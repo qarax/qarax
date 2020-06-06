@@ -1,0 +1,2 @@
+[development.databases]
+qarax_db = { url = "postgres://qarax:qarax@localhost:5432/qarax" }
