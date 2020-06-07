@@ -1,9 +1,8 @@
-use uuid::Uuid;
 use super::*;
-use crate::schema::hosts::dsl::*;
 use crate::database::Connection;
 use crate::schema::hosts;
-
+use crate::schema::hosts::dsl::*;
+use uuid::Uuid;
 
 #[derive(Serialize, Deserialize, Queryable, Debug, Insertable)]
 #[table_name = "hosts"]
