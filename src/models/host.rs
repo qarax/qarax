@@ -2,6 +2,7 @@ use super::*;
 use crate::database::Connection;
 use crate::schema::hosts;
 use crate::schema::hosts::dsl::hosts as all_hosts;
+use std::convert::From;
 use uuid::Uuid;
 
 #[derive(Serialize, Deserialize, Queryable, Debug, Insertable)]
@@ -36,22 +37,26 @@ impl Host {
             .unwrap()
     }
 
-    pub fn insert(h: &NewHost, conn: Connection) -> Result<String, String> {
-        let host_id = Uuid::new_v4();
+    pub fn insert(h: NewHost, conn: Connection) -> Result<uuid::Uuid, String> {
+        let h = Host::from(h);
 
-        let h = Host {
-            id: host_id,
-            name: h.name.clone(), // There's probably a better way
-            address: h.address.clone(),
-            port: h.port,
-            host_user: h.user.clone(),
-            password: h.password.clone(),
-            status: 0,
-        };
-
-        match diesel::insert_into(hosts::table).values(h).execute(&*conn) {
-            Ok(_) => Ok(host_id.to_string()),
+        match diesel::insert_into(hosts::table).values(&h).execute(&*conn) {
+            Ok(_) => Ok(h.id.to_owned()),
             Err(e) => Err(e.to_string()),
+        }
+    }
+}
+
+impl From<NewHost> for Host {
+    fn from(nh: NewHost) -> Self {
+        Host {
+            id: Uuid::new_v4(),
+            name: nh.name,
+            address: nh.address,
+            port: nh.port,
+            host_user: nh.user,
+            password: nh.password,
+            status: 0,
         }
     }
 }
