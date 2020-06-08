@@ -13,6 +13,8 @@ pub struct Host {
     pub port: i32,
     pub status: i32,
     pub host_user: String,
+
+    #[serde(skip_serializing)]
     pub password: String,
 }
 
