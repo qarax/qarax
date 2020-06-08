@@ -10,7 +10,7 @@ pub fn index(conn: Connection) -> JsonValue {
 
 #[post("/hosts", format = "json", data = "<host>")]
 pub fn add_host(host: Json<NewHost>, conn: Connection) -> JsonValue {
-    match Host::insert(&host, conn) {
+    match Host::insert(host.into_inner(), conn) {
         Ok(id) => json!({ "host_id": id }),
         Err(e) => json!({ "error": e }),
     }
