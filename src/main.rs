@@ -17,6 +17,6 @@ use controllers::hosts;
 fn main() {
     rocket::ignite()
         .attach(database::Connection::fairing())
-        .mount("/", routes![hosts::index])
+        .mount("/", routes![hosts::index, hosts::add_host])
         .launch();
 }
