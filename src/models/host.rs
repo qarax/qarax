@@ -1,7 +1,7 @@
 use super::*;
 use crate::database::Connection;
 use crate::schema::hosts;
-use crate::schema::hosts::dsl::{hosts as all_hosts};
+use crate::schema::hosts::dsl::hosts as all_hosts;
 use uuid::Uuid;
 
 #[derive(Serialize, Deserialize, Queryable, Debug, Insertable)]
@@ -18,7 +18,6 @@ pub struct Host {
     pub password: String,
 }
 
-
 #[derive(Serialize, Deserialize, Debug)]
 pub struct NewHost {
     pub name: String,
@@ -31,7 +30,10 @@ pub struct NewHost {
 
 impl Host {
     pub fn all(conn: Connection) -> Vec<Host> {
-        all_hosts.order(hosts::id.desc()).load::<Host>(&*conn).unwrap()
+        all_hosts
+            .order(hosts::id.desc())
+            .load::<Host>(&*conn)
+            .unwrap()
     }
 
     pub fn insert(h: &NewHost, conn: Connection) -> Result<String, String> {
@@ -49,7 +51,7 @@ impl Host {
 
         match diesel::insert_into(hosts::table).values(h).execute(&*conn) {
             Ok(_) => Ok(host_id.to_string()),
-            Err(e) => Err(e.to_string())
+            Err(e) => Err(e.to_string()),
         }
     }
 }
