@@ -1,2 +1,3 @@
 [development.databases]
 qarax_db = { url = "postgres://qarax:qarax@localhost:5432/qarax" }
+qarax_db_test = { url = "postgres://qarax:qarax@localhost:5432/qarax_test" }
