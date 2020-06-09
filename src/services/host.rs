@@ -2,7 +2,7 @@ use crate::database::DbConnection;
 use crate::models::host::{Host, NewHost};
 
 pub fn get_all(conn: &DbConnection) -> Vec<Host> {
-    return Host::all(conn);
+    Host::all(conn)
 }
 
 pub fn add_host(host: NewHost, conn: &DbConnection) -> Result<uuid::Uuid, String> {
