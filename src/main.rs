@@ -11,12 +11,13 @@ mod controllers;
 mod database;
 mod models;
 mod schema;
+mod services;
 
 use controllers::hosts;
 
 fn main() {
     rocket::ignite()
         .attach(database::Connection::fairing())
-        .mount("/", routes![hosts::index, hosts::add_host])
+        .mount("/hosts", routes![hosts::index, hosts::add_host])
         .launch();
 }
