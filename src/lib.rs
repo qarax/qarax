@@ -6,7 +6,10 @@ extern crate rocket;
 extern crate rocket_contrib;
 #[macro_use]
 extern crate diesel;
+#[macro_use]
+extern crate diesel_migrations;
 
+mod common;
 mod controllers;
 mod database;
 mod models;
@@ -18,6 +21,6 @@ use rocket::Rocket;
 
 pub fn rocket() -> Rocket {
     rocket::ignite()
-        .attach(database::Connection::fairing())
-        .mount("/hosts", routes![hosts::index, hosts::add_host])
+        .attach(database::DbConnection::fairing())
+        .mount("/hosts", hosts::routes())
 }

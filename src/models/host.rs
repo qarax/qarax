@@ -1,7 +1,7 @@
 use super::*;
-use crate::database::Connection;
 use crate::schema::hosts;
 use crate::schema::hosts::dsl::hosts as all_hosts;
+use diesel::PgConnection;
 use std::convert::From;
 use uuid::Uuid;
 
@@ -30,20 +30,24 @@ pub struct NewHost {
 }
 
 impl Host {
-    pub fn all(conn: Connection) -> Vec<Host> {
+    pub fn all(conn: &PgConnection) -> Vec<Host> {
         all_hosts
             .order(hosts::id.desc())
-            .load::<Host>(&*conn)
+            .load::<Host>(conn)
             .unwrap()
     }
 
-    pub fn insert(h: NewHost, conn: Connection) -> Result<uuid::Uuid, String> {
+    pub fn insert(h: NewHost, conn: &PgConnection) -> Result<uuid::Uuid, String> {
         let h = Host::from(h);
 
-        match diesel::insert_into(hosts::table).values(&h).execute(&*conn) {
+        match diesel::insert_into(hosts::table).values(&h).execute(conn) {
             Ok(_) => Ok(h.id.to_owned()),
             Err(e) => Err(e.to_string()),
         }
+    }
+
+    pub fn delete_all(conn: &PgConnection) -> Result<usize, diesel::result::Error> {
+        diesel::delete(all_hosts).execute(conn)
     }
 }
 

@@ -1,10 +1,17 @@
-use crate::database::Connection;
+use crate::database::DbConnection;
 use crate::models::host::{Host, NewHost};
 
-pub fn get_all(conn: Connection) -> Vec<Host> {
+pub fn get_all(conn: &DbConnection) -> Vec<Host> {
     return Host::all(conn);
 }
 
-pub fn add_host(host: NewHost, conn: Connection) -> Result<uuid::Uuid, String> {
+pub fn add_host(host: NewHost, conn: &DbConnection) -> Result<uuid::Uuid, String> {
     Host::insert(host, conn)
+}
+
+pub fn delete_all(conn: &DbConnection) -> Result<usize, String> {
+    match Host::delete_all(conn) {
+        Ok(record_count) => Ok(record_count),
+        Err(e) => Err(e.to_string()),
+    }
 }
