@@ -1,0 +1,10 @@
+- hosts: all
+  tasks:
+    - name: install packages
+      include: tasks/install.yml
+    - name: compile firecracker
+      include: tasks/compile.yml
+      when: build is defined and build == "compile"
+    - name: setup network
+      include: tasks/setup_network.yml
+

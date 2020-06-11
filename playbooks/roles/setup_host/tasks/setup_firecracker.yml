@@ -1,0 +1,15 @@
+- name: check if firecracker exists
+  stat:
+    path: $HOME/firecracker
+  register: firecracker
+
+- name: download firecracker
+  get_url:
+    url: "https://github.com/firecracker-microvm/firecracker/releases/download/v{{ fcversion }}/firecracker-v{{ fcversion}}-x86_64"
+    dest: ./firecracker
+  when: not firecracker.stat.exists
+
+- name: set execute permissions
+  file:
+    path: ./firecracker
+    mode: 0755
