@@ -1,6 +1,0 @@
-
-- hosts: all
-  tasks:
-    - name: activate catapult node
-      include: tasks/activate_catapult_node.yml
-      
