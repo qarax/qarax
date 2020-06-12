@@ -37,7 +37,7 @@ impl Host {
             .unwrap()
     }
 
-    pub fn insert(h: NewHost, conn: &PgConnection) -> Result<uuid::Uuid, String> {
+    pub fn insert(h: &NewHost, conn: &PgConnection) -> Result<uuid::Uuid, String> {
         let h = Host::from(h);
 
         match diesel::insert_into(hosts::table).values(&h).execute(conn) {
@@ -51,15 +51,15 @@ impl Host {
     }
 }
 
-impl From<NewHost> for Host {
-    fn from(nh: NewHost) -> Self {
+impl From<&NewHost> for Host {
+    fn from(nh: &NewHost) -> Self {
         Host {
             id: Uuid::new_v4(),
-            name: nh.name,
-            address: nh.address,
-            port: nh.port,
-            host_user: nh.user,
-            password: nh.password,
+            name: nh.name.to_owned(),
+            address: nh.address.to_owned(),
+            port: nh.port.to_owned(),
+            host_user: nh.user.to_owned(),
+            password: nh.password.to_owned(),
             status: 0,
         }
     }
