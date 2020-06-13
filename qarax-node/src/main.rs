@@ -1,10 +1,8 @@
-
-use tonic::{transport::Server};
-use server::QaraxNode;
 use server::node::node_server::NodeServer;
+use server::QaraxNode;
+use tonic::transport::Server;
 
 mod server;
-
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
