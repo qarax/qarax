@@ -1,7 +1,7 @@
-use tonic::{Request, Response, Status};
-use node::{Uuid, VmConfig, VmResponse, Status as NodeStatus, VmList};
-use std::convert::TryFrom;
 use crate::server::node::node_server::Node;
+use node::{Status as NodeStatus, Uuid, VmConfig, VmList, VmResponse};
+use std::convert::TryFrom;
+use tonic::{Request, Response, Status};
 
 pub(crate) mod node {
     tonic::include_proto!("node");
@@ -14,7 +14,7 @@ impl TryFrom<i32> for NodeStatus {
         match value {
             0 => Ok(NodeStatus::Success),
             1 => Ok(NodeStatus::Failure),
-            _ => panic!("Shouldn't happen")
+            _ => panic!("Shouldn't happen"),
         }
     }
 }
@@ -24,29 +24,25 @@ pub struct QaraxNode {}
 
 #[tonic::async_trait]
 impl Node for QaraxNode {
-    async fn start_vm(
-        &self,
-        request: Request<VmConfig>,
-    ) -> Result<Response<VmResponse>, Status> {
+    async fn start_vm(&self, request: Request<VmConfig>) -> Result<Response<VmResponse>, Status> {
         println!("Start VM: {:?}", request);
         let response = VmResponse {
             status: NodeStatus::Success as i32,
             config: Some(VmConfig {
-                vm_id: Some(Uuid { value: String::from("123") }),
+                vm_id: Some(Uuid {
+                    value: String::from("123"),
+                }),
                 vcpus: 1,
                 memory: 128,
                 kernel: String::from("vmlinux"),
-                root_fs: String::from("rootfs"), 
-            })
+                root_fs: String::from("rootfs"),
+            }),
         };
 
         Ok(Response::new(response))
     }
 
-    async fn stop_vm(
-        &self,
-        request: Request<Uuid>,
-    ) -> Result<Response<node::Response>, Status> {
+    async fn stop_vm(&self, request: Request<Uuid>) -> Result<Response<node::Response>, Status> {
         println!("Got a request: {:?}", request);
 
         let response = node::Response {
@@ -56,17 +52,15 @@ impl Node for QaraxNode {
         Ok(Response::new(response))
     }
 
-    async fn list_vms(
-        &self,
-        request: Request<()>,
-    ) -> Result<Response<node::VmList>, Status> {
+    async fn list_vms(&self, request: Request<()>) -> Result<Response<node::VmList>, Status> {
         println!("Got a request: {:?}", request);
 
         let response = VmList {
-            vm_id: vec![Uuid { value: String::from("123") }],
+            vm_id: vec![Uuid {
+                value: String::from("123"),
+            }],
         };
 
         Ok(Response::new(response))
     }
 }
-
