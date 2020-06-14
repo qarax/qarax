@@ -37,4 +37,5 @@ service Node {
     rpc StartVM(VmConfig) returns (VmResponse) {}
     rpc StopVM(UUID) returns (Response) {}
     rpc ListVms(google.protobuf.Empty) returns (VmList) {}
+    rpc HealthCheck(google.protobuf.Empty) returns (Response) {}
 }
