@@ -1,0 +1,41 @@
+syntax = "proto3";
+package node;
+
+import "google/protobuf/empty.proto";
+
+message UUID {
+    string value = 1;
+}
+
+message VmConfig {
+    UUID vmID = 1;
+    int64 memory = 2;
+    int64 vcpus = 3;
+    string kernel = 4;
+    string rootFs = 5;
+}
+
+enum Status {
+    SUCCESS = 0;
+    FAILURE = 1;
+}
+
+message Response {
+    Status status = 1;
+}
+
+message VmResponse {
+    Status status = 1;
+    VmConfig config = 2;
+}
+
+message VmList {
+    repeated UUID vmID = 1;
+}
+
+service Node {
+    rpc StartVM(VmConfig) returns (VmResponse) {}
+    rpc StopVM(UUID) returns (Response) {}
+    rpc ListVms(google.protobuf.Empty) returns (VmList) {}
+    rpc HealthCheck(google.protobuf.Empty) returns (Response) {}
+}

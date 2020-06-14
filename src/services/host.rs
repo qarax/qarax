@@ -1,7 +1,9 @@
 use crate::database::DbConnection;
 use crate::models::host::{Host, NewHost};
 
+use super::rpc::client::Client;
 use super::util::ansible;
+
 use std::collections::BTreeMap;
 use uuid::Uuid;
 
@@ -32,6 +34,30 @@ pub fn install(host: &NewHost) {
     );
 
     ac.run_playbook();
+}
+
+pub fn health_check(host_id: &str, conn: &DbConnection) -> Result<String, String> {
+    let host = match get_by_id(host_id, conn) {
+        Ok(h) => h,
+        Err(e) => return Err(e.to_string()),
+    };
+
+    use tonic::Request;
+
+    let client = Client::connect(format!("http://{}:{}", host.address, host.port));
+    match client {
+        Ok(mut c) => {
+            let response = c.health_check(Request::new(()));
+            match response {
+                Ok(_) => Ok(String::from("OK")),
+                Err(_) => Err(String::from("ERROR")),
+            }
+        }
+        Err(e) => Err(String::from(format!(
+            "Could not connect: {}",
+            e.to_string()
+        ))),
+    }
 }
 
 #[allow(dead_code)]
