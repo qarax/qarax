@@ -22,6 +22,14 @@ pub fn add_host(host: Json<NewHost>, conn: DbConnection) -> JsonValue {
     }
 }
 
+#[get("/health/<id>")]
+pub fn health_check(id: Uuid, conn: DbConnection) -> JsonValue {
+    match host_service::health_check(&id.to_string(), &conn) {
+        Ok(status) => json!({ "host_status": status }),
+        Err(status) => json!({ "host_status": status }),
+    }
+}
+
 #[post("/install", format = "json", data = "<host>")]
 pub fn install(host: Json<NewHost>) {
     // TODO: error handling
@@ -29,7 +37,7 @@ pub fn install(host: Json<NewHost>) {
 }
 
 pub fn routes() -> Vec<rocket::Route> {
-    routes![index, by_id, add_host, install]
+    routes![index, by_id, add_host, install, health_check]
 }
 
 // TODO: Use some sort of lock, currently impossible to run tests in parallel
