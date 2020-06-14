@@ -3,12 +3,17 @@ use crate::models::host::{Host, NewHost};
 
 use super::util::ansible;
 use std::collections::BTreeMap;
+use uuid::Uuid;
+
+pub fn get_by_id(host_id: &str, conn: &DbConnection) -> Result<Host, String> {
+    Host::by_id(Uuid::parse_str(host_id).unwrap(), conn)
+}
 
 pub fn get_all(conn: &DbConnection) -> Vec<Host> {
     Host::all(conn)
 }
 
-pub fn add_host(host: &NewHost, conn: &DbConnection) -> Result<uuid::Uuid, String> {
+pub fn add_host(host: &NewHost, conn: &DbConnection) -> Result<Uuid, String> {
     Host::insert(host, conn)
 }
 
@@ -26,7 +31,7 @@ pub fn install(host: &NewHost) {
         &extra_params,
     );
 
-    ac.run_playbook()
+    ac.run_playbook();
 }
 
 #[allow(dead_code)]
