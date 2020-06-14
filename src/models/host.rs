@@ -46,6 +46,13 @@ impl Host {
         }
     }
 
+    pub fn by_id(id: Uuid, conn: &PgConnection) -> Result<Host, String> {
+        match all_hosts.find(id).first(conn) {
+            Ok(h) => Ok(h),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
     pub fn delete_all(conn: &PgConnection) -> Result<usize, diesel::result::Error> {
         diesel::delete(all_hosts).execute(conn)
     }
