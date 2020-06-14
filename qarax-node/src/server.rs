@@ -63,4 +63,14 @@ impl Node for QaraxNode {
 
         Ok(Response::new(response))
     }
+
+    async fn health_check(&self, request: Request<()>) -> Result<Response<node::Response>, Status> {
+        println!("Got a request: {:?}", request);
+
+        let response = node::Response {
+            status: NodeStatus::Success as i32,
+        };
+
+        Ok(Response::new(response))
+    }
 }
