@@ -19,8 +19,12 @@ mod services;
 use controllers::hosts;
 use rocket::Rocket;
 
+use database::DbConnection;
+use services::host::HostService;
+
 pub fn rocket() -> Rocket {
     rocket::ignite()
-        .attach(database::DbConnection::fairing())
+        .attach(DbConnection::fairing())
+        .manage(HostService::new())
         .mount("/hosts", hosts::routes())
 }
