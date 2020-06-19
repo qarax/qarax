@@ -37,18 +37,26 @@ impl<'a> VmmClient<'a> {
         }
     }
 
-    pub async fn request(&self, endpoint: &'a str,  method: Method, body: &'static [u8]) -> Result<String> {
+    pub async fn request(&self, endpoint: &'a str,  method: Method, body: &'a [u8]) -> Result<String> {
+        //let uri = Uri::new("/tmp/firecracker.sock", "/");
+        println!("socket path: {} endpoint {}", self.socket_path, endpoint);
+
         let req = Request::builder()
             .method(method.as_str())
             .uri(Uri::new(self.socket_path, endpoint))
-            .body(Body::from(body))
+            .header("Accept", "application/json")
+            .header("Content-Type", "application/json")
+            .body(Body::from(body.to_vec()))
             .unwrap();
     
         let resp = self.client.request(req).await;
         let resp = match resp {
-            Ok(response) => response,
+            Ok(response) => {
+                response
+            },
             Err(e) => return Err(Error::new(ErrorKind::Other, e.to_string())),
         };
+        println!("Incoming status: {}", resp.status());
 
         let bytes = resp.into_body()
         .try_fold(Vec::default(), |mut buf, bytes| async {
@@ -57,6 +65,7 @@ impl<'a> VmmClient<'a> {
         })
         .await.unwrap();
 
+        println!("string {:?}", String::from_utf8(bytes.to_vec()));
         Ok(String::from_utf8(bytes).expect("Couldn't convert to string"))
     }
 }
