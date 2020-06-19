@@ -1,8 +1,11 @@
 extern crate firecracker_rust_sdk;
 
-use firecracker_rust_sdk::models;
+use firecracker_rust_sdk::models::{machine_configuration, machine, boot_source};
 
-fn create_firecracker_client() {
+pub async fn create_firecracker_client() {
     // TODO: do actual stuff
-    models::MachineConfiguration::new(true, 123, 1);
+    let mc = machine_configuration::MachineConfiguration::new(false, 128, 1);
+    let bs = boot_source::BootSource::new(String::from("vmlinux"));
+    let machine = machine::Machine::new("/tmp/firecracker.sock", mc, bs);
+    machine.start().await;
 }

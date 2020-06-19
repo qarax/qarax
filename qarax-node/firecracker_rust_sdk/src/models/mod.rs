@@ -36,3 +36,5 @@ pub mod vm;
 pub use self::vm::Vm;
 pub mod vsock;
 pub use self::vsock::Vsock;
+pub mod machine;
+pub use self::machine::Machine;

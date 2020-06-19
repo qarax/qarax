@@ -7,4 +7,5 @@ extern crate url;
 extern crate hyper;
 extern crate futures;
 
+mod http;
 pub mod models;
