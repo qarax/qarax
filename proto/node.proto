@@ -9,8 +9,8 @@ message UUID {
 
 message VmConfig {
     UUID vmID = 1;
-    int64 memory = 2;
-    int64 vcpus = 3;
+    int32 memory = 2;
+    int32 vcpus = 3;
     string kernel = 4;
     string rootFs = 5;
 }
