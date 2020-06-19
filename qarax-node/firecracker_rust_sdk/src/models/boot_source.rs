@@ -14,24 +14,24 @@
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BootSource {
-    /// Kernel boot arguments
-    #[serde(rename = "boot_args", skip_serializing_if = "Option::is_none")]
-    pub boot_args: Option<String>,
-    /// Host level path to the initrd image used to boot the guest
-    #[serde(rename = "initrd_path", skip_serializing_if = "Option::is_none")]
-    pub initrd_path: Option<String>,
     /// Host level path to the kernel image used to boot the guest
     #[serde(rename = "kernel_image_path")]
     pub kernel_image_path: String,
+    /// Kernel boot arguments
+    #[serde(rename = "boot_args")]
+    pub boot_args: String,
+    /// Host level path to the initrd image used to boot the guest
+    #[serde(rename = "initrd_path", skip_serializing_if = "Option::is_none")]
+    pub initrd_path: Option<String>,
 }
 
 impl BootSource {
     /// Boot source descriptor.
-    pub fn new(kernel_image_path: String) -> BootSource {
+    pub fn new(kernel_image_path: String, boot_args: String) -> BootSource {
         BootSource {
-            boot_args: None,
-            initrd_path: None,
+            boot_args,
             kernel_image_path,
+            initrd_path: None,
         }
     }
 }

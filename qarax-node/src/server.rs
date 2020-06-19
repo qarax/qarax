@@ -1,23 +1,10 @@
-use crate::server::node::node_server::Node;
-use node::{Status as NodeStatus, Uuid, VmConfig, VmList, VmResponse};
-use std::convert::TryFrom;
+use crate::lib;
+use crate::lib::node::node_server::Node;
+use crate::lib::node::{
+    Response as NodeResponse, Status as NodeStatus, Uuid, VmConfig, VmList, VmResponse,
+};
+
 use tonic::{Request, Response, Status};
-
-pub(crate) mod node {
-    tonic::include_proto!("node");
-}
-
-impl TryFrom<i32> for NodeStatus {
-    type Error = ();
-
-    fn try_from(value: i32) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(NodeStatus::Success),
-            1 => Ok(NodeStatus::Failure),
-            _ => panic!("Shouldn't happen"),
-        }
-    }
-}
 
 #[derive(Debug, Default)]
 pub struct QaraxNode {}
@@ -26,33 +13,39 @@ pub struct QaraxNode {}
 impl Node for QaraxNode {
     async fn start_vm(&self, request: Request<VmConfig>) -> Result<Response<VmResponse>, Status> {
         println!("Start VM: {:?}", request);
+        let config = VmConfig {
+            vm_id: Some(Uuid {
+                value: String::from("123"),
+            }),
+            vcpus: 1,
+            memory: 128,
+            kernel: String::from("./vmlinux"),
+            root_fs: String::from("rootfs"),
+        };
+
+        println!("starting vm...");
+        lib::start_vm(&config).await;
+
         let response = VmResponse {
             status: NodeStatus::Success as i32,
-            config: Some(VmConfig {
-                vm_id: Some(Uuid {
-                    value: String::from("123"),
-                }),
-                vcpus: 1,
-                memory: 128,
-                kernel: String::from("vmlinux"),
-                root_fs: String::from("rootfs"),
-            }),
+            config: Some(config),
         };
 
+        // TODO: there is no reason to return the config now
         Ok(Response::new(response))
     }
 
-    async fn stop_vm(&self, request: Request<Uuid>) -> Result<Response<node::Response>, Status> {
+    async fn stop_vm(&self, request: Request<Uuid>) -> Result<Response<NodeResponse>, Status> {
         println!("Got a request: {:?}", request);
 
-        let response = node::Response {
+        let response = NodeResponse {
             status: NodeStatus::Success as i32,
         };
 
         Ok(Response::new(response))
     }
 
-    async fn list_vms(&self, request: Request<()>) -> Result<Response<node::VmList>, Status> {
+    async fn list_vms(&self, request: Request<()>) -> Result<Response<VmList>, Status> {
         println!("Got a request: {:?}", request);
 
         let response = VmList {
@@ -64,10 +57,10 @@ impl Node for QaraxNode {
         Ok(Response::new(response))
     }
 
-    async fn health_check(&self, request: Request<()>) -> Result<Response<node::Response>, Status> {
+    async fn health_check(&self, request: Request<()>) -> Result<Response<NodeResponse>, Status> {
         println!("Got a request: {:?}", request);
 
-        let response = node::Response {
+        let response = NodeResponse {
             status: NodeStatus::Success as i32,
         };
 
