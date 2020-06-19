@@ -23,7 +23,6 @@ impl Node for QaraxNode {
             root_fs: String::from("rootfs"),
         };
 
-        println!("starting vm...");
         lib::start_vm(&config).await;
 
         let response = VmResponse {

@@ -1,9 +1,8 @@
-use std::io::{Error, ErrorKind};
 use hyper::{Body, Client, Request};
 use hyperlocal::{Uri, UnixClientExt, UnixConnector};
 use futures::stream::{TryStreamExt};
 
-type Result<T> = std::result::Result<T, Error>; 
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 pub enum Method {
     GET,
@@ -21,6 +20,7 @@ impl Method {
     }
 }
 
+#[derive(Debug)]
 pub struct VmmClient<'a> {
     client: Client<UnixConnector>,
     socket_path: &'a str,
@@ -35,9 +35,6 @@ impl<'a> VmmClient<'a> {
     }
 
     pub async fn request(&self, endpoint: &'a str,  method: Method, body: &'a [u8]) -> Result<String> {
-        //let uri = Uri::new("/tmp/firecracker.sock", "/");
-        println!("socket path: {} endpoint {}", self.socket_path, endpoint);
-
         let req = Request::builder()
             .method(method.as_str())
             .uri(Uri::new(self.socket_path, endpoint))
@@ -46,13 +43,7 @@ impl<'a> VmmClient<'a> {
             .body(Body::from(body.to_vec()))
             .unwrap();
     
-        let resp = self.client.request(req).await;
-        let resp = match resp {
-            Ok(response) => {
-                response
-            },
-            Err(e) => return Err(Error::new(ErrorKind::Other, e.to_string())),
-        };
+        let resp = self.client.request(req).await?;
         println!("Incoming status: {}", resp.status());
 
         let bytes = resp.into_body()
@@ -62,7 +53,6 @@ impl<'a> VmmClient<'a> {
         })
         .await.unwrap();
 
-        println!("string {:?}", String::from_utf8(bytes.to_vec()));
         Ok(String::from_utf8(bytes).expect("Couldn't convert to string"))
     }
 }

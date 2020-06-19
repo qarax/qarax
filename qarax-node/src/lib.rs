@@ -39,20 +39,23 @@ pub async fn start_vm(vm_config: &VmConfig) {
     // TODO: get paths and ids from qarax
     let drive = drive::Drive::new(String::from("rootfs"), false, true, String::from("rootfs"));
 
-    let machine = machine::Machine {
-        socket_path: &socket_path,
-        boot_source: bs,
-        machine_configuration: mc,
-        drive,
-    };
+    let vmm = machine::Machine::new(&socket_path, mc, bs, drive);
 
     // TODO: move into own function and handle errors,
-    // check if socket exists before
+    // - check if socket exists before
+    // - make a sanity check on the api server
+    // - make it run in the background, not sure why it doesn't already
     Command::new(FIRECRACKER_BIN)
         .args(vec!["--api-sock", &socket_path])
-        .spawn();
+        .spawn()
+        .expect("Faild to start firecracker");
 
-    machine.start().await;
+    // TODO: as mentioned above, proper polling that the api server is
+    // available required here
+    use std::{thread, time};
+    thread::sleep(time::Duration::from_millis(1000));
+
+    vmm.start().await;
 }
 
 impl TryFrom<i32> for Status {
