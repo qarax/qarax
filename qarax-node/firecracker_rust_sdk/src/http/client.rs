@@ -1,10 +1,7 @@
-use std::error;
 use std::io::{Error, ErrorKind};
 use hyper::{Body, Client, Request};
 use hyperlocal::{Uri, UnixClientExt, UnixConnector};
-use futures::stream::{Stream, TryStreamExt};
-
-const HTTP_VERSION: &str = "HTTP/1.1";
+use futures::stream::{TryStreamExt};
 
 type Result<T> = std::result::Result<T, Error>; 
 
