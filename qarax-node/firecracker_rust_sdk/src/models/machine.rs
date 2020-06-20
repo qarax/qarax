@@ -10,14 +10,14 @@ use tokio;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 #[derive(Debug)]
-pub struct Machine<'a> {
-    client: VmmClient<'a>,
+pub struct Machine {
+    client: VmmClient,
     machine_configuration: MachineConfiguration,
     boot_source: BootSource,
     drive: Drive,
 }
-impl<'a> Machine<'a> {
-    pub fn new(socket_path: &'a str, machine_configuration: MachineConfiguration, boot_source: BootSource, drive: Drive) -> Self {
+impl Machine {
+    pub fn new(socket_path: String, machine_configuration: MachineConfiguration, boot_source: BootSource, drive: Drive) -> Self {
         Machine {
             client: VmmClient::new(socket_path),
             machine_configuration,

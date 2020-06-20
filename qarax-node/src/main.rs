@@ -1,17 +1,17 @@
-mod lib;
-mod server;
+mod vmm_handler;
+mod vm_service;
 
-use lib::node::node_server::NodeServer;
-use server::QaraxNode;
+use vmm_handler::node::node_server::NodeServer;
+use vm_service::VmService;
 use tonic::transport::Server;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr = "[::1]:50051".parse()?;
-    let node = QaraxNode::default();
+    let vm_service = VmService::new();
 
     Server::builder()
-        .add_service(NodeServer::new(node))
+        .add_service(NodeServer::new(vm_service))
         .serve(addr)
         .await?;
 
