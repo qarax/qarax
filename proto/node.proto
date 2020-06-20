@@ -3,12 +3,8 @@ package node;
 
 import "google/protobuf/empty.proto";
 
-message UUID {
-    string value = 1;
-}
-
 message VmConfig {
-    UUID vmID = 1;
+    string vmID = 1;
     int32 memory = 2;
     int32 vcpus = 3;
     string kernel = 4;
@@ -30,12 +26,16 @@ message VmResponse {
 }
 
 message VmList {
-    repeated UUID vmID = 1;
+    repeated string vmID = 1;
+}
+
+message VmID {
+    string vmID = 1;
 }
 
 service Node {
     rpc StartVM(VmConfig) returns (VmResponse) {}
-    rpc StopVM(UUID) returns (Response) {}
+    rpc StopVM(VmID) returns (Response) {}
     rpc ListVms(google.protobuf.Empty) returns (VmList) {}
     rpc HealthCheck(google.protobuf.Empty) returns (Response) {}
 }
