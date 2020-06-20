@@ -21,23 +21,23 @@ impl Method {
 }
 
 #[derive(Debug)]
-pub struct VmmClient<'a> {
+pub struct VmmClient {
     client: Client<UnixConnector>,
-    socket_path: &'a str,
+    socket_path: String,
 }
 
-impl<'a> VmmClient<'a> {
-    pub fn new(socket_path: &'a str) -> Self {
+impl VmmClient {
+    pub fn new(socket_path: String) -> Self {
         VmmClient {
             client: Client::unix(),
             socket_path,
         }
     }
 
-    pub async fn request(&self, endpoint: &'a str,  method: Method, body: &'a [u8]) -> Result<String> {
+    pub async fn request(&self, endpoint: &str,  method: Method, body: &[u8]) -> Result<String> {
         let req = Request::builder()
             .method(method.as_str())
-            .uri(Uri::new(self.socket_path, endpoint))
+            .uri(Uri::new(&self.socket_path, endpoint))
             .header("Accept", "application/json")
             .header("Content-Type", "application/json")
             .body(Body::from(body.to_vec()))
