@@ -13,19 +13,16 @@ table! {
 table! {
     vms (id) {
         id -> Uuid,
-        name -> Nullable<Varchar>,
-        status -> Nullable<Int4>,
+        name -> Varchar,
+        status -> Int4,
         host_id -> Nullable<Uuid>,
-        vcpu -> Nullable<Int4>,
-        memory -> Nullable<Int4>,
-        kernel -> Nullable<Varchar>,
-        root_file_system -> Nullable<Varchar>,
+        vcpu -> Int4,
+        memory -> Int4,
+        kernel -> Varchar,
+        root_file_system -> Varchar,
     }
 }
 
 joinable!(vms -> hosts (host_id));
 
-allow_tables_to_appear_in_same_query!(
-    hosts,
-    vms,
-);
+allow_tables_to_appear_in_same_query!(hosts, vms,);
