@@ -21,10 +21,13 @@ use rocket::Rocket;
 
 use database::DbConnection;
 use services::host::HostService;
+use services::Backend;
 
 pub fn rocket() -> Rocket {
     rocket::ignite()
         .attach(DbConnection::fairing())
-        .manage(HostService::new())
+        .manage(Backend {
+            host_service: HostService::new(),
+        })
         .mount("/hosts", hosts::routes())
 }
