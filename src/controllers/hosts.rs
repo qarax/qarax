@@ -1,40 +1,40 @@
 use super::*;
 use crate::database::DbConnection;
 use crate::models::host::NewHost;
-use crate::services::host::HostService;
+use crate::services::Backend;
 use rocket_contrib::json::{Json, JsonValue};
 use rocket_contrib::uuid::Uuid;
 
 #[get("/")]
-pub fn index(hs: State<HostService>, conn: DbConnection) -> JsonValue {
-    json!({ "hosts": hs.get_all(&conn) })
+pub fn index(backend: State<Backend>, conn: DbConnection) -> JsonValue {
+    json!({ "hosts": backend.host_service.get_all(&conn) })
 }
 
 #[get("/<id>")]
-pub fn by_id(id: Uuid, hs: State<HostService>, conn: DbConnection) -> JsonValue {
-    json!({ "host": hs.get_by_id(&id.to_string(), &conn) })
+pub fn by_id(id: Uuid, backend: State<Backend>, conn: DbConnection) -> JsonValue {
+    json!({ "host": backend.host_service.get_by_id(&id.to_string(), &conn) })
 }
 
 #[post("/", format = "json", data = "<host>")]
-pub fn add_host(host: Json<NewHost>, hs: State<HostService>, conn: DbConnection) -> JsonValue {
-    match hs.add_host(&host.into_inner(), &conn) {
+pub fn add_host(host: Json<NewHost>, backend: State<Backend>, conn: DbConnection) -> JsonValue {
+    match backend.host_service.add_host(&host.into_inner(), &conn) {
         Ok(id) => json!({ "host_id": id }),
         Err(e) => json!({ "error": e }),
     }
 }
 
 #[get("/health/<id>")]
-pub fn health_check(id: Uuid, hs: State<HostService>, conn: DbConnection) -> JsonValue {
-    match hs.health_check(&id.to_string(), &conn) {
+pub fn health_check(id: Uuid, backend: State<Backend>, conn: DbConnection) -> JsonValue {
+    match backend.host_service.health_check(&id.to_string(), &conn) {
         Ok(status) => json!({ "host_status": status }),
         Err(status) => json!({ "host_status": status }),
     }
 }
 
 #[post("/install", format = "json", data = "<host>")]
-pub fn install(host: Json<NewHost>, hs: State<HostService>, conn: DbConnection) {
+pub fn install(host: Json<NewHost>, backend: State<Backend>, conn: DbConnection) {
     // TODO: error handling
-    hs.install(&host, &conn);
+    backend.host_service.install(&host, &conn);
 }
 
 pub fn routes() -> Vec<rocket::Route> {
@@ -45,6 +45,7 @@ pub fn routes() -> Vec<rocket::Route> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::host::HostService;
     use rocket::http::ContentType;
     use rocket::local::Client;
     use rocket::State;
@@ -55,7 +56,7 @@ mod tests {
     fn get_client() -> (HostService, Client, DbConnection) {
         let hs = HostService::new();
         let rocket = rocket::ignite()
-            .manage(hs)
+            .manage(Backend { host_service: hs })
             .attach(DbConnection::fairing())
             .mount("/hosts", routes());
 
