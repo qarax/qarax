@@ -16,13 +16,14 @@ mod models;
 mod schema;
 mod services;
 
-use controllers::hosts;
 use rocket::Rocket;
 
 use database::DbConnection;
 use services::host::HostService;
 use services::vm::VmService;
 use services::Backend;
+use controllers::hosts;
+use controllers::vms;
 
 pub fn rocket() -> Rocket {
     rocket::ignite()
@@ -32,4 +33,5 @@ pub fn rocket() -> Rocket {
             vm_service: VmService::new(),
         })
         .mount("/hosts", hosts::routes())
+        .mount("/vms", vms::routes())
 }
