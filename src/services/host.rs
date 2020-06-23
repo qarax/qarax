@@ -5,6 +5,7 @@ use super::rpc::client::Client;
 use super::util::ansible;
 
 use std::collections::BTreeMap;
+
 use uuid::Uuid;
 
 #[derive(Copy, Clone)]
@@ -33,6 +34,7 @@ impl HostService {
 
         // TODO: make configurable
         extra_params.insert("fcversion", "0.21.1");
+        extra_params.insert("local_node_path", &host.local_node_path);
 
         let ac = ansible::AnsibleCommand::new(
             ansible::INSTALL_HOST_PLAYBOOK,
