@@ -62,7 +62,7 @@ mod tests {
             .manage(Backend {
                 host_service: hs,
                 vm_service: vs,
-             })
+            })
             .attach(DbConnection::fairing())
             .mount("/hosts", routes());
 
