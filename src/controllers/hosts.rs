@@ -46,6 +46,8 @@ pub fn routes() -> Vec<rocket::Route> {
 mod tests {
     use super::*;
     use crate::services::host::HostService;
+    use crate::services::vm::VmService;
+
     use rocket::http::ContentType;
     use rocket::local::Client;
     use rocket::State;
@@ -55,8 +57,12 @@ mod tests {
 
     fn get_client() -> (HostService, Client, DbConnection) {
         let hs = HostService::new();
+        let vs = VmService::new();
         let rocket = rocket::ignite()
-            .manage(Backend { host_service: hs })
+            .manage(Backend {
+                host_service: hs,
+                vm_service: vs,
+             })
             .attach(DbConnection::fairing())
             .mount("/hosts", routes());
 

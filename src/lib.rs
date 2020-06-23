@@ -21,6 +21,7 @@ use rocket::Rocket;
 
 use database::DbConnection;
 use services::host::HostService;
+use services::vm::VmService;
 use services::Backend;
 
 pub fn rocket() -> Rocket {
@@ -28,6 +29,7 @@ pub fn rocket() -> Rocket {
         .attach(DbConnection::fairing())
         .manage(Backend {
             host_service: HostService::new(),
+            vm_service: VmService::new(),
         })
         .mount("/hosts", hosts::routes())
 }

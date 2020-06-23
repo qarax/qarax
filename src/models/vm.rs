@@ -32,6 +32,15 @@ impl Vm {
         vms.load::<Vm>(conn).unwrap()
     }
 
+    pub fn by_id(id: Uuid, conn: &PgConnection) -> Result<Vm, String> {
+        use crate::schema::vms::dsl::*;
+
+        match vms.find(id).first(conn) {
+            Ok(v) => Ok(v),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
     pub fn insert(v: &NewVm, conn: &PgConnection) -> Result<uuid::Uuid, String> {
         let v = Vm::from(v);
 
