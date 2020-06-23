@@ -1,5 +1,5 @@
 use crate::database::DbConnection;
-use crate::models::vm::{Vm, NewVm};
+use crate::models::vm::{NewVm, Vm};
 
 use uuid::Uuid;
 

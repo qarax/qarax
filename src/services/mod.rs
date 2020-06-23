@@ -1,7 +1,7 @@
 pub mod host;
-pub mod vm;
 mod rpc;
 mod util;
+pub mod vm;
 
 pub struct Backend {
     pub host_service: host::HostService,

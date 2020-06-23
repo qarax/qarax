@@ -18,12 +18,12 @@ mod services;
 
 use rocket::Rocket;
 
+use controllers::hosts;
+use controllers::vms;
 use database::DbConnection;
 use services::host::HostService;
 use services::vm::VmService;
 use services::Backend;
-use controllers::hosts;
-use controllers::vms;
 
 pub fn rocket() -> Rocket {
     rocket::ignite()
