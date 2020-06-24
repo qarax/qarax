@@ -4,7 +4,7 @@ table! {
         name -> Varchar,
         address -> Varchar,
         port -> Int4,
-        status -> Int4,
+        status -> Varchar,
         host_user -> Varchar,
         password -> Varchar,
     }
@@ -25,4 +25,7 @@ table! {
 
 joinable!(vms -> hosts (host_id));
 
-allow_tables_to_appear_in_same_query!(hosts, vms,);
+allow_tables_to_appear_in_same_query!(
+    hosts,
+    vms,
+);

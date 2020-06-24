@@ -4,7 +4,7 @@ CREATE TABLE hosts (
     name VARCHAR(50) UNIQUE NOT NULL,
     address VARCHAR(16) UNIQUE NOT NULL,
     port INT4 NOT NULL,
-	status INT4 NOT NULL,
+	status VARCHAR(18) NOT NULL,
     host_user VARCHAR(32) NOT NULL,
     password VARCHAR(255) NOT NULL
 )
