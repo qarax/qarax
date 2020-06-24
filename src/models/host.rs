@@ -12,7 +12,7 @@ pub struct Host {
     pub name: String,
     pub address: String,
     pub port: i32,
-    pub status: i32, // TODO: make enum
+    pub status: Status,
     pub host_user: String,
 
     #[serde(skip_serializing)]
@@ -67,7 +67,48 @@ impl From<&NewHost> for Host {
             port: nh.port.to_owned(),
             host_user: nh.user.to_owned(),
             password: nh.password.to_owned(),
-            status: 0,
+            status: Status::Down,
+        }
+    }
+}
+
+use diesel::pg::Pg;
+use diesel::sql_types::Varchar;
+use diesel::deserialize::{self, FromSql};
+use diesel::serialize::{self, ToSql, Output, IsNull};
+use std::io::Write;
+
+#[derive(Deserialize, Serialize, Debug, Copy, Clone, AsExpression, FromSqlRow)]
+#[sql_type = "Varchar"]
+pub enum Status {
+    Unknown,
+    Down,
+    Installing,
+    Initializing,
+    Up,
+}
+
+impl ToSql<Varchar, Pg> for Status {
+    fn to_sql<W: Write>(&self, out: &mut Output<W, Pg>) -> serialize::Result {
+        match *self {
+            Status::Unknown => out.write_all(b"UNKNOWN")?,
+            Status::Down => out.write_all(b"DOWN")?,
+            Status::Installing => out.write_all(b"INSTALLING")?,
+            Status::Initializing => out.write_all(b"INITIALIZING")?,
+            Status::Up => out.write_all(b"UP")?,
+        }
+        Ok(IsNull::No)
+    }
+}
+impl FromSql<Varchar, Pg> for Status {
+    fn from_sql(bytes: Option<&[u8]>) -> deserialize::Result<Self> {
+        match not_none!(bytes) {
+            b"UNKNOWN" => Ok(Status::Unknown),
+            b"DOWN" => Ok(Status::Down),
+            b"INSTALLING" => Ok(Status::Installing),
+            b"INITIALIZING" => Ok(Status::Initializing),
+            b"UP" => Ok(Status::Up),
+            _ => Err("Unrecognized enum variant".into()),
         }
     }
 }
