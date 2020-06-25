@@ -1,11 +1,11 @@
 use super::*;
 use crate::schema::hosts;
-use crate::schema::hosts::dsl::hosts as all_hosts;
+use crate::schema::hosts::dsl::*;
 use diesel::PgConnection;
 use std::convert::From;
 use uuid::Uuid;
 
-#[derive(Serialize, Deserialize, Queryable, Debug, Insertable)]
+#[derive(Serialize, Deserialize, Queryable, Debug, Insertable, Identifiable, Clone)]
 #[table_name = "hosts"]
 pub struct Host {
     pub id: Uuid,
@@ -29,12 +29,29 @@ pub struct NewHost {
     pub local_node_path: String,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct InstallHost {
+    pub local_node_path: String,
+
+    #[serde(rename = "fcversion")]
+    pub fc_version: String,
+}
+
 impl Host {
     pub fn all(conn: &PgConnection) -> Vec<Host> {
-        all_hosts
-            .order(hosts::id.desc())
+        use crate::schema::hosts::dsl::*;
+
+        hosts
+            .order(crate::schema::hosts::id.desc())
             .load::<Host>(conn)
             .unwrap()
+    }
+
+    pub fn by_id(host_id: Uuid, conn: &PgConnection) -> Result<Host, String> {
+        match hosts.find(host_id).first(conn) {
+            Ok(h) => Ok(h),
+            Err(e) => Err(e.to_string()),
+        }
     }
 
     pub fn insert(h: &NewHost, conn: &PgConnection) -> Result<uuid::Uuid, String> {
@@ -46,15 +63,20 @@ impl Host {
         }
     }
 
-    pub fn by_id(id: Uuid, conn: &PgConnection) -> Result<Host, String> {
-        match all_hosts.find(id).first(conn) {
-            Ok(h) => Ok(h),
+    pub fn update_status(h: Host, new_status: Status, conn: &PgConnection) -> Result<Host, String> {
+        match diesel::update(&h)
+            .set(status.eq(new_status))
+            .get_result(conn)
+        {
+            Ok(host) => Ok(host),
             Err(e) => Err(e.to_string()),
         }
     }
 
     pub fn delete_all(conn: &PgConnection) -> Result<usize, diesel::result::Error> {
-        diesel::delete(all_hosts).execute(conn)
+        use crate::schema::hosts::dsl::*;
+
+        diesel::delete(hosts).execute(conn)
     }
 }
 
@@ -72,10 +94,10 @@ impl From<&NewHost> for Host {
     }
 }
 
-use diesel::pg::Pg;
-use diesel::sql_types::Varchar;
 use diesel::deserialize::{self, FromSql};
-use diesel::serialize::{self, ToSql, Output, IsNull};
+use diesel::pg::Pg;
+use diesel::serialize::{self, IsNull, Output, ToSql};
+use diesel::sql_types::Varchar;
 use std::io::Write;
 
 #[derive(Deserialize, Serialize, Debug, Copy, Clone, AsExpression, FromSqlRow)]

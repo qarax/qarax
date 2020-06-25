@@ -1,6 +1,6 @@
 use super::*;
 use crate::database::DbConnection;
-use crate::models::host::NewHost;
+use crate::models::host::{InstallHost, NewHost};
 use crate::services::Backend;
 use rocket_contrib::json::{Json, JsonValue};
 use rocket_contrib::uuid::Uuid;
@@ -31,10 +31,21 @@ pub fn health_check(id: Uuid, backend: State<Backend>, conn: DbConnection) -> Js
     }
 }
 
-#[post("/install", format = "json", data = "<host>")]
-pub fn install(host: Json<NewHost>, backend: State<Backend>, conn: DbConnection) {
+#[post("/<host_id>/install", format = "json", data = "<host>")]
+pub fn install(
+    host_id: Uuid,
+    host: Json<InstallHost>,
+    backend: State<Backend>,
+    conn: DbConnection,
+) -> JsonValue {
     // TODO: error handling
-    backend.host_service.install(&host, &conn);
+    match backend
+        .host_service
+        .install(&host_id.to_string(), &host, conn)
+    {
+        Ok(status) => json!({ "status": status }),
+        Err(e) => json!({ "error": e.to_string()}),
+    }
 }
 
 pub fn routes() -> Vec<rocket::Route> {
@@ -128,7 +139,7 @@ mod tests {
         let host_id = response["host_id"].as_str().unwrap();
         let hs = HostService::new();
 
-        assert_eq!(hs.get_by_id(host_id, &conn).is_ok(), true);
+        assert_eq!(hs.get_by_id(host_id, conn).is_ok(), true);
 
         // TODO: Stupid teardown
         hs.delete_all(&conn);

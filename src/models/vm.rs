@@ -10,7 +10,7 @@ pub struct Vm {
     pub id: Uuid,
     pub name: String,
     pub status: i32,
-    pub host_id: Option<Uuid>, // Add belongs_too macro
+    pub host_id: Option<Uuid>, // Add belongs_to macro
     pub vcpu: i32,
     pub memory: i32,
     pub kernel: String,
