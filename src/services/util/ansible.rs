@@ -10,7 +10,7 @@ pub struct AnsibleCommand<'a> {
     playbook: &'a str,
     user: &'a str,
     host: &'a str,
-    extra_params: &'a BTreeMap<&'a str, &'a str>,
+    extra_params: BTreeMap<String, String>,
 }
 
 impl<'a> AnsibleCommand<'a> {
@@ -18,7 +18,7 @@ impl<'a> AnsibleCommand<'a> {
         playbook: &'a str,
         user: &'a str,
         host: &'a str,
-        extra_params: &'a BTreeMap<&'a str, &'a str>,
+        extra_params: BTreeMap<String, String>,
     ) -> Self {
         AnsibleCommand {
             playbook,
@@ -30,7 +30,11 @@ impl<'a> AnsibleCommand<'a> {
 
     pub fn run_playbook(&self) {
         // TODO: handle errors and write output properly
-        Command::new(CMD).args(self.to_string().split(" ")).spawn();
+        let mut process = Command::new(CMD)
+            .args(self.to_string().split(" "))
+            .spawn()
+            .expect("Ansible failed");
+        process.wait();
     }
 }
 
