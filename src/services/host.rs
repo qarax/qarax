@@ -9,17 +9,19 @@ use std::collections::HashMap;
 
 use std::thread;
 
+use std::sync::Arc;
+use std::sync::RwLock;
 use uuid::Uuid;
 
 #[derive(Clone)]
 pub struct HostService {
-    clients: HashMap<Uuid, Client>,
+    clients: Arc<RwLock<HashMap<Uuid, Client>>>,
 }
 
 impl HostService {
     pub fn new() -> Self {
         HostService {
-            clients: HashMap::new(),
+            clients: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -36,7 +38,7 @@ impl HostService {
     }
 
     pub fn install(
-        mut self,
+        self,
         host_id: &str,
         host: &InstallHost,
         conn: DbConnection,
@@ -60,6 +62,7 @@ impl HostService {
         );
 
         thread::spawn(move || {
+            // TODO: handle errors
             Host::update_status(db_host.to_owned(), Status::Installing, &*conn);
 
             let ac = ansible::AnsibleCommand::new(
@@ -72,12 +75,15 @@ impl HostService {
             ac.run_playbook();
             let client =
                 Client::connect(format!("http://{}:{}", db_host.address, db_host.port)).unwrap();
-            self.clients.insert(db_host.id, client);
-            match self.health_check(&db_host.id.to_string(), &conn) {
+            self.clients.write().unwrap().insert(db_host.id, client);
+
+            // TODO: fail instead of just printing
+            match self.health_check(&db_host.id.to_string()) {
                 Ok(r) => println!("Health check: {}", r),
                 Err(_) => println!("Health check failed"),
             };
 
+            // TODO: handle errors
             Host::update_status(db_host.to_owned(), Status::Up, &*conn);
             println!("Finished installation of {}", db_host.id);
         });
@@ -85,15 +91,15 @@ impl HostService {
         Ok(String::from("installing host"))
     }
 
-    pub fn health_check(&self, host_id: &str, conn: &DbConnection) -> Result<String, String> {
-        let host = match self.get_by_id(host_id, conn) {
-            Ok(h) => h,
-            Err(e) => return Err(e.to_string()),
-        };
-
+    pub fn health_check(&self, host_id: &str) -> Result<String, String> {
         use tonic::Request;
 
-        match self.clients.get(&Uuid::parse_str(host_id).unwrap()) {
+        match self
+            .clients
+            .read()
+            .unwrap()
+            .get(&Uuid::parse_str(host_id).unwrap())
+        {
             Some(c) => {
                 let response = c.health_check(Request::new(()));
                 return match response {
