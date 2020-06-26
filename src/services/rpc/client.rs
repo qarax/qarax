@@ -1,3 +1,4 @@
+use std::sync::{Arc, RwLock};
 use tokio::runtime::{Builder, Runtime};
 
 pub mod node {
@@ -9,9 +10,10 @@ use node::{node_client::NodeClient, Response as NodeResponse};
 type StdError = Box<dyn std::error::Error + Send + Sync + 'static>;
 type Result<T, E = StdError> = ::std::result::Result<T, E>;
 
+#[derive(Clone)]
 pub struct Client {
-    client: NodeClient<tonic::transport::Channel>,
-    rt: Runtime,
+    client: Arc<RwLock<NodeClient<tonic::transport::Channel>>>,
+    rt: Arc<RwLock<Runtime>>,
 }
 
 impl Client {
@@ -27,13 +29,19 @@ impl Client {
             .unwrap();
         let client = rt.block_on(NodeClient::connect(dst))?;
 
-        Ok(Self { rt, client })
+        Ok(Self {
+            client: Arc::new(RwLock::new(client)),
+            rt: Arc::new(RwLock::new(rt)),
+        })
     }
 
     pub fn health_check(
-        &mut self,
+        &self,
         request: impl tonic::IntoRequest<()>,
     ) -> Result<tonic::Response<NodeResponse>, tonic::Status> {
-        self.rt.block_on(self.client.health_check(request))
+        Arc::clone(&self.rt)
+            .write()
+            .unwrap()
+            .block_on(self.client.write().unwrap().health_check(request))
     }
 }

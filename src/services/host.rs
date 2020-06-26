@@ -5,16 +5,22 @@ use super::rpc::client::Client;
 use super::util::ansible;
 
 use std::collections::BTreeMap;
+use std::collections::HashMap;
+
 use std::thread;
 
 use uuid::Uuid;
 
-#[derive(Copy, Clone)]
-pub struct HostService {}
+#[derive(Clone)]
+pub struct HostService {
+    clients: HashMap<Uuid, Client>,
+}
 
 impl HostService {
     pub fn new() -> Self {
-        HostService {}
+        HostService {
+            clients: HashMap::new(),
+        }
     }
 
     pub fn get_by_id(&self, host_id: &str, conn: &DbConnection) -> Result<Host, String> {
@@ -30,7 +36,7 @@ impl HostService {
     }
 
     pub fn install(
-        &self,
+        mut self,
         host_id: &str,
         host: &InstallHost,
         conn: DbConnection,
@@ -64,6 +70,14 @@ impl HostService {
             );
 
             ac.run_playbook();
+            let client =
+                Client::connect(format!("http://{}:{}", db_host.address, db_host.port)).unwrap();
+            self.clients.insert(db_host.id, client);
+            match self.health_check(&db_host.id.to_string(), &conn) {
+                Ok(r) => println!("Health check: {}", r),
+                Err(_) => println!("Health check failed"),
+            };
+
             Host::update_status(db_host.to_owned(), Status::Up, &*conn);
             println!("Finished installation of {}", db_host.id);
         });
@@ -79,19 +93,15 @@ impl HostService {
 
         use tonic::Request;
 
-        let client = Client::connect(format!("http://{}:{}", host.address, host.port));
-        match client {
-            Ok(mut c) => {
+        match self.clients.get(&Uuid::parse_str(host_id).unwrap()) {
+            Some(c) => {
                 let response = c.health_check(Request::new(()));
-                match response {
+                return match response {
                     Ok(_) => Ok(String::from("OK")),
                     Err(_) => Err(String::from("ERROR")),
-                }
+                };
             }
-            Err(e) => Err(String::from(format!(
-                "Could not connect: {}",
-                e.to_string()
-            ))),
+            None => Err(String::from("No client found for host")),
         }
     }
 
