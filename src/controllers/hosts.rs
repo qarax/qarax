@@ -35,7 +35,7 @@ pub fn health_check(id: Uuid, backend: State<Backend>, conn: DbConnection) -> Js
 }
 
 #[post("/<host_id>/install", format = "json", data = "<host>")]
-pub fn install<'a>(
+pub fn install(
     host_id: Uuid,
     host: Json<InstallHost>,
     backend: State<Backend>,
