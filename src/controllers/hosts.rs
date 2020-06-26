@@ -1,12 +1,9 @@
 use super::*;
 use crate::database::DbConnection;
 use crate::models::host::{InstallHost, NewHost};
-use crate::services::host::HostService;
 use crate::services::Backend;
 use rocket_contrib::json::{Json, JsonValue};
 use rocket_contrib::uuid::Uuid;
-
-use std::sync::Arc;
 
 #[get("/")]
 pub fn index(backend: State<Backend>, conn: DbConnection) -> JsonValue {
@@ -27,8 +24,8 @@ pub fn add_host(host: Json<NewHost>, backend: State<Backend>, conn: DbConnection
 }
 
 #[get("/health/<id>")]
-pub fn health_check(id: Uuid, backend: State<Backend>, conn: DbConnection) -> JsonValue {
-    match backend.host_service.health_check(&id.to_string(), &conn) {
+pub fn health_check(id: Uuid, backend: State<Backend>) -> JsonValue {
+    match backend.host_service.health_check(&id.to_string()) {
         Ok(status) => json!({ "host_status": status }),
         Err(status) => json!({ "host_status": status }),
     }
@@ -43,8 +40,8 @@ pub fn install(
 ) -> JsonValue {
     // TODO: error handling
     match backend
-        .clone()
         .host_service
+        .clone()
         .install(&host_id.to_string(), &host, conn)
     {
         Ok(status) => json!({ "status": status }),
