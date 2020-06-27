@@ -1,6 +1,6 @@
 use crate::database::DbConnection;
 use crate::models::vm::{NewVm, Vm};
-
+use crate::services::host::HostService;
 use uuid::Uuid;
 
 #[derive(Copy, Clone)]
@@ -21,5 +21,31 @@ impl VmService {
 
     pub fn add_vm(&self, vm: &NewVm, conn: &DbConnection) -> Result<Uuid, String> {
         Vm::insert(vm, conn)
+    }
+
+    pub fn start(
+        &self,
+        vm_id: &str,
+        host_service: &HostService,
+        conn: &DbConnection,
+    ) -> Result<Uuid, String> {
+        use super::rpc::client::node::VmConfig;
+
+        // TODO: error handling
+        let host = host_service.get_running_host(conn);
+        let client = host_service.get_client(host.id);
+        let vm = self.get_by_id(vm_id, conn).unwrap();
+
+        let request = VmConfig {
+            vm_id: vm.id.to_string(),
+            memory: vm.memory,
+            vcpus: vm.vcpu,
+            kernel: vm.kernel,
+            root_fs: vm.root_file_system,
+        };
+
+        client.start_vm(request);
+
+        Ok(vm.id)
     }
 }

@@ -5,7 +5,7 @@ pub mod node {
     tonic::include_proto!("node");
 }
 
-use node::{node_client::NodeClient, Response as NodeResponse};
+use node::{node_client::NodeClient, Response as NodeResponse, VmConfig, VmResponse};
 
 type StdError = Box<dyn std::error::Error + Send + Sync + 'static>;
 type Result<T, E = StdError> = ::std::result::Result<T, E>;
@@ -43,5 +43,15 @@ impl Client {
             .write()
             .unwrap()
             .block_on(self.client.write().unwrap().health_check(request))
+    }
+
+    pub fn start_vm(
+        &self,
+        request: impl tonic::IntoRequest<(VmConfig)>,
+    ) -> Result<tonic::Response<VmResponse>, tonic::Status> {
+        Arc::clone(&self.rt)
+            .write()
+            .unwrap()
+            .block_on(self.client.write().unwrap().start_vm(request))
     }
 }

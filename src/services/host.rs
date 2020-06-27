@@ -111,6 +111,20 @@ impl HostService {
         }
     }
 
+    pub fn get_client(&self, host_id: Uuid) -> Client {
+        // TODO: error handling
+        self.clients.read().unwrap().get(&host_id).cloned().unwrap()
+    }
+
+    pub fn get_running_host(&self, conn: &DbConnection) -> Host {
+        // TODO: error handling
+        Host::by_status(Status::Up, conn)
+            .unwrap()
+            .first()
+            .cloned()
+            .unwrap()
+    }
+
     #[allow(dead_code)]
     pub fn delete_all(&self, conn: &DbConnection) -> Result<usize, String> {
         match Host::delete_all(conn) {
