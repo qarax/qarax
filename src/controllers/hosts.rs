@@ -62,12 +62,11 @@ mod tests {
 
     use rocket::http::ContentType;
     use rocket::local::Client;
-    use rocket::State;
     use serde_json::Value;
 
     embed_migrations!();
 
-    fn get_client() -> (HostService, Client, DbConnection) {
+    fn get_client() -> (Client, DbConnection) {
         let hs = HostService::new();
         let vs = VmService::new();
         let rocket = rocket::ignite()
@@ -81,15 +80,15 @@ mod tests {
         let conn = DbConnection::get_one(&rocket).expect("Database connection failed");
         embedded_migrations::run(&*conn).expect("Failed to run migrations");
         let client = Client::new(rocket).expect("Failed to get client");
-
-        (hs, client, conn)
+        (client, conn)
     }
 
     #[test]
     fn test_index_empty() {
-        let (hs, client, conn) = get_client();
+        let (client, conn) = get_client();
+        let backend: State<Backend> = State::from(&client.rocket()).expect("Could not get state");
         client.get("/hosts").dispatch();
-        assert_eq!(hs.get_all(&conn).len(), 0);
+        assert_eq!(backend.host_service.get_all(&conn).len(), 0);
     }
 
     #[test]
@@ -102,18 +101,19 @@ mod tests {
         "local_node_path": "/home/",
         "port": 8001}"#;
 
-        let (hs, client, conn) = get_client();
+        let (client, conn) = get_client();
         client
             .post("/hosts")
             .header(ContentType::JSON)
             .body(payload)
             .dispatch();
-        let hs = HostService::new();
 
-        assert_eq!(hs.get_all(&conn).len(), 1);
+        let backend: State<Backend> = State::from(&client.rocket()).unwrap();
+
+        assert_eq!(backend.host_service.get_all(&conn).len(), 1);
 
         // TODO: Stupid teardown
-        hs.delete_all(&conn);
+        backend.host_service.delete_all(&conn);
     }
 
     #[test]
@@ -126,7 +126,7 @@ mod tests {
         "local_node_path": "/home/",
         "port": 8001}"#;
 
-        let (hs, client, conn) = get_client();
+        let (client, conn) = get_client();
         let mut response = client
             .post("/hosts")
             .header(ContentType::JSON)
@@ -138,11 +138,12 @@ mod tests {
 
         let response: Value = serde_json::from_str(&response.unwrap()).unwrap();
         let host_id = response["host_id"].as_str().unwrap();
-        let hs = HostService::new();
 
-        assert_eq!(hs.get_by_id(host_id, conn).is_ok(), true);
+        let backend: State<Backend> = State::from(&client.rocket()).unwrap();
+
+        assert_eq!(backend.host_service.get_by_id(host_id, &conn).is_ok(), true);
 
         // TODO: Stupid teardown
-        hs.delete_all(&conn);
+        backend.host_service.delete_all(&conn);
     }
 }
