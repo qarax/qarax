@@ -27,14 +27,7 @@ impl VmService {
 impl Node for VmService {
     async fn start_vm(&self, request: Request<VmConfig>) -> Result<Response<VmResponse>, Status> {
         println!("Start VM: {:?}", request);
-        let config = VmConfig {
-            vm_id:  String::from("123"),
-            vcpus: 1,
-            memory: 128,
-            kernel: String::from("./vmlinux"),
-            root_fs: String::from("rootfs"),
-        };
-
+        let config = request.into_inner();
         let mut handlers = self.handlers.write().await;
         let handler = handlers.entry(config.vm_id.to_owned()).or_insert(VmmHandler::new());
         handler.configure_vm(&config).await;
