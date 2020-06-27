@@ -80,7 +80,7 @@ impl HostService {
             // TODO: fail instead of just printing
             match self.health_check(&db_host.id.to_string()) {
                 Ok(r) => println!("Health check: {}", r),
-                Err(_) => println!("Health check failed"),
+                Err(_) => eprintln!("Health check failed"),
             };
 
             // TODO: handle errors
@@ -106,7 +106,7 @@ impl HostService {
                     Ok(_) => Ok(String::from("OK")),
                     Err(_) => Err(String::from("ERROR")),
                 };
-            }
+            },
             None => Err(String::from("No client found for host")),
         }
     }
