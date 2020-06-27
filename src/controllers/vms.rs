@@ -2,6 +2,7 @@ use super::*;
 use crate::database::DbConnection;
 use crate::models::vm::NewVm;
 use crate::services::Backend;
+
 use rocket_contrib::json::{Json, JsonValue};
 use rocket_contrib::uuid::Uuid;
 
@@ -23,6 +24,17 @@ pub fn add_vm(vm: Json<NewVm>, backend: State<Backend>, conn: DbConnection) -> J
     }
 }
 
+#[post("/<id>/start")]
+pub fn start_vm(id: Uuid, backend: State<Backend>, conn: DbConnection) -> JsonValue {
+    match backend
+        .vm_service
+        .start(&id.to_string(), &backend.host_service, &conn)
+    {
+        Ok(id) => json!({ "vm_id": id }),
+        Err(_) => json!({ "error": "could not start vm" }),
+    }
+}
+
 pub fn routes() -> Vec<rocket::Route> {
-    routes![index, by_id, add_vm]
+    routes![index, by_id, add_vm, start_vm]
 }
