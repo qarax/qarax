@@ -60,10 +60,10 @@ mod test {
     #[test]
     fn test_generate_command() {
         let mut extra_params = BTreeMap::new();
-        extra_params.insert("ansible_password", "fedora");
-        extra_params.insert("fcversion", "0.21.1");
+        extra_params.insert(String::from("ansible_password"), String::from("fedora"));
+        extra_params.insert(String::from("fcversion"), String::from("0.21.1"));
 
-        let ac = AnsibleCommand::new(CMD, "root", "192.168.122.45", &extra_params);
+        let ac = AnsibleCommand::new(CMD, "root", "192.168.122.45", extra_params);
         const OUTPUT: &str = "/usr/bin/ansible-playbook -i 192.168.122.45, -u root -e ansible_password=fedora -e fcversion=0.21.1";
 
         assert_eq!(ac.to_string(), OUTPUT);

@@ -106,7 +106,7 @@ impl HostService {
                     Ok(_) => Ok(String::from("OK")),
                     Err(_) => Err(String::from("ERROR")),
                 };
-            },
+            }
             None => Err(String::from("No client found for host")),
         }
     }
