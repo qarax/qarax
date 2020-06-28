@@ -48,4 +48,23 @@ impl VmService {
 
         Ok(vm.id)
     }
+
+    pub fn stop(
+        &self,
+        vm_id: &str,
+        host_service: &HostService,
+        conn: &DbConnection,
+    ) -> Result<Uuid, String> {
+        use super::rpc::client::node::VmId;
+
+        // TODO: error handling
+        let host = host_service.get_running_host(conn);
+        let client = host_service.get_client(host.id);
+        let request = VmId {
+            vm_id: vm_id.to_owned(),
+        };
+        client.stop_vm(request);
+
+        Ok(Uuid::parse_str(vm_id).unwrap())
+    }
 }
