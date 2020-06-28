@@ -42,7 +42,7 @@ impl VmmHandler {
         // - check if socket exists before
         // - make a sanity check on the api server
         // - make it run in the background, not sure why it doesn't already
-        Command::new(FIRECRACKER_BIN)
+        let child = Command::new(FIRECRACKER_BIN)
             .args(vec!["--api-sock", &socket_path])
             .spawn()
             .expect("Faild to start firecracker");
@@ -52,11 +52,10 @@ impl VmmHandler {
         use std::{thread, time};
         thread::sleep(time::Duration::from_millis(1000));
 
-
         // TODO: get paths and ids from qarax
         let drive = drive::Drive::new(String::from("rootfs"), false, true, String::from("rootfs"));
 
-        let vmm = machine::Machine::new(socket_path, mc, bs, drive);
+        let vmm = machine::Machine::new(socket_path, mc, bs, drive, child.id());
         tokio::join!(vmm.configure_boot_source(), vmm.configure_drive());
 
         self.machine = Some(Box::new(vmm));
@@ -64,6 +63,10 @@ impl VmmHandler {
 
     pub async fn start_vm(&self) {
         self.machine.as_ref().unwrap().start().await;
+    }
+
+    pub async fn stop_vm(&self) {
+        self.machine.as_ref().unwrap().stop().await;
     }
 }
 

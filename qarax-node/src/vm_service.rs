@@ -1,25 +1,25 @@
-use crate::vmm_handler::VmmHandler;
 use crate::vmm_handler::node::node_server::Node;
 use crate::vmm_handler::node::{
-    Response as NodeResponse, Status as NodeStatus, VmConfig, VmList, VmResponse, VmId
+    Response as NodeResponse, Status as NodeStatus, VmConfig, VmId, VmList, VmResponse,
 };
+use crate::vmm_handler::VmmHandler;
 
 use std::collections::HashMap;
 
-use tonic::{Request, Response, Status};
 use tokio::sync::RwLock;
+use tonic::{Request, Response, Status};
 
 #[derive(Debug, Default)]
 pub struct VmService {
     // TODO: Not sure about this at all
-    handlers: RwLock<HashMap<String, VmmHandler>>
+    handlers: RwLock<HashMap<String, VmmHandler>>,
 }
 
 impl VmService {
     pub fn new() -> Self {
-       VmService {
-           handlers: RwLock::new(HashMap::new()),
-       }
+        VmService {
+            handlers: RwLock::new(HashMap::new()),
+        }
     }
 }
 
@@ -29,7 +29,9 @@ impl Node for VmService {
         println!("Start VM: {:?}", request);
         let config = request.into_inner();
         let mut handlers = self.handlers.write().await;
-        let handler = handlers.entry(config.vm_id.to_owned()).or_insert(VmmHandler::new());
+        let handler = handlers
+            .entry(config.vm_id.to_owned())
+            .or_insert(VmmHandler::new());
         handler.configure_vm(&config).await;
         handler.start_vm().await;
 
@@ -44,7 +46,12 @@ impl Node for VmService {
 
     async fn stop_vm(&self, request: Request<VmId>) -> Result<Response<NodeResponse>, Status> {
         println!("Got a request: {:?}", request);
+        let vm_id = request.into_inner().vm_id;
+        let mut handlers = self.handlers.write().await;
+        let handler = handlers.entry(vm_id.clone()).or_insert(VmmHandler::new());
+        handler.stop_vm().await;
 
+        handlers.remove(&vm_id);
         let response = NodeResponse {
             status: NodeStatus::Success as i32,
         };

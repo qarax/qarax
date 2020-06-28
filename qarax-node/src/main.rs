@@ -1,9 +1,9 @@
-mod vmm_handler;
 mod vm_service;
+mod vmm_handler;
 
-use vmm_handler::node::node_server::NodeServer;
-use vm_service::VmService;
 use tonic::transport::Server;
+use vm_service::VmService;
+use vmm_handler::node::node_server::NodeServer;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
