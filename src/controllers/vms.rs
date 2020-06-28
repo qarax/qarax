@@ -35,6 +35,17 @@ pub fn start_vm(id: Uuid, backend: State<Backend>, conn: DbConnection) -> JsonVa
     }
 }
 
+#[post("/<id>/stop")]
+pub fn stop_vm(id: Uuid, backend: State<Backend>, conn: DbConnection) -> JsonValue {
+    match backend
+        .vm_service
+        .stop(&id.to_string(), &backend.host_service, &conn)
+    {
+        Ok(id) => json!({ "vm_id": id }),
+        Err(_) => json!({ "error": "could not stop vm" }),
+    }
+}
+
 pub fn routes() -> Vec<rocket::Route> {
-    routes![index, by_id, add_vm, start_vm]
+    routes![index, by_id, add_vm, start_vm, stop_vm]
 }
