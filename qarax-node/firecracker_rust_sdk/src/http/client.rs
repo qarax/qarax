@@ -23,7 +23,7 @@ impl Method {
 #[derive(Debug)]
 pub struct VmmClient {
     client: Client<UnixConnector>,
-    socket_path: String,
+    pub socket_path: String,
 }
 
 impl VmmClient {
