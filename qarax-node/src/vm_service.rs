@@ -6,19 +6,20 @@ use crate::vmm_handler::VmmHandler;
 
 use std::collections::HashMap;
 
+use std::sync::Arc;
 use tokio::sync::RwLock;
 use tonic::{Request, Response, Status};
 
 #[derive(Debug, Default)]
 pub struct VmService {
     // TODO: Not sure about this at all
-    handlers: RwLock<HashMap<String, VmmHandler>>,
+    handlers: Arc<RwLock<HashMap<String, VmmHandler>>>,
 }
 
 impl VmService {
     pub fn new() -> Self {
         VmService {
-            handlers: RwLock::new(HashMap::new()),
+            handlers: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 }
