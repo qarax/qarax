@@ -6,6 +6,7 @@ use node::{Status, VmConfig};
 use std::convert::TryFrom;
 use std::fmt;
 use std::process::Command;
+use tokio::sync::RwLock;
 
 pub(crate) mod node {
     tonic::include_proto!("node");
@@ -17,14 +18,18 @@ type AsyncResult<T> = std::result::Result<T, Box<dyn std::error::Error + Send + 
 const FIRECRACKER_BIN: &str = "./firecracker";
 
 // TODO: VmmHandler sounds like a stupid name
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct VmmHandler {
-    machine: Option<Box<machine::Machine>>,
+    machine: RwLock<Option<machine::Machine>>,
+    log: slog::Logger,
 }
 
 impl VmmHandler {
-    pub fn new() -> Self {
-        VmmHandler { machine: None }
+    pub fn new(log: slog::Logger) -> Self {
+        VmmHandler {
+            machine: RwLock::new(None),
+            log,
+        }
     }
 
     pub async fn configure_vm(&mut self, vm_config: &VmConfig) {
@@ -58,15 +63,30 @@ impl VmmHandler {
         let vmm = machine::Machine::new(socket_path, mc, bs, drive, child.id());
         tokio::join!(vmm.configure_boot_source(), vmm.configure_drive());
 
-        self.machine = Some(Box::new(vmm));
+        self.machine.write().await.replace(vmm);
     }
 
     pub async fn start_vm(&self) {
-        self.machine.as_ref().unwrap().start().await;
+        let m = self.machine.read().await;
+        if m.is_some() {
+            info!(self.log, "Starting VM machine...");
+            m.as_ref().unwrap().start().await;
+        } else {
+            error!(self.log, "Machine object unavilable!");
+        }
     }
 
     pub async fn stop_vm(&self) {
-        self.machine.as_ref().unwrap().stop().await;
+        let m = self.machine.read().await;
+        if m.is_some() {
+            info!(self.log, "Stopping VM machine...");
+            match m.as_ref().unwrap().stop().await {
+                Ok(_) => info!(self.log, "VM stopped"),
+                Err(e) => error!(self.log, "Failed to stop VM :( {}", e.to_string()),
+            }
+        } else {
+            error!(self.log, "Machine object unavilable!");
+        }
     }
 }
 
