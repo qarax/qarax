@@ -32,10 +32,10 @@ impl Vm {
         vms.load::<Vm>(conn).unwrap()
     }
 
-    pub fn by_id(id: Uuid, conn: &PgConnection) -> Result<Vm, String> {
+    pub fn by_id(vm_id: Uuid, conn: &PgConnection) -> Result<Vm, String> {
         use crate::schema::vms::dsl::*;
 
-        match vms.find(id).first(conn) {
+        match vms.find(vm_id).first(conn) {
             Ok(v) => Ok(v),
             Err(e) => Err(e.to_string()),
         }
