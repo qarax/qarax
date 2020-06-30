@@ -4,9 +4,10 @@ use firecracker_rust_sdk::models::{boot_source, drive, machine, machine_configur
 use node::{Status, VmConfig};
 
 use std::convert::TryFrom;
-use std::fmt;
 use std::process::Command;
 use tokio::sync::RwLock;
+
+use std::sync::Arc;
 
 pub(crate) mod node {
     tonic::include_proto!("node");
@@ -20,19 +21,19 @@ const FIRECRACKER_BIN: &str = "./firecracker";
 // TODO: VmmHandler sounds like a stupid name
 #[derive(Debug)]
 pub struct VmmHandler {
-    machine: RwLock<Option<machine::Machine>>,
-    log: slog::Logger,
+    machine: Arc<RwLock<Option<machine::Machine>>>,
 }
 
 impl VmmHandler {
-    pub fn new(log: slog::Logger) -> Self {
+    pub fn new() -> Self {
         VmmHandler {
-            machine: RwLock::new(None),
-            log,
+            machine: Arc::new(RwLock::new(None)),
         }
     }
 
     pub async fn configure_vm(&mut self, vm_config: &VmConfig) {
+        tracing::info!("Configuring VMM...");
+
         // TODO: do some actual validation
         let socket_path = format!("/tmp/{}.sock", vm_config.vm_id);
         let mc = machine_configuration::MachineConfiguration::new(false, vm_config.memory, 1);
@@ -47,6 +48,8 @@ impl VmmHandler {
         // - check if socket exists before
         // - make a sanity check on the api server
         // - make it run in the background, not sure why it doesn't already
+        tracing::info!("Starting FC process...");
+
         let child = Command::new(FIRECRACKER_BIN)
             .args(vec!["--api-sock", &socket_path])
             .spawn()
@@ -61,32 +64,42 @@ impl VmmHandler {
         let drive = drive::Drive::new(String::from("rootfs"), false, true, String::from("rootfs"));
 
         let vmm = machine::Machine::new(socket_path, mc, bs, drive, child.id());
+        tracing::info!("waiting for configuration...");
+
         tokio::join!(vmm.configure_boot_source(), vmm.configure_drive());
+        tracing::info!("before self.machine is {:?}", &self.machine);
 
         self.machine.write().await.replace(vmm);
+        tracing::info!("self.machine is {:?}", &self.machine);
     }
 
     pub async fn start_vm(&self) {
         let m = self.machine.read().await;
         if m.is_some() {
-            info!(self.log, "Starting VM machine...");
+            tracing::info!("Starting VM machine...");
             m.as_ref().unwrap().start().await;
         } else {
-            error!(self.log, "Machine object unavilable!");
+            tracing::error!("Machine object unavilable! - start");
         }
     }
 
     pub async fn stop_vm(&self) {
         let m = self.machine.read().await;
         if m.is_some() {
-            info!(self.log, "Stopping VM machine...");
+            tracing::info!("Stopping VM machine...");
             match m.as_ref().unwrap().stop().await {
-                Ok(_) => info!(self.log, "VM stopped"),
-                Err(e) => error!(self.log, "Failed to stop VM :( {}", e.to_string()),
+                Ok(_) => tracing::info!("VM stopped"),
+                Err(e) => tracing::error!("Failed to stop VM :( {}", e.to_string()),
             }
         } else {
-            error!(self.log, "Machine object unavilable!");
+            tracing::error!("Machine object unavilable! - stop");
         }
+    }
+}
+
+impl Drop for VmmHandler {
+    fn drop(&mut self) {
+        tracing::info!("dropping handler!");
     }
 }
 
