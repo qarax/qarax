@@ -14,14 +14,12 @@ use tonic::{Code, Request, Response, Status};
 pub struct VmService {
     // TODO: Not sure about this at all
     handlers: Arc<RwLock<HashMap<String, VmmHandler>>>,
-    log: slog::Logger,
 }
 
 impl VmService {
-    pub fn new(log: slog::Logger) -> Self {
+    pub fn new() -> Self {
         VmService {
             handlers: Arc::new(RwLock::new(HashMap::new())),
-            log,
         }
     }
 }
@@ -30,14 +28,21 @@ impl VmService {
 impl Node for VmService {
     async fn start_vm(&self, request: Request<VmConfig>) -> Result<Response<VmResponse>, Status> {
         let config = request.into_inner();
-        info!(self.log, "Starting VM {}", config.vm_id; "vm_id" => &config.vm_id, "vcpus" => &config.vcpus);
+        tracing::info!(
+            "Starting VM {}, {}, {}",
+            &config.vm_id,
+            &config.vm_id,
+            &config.vcpus
+        );
 
         let mut handlers = self.handlers.write().await;
         let handler = handlers
             .entry(config.vm_id.to_owned())
-            .or_insert(VmmHandler::new(self.log.new(o!())));
+            .or_insert(VmmHandler::new());
         handler.configure_vm(&config).await;
+        tracing::info!("Configured VM...");
         handler.start_vm().await;
+        tracing::info!("Started VM...");
 
         let response = VmResponse {
             status: NodeStatus::Success as i32,
@@ -50,17 +55,13 @@ impl Node for VmService {
 
     async fn stop_vm(&self, request: Request<VmId>) -> Result<Response<NodeResponse>, Status> {
         let vm_id = request.into_inner().vm_id;
-        info!(self.log, "Stopping VM {}", vm_id; "vm_id" => &vm_id);
-        info!(
-            self.log,
-            "{} handlers available",
-            self.handlers.read().await.len()
-        );
+        tracing::info!("Stopping VM {}", vm_id);
+        tracing::info!("handlers available");
 
         let mut handlers = self.handlers.write().await;
 
         if let Some(handler) = handlers.get(&vm_id) {
-            info!(self.log, "Fetched handler for vm {}", vm_id; "vm_id" => &vm_id);
+            tracing::info!("Fetched handler for vm {}", vm_id);
             handler.stop_vm().await;
 
             handlers.remove(&vm_id);
