@@ -73,6 +73,11 @@ impl HostService {
             );
 
             ac.run_playbook();
+
+            // TODO: Find out how to add a timeout to Client#connect
+            use std::{thread, time};
+            thread::sleep(time::Duration::from_millis(3000));
+
             let client =
                 Client::connect(format!("http://{}:{}", db_host.address, db_host.port)).unwrap();
             self.clients.write().unwrap().insert(db_host.id, client);
