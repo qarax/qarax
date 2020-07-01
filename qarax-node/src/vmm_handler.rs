@@ -67,10 +67,7 @@ impl VmmHandler {
         tracing::info!("waiting for configuration...");
 
         tokio::join!(vmm.configure_boot_source(), vmm.configure_drive());
-        tracing::info!("before self.machine is {:?}", &self.machine);
-
         self.machine.write().await.replace(vmm);
-        tracing::info!("self.machine is {:?}", &self.machine);
     }
 
     pub async fn start_vm(&self) {
