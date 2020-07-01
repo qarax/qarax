@@ -31,7 +31,7 @@ impl Node for VmService {
         tracing::info!(
             "Starting VM {}, {}, {}",
             &config.vm_id,
-            &config.vm_id,
+            &config.memory,
             &config.vcpus
         );
 
@@ -76,7 +76,7 @@ impl Node for VmService {
     }
 
     async fn list_vms(&self, request: Request<()>) -> Result<Response<VmList>, Status> {
-        println!("Got a request: {:?}", request);
+        tracing::debug!("Got a request: {:?}", request);
 
         let response = VmList {
             vm_id: vec![String::from("123")],
@@ -86,7 +86,7 @@ impl Node for VmService {
     }
 
     async fn health_check(&self, request: Request<()>) -> Result<Response<NodeResponse>, Status> {
-        println!("Got a request: {:?}", request);
+        tracing::debug!("Got a request: {:?}", request);
 
         let response = NodeResponse {
             status: NodeStatus::Success as i32,

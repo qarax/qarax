@@ -44,7 +44,7 @@ impl VmmClient {
             .unwrap();
     
         let resp = self.client.request(req).await?;
-        println!("Incoming status: {}", resp.status());
+        tracing::debug!("incoming status: {}", resp.status());
 
         let bytes = resp.into_body()
         .try_fold(Vec::default(), |mut buf, bytes| async {
