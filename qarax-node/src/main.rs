@@ -14,7 +14,7 @@ use tracing_appender;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let log_path = "qarax-node.log";
 
-    let file_appender = tracing_appender::rolling::hourly(env::current_dir().unwrap(), log_path);
+    let file_appender = tracing_appender::rolling::daily(env::current_dir().unwrap(), log_path);
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
     tracing_subscriber::fmt().with_writer(non_blocking).init();
 
