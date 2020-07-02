@@ -38,7 +38,8 @@
     mode: u=rwx
 
 - name: start qarax-node
-  command: nohup ./start_qarax_node.sh &
+  command: ./start_qarax_node.sh
   async: 10
   poll: 0
+  register: myoutput
   when: qarax_node_running.rc == 1
