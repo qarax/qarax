@@ -1,11 +1,11 @@
 use super::BootSource;
 use super::Drive;
+use super::Logger;
 use super::MachineConfiguration;
 
 use crate::http::client::{Method, VmmClient};
 
 use serde_json;
-use tokio;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -15,14 +15,17 @@ pub struct Machine {
     machine_configuration: MachineConfiguration,
     boot_source: BootSource,
     drive: Drive,
+    logger: Logger,
     pid: u32,
 }
+
 impl Machine {
     pub fn new(
         socket_path: String,
         machine_configuration: MachineConfiguration,
         boot_source: BootSource,
         drive: Drive,
+        logger: Logger,
         pid: u32,
     ) -> Self {
         Machine {
@@ -30,6 +33,7 @@ impl Machine {
             machine_configuration,
             boot_source,
             drive,
+            logger,
             pid,
         }
     }
@@ -56,6 +60,24 @@ impl Machine {
         Ok(self
             .client
             .request(&endpoint, Method::PUT, &drive.as_bytes())
+            .await?)
+    }
+
+    pub async fn configure_logger(&self) -> Result<String> {
+        // TODO: error handling
+        use nix::unistd;
+        use nix::sys::stat;
+        use std::path::Path;
+
+        unistd::mkfifo(Path::new(&self.logger.log_path), stat::Mode::S_IRWXU)?;
+
+        let logger = serde_json::to_string(&self.logger).unwrap();
+
+        tracing::debug!("Sending logger with {}\n", logger);
+
+        Ok(self
+            .client
+            .request("/logger", Method::PUT, &logger.as_bytes())
             .await?)
     }
 
