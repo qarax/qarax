@@ -1,6 +1,6 @@
 extern crate firecracker_rust_sdk;
 
-use firecracker_rust_sdk::models::{boot_source, drive, machine, machine_configuration};
+use firecracker_rust_sdk::models::{boot_source, drive, logger, machine, machine_configuration};
 use node::{Status, VmConfig};
 
 use std::convert::TryFrom;
@@ -62,11 +62,16 @@ impl VmmHandler {
 
         // TODO: get paths and ids from qarax
         let drive = drive::Drive::new(String::from("rootfs"), false, true, String::from("rootfs"));
+        let mut logger = logger::Logger::new(format!("/var/log/{}.log", vm_config.vm_id));
+        // TODO: get the level from qarax-node's configuration (hopefully it'll have one)
+        logger.level = Some(logger::Level::Debug);
 
-        let vmm = machine::Machine::new(socket_path, mc, bs, drive, child.id());
+        let vmm = machine::Machine::new(socket_path, mc, bs, drive, logger, child.id());
         tracing::info!("waiting for configuration...");
 
-        tokio::join!(vmm.configure_boot_source(), vmm.configure_drive());
+        vmm.configure_logger().await;
+        tokio::join!(vmm.configure_boot_source(), vmm.configure_drive(),);
+
         self.machine.write().await.replace(vmm);
     }
 
