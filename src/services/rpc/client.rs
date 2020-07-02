@@ -12,8 +12,8 @@ type Result<T, E = StdError> = ::std::result::Result<T, E>;
 
 #[derive(Clone)]
 pub struct Client {
-    client: Arc<RwLock<NodeClient<tonic::transport::Channel>>>,
     rt: Arc<RwLock<Runtime>>,
+    client: Arc<RwLock<NodeClient<tonic::transport::Channel>>>,
 }
 
 impl Client {
