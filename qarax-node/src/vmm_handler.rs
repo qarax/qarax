@@ -94,12 +94,6 @@ impl VmmHandler {
     }
 }
 
-impl Drop for VmmHandler {
-    fn drop(&mut self) {
-        tracing::info!("dropping handler!");
-    }
-}
-
 impl TryFrom<i32> for Status {
     type Error = ();
 
