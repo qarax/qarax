@@ -4,7 +4,7 @@ use firecracker_rust_sdk::models::{boot_source, drive, logger, machine, machine_
 use node::{Status, VmConfig};
 
 use std::convert::TryFrom;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use tokio::sync::RwLock;
 
 use std::sync::Arc;
@@ -52,6 +52,7 @@ impl VmmHandler {
 
         let child = Command::new(FIRECRACKER_BIN)
             .args(vec!["--api-sock", &socket_path])
+            .stdout(Stdio::null())
             .spawn()
             .expect("Faild to start firecracker");
 
