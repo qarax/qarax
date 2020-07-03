@@ -47,7 +47,7 @@ impl Client {
 
     pub fn start_vm(
         &self,
-        request: impl tonic::IntoRequest<(VmConfig)>,
+        request: impl tonic::IntoRequest<VmConfig>,
     ) -> Result<tonic::Response<VmResponse>, tonic::Status> {
         Arc::clone(&self.rt)
             .write()
@@ -57,7 +57,7 @@ impl Client {
 
     pub fn stop_vm(
         &self,
-        request: impl tonic::IntoRequest<(VmId)>,
+        request: impl tonic::IntoRequest<VmId>,
     ) -> Result<tonic::Response<NodeResponse>, tonic::Status> {
         Arc::clone(&self.rt)
             .write()
