@@ -1,5 +1,6 @@
 use std::sync::{Arc, RwLock};
 use tokio::runtime::{Builder, Runtime};
+use tokio::time::{self, Duration};
 
 pub mod node {
     tonic::include_proto!("node");
@@ -17,9 +18,32 @@ pub struct Client {
 }
 
 impl Client {
+    async fn internal_connect<D>(
+        dst: D,
+    ) -> Result<NodeClient<tonic::transport::Channel>, tonic::Status>
+    where
+        D: std::convert::TryInto<tonic::transport::Endpoint> + Clone,
+        D::Error: Into<StdError>,
+    {
+        let mut timeout = time::delay_for(Duration::from_secs(10));
+        loop {
+            tokio::select! {
+               _ = &mut timeout => {
+                   return Err(tonic::Status::deadline_exceeded("Could not connect in time"));
+               },
+               c = NodeClient::connect(dst.clone()) => match c {
+                   Ok(c) => return Ok(c),
+
+                   // TODO: the error needs to be looked at in case it's not "Connection refused"
+                   Err(e) => continue,
+               }
+            };
+        }
+    }
+
     pub fn connect<D>(dst: D) -> Result<Self, tonic::transport::Error>
     where
-        D: std::convert::TryInto<tonic::transport::Endpoint>,
+        D: std::convert::TryInto<tonic::transport::Endpoint> + Clone,
         D::Error: Into<StdError>,
     {
         let mut rt = Builder::new()
@@ -27,10 +51,11 @@ impl Client {
             .enable_all()
             .build()
             .unwrap();
-        let client = rt.block_on(NodeClient::connect(dst))?;
+
+        let client = rt.block_on(Self::internal_connect(dst));
 
         Ok(Self {
-            client: Arc::new(RwLock::new(client)),
+            client: Arc::new(RwLock::new(client.unwrap())),
             rt: Arc::new(RwLock::new(rt)),
         })
     }
