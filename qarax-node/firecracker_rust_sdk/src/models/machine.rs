@@ -5,8 +5,6 @@ use super::MachineConfiguration;
 
 use crate::http::client::{Method, VmmClient};
 
-use serde_json;
-
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 #[derive(Debug)]
