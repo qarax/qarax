@@ -7,7 +7,7 @@ use super::util::ansible;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 
-use std::thread;
+use std::{thread, time};
 
 use std::sync::Arc;
 use std::sync::RwLock;
@@ -75,7 +75,6 @@ impl HostService {
             ac.run_playbook();
 
             // TODO: Find out how to add a timeout to Client#connect
-            use std::{thread, time};
             thread::sleep(time::Duration::from_millis(3000));
 
             let client =
