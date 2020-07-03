@@ -40,10 +40,7 @@ impl<'a> AnsibleCommand<'a> {
 
 impl<'a> fmt::Display for AnsibleCommand<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let mut output = String::from(format!(
-            "{} -i {}, -u {}",
-            self.playbook, self.host, self.user
-        ));
+        let mut output = format!("{} -i {}, -u {}", self.playbook, self.host, self.user);
 
         for (k, v) in self.extra_params.iter() {
             output.push_str(format!(" -e {}={}", k, v).as_str());
