@@ -74,19 +74,29 @@ impl HostService {
 
             ac.run_playbook();
 
-            let client =
-                Client::connect(format!("http://{}:{}", db_host.address, db_host.port)).unwrap();
-            self.clients.write().unwrap().insert(db_host.id, client);
+            match Client::connect(format!("http://{}:{}", db_host.address, db_host.port)) {
+                Ok(c) => {
+                    println!("Successfully connected to qarax-node");
+                    self.clients.write().unwrap().insert(db_host.id, c);
+                }
+                Err(e) => {
+                    println!("Failed to connect to qarax-node {}", e.to_string());
+                    Host::update_status(db_host.to_owned(), Status::Down, &*conn);
+                }
+            }
 
             // TODO: fail instead of just printing
             match self.health_check(&db_host.id.to_string()) {
-                Ok(r) => println!("Health check: {}", r),
-                Err(_) => eprintln!("Health check failed"),
+                Ok(r) => {
+                    println!("Health check: {}", r);
+                    Host::update_status(db_host.to_owned(), Status::Up, &*conn);
+                    println!("Finished installation of {}", db_host.id);
+                }
+                Err(e) => {
+                    Host::update_status(db_host.to_owned(), Status::Down, &*conn);
+                    eprintln!("Health check failed, failing installation")
+                }
             };
-
-            // TODO: handle errors
-            Host::update_status(db_host.to_owned(), Status::Up, &*conn);
-            println!("Finished installation of {}", db_host.id);
         });
 
         Ok(String::from("installing host"))
