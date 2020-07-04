@@ -136,6 +136,36 @@ impl HostService {
             .unwrap()
     }
 
+    pub fn initialize_hosts(&self, conn: &DbConnection) {
+        let hosts = Host::by_status(Status::Up, conn).unwrap();
+        for host in hosts {
+            match Client::connect(format!("http://{}:{}", host.address, host.port)) {
+                Ok(c) => {
+                    println!("Saving client for host {}", host.id);
+                    self.clients.write().unwrap().insert(host.id, c);
+
+                    match self.health_check(&host.id.to_string()) {
+                        Ok(_) => {
+                            println!("Successfully initialized host {}", host.id,);
+                        }
+                        Err(e) => {
+                            eprintln!("Host is unhealthy {}, error: {}", host.id, e);
+
+                            // TODO: down status is not correct, need to introduce one
+                            Host::update_status(host, Status::Down, &*conn);
+                            return ();
+                        }
+                    };
+                }
+                Err(e) => {
+                    eprintln!("Could not connect to host {}, error: {}", host.id, e);
+                    Host::update_status(host, Status::Down, &*conn);
+                    return ();
+                }
+            };
+        }
+    }
+
     #[allow(dead_code)]
     pub fn delete_all(&self, conn: &DbConnection) -> Result<usize, String> {
         match Host::delete_all(conn) {

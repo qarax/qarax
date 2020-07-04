@@ -16,7 +16,9 @@ mod models;
 mod schema;
 mod services;
 
+use rocket::fairing::AdHoc;
 use rocket::Rocket;
+use rocket::State;
 
 use controllers::hosts;
 use controllers::vms;
@@ -32,6 +34,10 @@ pub fn rocket() -> Rocket {
             host_service: HostService::new(),
             vm_service: VmService::new(),
         })
+        .attach(AdHoc::on_launch("Initialize hosts", |rocket| {
+            let backend: State<Backend> = State::from(rocket).unwrap();
+            backend.host_service.initialize_hosts(&DbConnection::get_one(&rocket).unwrap())
+        }))
         .mount("/hosts", hosts::routes())
         .mount("/vms", vms::routes())
 }
