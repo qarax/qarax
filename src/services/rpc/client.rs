@@ -41,7 +41,7 @@ impl Client {
         }
     }
 
-    pub fn connect<D>(dst: D) -> Result<Self, tonic::transport::Error>
+    pub fn connect<D>(dst: D) -> Result<Self, String>
     where
         D: std::convert::TryInto<tonic::transport::Endpoint> + Clone,
         D::Error: Into<StdError>,
@@ -52,10 +52,13 @@ impl Client {
             .build()
             .unwrap();
 
-        let client = rt.block_on(Self::internal_connect(dst));
+        let client = match rt.block_on(Self::internal_connect(dst)) {
+            Ok(c) => c,
+            Err(e) => return Err(e.to_string()),
+        };
 
         Ok(Self {
-            client: Arc::new(RwLock::new(client.unwrap())),
+            client: Arc::new(RwLock::new(client)),
             rt: Arc::new(RwLock::new(rt)),
         })
     }
