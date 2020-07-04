@@ -139,6 +139,7 @@ impl HostService {
     pub fn initialize_hosts(&self, conn: &DbConnection) {
         let hosts = Host::by_status(Status::Up, conn).unwrap();
         for host in hosts {
+            // TODO: this can and should be done in parallel
             match Client::connect(format!("http://{}:{}", host.address, host.port)) {
                 Ok(c) => {
                     println!("Saving client for host {}", host.id);
