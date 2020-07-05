@@ -152,7 +152,8 @@ impl HostService {
                         Err(e) => {
                             eprintln!("Host is unhealthy {}, error: {}", host.id, e);
 
-                            // TODO: down status is not correct, need to introduce one
+                            // TODO: down status is not correct, need to introduce a new status
+                            // for this
                             Host::update_status(host, Status::Down, &*conn);
                             return ();
                         }
