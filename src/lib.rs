@@ -36,7 +36,9 @@ pub fn rocket() -> Rocket {
         })
         .attach(AdHoc::on_launch("Initialize hosts", |rocket| {
             let backend: State<Backend> = State::from(rocket).unwrap();
-            backend.host_service.initialize_hosts(&DbConnection::get_one(&rocket).unwrap())
+            backend
+                .host_service
+                .initialize_hosts(&DbConnection::get_one(&rocket).unwrap())
         }))
         .mount("/hosts", hosts::routes())
         .mount("/vms", vms::routes())

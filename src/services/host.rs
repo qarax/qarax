@@ -63,7 +63,7 @@ impl HostService {
 
         thread::spawn(move || {
             // TODO: handle errors
-            Host::update_status(db_host.to_owned(), Status::Installing, &*conn);
+            Host::update_status(&db_host, Status::Installing, &*conn);
 
             let ac = ansible::AnsibleCommand::new(
                 ansible::INSTALL_HOST_PLAYBOOK,
@@ -81,7 +81,7 @@ impl HostService {
                 }
                 Err(e) => {
                     println!("Failed to connect to qarax-node {}", e.to_string());
-                    Host::update_status(db_host.to_owned(), Status::Down, &*conn);
+                    Host::update_status(&db_host, Status::Down, &*conn);
                 }
             }
 
@@ -89,11 +89,11 @@ impl HostService {
             match self.health_check(&db_host.id.to_string()) {
                 Ok(r) => {
                     println!("Health check: {}", r);
-                    Host::update_status(db_host.to_owned(), Status::Up, &*conn);
+                    Host::update_status(&db_host, Status::Up, &*conn);
                     println!("Finished installation of {}", db_host.id);
                 }
                 Err(e) => {
-                    Host::update_status(db_host.to_owned(), Status::Down, &*conn);
+                    Host::update_status(&db_host, Status::Down, &*conn);
                     eprintln!("Health check failed, failing installation")
                 }
             };
@@ -138,7 +138,7 @@ impl HostService {
 
     pub fn initialize_hosts(&self, conn: &DbConnection) {
         let hosts = Host::by_status(Status::Up, conn).unwrap();
-        for host in hosts {
+        hosts.iter().for_each(|host| {
             // TODO: this can and should be done concurrently
             match Client::connect(format!("http://{}:{}", host.address, host.port)) {
                 Ok(c) => {
@@ -165,7 +165,7 @@ impl HostService {
                     return ();
                 }
             };
-        }
+        });
     }
 
     #[allow(dead_code)]

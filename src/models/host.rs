@@ -70,8 +70,12 @@ impl Host {
         }
     }
 
-    pub fn update_status(h: Host, new_status: Status, conn: &PgConnection) -> Result<Host, String> {
-        match diesel::update(&h)
+    pub fn update_status(
+        h: &Host,
+        new_status: Status,
+        conn: &PgConnection,
+    ) -> Result<Host, String> {
+        match diesel::update(h)
             .set(status.eq(new_status))
             .get_result(conn)
         {
