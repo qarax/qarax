@@ -1,7 +1,21 @@
 # qarax
-qarax aims to be a firecracker orchestrator, it is currently in very early stages
+qarax aims to be a [firecracker](orchestrator), it is currently in very early stages
+
+### Prerequisites
+```
+postgresql
+ansible
+rust
+```
+Note: currently Rust nightly is required because of Rocket, use the [following](https://rocket.rs/v0.4/guide/getting-started/#installing-rust) instructions for installation.
 
 ### Development
+
+#### Get the source
+```shell
+git clone https://github.com/qarax/qarax.git
+cd qarax
+```
 
 #### Create the database
 ```shell
