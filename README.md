@@ -68,5 +68,6 @@ $ curl -XPOST http://localhost:8000/vms/71205bf5-c444-458f-b1b1-918757ee4892/sto
 
 # FAQ
 > Will we succeed?
+
 Unclear at the moment. Only time will tell.
 
