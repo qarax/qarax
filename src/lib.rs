@@ -27,9 +27,15 @@ use services::host::HostService;
 use services::vm::VmService;
 use services::Backend;
 
+embed_migrations!();
+
 pub fn rocket() -> Rocket {
     rocket::ignite()
         .attach(DbConnection::fairing())
+        .attach(AdHoc::on_launch("Run migrations", |rocket| {
+            let connection: DbConnection = DbConnection::get_one(rocket).unwrap();
+            embedded_migrations::run(&*connection).expect("Database connection failed");
+        }))
         .manage(Backend {
             host_service: HostService::new(),
             vm_service: VmService::new(),
