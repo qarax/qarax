@@ -19,7 +19,7 @@ cd qarax
 
 #### Create the database
 ```shell
-./create_db.sh
+./scripts/create_db.sh
 ```
 
 #### Run the server
@@ -29,7 +29,7 @@ $ cargo run
 
 #### Execute tests
 ```shell
-./run_tests.sh
+./scripts/run_tests.sh
 ```
 Note: a simple `cargo test` will not work as the tests require a database and cannot be run in parallel.
 
