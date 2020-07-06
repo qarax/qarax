@@ -26,7 +26,7 @@ pub struct NewHost {
     pub port: i32,
     pub user: String,
     pub password: String,
-    pub local_node_path: String,
+    pub local_node_path: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
