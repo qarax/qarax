@@ -1,5 +1,5 @@
 # qarax
-qarax aims to be a [firecracker](orchestrator), it is currently in very early stages
+qarax aims to be a [firecracker](https://firecracker-microvm.github.io/) orchestrator, it is currently in its very early stages of development
 
 ### Prerequisites
 ```
@@ -65,4 +65,8 @@ Stop a VM:
 ```shell
 $ curl -XPOST http://localhost:8000/vms/71205bf5-c444-458f-b1b1-918757ee4892/stop
 ```
+
+# FAQ
+> Will we succeed?
+Unclear at the moment. Only time will tell.
 
