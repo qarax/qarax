@@ -24,7 +24,7 @@ cd qarax
 
 #### Run the server
 ```shell
-$ cargo run
+$ cargo run --bin qarax
 ```
 
 #### Execute tests
@@ -37,7 +37,7 @@ Note: a simple `cargo test` will not work as the tests require a database and ca
 
 Adding a host:
 ```shell
-$ curl -XPOST http://localhost:8000/hosts -d '{ "name":"hosto", "address": "192.168.122.45", "user": "root", "password": "fedora", "local_node_path": "/path/to/qarax-node", "port": 50051}' -H "Content-Type: application/json"
+$ curl -XPOST http://localhost:8000/hosts -d '{ "name":"hosto", "address": "192.168.122.45", "user": "root", "password": "fedora", "port": 50051}' -H "Content-Type: application/json"
 ```
 Example reply:
 ```json
@@ -46,10 +46,8 @@ Example reply:
 
 Installing a host:
 ```shell
-$ curl -XPOST http://localhost:8000/hosts/365e5061-62b9-41e5-9766-47fcd2c51721/install -d '{ "local_node_path": "/path/to/qarax-node", "fcversion": "v0.21.1" }' -H "Content-Type: application/json"
+$ curl -XPOST http://localhost:8000/hosts/365e5061-62b9-41e5-9766-47fcd2c51721/install -d '{ "local_node_path": "/path/to/qarax", "fcversion": "v0.21.1" }' -H "Content-Type: application/json"
 ```
-
-Note: The source of [qarax-node](https://github.com/qarax/qarax-node) is required
 
 Adding a VM:
 ```shell
