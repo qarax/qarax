@@ -1,7 +1,7 @@
 [package]
 name = "qarax"
 version = "0.1.0"
-authors = ["Benny Zlotnik <uber442@gmail.com>"]
+authors = ["Benny Zlotnik <bzlotnik@protonmail.com>"]
 edition = "2018"
 
 [dependencies]
@@ -14,10 +14,8 @@ uuid = { version = "0.6.5", features = ["serde", "v4"] }
 dotenv = "0.15.0"
 tonic = "0.2"
 prost = "0.6"
-futures-core = "0.3"
-futures-util = "0.3"
-tokio = { version = "0.2", features = ["macros", "sync", "stream", "time"] }
-
+futures = "0.3"
+tokio = { version = "0.2", features = ["full"] }
 async-stream = "0.2"
 
 [dependencies.rocket_contrib]
@@ -27,3 +25,7 @@ features = ["diesel_postgres_pool", "json", "uuid"]
 
 [build-dependencies]
 tonic-build = "0.2"
+
+[workspace]
+default-members = [".", "qarax-node"]
+members = [".", "qarax-node"]
