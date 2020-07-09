@@ -13,13 +13,13 @@ Note: currently Rust nightly is required because of Rocket, use the [following](
 
 #### Get the source
 ```shell
-git clone https://github.com/qarax/qarax.git
-cd qarax
+$ git clone https://github.com/qarax/qarax.git
+$ cd qarax
 ```
 
 #### Create the database
 ```shell
-./scripts/create_db.sh
+$ ./scripts/create_db.sh
 ```
 
 #### Run the server
@@ -29,7 +29,7 @@ $ cargo run --bin qarax
 
 #### Execute tests
 ```shell
-./scripts/run_tests.sh
+$ ./scripts/run_tests.sh
 ```
 Note: a simple `cargo test` will not work as the tests require a database and cannot be run in parallel.
 
