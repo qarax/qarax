@@ -9,6 +9,9 @@ message VmConfig {
     int32 vcpus = 3;
     string kernel = 4;
     string rootFs = 5;
+    string kernel_params = 6;
+    string network_mode = 7;
+    string address = 8;
 }
 
 enum Status {

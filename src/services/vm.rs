@@ -42,6 +42,9 @@ impl VmService {
             vcpus: vm.vcpu,
             kernel: vm.kernel,
             root_fs: vm.root_file_system,
+            kernel_params: vm.kernel_params,
+            network_mode: vm.network_mode.unwrap_or(String::from("")),
+            address: vm.address.unwrap_or(String::from("")),
         };
 
         client.start_vm(request);
