@@ -10,8 +10,6 @@
 
 /// Logger : Describes the configuration option for the logging capability.
 
-
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Logger {
     /// Set the level.
@@ -52,4 +50,3 @@ pub enum Level {
     #[serde(rename = "Debug")]
     Debug,
 }
-

@@ -10,8 +10,6 @@
 
 /// InstanceInfo : Describes MicroVM instance information.
 
-
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct InstanceInfo {
     /// Application name.
@@ -50,4 +48,3 @@ pub enum State {
     #[serde(rename = "Running")]
     Running,
 }
-

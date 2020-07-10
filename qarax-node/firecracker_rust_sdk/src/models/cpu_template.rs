@@ -17,9 +17,4 @@ pub enum CpuTemplate {
     C3,
     #[serde(rename = "T2")]
     T2,
-
 }
-
-
-
-

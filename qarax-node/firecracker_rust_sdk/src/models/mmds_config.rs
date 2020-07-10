@@ -10,8 +10,6 @@
 
 /// MmdsConfig : Defines the MMDS configuration.
 
-
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MmdsConfig {
     /// A valid IPv4 link-local address.
@@ -22,10 +20,6 @@ pub struct MmdsConfig {
 impl MmdsConfig {
     /// Defines the MMDS configuration.
     pub fn new() -> MmdsConfig {
-        MmdsConfig {
-            ipv4_address: None,
-        }
+        MmdsConfig { ipv4_address: None }
     }
 }
-
-

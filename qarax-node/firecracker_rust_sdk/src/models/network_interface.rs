@@ -10,12 +10,13 @@
 
 /// NetworkInterface : Defines a network interface.
 
-
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct NetworkInterface {
     /// If this field is set, the device model will reply to HTTP GET requests sent to the MMDS address via this interface. In this case, both ARP requests for 169.254.169.254 and TCP segments heading to the same address are intercepted by the device model, and do not reach the associated TAP device.
-    #[serde(rename = "allow_mmds_requests", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "allow_mmds_requests",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub allow_mmds_requests: Option<bool>,
     #[serde(rename = "guest_mac", skip_serializing_if = "Option::is_none")]
     pub guest_mac: Option<String>,
@@ -43,5 +44,3 @@ impl NetworkInterface {
         }
     }
 }
-
-

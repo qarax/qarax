@@ -63,8 +63,8 @@ impl Machine {
 
     pub async fn configure_logger(&self) -> Result<String> {
         // TODO: error handling
-        use nix::unistd;
         use nix::sys::stat;
+        use nix::unistd;
         use std::path::Path;
 
         unistd::mkfifo(Path::new(&self.logger.log_path), stat::Mode::S_IRWXU)?;
