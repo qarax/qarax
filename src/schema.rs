@@ -22,6 +22,7 @@ table! {
         root_file_system -> Varchar,
         address -> Nullable<Varchar>,
         network_mode -> Nullable<Varchar>,
+        kernel_params -> Varchar,
     }
 }
 

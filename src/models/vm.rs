@@ -4,6 +4,8 @@ use diesel::PgConnection;
 use std::convert::From;
 use uuid::Uuid;
 
+const DEFAUL_KERNEL_PARAMS: &str = "console=ttyS0 reboot=k panic=1 pci=off";
+
 #[derive(Insertable, Identifiable, Serialize, Deserialize, Queryable, Debug)]
 #[table_name = "vms"]
 pub struct Vm {
@@ -17,6 +19,7 @@ pub struct Vm {
     pub root_file_system: String,
     pub address: Option<String>,
     pub network_mode: Option<String>,
+    pub kernel_params: String,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -28,6 +31,7 @@ pub struct NewVm {
     pub root_file_system: String,
     pub network_mode: Option<NetworkMode>,
     pub address: Option<String>,
+    pub kernel_params: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -92,6 +96,11 @@ impl From<&NewVm> for Vm {
             String::from("")
         };
 
+        let kernel_params = match &nv.kernel_params {
+            Some(kp) => kp.to_owned(),
+            None => String::from(DEFAUL_KERNEL_PARAMS),
+        };
+
         Vm {
             id: Uuid::new_v4(),
             name: nv.name.to_owned(),
@@ -103,6 +112,7 @@ impl From<&NewVm> for Vm {
             root_file_system: nv.root_file_system.to_owned(),
             address: Some(address),
             network_mode,
+            kernel_params,
         }
     }
 }
