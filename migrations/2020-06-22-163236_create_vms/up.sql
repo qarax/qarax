@@ -6,5 +6,7 @@ CREATE TABLE vms (
     vcpu INTEGER NOT NULL,
     memory INTEGER NOT NULL,
     kernel VARCHAR(255) NOT NULL,
-    root_file_system VARCHAR(255) NOT NULL
+    root_file_system VARCHAR(255) NOT NULL,
+    address VARCHAR(16),
+    network_mode VARCHAR(10)
 )

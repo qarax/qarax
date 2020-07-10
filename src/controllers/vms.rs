@@ -49,3 +49,138 @@ pub fn stop_vm(id: Uuid, backend: State<Backend>, conn: DbConnection) -> JsonVal
 pub fn routes() -> Vec<rocket::Route> {
     routes![index, by_id, add_vm, start_vm, stop_vm]
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::services::host::HostService;
+    use crate::services::vm::VmService;
+
+    use rocket::http::ContentType;
+    use rocket::local::Client;
+    use serde_json::Value;
+
+    embed_migrations!();
+
+    fn get_client() -> (Client, DbConnection) {
+        let hs = HostService::new();
+        let vs = VmService::new();
+        let rocket = rocket::ignite()
+            .manage(Backend {
+                host_service: hs,
+                vm_service: vs,
+            })
+            .attach(DbConnection::fairing())
+            .mount("/vms", routes());
+
+        let conn = DbConnection::get_one(&rocket).expect("Database connection failed");
+        embedded_migrations::run(&*conn).expect("Failed to run migrations");
+        let client = Client::new(rocket).expect("Failed to get client");
+        (client, conn)
+    }
+
+    #[test]
+    fn test_index_empty() {
+        let (client, conn) = get_client();
+        let backend: State<Backend> = State::from(&client.rocket()).expect("Could not get state");
+        client.get("/vmss").dispatch();
+        assert_eq!(backend.host_service.get_all(&conn).len(), 0);
+    }
+
+    #[test]
+    fn test_add_vm_no_network() {
+        let payload = r#"{
+            "name": "vm1",
+            "vcpu": 1,
+            "memory": 128,
+            "kernel": "vmlinux",
+            "root_file_system": "rootfs"
+            }"#;
+
+        let (client, conn) = get_client();
+        let backend: State<Backend> = State::from(&client.rocket()).unwrap();
+
+        let mut response = client
+            .post("/vms")
+            .header(ContentType::JSON)
+            .body(payload)
+            .dispatch();
+
+        let response: Value = serde_json::from_str(&response.body_string().unwrap()).unwrap();
+        let vm_id = response["vm_id"].as_str().unwrap();
+
+        assert_eq!(backend.vm_service.get_all(&conn).len(), 1);
+
+        let vm = backend.vm_service.get_by_id(vm_id, &conn).unwrap();
+        assert_eq!(vm.network_mode, None);
+
+        // TODO: Stupid teardown
+        backend.vm_service.delete_all(&conn);
+    }
+
+    #[test]
+    fn test_add_vm_dhcp_network() {
+        let payload = r#"{
+            "name": "vm1",
+            "vcpu": 1,
+            "memory": 128,
+            "kernel": "vmlinux",
+            "root_file_system": "rootfs",
+            "network_mode": "dhcp"
+            }"#;
+
+        let (client, conn) = get_client();
+        let backend: State<Backend> = State::from(&client.rocket()).unwrap();
+
+        let mut response = client
+            .post("/vms")
+            .header(ContentType::JSON)
+            .body(payload)
+            .dispatch();
+
+        let response: Value = serde_json::from_str(&response.body_string().unwrap()).unwrap();
+        let vm_id = response["vm_id"].as_str().unwrap();
+
+        assert_eq!(backend.vm_service.get_all(&conn).len(), 1);
+
+        let vm = backend.vm_service.get_by_id(vm_id, &conn).unwrap();
+        assert_eq!(vm.network_mode, Some(String::from("dhcp")));
+
+        // TODO: Stupid teardown
+        backend.vm_service.delete_all(&conn);
+    }
+
+    #[test]
+    fn test_add_vm_static_ip_network() {
+        let payload = r#"{
+            "name": "vm1",
+            "vcpu": 1,
+            "memory": 128,
+            "kernel": "vmlinux",
+            "root_file_system": "rootfs",
+            "network_mode": "static_ip",
+            "address": "192.168.122.100"
+            }"#;
+
+        let (client, conn) = get_client();
+        let backend: State<Backend> = State::from(&client.rocket()).unwrap();
+
+        let mut response = client
+            .post("/vms")
+            .header(ContentType::JSON)
+            .body(payload)
+            .dispatch();
+
+        let response: Value = serde_json::from_str(&response.body_string().unwrap()).unwrap();
+        let vm_id = response["vm_id"].as_str().unwrap();
+
+        assert_eq!(backend.vm_service.get_all(&conn).len(), 1);
+
+        let vm = backend.vm_service.get_by_id(vm_id, &conn).unwrap();
+        assert_eq!(vm.network_mode, Some(String::from("static_ip")));
+        assert_eq!(vm.address, Some(String::from("192.168.122.100")));
+
+        // TODO: Stupid teardown
+        backend.vm_service.delete_all(&conn);
+    }
+}

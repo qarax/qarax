@@ -15,6 +15,8 @@ pub struct Vm {
     pub memory: i32,
     pub kernel: String,
     pub root_file_system: String,
+    pub address: Option<String>,
+    pub network_mode: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -24,6 +26,25 @@ pub struct NewVm {
     pub memory: i32,
     pub kernel: String,
     pub root_file_system: String,
+    pub network_mode: Option<NetworkMode>,
+    pub address: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub enum NetworkMode {
+    #[serde(rename = "dhcp")]
+    Dhcp,
+    #[serde(rename = "static_ip")]
+    StaticIp,
+}
+
+impl NetworkMode {
+    pub fn as_str(&self) -> String {
+        match self {
+            NetworkMode::Dhcp => String::from("dhcp"),
+            NetworkMode::StaticIp => String::from("static_ip"),
+        }
+    }
 }
 
 impl Vm {
@@ -49,10 +70,28 @@ impl Vm {
             Err(e) => Err(e.to_string()),
         }
     }
+
+    pub fn delete_all(conn: &PgConnection) -> Result<usize, diesel::result::Error> {
+        use crate::schema::vms::dsl::*;
+
+        diesel::delete(vms).execute(conn)
+    }
 }
 
 impl From<&NewVm> for Vm {
     fn from(nv: &NewVm) -> Self {
+        let network_mode: Option<String>;
+        let address = if let Some(n) = &nv.network_mode {
+            network_mode = Some(n.as_str());
+            match n {
+                NetworkMode::Dhcp => String::from(""),
+                NetworkMode::StaticIp => nv.address.as_ref().unwrap().to_owned(),
+            }
+        } else {
+            network_mode = None;
+            String::from("")
+        };
+
         Vm {
             id: Uuid::new_v4(),
             name: nv.name.to_owned(),
@@ -62,6 +101,8 @@ impl From<&NewVm> for Vm {
             memory: nv.memory,
             kernel: nv.kernel.to_owned(),
             root_file_system: nv.root_file_system.to_owned(),
+            address: Some(address),
+            network_mode,
         }
     }
 }
