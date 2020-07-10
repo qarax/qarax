@@ -20,6 +20,8 @@ table! {
         memory -> Int4,
         kernel -> Varchar,
         root_file_system -> Varchar,
+        address -> Nullable<Varchar>,
+        network_mode -> Nullable<Varchar>,
     }
 }
 

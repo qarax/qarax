@@ -67,4 +67,12 @@ impl VmService {
 
         Ok(Uuid::parse_str(vm_id).unwrap())
     }
+
+    #[allow(dead_code)]
+    pub fn delete_all(&self, conn: &DbConnection) -> Result<usize, String> {
+        match Vm::delete_all(conn) {
+            Ok(record_count) => Ok(record_count),
+            Err(e) => Err(e.to_string()),
+        }
+    }
 }
