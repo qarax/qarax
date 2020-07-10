@@ -29,7 +29,7 @@ pub struct NewVm {
     pub memory: i32,
     pub kernel: String,
     pub root_file_system: String,
-    pub network_mode: Option<NetworkMode>,
+    pub network_mode: Option<NetworkMode>, // TODO: remove option and use (DHCP, STATIC_IP, NONE)
     pub address: Option<String>,
     pub kernel_params: Option<String>,
 }
@@ -40,6 +40,7 @@ pub enum NetworkMode {
     Dhcp,
     #[serde(rename = "static_ip")]
     StaticIp,
+    // TODO: add default None
 }
 
 impl NetworkMode {
