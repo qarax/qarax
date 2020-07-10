@@ -10,8 +10,6 @@
 
 /// Metrics : Describes the configuration option for the metrics capability.
 
-
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Metrics {
     /// Path to the named pipe or file where the JSON-formatted metrics are flushed.
@@ -22,10 +20,6 @@ pub struct Metrics {
 impl Metrics {
     /// Describes the configuration option for the metrics capability.
     pub fn new(metrics_path: String) -> Metrics {
-        Metrics {
-            metrics_path,
-        }
+        Metrics { metrics_path }
     }
 }
-
-

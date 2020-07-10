@@ -10,8 +10,6 @@
 
 /// InstanceActionInfo : Variant wrapper containing the real action.
 
-
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct InstanceActionInfo {
     /// Enumeration indicating what type of action is contained in the payload
@@ -22,9 +20,7 @@ pub struct InstanceActionInfo {
 impl InstanceActionInfo {
     /// Variant wrapper containing the real action.
     pub fn new(action_type: ActionType) -> InstanceActionInfo {
-        InstanceActionInfo {
-            action_type,
-        }
+        InstanceActionInfo { action_type }
     }
 }
 
@@ -38,4 +34,3 @@ pub enum ActionType {
     #[serde(rename = "SendCtrlAltDel")]
     SendCtrlAltDel,
 }
-

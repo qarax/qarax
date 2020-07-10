@@ -10,8 +10,6 @@
 
 /// BootSource : Boot source descriptor.
 
-
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BootSource {
     /// Host level path to the kernel image used to boot the guest
@@ -35,5 +33,3 @@ impl BootSource {
         }
     }
 }
-
-

@@ -10,8 +10,6 @@
 
 /// Vm : Defines the microVM running state. It is especially useful in the snapshotting context.
 
-
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Vm {
     #[serde(rename = "state")]
@@ -21,13 +19,11 @@ pub struct Vm {
 impl Vm {
     /// Defines the microVM running state. It is especially useful in the snapshotting context.
     pub fn new(state: State) -> Vm {
-        Vm {
-            state,
-        }
+        Vm { state }
     }
 }
 
-/// 
+///
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum State {
     #[serde(rename = "Paused")]
@@ -35,4 +31,3 @@ pub enum State {
     #[serde(rename = "Resumed")]
     Resumed,
 }
-

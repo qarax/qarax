@@ -10,8 +10,6 @@
 
 /// PartialNetworkInterface : Defines a partial network interface structure, used to update the rate limiters for that interface, after microvm start.
 
-
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PartialNetworkInterface {
     #[serde(rename = "iface_id")]
@@ -32,5 +30,3 @@ impl PartialNetworkInterface {
         }
     }
 }
-
-
