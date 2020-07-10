@@ -183,4 +183,74 @@ mod tests {
         // TODO: Stupid teardown
         backend.vm_service.delete_all(&conn);
     }
+
+    #[test]
+    fn test_default_kernel_params() {
+        let payload = r#"{
+            "name": "vm1",
+            "vcpu": 1,
+            "memory": 128,
+            "kernel": "vmlinux",
+            "root_file_system": "rootfs",
+            "network_mode": "static_ip",
+            "address": "192.168.122.100"
+            }"#;
+
+        let (client, conn) = get_client();
+        let backend: State<Backend> = State::from(&client.rocket()).unwrap();
+
+        let mut response = client
+            .post("/vms")
+            .header(ContentType::JSON)
+            .body(payload)
+            .dispatch();
+
+        let response: Value = serde_json::from_str(&response.body_string().unwrap()).unwrap();
+        let vm_id = response["vm_id"].as_str().unwrap();
+
+        assert_eq!(backend.vm_service.get_all(&conn).len(), 1);
+
+        let vm = backend.vm_service.get_by_id(vm_id, &conn).unwrap();
+        assert_eq!(
+            vm.kernel_params,
+            String::from("console=ttyS0 reboot=k panic=1 pci=off")
+        );
+
+        // TODO: Stupid teardown
+        backend.vm_service.delete_all(&conn);
+    }
+
+    #[test]
+    fn test_custom_kernel_params() {
+        let payload = r#"{
+            "name": "vm1",
+            "vcpu": 1,
+            "memory": 128,
+            "kernel": "vmlinux",
+            "root_file_system": "rootfs",
+            "network_mode": "static_ip",
+            "address": "192.168.122.100",
+            "kernel_params": "ip=1.1.1.1"
+            }"#;
+
+        let (client, conn) = get_client();
+        let backend: State<Backend> = State::from(&client.rocket()).unwrap();
+
+        let mut response = client
+            .post("/vms")
+            .header(ContentType::JSON)
+            .body(payload)
+            .dispatch();
+
+        let response: Value = serde_json::from_str(&response.body_string().unwrap()).unwrap();
+        let vm_id = response["vm_id"].as_str().unwrap();
+
+        assert_eq!(backend.vm_service.get_all(&conn).len(), 1);
+
+        let vm = backend.vm_service.get_by_id(vm_id, &conn).unwrap();
+        assert_eq!(vm.kernel_params, String::from("ip=1.1.1.1"));
+
+        // TODO: Stupid teardown
+        backend.vm_service.delete_all(&conn);
+    }
 }
