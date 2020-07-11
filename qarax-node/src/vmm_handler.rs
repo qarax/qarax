@@ -1,10 +1,14 @@
 extern crate firecracker_rust_sdk;
 
-use firecracker_rust_sdk::models::{boot_source, drive, logger, machine, machine_configuration};
+use crate::network;
+use firecracker_rust_sdk::models::{
+    boot_source, drive, logger, machine, machine_configuration, network_interface,
+};
 use node::{Status, VmConfig};
 
 use std::convert::TryFrom;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
+use tokio::process::Command;
 use tokio::sync::RwLock;
 
 use std::sync::Arc;
@@ -39,15 +43,21 @@ impl VmmHandler {
         let mc = machine_configuration::MachineConfiguration::new(false, vm_config.memory, 1);
 
         // TODO: boot_params should come from qarax and find a better way to handle kernel because it's already a string
-        let bs = boot_source::BootSource::new(
+        let mut bs = boot_source::BootSource::new(
             vm_config.kernel.to_string(),
-            String::from("console=ttyS0 reboot=k panic=1 pci=off"),
+            vm_config.kernel_params.to_string(),
         );
+
+        let mut network = None;
+
+        // TODO: use an enum like civilized person
+        if vm_config.network_mode == "dhcp" {
+            network = Some(Self::configure_network(&mut bs, &vm_config.vm_id));
+        }
 
         // TODO: move into own function and handle errors
         // - check if socket exists before
         // - make a sanity check on the api server
-        // - make it run in the background, not sure why it doesn't already
         tracing::info!("Starting FC process...");
 
         let child = Command::new(FIRECRACKER_BIN)
@@ -67,9 +77,15 @@ impl VmmHandler {
         // TODO: get the level from qarax-node's configuration (hopefully it'll have one)
         logger.level = Some(logger::Level::Debug);
 
-        let vmm = machine::Machine::new(socket_path, mc, bs, drive, logger, child.id());
-        tracing::info!("waiting for configuration...");
+        let vmm = machine::Machine::new(socket_path, mc, bs, drive, network, logger, child.id());
 
+        if vmm.network.is_some() {
+            tracing::info!("Configuring network...");
+            network::create_tap_device(&vm_config.vm_id).await;
+            vmm.configure_network().await;
+        }
+
+        tracing::info!("Waiting for configuration...");
         vmm.configure_logger().await;
         tokio::join!(vmm.configure_boot_source(), vmm.configure_drive(),);
 
@@ -81,6 +97,27 @@ impl VmmHandler {
         if m.is_some() {
             tracing::info!("Starting VM machine...");
             m.as_ref().unwrap().start().await;
+            tracing::info!("machines started");
+
+            // TODO: find a better way to do polling and definitly do not block the request
+            use std::{thread, time};
+            thread::sleep(time::Duration::from_millis(5000));
+
+            // TODO: there has got to be a better way
+            let mac = m
+                .as_ref()
+                .unwrap()
+                .network
+                .as_ref()
+                .unwrap()
+                .guest_mac
+                .as_ref()
+                .unwrap();
+            // TODO: use -q, -x, -I options
+            let arp_scan = Command::new("arp-scan").arg("-l").output().await;
+            let ip =
+                network::get_ip(String::from_utf8(arp_scan.unwrap().stdout).unwrap(), &mac).await;
+            tracing::info!("ip address: {}", ip);
         } else {
             tracing::error!("Machine object unavilable! - start");
         }
@@ -96,6 +133,23 @@ impl VmmHandler {
             }
         } else {
             tracing::error!("Machine object unavilable! - stop");
+        }
+    }
+
+    fn configure_network(
+        bs: &mut boot_source::BootSource,
+        vm_id: &str,
+    ) -> network_interface::NetworkInterface {
+        // TODO: implement static ip as well
+        bs.boot_args = format!("{} ip=dhcp", bs.boot_args);
+
+        network_interface::NetworkInterface {
+            guest_mac: Some(network::generate_mac()),
+            host_dev_name: format!("fc-tap-{}", &vm_id[..4]),
+            iface_id: String::from("1"), // TODO: assign a normal ID
+            allow_mmds_requests: None,
+            rx_rate_limiter: None,
+            tx_rate_limiter: None,
         }
     }
 }

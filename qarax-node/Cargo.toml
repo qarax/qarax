@@ -16,6 +16,7 @@ tracing = "0.1"
 tracing-subscriber = "0.2"
 tracing-appender = "0.1"
 firecracker_rust_sdk = { path = "./firecracker_rust_sdk" }
+rand = "0.7.3"
 
 [build-dependencies]
 tonic-build = "0.2"
