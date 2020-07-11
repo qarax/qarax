@@ -2,6 +2,7 @@ use super::BootSource;
 use super::Drive;
 use super::Logger;
 use super::MachineConfiguration;
+use super::NetworkInterface;
 
 use crate::http::client::{Method, VmmClient};
 
@@ -13,6 +14,7 @@ pub struct Machine {
     machine_configuration: MachineConfiguration,
     boot_source: BootSource,
     drive: Drive,
+    pub network: Option<NetworkInterface>,
     logger: Logger,
     pid: u32,
 }
@@ -23,6 +25,7 @@ impl Machine {
         machine_configuration: MachineConfiguration,
         boot_source: BootSource,
         drive: Drive,
+        network: Option<NetworkInterface>,
         logger: Logger,
         pid: u32,
     ) -> Self {
@@ -31,6 +34,7 @@ impl Machine {
             machine_configuration,
             boot_source,
             drive,
+            network,
             logger,
             pid,
         }
@@ -39,7 +43,7 @@ impl Machine {
     // TODO: check errors and stuff
     pub async fn configure_boot_source(&self) -> Result<String> {
         let boot_source = serde_json::to_string(&self.boot_source).unwrap();
-        tracing::debug!("Sending boot_source with {}\n", boot_source);
+        tracing::info!("Sending boot_source with {}\n", boot_source);
 
         Ok(self
             .client
@@ -50,7 +54,7 @@ impl Machine {
     pub async fn configure_drive(&self) -> Result<String> {
         let drive = serde_json::to_string(&self.drive).unwrap();
 
-        tracing::debug!("Sending drive with {}\n", drive);
+        tracing::info!("Sending drive with {}\n", drive);
 
         let drive_id = &self.drive.drive_id;
         let endpoint = format!("/drives/{}", drive_id);
@@ -71,7 +75,7 @@ impl Machine {
 
         let logger = serde_json::to_string(&self.logger).unwrap();
 
-        tracing::debug!("Sending logger with {}\n", logger);
+        tracing::info!("Sending logger with {}\n", logger);
 
         Ok(self
             .client
@@ -79,8 +83,22 @@ impl Machine {
             .await?)
     }
 
+    pub async fn configure_network(&self) -> Result<String> {
+        let network = serde_json::to_string(self.network.as_ref().unwrap()).unwrap();
+        tracing::info!("Sending network with {}\n", network);
+        let endpoint = format!(
+            "/network-interfaces/{}",
+            self.network.as_ref().unwrap().iface_id
+        );
+
+        Ok(self
+            .client
+            .request(&endpoint, Method::PUT, &network.as_bytes())
+            .await?)
+    }
+
     pub async fn start(&self) -> Result<String> {
-        tracing::debug!("Starting VM :O");
+        tracing::info!("Starting VM :O");
 
         Ok(self
             .client
