@@ -9,6 +9,9 @@ const BRIDGE_NAME: &str = "fcbridge";
 pub fn generate_mac() -> String {
     let mut buf: [u8; 6] = [0; 6];
     rand::thread_rng().fill_bytes(&mut buf);
+
+    // For locally-administered MAC addresses, the second least significant
+    // bit should be 1
     buf[0] |= 2;
 
     format!(

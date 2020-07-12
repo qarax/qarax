@@ -78,6 +78,7 @@ impl VmmHandler {
         logger.level = Some(logger::Level::Debug);
 
         let vmm = machine::Machine::new(socket_path, mc, bs, drive, network, logger, child.id());
+        vmm.configure_logger().await;
 
         if vmm.network.is_some() {
             tracing::info!("Configuring network...");
@@ -86,7 +87,6 @@ impl VmmHandler {
         }
 
         tracing::info!("Waiting for configuration...");
-        vmm.configure_logger().await;
         tokio::join!(vmm.configure_boot_source(), vmm.configure_drive(),);
 
         self.machine.write().await.replace(vmm);
