@@ -51,6 +51,17 @@ pub async fn create_tap_device(vm_id: &str) {
         .await;
 }
 
+pub async fn delete_tap_device(vm_id: &str) {
+    let tap_device = &format!("fc-tap-{}", &vm_id[..4]);
+
+    Command::new("ip")
+        .args(vec!["link", "delete", tap_device])
+        .stdout(Stdio::null())
+        .spawn()
+        .expect("failed to add tap device to bridge")
+        .await;
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
