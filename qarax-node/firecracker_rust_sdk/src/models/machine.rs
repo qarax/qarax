@@ -10,6 +10,7 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>
 
 #[derive(Debug)]
 pub struct Machine {
+    pub vm_id: String,
     client: VmmClient,
     machine_configuration: MachineConfiguration,
     boot_source: BootSource,
@@ -21,6 +22,7 @@ pub struct Machine {
 
 impl Machine {
     pub fn new(
+        vm_id: String,
         socket_path: String,
         machine_configuration: MachineConfiguration,
         boot_source: BootSource,
@@ -30,6 +32,7 @@ impl Machine {
         pid: u32,
     ) -> Self {
         Machine {
+            vm_id,
             client: VmmClient::new(socket_path),
             machine_configuration,
             boot_source,

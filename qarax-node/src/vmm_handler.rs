@@ -77,7 +77,16 @@ impl VmmHandler {
         // TODO: get the level from qarax-node's configuration (hopefully it'll have one)
         logger.level = Some(logger::Level::Debug);
 
-        let vmm = machine::Machine::new(socket_path, mc, bs, drive, network, logger, child.id());
+        let vmm = machine::Machine::new(
+            vm_config.vm_id.to_owned(),
+            socket_path,
+            mc,
+            bs,
+            drive,
+            network,
+            logger,
+            child.id(),
+        );
         vmm.configure_logger().await;
 
         if vmm.network.is_some() {
@@ -127,8 +136,15 @@ impl VmmHandler {
         let m = self.machine.read().await;
         if m.is_some() {
             tracing::info!("Stopping VM machine...");
-            match m.as_ref().unwrap().stop().await {
-                Ok(_) => tracing::info!("VM stopped"),
+            let machine = m.as_ref().unwrap();
+            match machine.stop().await {
+                Ok(_) => {
+                    if machine.network.is_some() {
+                        tracing::info!("Removing tap device");
+                        network::delete_tap_device(&machine.vm_id).await;
+                    }
+                    tracing::info!("VM stopped")
+                }
                 Err(e) => tracing::error!("Failed to stop VM :( {}", e.to_string()),
             }
         } else {
