@@ -106,7 +106,7 @@ impl VmmHandler {
         if m.is_some() {
             tracing::info!("Starting VM machine...");
             m.as_ref().unwrap().start().await;
-            tracing::info!("machines started");
+            tracing::info!("machine started");
 
             // TODO: find a better way to do polling and definitly do not block the request
             use std::{thread, time};
