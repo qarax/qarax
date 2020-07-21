@@ -17,6 +17,7 @@ tracing-subscriber = "0.2"
 tracing-appender = "0.1"
 firecracker_rust_sdk = { path = "./firecracker_rust_sdk" }
 rand = "0.7.3"
+smoltcp = { git = "https://github.com/bennyz/smoltcp", branch = "qarax-branch", features= ["proto-dhcpv4", "log"]}
 
 [build-dependencies]
 tonic-build = "0.2"
