@@ -1,4 +1,0 @@
-- name: install arp-scan
-  package:
-    name: arp-scan
-    state: present
