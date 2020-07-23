@@ -1,6 +1,8 @@
 extern crate firecracker_rust_sdk;
 
 use crate::network;
+use crate::network::IpAddr;
+
 use firecracker_rust_sdk::models::{
     boot_source, drive, logger, machine, machine_configuration, network_interface,
 };
@@ -8,16 +10,14 @@ use node::{Status, VmConfig};
 
 use std::convert::TryFrom;
 use std::process::Stdio;
+use std::sync::Arc;
+
 use tokio::process::Command;
 use tokio::sync::RwLock;
-
-use std::sync::Arc;
 
 pub(crate) mod node {
     tonic::include_proto!("node");
 }
-
-type AsyncResult<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 // Make configurable
 const FIRECRACKER_BIN: &str = "./firecracker";
@@ -35,7 +35,7 @@ impl VmmHandler {
         }
     }
 
-    pub async fn configure_vm(&mut self, vm_config: &VmConfig) {
+    pub async fn configure_vm(&mut self, vm_config: &mut VmConfig) {
         tracing::info!("Configuring VMM...");
 
         // TODO: do some actual validation
@@ -52,14 +52,18 @@ impl VmmHandler {
 
         // TODO: use an enum like civilized person
         if vm_config.network_mode == "dhcp" {
+            network::create_tap_device(&vm_config.vm_id).await;
             let mac = network::generate_mac();
             tracing::info!("Generated MAC address: '{}'", mac);
 
             // TODO: The IP should be sent back to qarax
-            let ip = network::get_ip(Arc::new(mac), Arc::new(get_tap_device(&vm_config.vm_id))).await.unwrap();
+            let ip = network::get_ip(Arc::new(mac), Arc::new(get_tap_device(&vm_config.vm_id)))
+                .await
+                .unwrap();
 
             tracing::info!("Assigning IP '{}' for VM {}", ip, &vm_config.vm_id);
             network = Some(Self::configure_network(&mut bs, &vm_config.vm_id, mac));
+            vm_config.address = ip;
         }
 
         // TODO: move into own function and handle errors
@@ -98,7 +102,6 @@ impl VmmHandler {
 
         if vmm.network.is_some() {
             tracing::info!("Configuring network...");
-            network::create_tap_device(&vm_config.vm_id).await;
             vmm.configure_network().await;
         }
 

@@ -1,6 +1,7 @@
 use crate::database::DbConnection;
-use crate::models::vm::{NewVm, Vm};
+use crate::models::vm::{NetworkMode, NewVm, Vm};
 use crate::services::host::HostService;
+use std::str::FromStr;
 use uuid::Uuid;
 
 #[derive(Copy, Clone)]
@@ -34,20 +35,31 @@ impl VmService {
         // TODO: error handling
         let host = host_service.get_running_host(conn);
         let client = host_service.get_client(host.id);
-        let vm = self.get_by_id(vm_id, conn).unwrap();
-
+        let mut vm = self.get_by_id(vm_id, conn).unwrap();
+        let clone = vm.clone();
         let request = VmConfig {
-            vm_id: vm.id.to_string(),
-            memory: vm.memory,
-            vcpus: vm.vcpu,
-            kernel: vm.kernel,
-            root_fs: vm.root_file_system,
-            kernel_params: vm.kernel_params,
-            network_mode: vm.network_mode.unwrap_or(String::from("")),
-            address: vm.address.unwrap_or(String::from("")),
+            vm_id: clone.id.to_string(),
+            memory: clone.memory,
+            vcpus: clone.vcpu,
+            kernel: clone.kernel,
+            root_fs: clone.root_file_system,
+            kernel_params: clone.kernel_params,
+            network_mode: clone.network_mode.clone().unwrap_or(String::from("")),
+            address: clone.address.unwrap_or(String::from("")),
         };
 
-        client.start_vm(request);
+        match client.start_vm(request) {
+            Ok(config) => {
+                let network_mode = vm.network_mode.as_ref().unwrap();
+                if NetworkMode::from_str(network_mode.as_str()).unwrap() == NetworkMode::Dhcp {
+                    vm.address = Some(config.into_inner().address);
+                    Vm::update(&vm, conn);
+                }
+            }
+            Err(e) => {
+                return Err(e.to_string());
+            }
+        }
 
         Ok(vm.id)
     }

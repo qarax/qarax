@@ -37,7 +37,7 @@ message VmID {
 }
 
 service Node {
-    rpc StartVM(VmConfig) returns (VmResponse) {}
+    rpc StartVM(VmConfig) returns (VmConfig) {}
     rpc StopVM(VmID) returns (Response) {}
     rpc ListVms(google.protobuf.Empty) returns (VmList) {}
     rpc HealthCheck(google.protobuf.Empty) returns (Response) {}

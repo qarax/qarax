@@ -31,7 +31,7 @@ pub fn start_vm(id: Uuid, backend: State<Backend>, conn: DbConnection) -> JsonVa
         .start(&id.to_string(), &backend.host_service, &conn)
     {
         Ok(id) => json!({ "vm_id": id }),
-        Err(_) => json!({ "error": "could not start vm" }),
+        Err(e) => json!({ "error": format!("could not start vm: {}", e) }),
     }
 }
 
