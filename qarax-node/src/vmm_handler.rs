@@ -52,7 +52,14 @@ impl VmmHandler {
 
         // TODO: use an enum like civilized person
         if vm_config.network_mode == "dhcp" {
-            network = Some(Self::configure_network(&mut bs, &vm_config.vm_id));
+            let mac = network::generate_mac();
+            tracing::info!("Generated MAC address: '{}'", mac);
+
+            // TODO: The IP should be sent back to qarax
+            let ip = network::get_ip(Arc::new(mac), Arc::new(get_tap_device(&vm_config.vm_id))).await.unwrap();
+
+            tracing::info!("Assigning IP '{}' for VM {}", ip, &vm_config.vm_id);
+            network = Some(Self::configure_network(&mut bs, &vm_config.vm_id, mac));
         }
 
         // TODO: move into own function and handle errors
@@ -107,26 +114,6 @@ impl VmmHandler {
             tracing::info!("Starting VM machine...");
             m.as_ref().unwrap().start().await;
             tracing::info!("machine started");
-
-            // TODO: find a better way to do polling and definitly do not block the request
-            use std::{thread, time};
-            thread::sleep(time::Duration::from_millis(5000));
-
-            // TODO: there has got to be a better way
-            let mac = m
-                .as_ref()
-                .unwrap()
-                .network
-                .as_ref()
-                .unwrap()
-                .guest_mac
-                .as_ref()
-                .unwrap();
-            // TODO: use -q, -x, -I options
-            let arp_scan = Command::new("arp-scan").arg("-l").output().await;
-            let ip =
-                network::get_ip(String::from_utf8(arp_scan.unwrap().stdout).unwrap(), &mac).await;
-            tracing::info!("ip address: {}", ip);
         } else {
             tracing::error!("Machine object unavilable! - start");
         }
@@ -155,19 +142,25 @@ impl VmmHandler {
     fn configure_network(
         bs: &mut boot_source::BootSource,
         vm_id: &str,
+        mac: network::MacAddress,
     ) -> network_interface::NetworkInterface {
         // TODO: implement static ip as well
         bs.boot_args = format!("{} ip=dhcp", bs.boot_args);
 
         network_interface::NetworkInterface {
-            guest_mac: Some(network::generate_mac()),
-            host_dev_name: format!("fc-tap-{}", &vm_id[..4]),
+            guest_mac: Some(mac.to_string()),
+            host_dev_name: get_tap_device(vm_id),
             iface_id: String::from("1"), // TODO: assign a normal ID
             allow_mmds_requests: None,
             rx_rate_limiter: None,
             tx_rate_limiter: None,
         }
     }
+}
+
+// TODO: turn this into a macro or something
+fn get_tap_device(vm_id: &str) -> String {
+    format!("fc-tap-{}", &vm_id[..4])
 }
 
 impl TryFrom<i32> for Status {

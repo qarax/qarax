@@ -1,12 +1,40 @@
 use rand;
 use rand::prelude::*;
-
+use std::error::Error;
+use std::fmt;
 use std::process::Stdio;
+use std::sync::Arc;
+
 use tokio::process::Command;
+use tokio::time::{self, Duration};
+
+mod dhcp;
 
 const BRIDGE_NAME: &str = "fcbridge";
 
-pub fn generate_mac() -> String {
+#[derive(Copy, Clone)]
+pub struct MacAddress(pub [u8; 6]);
+
+impl MacAddress {
+    pub fn from_bytes(data: [u8; 06]) -> Self {
+        let mut bytes = [0; 6];
+        bytes.copy_from_slice(&data);
+        Self(bytes)
+    }
+}
+
+impl fmt::Display for MacAddress {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let bytes = self.0;
+        write!(
+            f,
+            "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5]
+        )
+    }
+}
+
+pub fn generate_mac() -> MacAddress {
     let mut buf: [u8; 6] = [0; 6];
     rand::thread_rng().fill_bytes(&mut buf);
 
@@ -14,16 +42,28 @@ pub fn generate_mac() -> String {
     // bit should be 1
     buf[0] |= 2;
 
-    format!(
-        "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-        buf[0], buf[1], buf[2], buf[3], buf[4], buf[5]
-    )
+    MacAddress::from_bytes(buf)
 }
 
-pub async fn get_ip(output: String, mac: &str) -> String {
-    let s: String = output.lines().filter(|l| l.contains(mac)).collect();
-
-    s.as_str().split_whitespace().next().unwrap().to_owned()
+pub async fn get_ip(
+    mac: Arc<MacAddress>,
+    tap_device: Arc<String>,
+) -> Result<String, Box<dyn Error + Sync + Send>> {
+    let mut timeout = time::delay_for(Duration::from_secs(120));
+    loop {
+        let tap_device = tap_device.clone();
+        let mac = mac.clone();
+        tokio::select! {
+           _ = &mut timeout => {
+               return Err("Could not get IP in time".into());
+           },
+           ip = tokio::spawn(async move {
+                dhcp::get_ip(*mac, &tap_device)
+            }) => {
+                return ip.unwrap();
+            }
+        };
+    }
 }
 
 pub async fn create_tap_device(vm_id: &str) {
@@ -60,23 +100,4 @@ pub async fn delete_tap_device(vm_id: &str) {
         .spawn()
         .expect("failed to add tap device to bridge")
         .await;
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-    use tokio::runtime::Builder;
-
-    #[test]
-    fn test() {
-        let mut rt = Builder::new()
-            .basic_scheduler()
-            .enable_all()
-            .build()
-            .unwrap();
-
-        let input = String::from("Interface: fcbridge, type: EN10MB, MAC: f6:17:27:50:93:84, IPv4: 192.168.122.45\nStarting arp-scan 1.9.7 with 256 hosts (https://github.com/royhills/arp-scan)\n192.168.122.1\t52:54:00:9b:d5:cc\tQEMU\n\n1 packets received by filter, 0 packets dropped by kernel\nEnding arp-scan 1.9.7: 256 hosts scanned in 1.898 seconds (134.88 hosts/sec). 1 responded\n");
-        let out = rt.block_on(get_ip(input, "52:54:00:9b:d5:cc"));
-        assert_eq!(out, "192.168.122.1")
-    }
 }
