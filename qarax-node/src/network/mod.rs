@@ -8,6 +8,8 @@ use std::sync::Arc;
 use tokio::process::Command;
 use tokio::time::{self, Duration};
 
+pub use std::net::Ipv4Addr as IpAddr;
+
 mod dhcp;
 
 const BRIDGE_NAME: &str = "fcbridge";

@@ -76,7 +76,7 @@ impl Client {
     pub fn start_vm(
         &self,
         request: impl tonic::IntoRequest<VmConfig>,
-    ) -> Result<tonic::Response<VmResponse>, tonic::Status> {
+    ) -> Result<tonic::Response<VmConfig>, tonic::Status> {
         Arc::clone(&self.rt)
             .write()
             .unwrap()

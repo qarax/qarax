@@ -17,6 +17,7 @@ pub fn get_ip(
 ) -> Result<String, Box<dyn Error + Sync + Send>> {
     tracing::info!("Starting DHCP client...");
 
+    // TODO: error handling: ensure tap device exists and stuff
     let mut sockets = SocketSet::new(vec![]);
     let tx_buffer = RawSocketBuffer::new([RawPacketMetadata::EMPTY; 1], vec![0; 600]);
     let rx_buffer = RawSocketBuffer::new([RawPacketMetadata::EMPTY; 1], vec![0; 600]);

@@ -25,8 +25,8 @@ impl VmService {
 
 #[tonic::async_trait]
 impl Node for VmService {
-    async fn start_vm(&self, request: Request<VmConfig>) -> Result<Response<VmResponse>, Status> {
-        let config = request.into_inner();
+    async fn start_vm(&self, request: Request<VmConfig>) -> Result<Response<VmConfig>, Status> {
+        let mut config = request.into_inner();
         tracing::info!(
             "Starting VM {}, {}, {}",
             &config.vm_id,
@@ -38,18 +38,13 @@ impl Node for VmService {
         let handler = handlers
             .entry(config.vm_id.to_owned())
             .or_insert(VmmHandler::new());
-        handler.configure_vm(&config).await;
+        handler.configure_vm(&mut config).await;
         tracing::info!("Configured VM...");
         handler.start_vm().await;
         tracing::info!("Started VM...");
 
-        let response = VmResponse {
-            status: NodeStatus::Success as i32,
-            config: Some(config),
-        };
-
         // TODO: there is no reason to return the config now
-        Ok(Response::new(response))
+        Ok(Response::new(config))
     }
 
     async fn stop_vm(&self, request: Request<VmId>) -> Result<Response<NodeResponse>, Status> {

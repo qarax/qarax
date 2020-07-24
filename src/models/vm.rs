@@ -2,11 +2,12 @@ use super::*;
 use crate::schema::vms;
 use diesel::PgConnection;
 use std::convert::From;
+use std::str::FromStr;
 use uuid::Uuid;
 
 const DEFAUL_KERNEL_PARAMS: &str = "console=ttyS0 reboot=k panic=1 pci=off";
 
-#[derive(Insertable, Identifiable, Serialize, Deserialize, Queryable, Debug)]
+#[derive(Insertable, Identifiable, Serialize, Deserialize, Queryable, Debug, AsChangeset, Clone)]
 #[table_name = "vms"]
 pub struct Vm {
     pub id: Uuid,
@@ -34,7 +35,7 @@ pub struct NewVm {
     pub kernel_params: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub enum NetworkMode {
     #[serde(rename = "dhcp")]
     Dhcp,
@@ -48,6 +49,17 @@ impl NetworkMode {
         match self {
             NetworkMode::Dhcp => String::from("dhcp"),
             NetworkMode::StaticIp => String::from("static_ip"),
+        }
+    }
+}
+
+impl FromStr for NetworkMode {
+    type Err = ();
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        match input {
+            "dhcp" => Ok(NetworkMode::Dhcp),
+            "static_ip" => Ok(NetworkMode::StaticIp),
+            _ => Err(()),
         }
     }
 }
@@ -76,6 +88,12 @@ impl Vm {
         }
     }
 
+    pub fn update(vm: &Vm, conn: &PgConnection) -> Result<Vm, String> {
+        match diesel::update(vm).set(vm).get_result(conn) {
+            Ok(host) => Ok(host),
+            Err(e) => Err(e.to_string()),
+        }
+    }
     pub fn delete_all(conn: &PgConnection) -> Result<usize, diesel::result::Error> {
         use crate::schema::vms::dsl::*;
 
