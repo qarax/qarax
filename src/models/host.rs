@@ -1,9 +1,17 @@
 use super::*;
 use crate::schema::hosts;
 use crate::schema::hosts::dsl::*;
+use anyhow::Result;
 use diesel::PgConnection;
 use std::convert::From;
+use thiserror::Error;
 use uuid::Uuid;
+
+#[derive(Error, Debug)]
+pub enum HostModelError {
+    #[error("Host '{0}' not found, error {1}")]
+    NotFound(String, String),
+}
 
 #[derive(Serialize, Deserialize, Queryable, Debug, Insertable, Identifiable, Clone)]
 #[table_name = "hosts"]
@@ -47,10 +55,10 @@ impl Host {
             .unwrap()
     }
 
-    pub fn by_id(host_id: Uuid, conn: &PgConnection) -> Result<Host, String> {
+    pub fn by_id(host_id: Uuid, conn: &PgConnection) -> Result<Host> {
         match hosts.find(host_id).first(conn) {
             Ok(h) => Ok(h),
-            Err(e) => Err(e.to_string()),
+            Err(e) => Err(HostModelError::NotFound(host_id.to_string(), e.to_string()).into()),
         }
     }
 

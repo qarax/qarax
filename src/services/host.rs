@@ -6,12 +6,12 @@ use super::util::ansible;
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
-
-use std::thread;
-
 use std::sync::Arc;
 use std::sync::RwLock;
+use std::thread;
 use uuid::Uuid;
+
+use anyhow::Result;
 
 #[derive(Clone)]
 pub struct HostService {
@@ -25,7 +25,7 @@ impl HostService {
         }
     }
 
-    pub fn get_by_id(&self, host_id: &str, conn: &DbConnection) -> Result<Host, String> {
+    pub fn get_by_id(&self, host_id: &str, conn: &DbConnection) -> Result<Host> {
         Host::by_id(Uuid::parse_str(host_id).unwrap(), conn)
     }
 

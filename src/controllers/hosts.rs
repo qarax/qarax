@@ -2,8 +2,6 @@ use super::*;
 use crate::database::DbConnection;
 use crate::models::host::{InstallHost, NewHost};
 use crate::services::Backend;
-use rocket_contrib::json::{Json, JsonValue};
-use rocket_contrib::uuid::Uuid;
 
 #[get("/")]
 pub fn index(backend: State<Backend>, conn: DbConnection) -> JsonValue {
@@ -11,8 +9,17 @@ pub fn index(backend: State<Backend>, conn: DbConnection) -> JsonValue {
 }
 
 #[get("/<id>")]
-pub fn by_id(id: Uuid, backend: State<Backend>, conn: DbConnection) -> JsonValue {
-    json!({ "host": backend.host_service.get_by_id(&id.to_string(), &conn) })
+pub fn by_id(id: Uuid, backend: State<Backend>, conn: DbConnection) -> ApiResponse {
+    match backend.host_service.get_by_id(&id.to_string(), &conn) {
+        Ok(h) => ApiResponse {
+            response: json!({ "host": h }),
+            status: Status::Ok,
+        },
+        Err(e) => ApiResponse {
+            response: json!({"error": e.to_string()}),
+            status: Status::NotFound,
+        },
+    }
 }
 
 #[post("/", format = "json", data = "<host>")]
@@ -145,5 +152,15 @@ mod tests {
 
         // TODO: Stupid teardown
         backend.host_service.delete_all(&conn);
+    }
+
+    #[test]
+    fn test_host_not_found() {
+        let (client, _) = get_client();
+        let response = client
+            .get("/hosts/835b6b42-9e70-43ef-a58d-6235ab0e1495")
+            .dispatch();
+
+        assert_eq!(response.status(), Status::NotFound);
     }
 }
