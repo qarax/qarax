@@ -1,7 +1,7 @@
 #!/bin/bash
 echo "Defining VM..."
 
-VM_NAME=${1:-"fc_host"}
+VM_NAME=${1:-"fchost"}
 LIBVIRT_NETWORK=${2:-"default"}
 VM_IP=${3:-"192.168.122.45"}
 
