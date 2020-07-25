@@ -32,10 +32,16 @@ pub fn by_id(id: Uuid, backend: State<Backend>, conn: DbConnection) -> ApiRespon
 }
 
 #[post("/", format = "json", data = "<host>")]
-pub fn add_host(host: Json<NewHost>, backend: State<Backend>, conn: DbConnection) -> JsonValue {
+pub fn add_host(host: Json<NewHost>, backend: State<Backend>, conn: DbConnection) -> ApiResponse {
     match backend.host_service.add_host(&host.into_inner(), &conn) {
-        Ok(id) => json!({ "host_id": id }),
-        Err(e) => json!({ "error": e }),
+        Ok(id) => ApiResponse {
+            response: json!({ "host_id": id }),
+            status: Status::Ok,
+        },
+        Err(e) => ApiResponse {
+            response: json!({ "error": e.to_string() }),
+            status: Status::BadRequest,
+        },
     }
 }
 
@@ -171,5 +177,44 @@ mod tests {
             .dispatch();
 
         assert_eq!(response.status(), Status::NotFound);
+    }
+
+    #[test]
+    fn test_host_duplicate_name() {
+        let payload1 = r#"{
+            "name":"hosto",
+            "address": "1.1.1.1",
+            "user": "root",
+            "password": "passwordo",
+            "local_node_path": "/home/",
+            "port": 8001}"#;
+
+        let payload2 = r#"{
+                "name":"hosto",
+                "address": "1.1.1.1",
+                "user": "root",
+                "password": "passwordo",
+                "local_node_path": "/home/",
+                "port": 8001}"#;
+        let (client, conn) = get_client();
+        let backend: State<Backend> = State::from(&client.rocket()).unwrap();
+
+        let mut response1 = client
+            .post("/hosts")
+            .header(ContentType::JSON)
+            .body(payload1)
+            .dispatch();
+
+        let mut response2 = client
+            .post("/hosts")
+            .header(ContentType::JSON)
+            .body(payload1)
+            .dispatch();
+
+        assert_eq!(response1.status(), Status::Ok);
+        assert_eq!(response2.status(), Status::BadRequest);
+
+        // TODO: Stupid teardown
+        backend.host_service.delete_all(&conn);
     }
 }

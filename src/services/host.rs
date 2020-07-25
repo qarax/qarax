@@ -33,7 +33,7 @@ impl HostService {
         Host::all(conn)
     }
 
-    pub fn add_host(&self, host: &NewHost, conn: &DbConnection) -> Result<Uuid, String> {
+    pub fn add_host(&self, host: &NewHost, conn: &DbConnection) -> Result<Uuid> {
         Host::insert(host, conn)
     }
 
