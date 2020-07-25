@@ -84,7 +84,7 @@ mod tests {
         let (client, conn) = get_client();
         let backend: State<Backend> = State::from(&client.rocket()).expect("Could not get state");
         client.get("/vmss").dispatch();
-        assert_eq!(backend.host_service.get_all(&conn).len(), 0);
+        assert_eq!(backend.host_service.get_all(&conn).unwrap().len(), 0);
     }
 
     #[test]
