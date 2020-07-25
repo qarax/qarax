@@ -1,11 +1,9 @@
 use super::*;
 use crate::schema::hosts;
 use crate::schema::hosts::dsl::*;
-use anyhow::anyhow;
 use anyhow::Result;
 use diesel::PgConnection;
 use std::convert::From;
-use uuid::Uuid;
 
 #[derive(Serialize, Deserialize, Queryable, Debug, Insertable, Identifiable, Clone)]
 #[table_name = "hosts"]
@@ -53,10 +51,7 @@ impl Host {
         match hosts.find(host_id).first(conn) {
             Ok(h) => Ok(h),
             Err(e) => {
-                Err(
-                    ModelError::NotFound(EntityType::Host, host_id.to_string(), e.to_string())
-                        .into(),
-                )
+                Err(ModelError::NotFound(EntityType::Host, host_id.into(), anyhow!(e)).into())
             }
         }
     }
@@ -74,10 +69,7 @@ impl Host {
         match diesel::insert_into(hosts::table).values(&h).execute(conn) {
             Ok(_) => Ok(h.id.to_owned()),
             Err(e) => {
-                Err(
-                    ModelError::FailedToAdd(EntityType::Host, h.id.to_string(), e.to_string())
-                        .into(),
-                )
+                Err(ModelError::FailedToAdd(EntityType::Host, h.id.into(), anyhow!(e)).into())
             }
         }
     }
