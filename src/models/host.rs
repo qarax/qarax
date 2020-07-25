@@ -54,7 +54,7 @@ impl Host {
             Ok(h) => Ok(h),
             Err(e) => {
                 Err(
-                    ModelError::NotFound(String::from("Host"), host_id.to_string(), e.to_string())
+                    ModelError::NotFound(EntityType::Host, host_id.to_string(), e.to_string())
                         .into(),
                 )
             }
@@ -75,7 +75,7 @@ impl Host {
             Ok(_) => Ok(h.id.to_owned()),
             Err(e) => {
                 Err(
-                    ModelError::FailedToAdd(String::from("Host"), h.id.to_string(), e.to_string())
+                    ModelError::FailedToAdd(EntityType::Host, h.id.to_string(), e.to_string())
                         .into(),
                 )
             }

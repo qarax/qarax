@@ -181,7 +181,7 @@ mod tests {
 
     #[test]
     fn test_host_duplicate_name() {
-        let payload1 = r#"{
+        let payload = r#"{
             "name":"hosto",
             "address": "1.1.1.1",
             "user": "root",
@@ -189,29 +189,23 @@ mod tests {
             "local_node_path": "/home/",
             "port": 8001}"#;
 
-        let payload2 = r#"{
-                "name":"hosto",
-                "address": "1.1.1.1",
-                "user": "root",
-                "password": "passwordo",
-                "local_node_path": "/home/",
-                "port": 8001}"#;
         let (client, conn) = get_client();
         let backend: State<Backend> = State::from(&client.rocket()).unwrap();
 
-        let mut response1 = client
+        let response1 = client
             .post("/hosts")
             .header(ContentType::JSON)
-            .body(payload1)
-            .dispatch();
-
-        let mut response2 = client
-            .post("/hosts")
-            .header(ContentType::JSON)
-            .body(payload1)
+            .body(payload)
             .dispatch();
 
         assert_eq!(response1.status(), Status::Ok);
+
+        let response2 = client
+            .post("/hosts")
+            .header(ContentType::JSON)
+            .body(payload)
+            .dispatch();
+
         assert_eq!(response2.status(), Status::BadRequest);
 
         // TODO: Stupid teardown
