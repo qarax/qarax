@@ -29,7 +29,7 @@ impl HostService {
         Host::by_id(Uuid::parse_str(host_id).unwrap(), conn)
     }
 
-    pub fn get_all(&self, conn: &DbConnection) -> Vec<Host> {
+    pub fn get_all(&self, conn: &DbConnection) -> Result<Vec<Host>> {
         Host::all(conn)
     }
 

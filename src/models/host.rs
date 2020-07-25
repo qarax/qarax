@@ -1,6 +1,7 @@
 use super::*;
 use crate::schema::hosts;
 use crate::schema::hosts::dsl::*;
+use anyhow::anyhow;
 use anyhow::Result;
 use diesel::PgConnection;
 use std::convert::From;
@@ -46,13 +47,13 @@ pub struct InstallHost {
 }
 
 impl Host {
-    pub fn all(conn: &PgConnection) -> Vec<Host> {
+    pub fn all(conn: &PgConnection) -> Result<Vec<Host>> {
         use crate::schema::hosts::dsl::*;
 
         hosts
             .order(crate::schema::hosts::id.desc())
             .load::<Host>(conn)
-            .unwrap()
+            .map_err(|e| anyhow!(e))
     }
 
     pub fn by_id(host_id: Uuid, conn: &PgConnection) -> Result<Host> {

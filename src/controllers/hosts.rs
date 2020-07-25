@@ -4,8 +4,17 @@ use crate::models::host::{InstallHost, NewHost};
 use crate::services::Backend;
 
 #[get("/")]
-pub fn index(backend: State<Backend>, conn: DbConnection) -> JsonValue {
-    json!({ "hosts": backend.host_service.get_all(&conn) })
+pub fn index(backend: State<Backend>, conn: DbConnection) -> ApiResponse {
+    match backend.host_service.get_all(&conn) {
+        Ok(hosts) => ApiResponse {
+            response: json!({ "hosts": hosts }),
+            status: Status::Ok,
+        },
+        Err(e) => ApiResponse {
+            response: json!({"error": e.to_string()}),
+            status: Status::BadRequest,
+        },
+    }
 }
 
 #[get("/<id>")]
@@ -95,7 +104,7 @@ mod tests {
         let (client, conn) = get_client();
         let backend: State<Backend> = State::from(&client.rocket()).expect("Could not get state");
         client.get("/hosts").dispatch();
-        assert_eq!(backend.host_service.get_all(&conn).len(), 0);
+        assert_eq!(backend.host_service.get_all(&conn).unwrap().len(), 0);
     }
 
     #[test]
@@ -117,7 +126,7 @@ mod tests {
 
         let backend: State<Backend> = State::from(&client.rocket()).unwrap();
 
-        assert_eq!(backend.host_service.get_all(&conn).len(), 1);
+        assert_eq!(backend.host_service.get_all(&conn).unwrap().len(), 1);
 
         // TODO: Stupid teardown
         backend.host_service.delete_all(&conn);
