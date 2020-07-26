@@ -190,7 +190,7 @@ mod tests {
             "port": 8001}"#;
 
         let (client, conn) = get_client();
-        let backend: State<Backend> = State::from::<Backend>(&client.rocket()).unwrap();
+        let backend: State<Backend> = State::from(&client.rocket()).unwrap();
 
         let response1 = client
             .post("/hosts")
