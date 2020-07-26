@@ -81,10 +81,13 @@ mod tests {
 
     #[test]
     fn test_index_empty() {
-        let (client, conn) = get_client();
-        let backend: State<Backend> = State::from(&client.rocket()).expect("Could not get state");
-        client.get("/vmss").dispatch();
-        assert_eq!(backend.host_service.get_all(&conn).unwrap().len(), 0);
+        let (client, _) = get_client();
+        let mut response = client.get("/vms").dispatch();
+
+        let response = response.body_string();
+        let response: Value = serde_json::from_str(&response.unwrap()).unwrap();
+
+        assert_eq!(response.to_string(), "{\"vms\":[]}");
     }
 
     #[test]
