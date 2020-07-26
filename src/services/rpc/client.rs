@@ -6,7 +6,7 @@ pub mod node {
     tonic::include_proto!("node");
 }
 
-use node::{node_client::NodeClient, Response as NodeResponse, VmConfig, VmId, VmResponse};
+use node::{node_client::NodeClient, Response as NodeResponse, VmConfig, VmId};
 
 type StdError = Box<dyn std::error::Error + Send + Sync + 'static>;
 type Result<T, E = StdError> = ::std::result::Result<T, E>;
@@ -35,7 +35,7 @@ impl Client {
                    Ok(c) => return Ok(c),
 
                    // TODO: the error needs to be looked at in case it's not "Connection refused"
-                   Err(e) => continue,
+                   Err(_) => continue,
                }
             };
         }
