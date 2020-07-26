@@ -115,7 +115,7 @@ mod tests {
         assert_eq!(vm.network_mode, None);
 
         // TODO: Stupid teardown
-        backend.vm_service.delete_all(&conn);
+        backend.vm_service.delete_all(&conn).unwrap();
     }
 
     #[test]
@@ -147,7 +147,7 @@ mod tests {
         assert_eq!(vm.network_mode, Some(String::from("dhcp")));
 
         // TODO: Stupid teardown
-        backend.vm_service.delete_all(&conn);
+        backend.vm_service.delete_all(&conn).unwrap();
     }
 
     #[test]
@@ -181,7 +181,7 @@ mod tests {
         assert_eq!(vm.address, Some(String::from("192.168.122.100")));
 
         // TODO: Stupid teardown
-        backend.vm_service.delete_all(&conn);
+        backend.vm_service.delete_all(&conn).unwrap();
     }
 
     #[test]
@@ -217,7 +217,7 @@ mod tests {
         );
 
         // TODO: Stupid teardown
-        backend.vm_service.delete_all(&conn);
+        backend.vm_service.delete_all(&conn).unwrap();
     }
 
     #[test]
@@ -251,6 +251,6 @@ mod tests {
         assert_eq!(vm.kernel_params, String::from("ip=1.1.1.1"));
 
         // TODO: Stupid teardown
-        backend.vm_service.delete_all(&conn);
+        backend.vm_service.delete_all(&conn).unwrap();
     }
 }

@@ -135,7 +135,7 @@ mod tests {
         assert_eq!(backend.host_service.get_all(&conn).unwrap().len(), 1);
 
         // TODO: Stupid teardown
-        backend.host_service.delete_all(&conn);
+        backend.host_service.delete_all(&conn).unwrap();
     }
 
     #[test]
@@ -166,7 +166,7 @@ mod tests {
         assert_eq!(backend.host_service.get_by_id(host_id, &conn).is_ok(), true);
 
         // TODO: Stupid teardown
-        backend.host_service.delete_all(&conn);
+        backend.host_service.delete_all(&conn).unwrap();
     }
 
     #[test]
@@ -209,6 +209,6 @@ mod tests {
         assert_eq!(response2.status(), Status::BadRequest);
 
         // TODO: Stupid teardown
-        backend.host_service.delete_all(&conn);
+        backend.host_service.delete_all(&conn).unwrap();
     }
 }
