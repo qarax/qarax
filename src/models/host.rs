@@ -74,17 +74,15 @@ impl Host {
         }
     }
 
-    pub fn update_status(
-        h: &Host,
-        new_status: Status,
-        conn: &PgConnection,
-    ) -> Result<Host, String> {
+    pub fn update_status(h: &Host, new_status: Status, conn: &PgConnection) -> Result<Host> {
         match diesel::update(h)
             .set(status.eq(new_status))
             .get_result(conn)
         {
             Ok(host) => Ok(host),
-            Err(e) => Err(e.to_string()),
+            Err(e) => {
+                Err(ModelError::FailedToUpdate(EntityType::Host, h.id.into(), anyhow!(e)).into())
+            }
         }
     }
 
