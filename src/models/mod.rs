@@ -46,4 +46,6 @@ enum ModelError {
     NotFound(EntityType, EntityId, Error),
     #[error("Failed to add '{0}' '{1}' to the database, error {2}")]
     FailedToAdd(EntityType, EntityId, Error),
+    #[error("Failed to update '{0}' '{1}' to the database, error {2}")]
+    FailedToUpdate(EntityType, EntityId, Error),
 }

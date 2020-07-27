@@ -46,10 +46,16 @@ pub fn add_host(host: Json<NewHost>, backend: State<Backend>, conn: DbConnection
 }
 
 #[get("/health/<id>")]
-pub fn health_check(id: Uuid, backend: State<Backend>) -> JsonValue {
+pub fn health_check(id: Uuid, backend: State<Backend>) -> ApiResponse {
     match backend.host_service.health_check(&id.to_string()) {
-        Ok(status) => json!({ "host_status": status }),
-        Err(status) => json!({ "host_status": status }),
+        Ok(status) => ApiResponse {
+            response: json!({ "host_status": status }),
+            status: Status::Ok,
+        },
+        Err(e) => ApiResponse {
+            response: json!({ "host_status": e.to_string() }),
+            status: Status::BadRequest,
+        },
     }
 }
 

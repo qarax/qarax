@@ -9,9 +9,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::thread;
-use uuid::Uuid;
 
-use anyhow::Result;
+use super::*;
 
 #[derive(Clone)]
 pub struct HostService {
@@ -37,16 +36,8 @@ impl HostService {
         Host::insert(host, conn)
     }
 
-    pub fn install(
-        self,
-        host_id: &str,
-        host: &InstallHost,
-        conn: DbConnection,
-    ) -> Result<String, String> {
-        let db_host = match self.get_by_id(host_id, &conn) {
-            Ok(h) => h,
-            Err(_) => return Err(String::from("Host not found")),
-        };
+    pub fn install(self, host_id: &str, host: &InstallHost, conn: DbConnection) -> Result<String> {
+        let db_host = self.get_by_id(host_id, &conn)?;
 
         let mut extra_params = BTreeMap::new();
         extra_params.insert(
@@ -63,7 +54,7 @@ impl HostService {
 
         thread::spawn(move || {
             // TODO: handle errors
-            Host::update_status(&db_host, Status::Installing, &*conn);
+            Host::update_status(&db_host, Status::Installing, &*conn).unwrap();
 
             let ac = ansible::AnsibleCommand::new(
                 ansible::INSTALL_HOST_PLAYBOOK,
@@ -72,37 +63,41 @@ impl HostService {
                 extra_params,
             );
 
-            ac.run_playbook();
+            if let Err(e) = ac
+                .run_playbook()
+                .with_context(|| format!("Couldn't run playbook"))
+            {
+                eprintln!("{:?}", e);
+                Host::update_status(&db_host, Status::Down, &*conn).expect("Failed to update host");
+                return;
+            }
 
             match Client::connect(format!("http://{}:{}", db_host.address, db_host.port)) {
+                Err(e) => {
+                    eprintln!("Failed to connect to qarax-node, {:?}", e);
+                    Host::update_status(&db_host, Status::Down, &*conn)
+                        .expect("Failed to update host");
+                    return;
+                }
                 Ok(c) => {
                     println!("Successfully connected to qarax-node");
                     self.clients.write().unwrap().insert(db_host.id, c);
                 }
-                Err(e) => {
-                    println!("Failed to connect to qarax-node {}", e.to_string());
-                    Host::update_status(&db_host, Status::Down, &*conn);
-                }
             }
 
-            // TODO: fail instead of just printing
-            match self.health_check(&db_host.id.to_string()) {
-                Ok(r) => {
-                    println!("Health check: {}", r);
-                    Host::update_status(&db_host, Status::Up, &*conn);
-                    println!("Finished installation of {}", db_host.id);
-                }
-                Err(e) => {
-                    Host::update_status(&db_host, Status::Down, &*conn);
-                    eprintln!("Health check failed, failing installation")
-                }
-            };
+            if self.health_check(&db_host.id.to_string()).is_err() {
+                eprintln!("Health check failed, failing installation");
+                Host::update_status(&db_host, Status::Down, &*conn).expect("Failed to update host");
+            } else {
+                println!("Finished installation of {}", db_host.id);
+                Host::update_status(&db_host, Status::Up, &*conn).expect("Failed to update host");
+            }
         });
 
         Ok(String::from("installing host"))
     }
 
-    pub fn health_check(&self, host_id: &str) -> Result<String, String> {
+    pub fn health_check(&self, host_id: &str) -> Result<String> {
         use tonic::Request;
 
         match self
@@ -113,12 +108,12 @@ impl HostService {
         {
             Some(c) => {
                 let response = c.health_check(Request::new(()));
-                return match response {
+                match response {
                     Ok(_) => Ok(String::from("OK")),
-                    Err(_) => Err(String::from("ERROR")),
-                };
+                    Err(e) => Err(anyhow!("Failed {:?}", e)),
+                }
             }
-            None => Err(String::from("No client found for host")),
+            None => Err(anyhow!("No client found for host")),
         }
     }
 
@@ -154,14 +149,15 @@ impl HostService {
 
                             // TODO: down status is not correct, need to introduce a new status
                             // for this
-                            Host::update_status(host, Status::Down, &*conn);
+                            Host::update_status(host, Status::Down, &*conn)
+                                .expect("Failed to update host");
                             return ();
                         }
                     };
                 }
                 Err(e) => {
                     eprintln!("Could not connect to host {}, error: {}", host.id, e);
-                    Host::update_status(host, Status::Down, &*conn);
+                    Host::update_status(host, Status::Down, &*conn).expect("Failed to update host");
                     return ();
                 }
             };

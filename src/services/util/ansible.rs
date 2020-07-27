@@ -1,3 +1,4 @@
+use anyhow::{anyhow, Result};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::process::Command;
@@ -28,13 +29,23 @@ impl<'a> AnsibleCommand<'a> {
         }
     }
 
-    pub fn run_playbook(&self) {
+    pub fn run_playbook(&self) -> Result<()> {
         // TODO: handle errors and write output properly
         let mut process = Command::new(CMD)
             .args(self.to_string().split(" "))
             .spawn()
             .expect("Ansible failed");
-        process.wait();
+
+        match process.wait() {
+            Ok(status) => {
+                if status.success() {
+                    Ok(())
+                } else {
+                    Err(anyhow!("playbook failed, '{}'", status))
+                }
+            }
+            Err(e) => Err(anyhow!(e)),
+        }
     }
 }
 
