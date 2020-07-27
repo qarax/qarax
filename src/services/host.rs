@@ -63,42 +63,34 @@ impl HostService {
                 extra_params,
             );
 
-            match ac
+            if let Err(e) = ac
                 .run_playbook()
                 .with_context(|| format!("Couldn't run playbook"))
             {
-                // TODO: make this into a nice method that could be used by `initialize_hosts`
-                Ok(_) => {
-                    match Client::connect(format!("http://{}:{}", db_host.address, db_host.port)) {
-                        Ok(c) => {
-                            println!("Successfully connected to qarax-node");
-                            self.clients.write().unwrap().insert(db_host.id, c);
-                            match self.health_check(&db_host.id.to_string()) {
-                                Ok(r) => {
-                                    println!("Health check: {}", r);
-                                    Host::update_status(&db_host, Status::Up, &*conn)
-                                        .expect("Failed to update host");
-                                    println!("Finished installation of {}", db_host.id);
-                                }
-                                Err(e) => {
-                                    eprintln!("Health check failed, failing installation {:?}", e);
-                                    Host::update_status(&db_host, Status::Down, &*conn)
-                                        .expect("Failed to update host");
-                                }
-                            };
-                        }
-                        Err(e) => {
-                            println!("Failed to connect to qarax-node {}", e);
-                            Host::update_status(&db_host, Status::Down, &*conn)
-                                .expect("Failed to update host");
-                        }
-                    }
-                }
+                eprintln!("{:?}", e);
+                Host::update_status(&db_host, Status::Down, &*conn).expect("Failed to update host");
+                return;
+            }
+
+            match Client::connect(format!("http://{}:{}", db_host.address, db_host.port)) {
                 Err(e) => {
-                    eprintln!("{:?}", e);
+                    eprintln!("Failed to connect to qarax-node, {:?}", e);
                     Host::update_status(&db_host, Status::Down, &*conn)
                         .expect("Failed to update host");
+                    return;
                 }
+                Ok(c) => {
+                    println!("Successfully connected to qarax-node");
+                    self.clients.write().unwrap().insert(db_host.id, c);
+                }
+            }
+
+            if self.health_check(&db_host.id.to_string()).is_err() {
+                eprintln!("Health check failed, failing installation");
+                Host::update_status(&db_host, Status::Down, &*conn).expect("Failed to update host");
+            } else {
+                println!("Finished installation of {}", db_host.id);
+                Host::update_status(&db_host, Status::Up, &*conn).expect("Failed to update host");
             }
         });
 
