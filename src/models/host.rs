@@ -113,7 +113,7 @@ use diesel::serialize::{self, IsNull, Output, ToSql};
 use diesel::sql_types::Varchar;
 use std::io::Write;
 
-#[derive(Deserialize, Serialize, Debug, Copy, Clone, AsExpression, FromSqlRow)]
+#[derive(Deserialize, Serialize, Debug, Copy, Clone, AsExpression, FromSqlRow, Eq, PartialEq)]
 #[sql_type = "Varchar"]
 pub enum Status {
     Unknown,

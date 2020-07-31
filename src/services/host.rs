@@ -4,23 +4,25 @@ use crate::models::host::{Host, InstallHost, NewHost, Status};
 use super::rpc::client::Client;
 use super::util::ansible;
 
+use super::*;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
-use std::sync::Arc;
-use std::sync::RwLock;
+use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 
-use super::*;
+use dashmap::DashMap;
 
 #[derive(Clone)]
 pub struct HostService {
     clients: Arc<RwLock<HashMap<Uuid, Client>>>,
+    locks: Arc<DashMap<Uuid, Arc<Mutex<bool>>>>,
 }
 
 impl HostService {
     pub fn new() -> Self {
         HostService {
             clients: Arc::new(RwLock::new(HashMap::new())),
+            locks: Arc::new(DashMap::new()),
         }
     }
 
@@ -36,8 +38,39 @@ impl HostService {
         Host::insert(host, conn)
     }
 
-    pub fn install(self, host_id: &str, host: &InstallHost, conn: DbConnection) -> Result<String> {
+    pub fn install(&self, host_id: &str, host: &InstallHost, conn: DbConnection) -> Result<String> {
+        let uuid = &Uuid::parse_str(host_id)?;
+
+        let lock: Arc<Mutex<bool>>;
+        if let Some(ref v) = self.locks.get(uuid) {
+            if let Ok(ref mut m) = v.try_lock() {
+                println!("lock for host '{}' acquired", host_id);
+                lock = self.locks.insert(*uuid, Arc::clone(&v)).unwrap();
+            } else {
+                println!("lock for host '{}' is held", host_id);
+                return Err(anyhow!("Host is currently being installed"));
+            }
+        } else {
+            println!("creating a lock for host '{}'", host_id);
+            lock = Arc::new(Mutex::new(true));
+        }
+
+        let m = lock.lock().unwrap();
+        self.locks.insert(*uuid, Arc::clone(&lock));
+
         let db_host = self.get_by_id(host_id, &conn)?;
+        if db_host.status == Status::Installing {
+            std::mem::drop(m);
+            self.locks.remove(uuid);
+            return Err(anyhow!("Host is currently being installed"));
+        }
+
+        Host::update_status(&db_host, Status::Installing, &*conn).unwrap();
+        println!("releasing lock for host '{}'", host_id);
+
+        // Just in case?
+        std::mem::drop(m);
+        self.locks.remove(uuid);
 
         let mut extra_params = BTreeMap::new();
         extra_params.insert(
@@ -52,10 +85,9 @@ impl HostService {
             host.local_node_path.to_owned(),
         );
 
+        let clients = Arc::clone(&self.clients);
         thread::spawn(move || {
             // TODO: handle errors
-            Host::update_status(&db_host, Status::Installing, &*conn).unwrap();
-
             let ac = ansible::AnsibleCommand::new(
                 ansible::INSTALL_HOST_PLAYBOOK,
                 &db_host.host_user,
@@ -81,11 +113,11 @@ impl HostService {
                 }
                 Ok(c) => {
                     println!("Successfully connected to qarax-node");
-                    self.clients.write().unwrap().insert(db_host.id, c);
+                    clients.write().unwrap().insert(db_host.id, c);
                 }
             }
 
-            if self.health_check(&db_host.id.to_string()).is_err() {
+            if Self::health_check_internal(clients, &db_host.id.to_string()).is_err() {
                 eprintln!("Health check failed, failing installation");
                 Host::update_status(&db_host, Status::Down, &*conn).expect("Failed to update host");
             } else {
@@ -98,10 +130,17 @@ impl HostService {
     }
 
     pub fn health_check(&self, host_id: &str) -> Result<String> {
+        Self::health_check_internal(Arc::clone(&self.clients), host_id)
+    }
+
+    fn health_check_internal(
+        clients: Arc<RwLock<HashMap<Uuid, Client>>>,
+        host_id: &str,
+    ) -> Result<String> {
         use tonic::Request;
 
-        match self
-            .clients
+        // TODO: do not pass the entire clients map, only the relevent client
+        match clients
             .read()
             .unwrap()
             .get(&Uuid::parse_str(host_id).unwrap())
@@ -140,7 +179,10 @@ impl HostService {
                     println!("Saving client for host {}", host.id);
                     self.clients.write().unwrap().insert(host.id, c);
 
-                    match self.health_check(&host.id.to_string()) {
+                    match Self::health_check_internal(
+                        Arc::clone(&self.clients),
+                        &host.id.to_string(),
+                    ) {
                         Ok(_) => {
                             println!("Successfully initialized host {}", host.id,);
                         }

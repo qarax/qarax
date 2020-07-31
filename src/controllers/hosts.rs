@@ -66,7 +66,6 @@ pub fn install(
     backend: State<Backend>,
     conn: DbConnection,
 ) -> JsonValue {
-    // TODO: error handling
     match backend
         .host_service
         .clone()

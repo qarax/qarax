@@ -19,6 +19,7 @@ tokio = { version = "0.2", features = ["full"] }
 async-stream = "0.2"
 anyhow = "1.0"
 thiserror = "1.0"
+dashmap = "3.11.7"
 
 [dependencies.rocket_contrib]
 version = "0.4.5"
