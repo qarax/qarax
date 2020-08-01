@@ -7,8 +7,17 @@ use rocket_contrib::json::{Json, JsonValue};
 use rocket_contrib::uuid::Uuid;
 
 #[get("/")]
-pub fn index(backend: State<Backend>, conn: DbConnection) -> JsonValue {
-    json!({ "vms": backend.vm_service.get_all(&conn) })
+pub fn index(backend: State<Backend>, conn: DbConnection) -> ApiResponse {
+    match backend.vm_service.get_all(&conn) {
+        Ok(vms) => ApiResponse {
+            response: json!({ "vms": vms }),
+            status: Status::Ok,
+        },
+        Err(e) => ApiResponse {
+            response: json!({"error": e.to_string()}),
+            status: Status::BadRequest,
+        },
+    }
 }
 
 #[get("/<id>")]
@@ -112,7 +121,7 @@ mod tests {
         let response: Value = serde_json::from_str(&response.body_string().unwrap()).unwrap();
         let vm_id = response["vm_id"].as_str().unwrap();
 
-        assert_eq!(backend.vm_service.get_all(&conn).len(), 1);
+        assert_eq!(backend.vm_service.get_all(&conn).unwrap().len(), 1);
 
         let vm = backend.vm_service.get_by_id(vm_id, &conn).unwrap();
         assert_eq!(vm.network_mode, None);
@@ -144,7 +153,7 @@ mod tests {
         let response: Value = serde_json::from_str(&response.body_string().unwrap()).unwrap();
         let vm_id = response["vm_id"].as_str().unwrap();
 
-        assert_eq!(backend.vm_service.get_all(&conn).len(), 1);
+        assert_eq!(backend.vm_service.get_all(&conn).unwrap().len(), 1);
 
         let vm = backend.vm_service.get_by_id(vm_id, &conn).unwrap();
         assert_eq!(vm.network_mode, Some(String::from("dhcp")));
@@ -177,7 +186,7 @@ mod tests {
         let response: Value = serde_json::from_str(&response.body_string().unwrap()).unwrap();
         let vm_id = response["vm_id"].as_str().unwrap();
 
-        assert_eq!(backend.vm_service.get_all(&conn).len(), 1);
+        assert_eq!(backend.vm_service.get_all(&conn).unwrap().len(), 1);
 
         let vm = backend.vm_service.get_by_id(vm_id, &conn).unwrap();
         assert_eq!(vm.network_mode, Some(String::from("static_ip")));
@@ -211,7 +220,7 @@ mod tests {
         let response: Value = serde_json::from_str(&response.body_string().unwrap()).unwrap();
         let vm_id = response["vm_id"].as_str().unwrap();
 
-        assert_eq!(backend.vm_service.get_all(&conn).len(), 1);
+        assert_eq!(backend.vm_service.get_all(&conn).unwrap().len(), 1);
 
         let vm = backend.vm_service.get_by_id(vm_id, &conn).unwrap();
         assert_eq!(
@@ -248,7 +257,7 @@ mod tests {
         let response: Value = serde_json::from_str(&response.body_string().unwrap()).unwrap();
         let vm_id = response["vm_id"].as_str().unwrap();
 
-        assert_eq!(backend.vm_service.get_all(&conn).len(), 1);
+        assert_eq!(backend.vm_service.get_all(&conn).unwrap().len(), 1);
 
         let vm = backend.vm_service.get_by_id(vm_id, &conn).unwrap();
         assert_eq!(vm.kernel_params, String::from("ip=1.1.1.1"));

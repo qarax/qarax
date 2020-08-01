@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Error};
+use anyhow::{anyhow, Error, Result};
 use diesel::dsl::*;
 use diesel::*;
 use serde::{Deserialize, Serialize};

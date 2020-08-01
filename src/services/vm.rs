@@ -1,3 +1,4 @@
+use super::*;
 use crate::database::DbConnection;
 use crate::models::vm::{NetworkMode, NewVm, Vm};
 use crate::services::host::HostService;
@@ -16,7 +17,7 @@ impl VmService {
         Vm::by_id(Uuid::parse_str(vm_id).unwrap(), conn)
     }
 
-    pub fn get_all(&self, conn: &DbConnection) -> Vec<Vm> {
+    pub fn get_all(&self, conn: &DbConnection) -> Result<Vec<Vm>> {
         Vm::all(conn)
     }
 

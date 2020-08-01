@@ -7,7 +7,7 @@ use rocket::response;
 use rocket::response::{Responder, Response};
 use rocket::State;
 use rocket_contrib::json::{Json, JsonValue};
-use rocket_contrib::uuid::{uuid_crate, Uuid};
+use rocket_contrib::uuid::Uuid;
 
 #[derive(Debug)]
 pub struct ApiResponse {

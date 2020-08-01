@@ -65,9 +65,9 @@ impl FromStr for NetworkMode {
 }
 
 impl Vm {
-    pub fn all(conn: &PgConnection) -> Vec<Vm> {
+    pub fn all(conn: &PgConnection) -> Result<Vec<Vm>> {
         use crate::schema::vms::dsl::*;
-        vms.load::<Vm>(conn).unwrap()
+        vms.load::<Vm>(conn).map_err(|e| anyhow!(e))
     }
 
     pub fn by_id(vm_id: Uuid, conn: &PgConnection) -> Result<Vm, String> {

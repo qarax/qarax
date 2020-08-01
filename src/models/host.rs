@@ -1,7 +1,6 @@
 use super::*;
 use crate::schema::hosts;
 use crate::schema::hosts::dsl::*;
-use anyhow::Result;
 use diesel::PgConnection;
 use std::convert::From;
 
