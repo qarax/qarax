@@ -37,7 +37,7 @@ impl Node for VmService {
         let mut handlers = self.handlers.write().await;
         let handler = handlers
             .entry(config.vm_id.to_owned())
-            .or_insert(VmmHandler::new());
+            .or_insert_with(VmmHandler::new);
         handler.configure_vm(&mut config).await;
         tracing::info!("Configured VM...");
         handler.start_vm().await;
