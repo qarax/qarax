@@ -15,14 +15,14 @@ use dashmap::DashMap;
 #[derive(Clone)]
 pub struct HostService {
     clients: Arc<RwLock<HashMap<Uuid, Client>>>,
-    locks: Arc<DashMap<Uuid, Arc<Mutex<bool>>>>,
+    locks: DashMap<Uuid, Arc<Mutex<bool>>>,
 }
 
 impl HostService {
     pub fn new() -> Self {
         HostService {
             clients: Arc::new(RwLock::new(HashMap::new())),
-            locks: Arc::new(DashMap::new()),
+            locks: DashMap::new(),
         }
     }
 
