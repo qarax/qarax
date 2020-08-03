@@ -21,8 +21,17 @@ pub fn index(backend: State<Backend>, conn: DbConnection) -> ApiResponse {
 }
 
 #[get("/<id>")]
-pub fn by_id(id: Uuid, backend: State<Backend>, conn: DbConnection) -> JsonValue {
-    json!({ "vm": backend.vm_service.get_by_id(&id.to_string(), &conn) })
+pub fn by_id(id: Uuid, backend: State<Backend>, conn: DbConnection) -> ApiResponse {
+    match backend.vm_service.get_by_id(&id.to_string(), &conn) {
+        Ok(vm) => ApiResponse {
+            response: json!({ "vm": vm }),
+            status: Status::Ok,
+        },
+        Err(e) => ApiResponse {
+            response: json!({"error": e.to_string()}),
+            status: Status::BadRequest,
+        },
+    }
 }
 
 #[post("/", format = "json", data = "<vm>")]

@@ -13,7 +13,7 @@ impl VmService {
         VmService {}
     }
 
-    pub fn get_by_id(&self, vm_id: &str, conn: &DbConnection) -> Result<Vm, String> {
+    pub fn get_by_id(&self, vm_id: &str, conn: &DbConnection) -> Result<Vm> {
         Vm::by_id(Uuid::parse_str(vm_id).unwrap(), conn)
     }
 

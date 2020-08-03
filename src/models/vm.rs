@@ -70,12 +70,12 @@ impl Vm {
         vms.load::<Vm>(conn).map_err(|e| anyhow!(e))
     }
 
-    pub fn by_id(vm_id: Uuid, conn: &PgConnection) -> Result<Vm, String> {
+    pub fn by_id(vm_id: Uuid, conn: &PgConnection) -> Result<Vm> {
         use crate::schema::vms::dsl::*;
 
         match vms.find(vm_id).first(conn) {
             Ok(v) => Ok(v),
-            Err(e) => Err(e.to_string()),
+            Err(e) => Err(e.into()),
         }
     }
 
