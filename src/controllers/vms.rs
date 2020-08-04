@@ -35,10 +35,16 @@ pub fn by_id(id: Uuid, backend: State<Backend>, conn: DbConnection) -> ApiRespon
 }
 
 #[post("/", format = "json", data = "<vm>")]
-pub fn add_vm(vm: Json<NewVm>, backend: State<Backend>, conn: DbConnection) -> JsonValue {
+pub fn add_vm(vm: Json<NewVm>, backend: State<Backend>, conn: DbConnection) -> ApiResponse {
     match backend.vm_service.add_vm(&vm.into_inner(), &conn) {
-        Ok(id) => json!({ "vm_id": id }),
-        Err(e) => json!({ "error": e }),
+        Ok(id) => ApiResponse {
+            response: json!({ "vm_id": id }),
+            status: Status::Ok,
+        },
+        Err(e) => ApiResponse {
+            response: json!({ "error": e.to_string() }),
+            status: Status::BadRequest,
+        },
     }
 }
 

@@ -21,7 +21,7 @@ impl VmService {
         Vm::all(conn)
     }
 
-    pub fn add_vm(&self, vm: &NewVm, conn: &DbConnection) -> Result<Uuid, String> {
+    pub fn add_vm(&self, vm: &NewVm, conn: &DbConnection) -> Result<Uuid> {
         Vm::insert(vm, conn)
     }
 

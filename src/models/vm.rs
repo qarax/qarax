@@ -79,12 +79,12 @@ impl Vm {
         }
     }
 
-    pub fn insert(v: &NewVm, conn: &PgConnection) -> Result<uuid::Uuid, String> {
+    pub fn insert(v: &NewVm, conn: &PgConnection) -> Result<uuid::Uuid> {
         let v = Vm::from(v);
 
         match diesel::insert_into(vms::table).values(&v).execute(conn) {
             Ok(_) => Ok(v.id.to_owned()),
-            Err(e) => Err(e.to_string()),
+            Err(e) => Err(e.into()),
         }
     }
 
