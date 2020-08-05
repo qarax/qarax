@@ -30,7 +30,7 @@ impl VmService {
         vm_id: &str,
         host_service: &HostService,
         conn: &DbConnection,
-    ) -> Result<Uuid, String> {
+    ) -> Result<Uuid> {
         use super::rpc::client::node::VmConfig;
 
         // TODO: error handling
@@ -54,11 +54,11 @@ impl VmService {
                 let network_mode = vm.network_mode.as_ref().unwrap();
                 if NetworkMode::from_str(network_mode.as_str()).unwrap() == NetworkMode::Dhcp {
                     vm.address = Some(config.into_inner().address);
-                    Vm::update(&vm, conn);
+                    Vm::update(&vm, conn)?;
                 }
             }
             Err(e) => {
-                return Err(e.to_string());
+                return Err(e.into());
             }
         }
 
@@ -70,7 +70,7 @@ impl VmService {
         vm_id: &str,
         host_service: &HostService,
         conn: &DbConnection,
-    ) -> Result<Uuid, String> {
+    ) -> Result<Uuid> {
         use super::rpc::client::node::VmId;
 
         // TODO: error handling
@@ -79,7 +79,7 @@ impl VmService {
         let request = VmId {
             vm_id: vm_id.to_owned(),
         };
-        client.stop_vm(request);
+        client.stop_vm(request)?;
 
         Ok(Uuid::parse_str(vm_id).unwrap())
     }

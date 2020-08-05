@@ -88,10 +88,10 @@ impl Vm {
         }
     }
 
-    pub fn update(vm: &Vm, conn: &PgConnection) -> Result<Vm, String> {
+    pub fn update(vm: &Vm, conn: &PgConnection) -> Result<Vm> {
         match diesel::update(vm).set(vm).get_result(conn) {
             Ok(host) => Ok(host),
-            Err(e) => Err(e.to_string()),
+            Err(e) => Err(e.into()),
         }
     }
     pub fn delete_all(conn: &PgConnection) -> Result<usize, diesel::result::Error> {
