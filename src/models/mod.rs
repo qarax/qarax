@@ -34,8 +34,8 @@ enum EntityType {
 impl fmt::Display for EntityType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Host => write!(f, "Host"),
-            Vm => write!(f, "VM"),
+            EntityType::Host => write!(f, "Host"),
+            EntityType::Vm => write!(f, "VM"),
         }
     }
 }

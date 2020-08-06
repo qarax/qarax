@@ -43,7 +43,7 @@ impl HostService {
 
         let lock: Arc<Mutex<bool>>;
         if let Some(ref v) = self.locks.get(uuid) {
-            if let Ok(ref mut m) = v.try_lock() {
+            if let Ok(ref mut _m) = v.try_lock() {
                 println!("lock for host '{}' acquired", host_id);
                 lock = self.locks.insert(*uuid, Arc::clone(&v)).unwrap();
             } else {
