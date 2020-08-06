@@ -1,7 +1,6 @@
 extern crate firecracker_rust_sdk;
 
 use crate::network;
-use crate::network::IpAddr;
 
 use firecracker_rust_sdk::models::{
     boot_source, drive, logger, machine, machine_configuration, network_interface,
@@ -14,6 +13,8 @@ use std::sync::Arc;
 
 use tokio::process::Command;
 use tokio::sync::RwLock;
+
+use anyhow::{anyhow, Result};
 
 pub(crate) mod node {
     tonic::include_proto!("node");
@@ -35,7 +36,7 @@ impl VmmHandler {
         }
     }
 
-    pub async fn configure_vm(&mut self, vm_config: &mut VmConfig) {
+    pub async fn configure_vm(&mut self, vm_config: &mut VmConfig) -> Result<()> {
         tracing::info!("Configuring VMM...");
 
         // TODO: do some actual validation
@@ -52,14 +53,13 @@ impl VmmHandler {
 
         // TODO: use an enum like civilized person
         if vm_config.network_mode == "dhcp" {
-            network::create_tap_device(&vm_config.vm_id).await;
+            network::create_tap_device(&vm_config.vm_id).await?;
             let mac = network::generate_mac();
             tracing::info!("Generated MAC address: '{}'", mac);
 
             // TODO: The IP should be sent back to qarax
-            let ip = network::get_ip(Arc::new(mac), Arc::new(get_tap_device(&vm_config.vm_id)))
-                .await
-                .unwrap();
+            let ip =
+                network::get_ip(Arc::new(mac), Arc::new(get_tap_device(&vm_config.vm_id))).await?;
 
             tracing::info!("Assigning IP '{}' for VM {}", ip, &vm_config.vm_id);
             network = Some(Self::configure_network(&mut bs, &vm_config.vm_id, mac));
@@ -98,47 +98,52 @@ impl VmmHandler {
             logger,
             child.id(),
         );
-        vmm.configure_logger().await;
+        vmm.configure_logger().await?;
 
         if vmm.network.is_some() {
             tracing::info!("Configuring network...");
-            vmm.configure_network().await;
+            vmm.configure_network().await?;
         }
 
         tracing::info!("Waiting for configuration...");
-        tokio::join!(vmm.configure_boot_source(), vmm.configure_drive(),);
+        let (_, _) = tokio::join!(vmm.configure_boot_source(), vmm.configure_drive(),);
 
         self.machine.write().await.replace(vmm);
+        Ok(())
     }
 
-    pub async fn start_vm(&self) {
+    pub async fn start_vm(&self) -> Result<()> {
         let m = self.machine.read().await;
-        if m.is_some() {
-            tracing::info!("Starting VM machine...");
-            m.as_ref().unwrap().start().await;
-            tracing::info!("machine started");
+
+        if m.is_none() {
+            Err(anyhow!("No machine object!"))
         } else {
-            tracing::error!("Machine object unavilable! - start");
+            tracing::info!("Starting VM machine...");
+            m.as_ref().unwrap().start().await?;
+            tracing::info!("Machine started");
+            Ok(())
         }
     }
 
-    pub async fn stop_vm(&self) {
+    pub async fn stop_vm(&self) -> Result<()> {
         let m = self.machine.read().await;
-        if m.is_some() {
+        if m.is_none() {
+            Err(anyhow!("No machine object!"))
+        } else {
             tracing::info!("Stopping VM machine...");
             let machine = m.as_ref().unwrap();
             match machine.stop().await {
                 Ok(_) => {
                     if machine.network.is_some() {
                         tracing::info!("Removing tap device");
-                        network::delete_tap_device(&machine.vm_id).await;
+                        network::delete_tap_device(&machine.vm_id).await?;
                     }
-                    tracing::info!("VM stopped")
+
+                    tracing::info!("VM stopped");
+                    Ok(())
                 }
-                Err(e) => tracing::error!("Failed to stop VM :( {}", e.to_string()),
+                Err(e) => Err(anyhow!("Failed to stop VM :( {}", e.to_string())),
             }
-        } else {
-            tracing::error!("Machine object unavilable! - stop");
         }
     }
 

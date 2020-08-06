@@ -6,7 +6,7 @@ use super::NetworkInterface;
 
 use crate::http::client::{Method, VmmClient};
 
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+use anyhow::Result;
 
 #[derive(Debug)]
 pub struct Machine {
@@ -45,7 +45,7 @@ impl Machine {
 
     // TODO: check errors and stuff
     pub async fn configure_boot_source(&self) -> Result<String> {
-        let boot_source = serde_json::to_string(&self.boot_source).unwrap();
+        let boot_source = serde_json::to_string(&self.boot_source)?;
         tracing::info!("Sending boot_source with {}\n", boot_source);
 
         Ok(self
@@ -55,7 +55,7 @@ impl Machine {
     }
 
     pub async fn configure_drive(&self) -> Result<String> {
-        let drive = serde_json::to_string(&self.drive).unwrap();
+        let drive = serde_json::to_string(&self.drive)?;
 
         tracing::info!("Sending drive with {}\n", drive);
 
@@ -76,7 +76,7 @@ impl Machine {
 
         unistd::mkfifo(Path::new(&self.logger.log_path), stat::Mode::S_IRWXU)?;
 
-        let logger = serde_json::to_string(&self.logger).unwrap();
+        let logger = serde_json::to_string(&self.logger)?;
 
         tracing::info!("Sending logger with {}\n", logger);
 
@@ -87,12 +87,10 @@ impl Machine {
     }
 
     pub async fn configure_network(&self) -> Result<String> {
-        let network = serde_json::to_string(self.network.as_ref().unwrap()).unwrap();
+        let network_definition = self.network.as_ref().unwrap();
+        let network = serde_json::to_string(network_definition)?;
         tracing::info!("Sending network with {}\n", network);
-        let endpoint = format!(
-            "/network-interfaces/{}",
-            self.network.as_ref().unwrap().iface_id
-        );
+        let endpoint = format!("/network-interfaces/{}", network_definition.iface_id);
 
         Ok(self
             .client

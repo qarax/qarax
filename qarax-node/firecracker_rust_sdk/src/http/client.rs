@@ -1,8 +1,7 @@
+use super::*;
 use futures::stream::TryStreamExt;
 use hyper::{Body, Client, Request};
 use hyperlocal::{UnixClientExt, UnixConnector, Uri};
-
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 pub enum Method {
     GET,
@@ -40,8 +39,7 @@ impl VmmClient {
             .uri(Uri::new(&self.socket_path, endpoint))
             .header("Accept", "application/json")
             .header("Content-Type", "application/json")
-            .body(Body::from(body.to_vec()))
-            .unwrap();
+            .body(Body::from(body.to_vec()))?;
 
         let resp = self.client.request(req).await?;
         tracing::debug!("incoming status: {}", resp.status());
@@ -52,8 +50,7 @@ impl VmmClient {
                 buf.extend(bytes);
                 Ok(buf)
             })
-            .await
-            .unwrap();
+            .await?;
 
         Ok(String::from_utf8(bytes).expect("Couldn't convert to string"))
     }

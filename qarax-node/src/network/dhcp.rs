@@ -1,3 +1,4 @@
+use super::*;
 use crate::network::MacAddress;
 use smoltcp::dhcp::{ClientState, Dhcpv4Client};
 use smoltcp::iface::{EthernetInterfaceBuilder, NeighborCache, Routes};
@@ -7,14 +8,10 @@ use smoltcp::socket::{RawPacketMetadata, RawSocketBuffer, SocketSet};
 use smoltcp::time::Instant;
 use smoltcp::wire::{EthernetAddress, IpCidr, Ipv4Address};
 use std::collections::BTreeMap;
-use std::error::Error;
 use std::os::unix::io::AsRawFd;
 
 // Get an IP address from the DHCP server, based on https://github.com/smoltcp-rs/smoltcp/blob/master/examples/dhcp_client.rs
-pub fn get_ip(
-    mac_address: MacAddress,
-    tap_device: &str,
-) -> Result<String, Box<dyn Error + Sync + Send>> {
+pub fn get_ip(mac_address: MacAddress, tap_device: &str) -> Result<String> {
     tracing::info!("Starting DHCP client...");
 
     // TODO: error handling: ensure tap device exists and stuff

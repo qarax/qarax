@@ -1,10 +1,10 @@
 use rand;
 use rand::prelude::*;
-use std::error::Error;
 use std::fmt;
 use std::process::Stdio;
 use std::sync::Arc;
 
+use anyhow::{anyhow, Result};
 use tokio::process::Command;
 use tokio::time::{self, Duration};
 
@@ -47,17 +47,14 @@ pub fn generate_mac() -> MacAddress {
     MacAddress::from_bytes(buf)
 }
 
-pub async fn get_ip(
-    mac: Arc<MacAddress>,
-    tap_device: Arc<String>,
-) -> Result<String, Box<dyn Error + Sync + Send>> {
+pub async fn get_ip(mac: Arc<MacAddress>, tap_device: Arc<String>) -> Result<String> {
     let mut timeout = time::delay_for(Duration::from_secs(120));
     loop {
         let tap_device = tap_device.clone();
         let mac = mac.clone();
         tokio::select! {
            _ = &mut timeout => {
-               return Err("Could not get IP in time".into());
+               return Err(anyhow!("Could not get IP in time"));
            },
            ip = tokio::spawn(async move {
                 dhcp::get_ip(*mac, &tap_device)
@@ -68,7 +65,7 @@ pub async fn get_ip(
     }
 }
 
-pub async fn create_tap_device(vm_id: &str) {
+pub async fn create_tap_device(vm_id: &str) -> Result<()> {
     // TODO: use a utility or something and handle errors
     let tap_device = &format!("fc-tap-{}", &vm_id[..4]);
     Command::new("ip")
@@ -76,24 +73,26 @@ pub async fn create_tap_device(vm_id: &str) {
         .stdout(Stdio::null())
         .spawn()
         .expect("failed to add tap device")
-        .await;
+        .await?;
 
     Command::new("ip")
         .args(vec!["link", "set", tap_device, "up"])
         .stdout(Stdio::null())
         .spawn()
         .expect("failed to set tap device up")
-        .await;
+        .await?;
 
     Command::new("ip")
         .args(vec!["link", "set", tap_device, "master", BRIDGE_NAME])
         .stdout(Stdio::null())
         .spawn()
         .expect("failed to add tap device to bridge")
-        .await;
+        .await?;
+
+    Ok(())
 }
 
-pub async fn delete_tap_device(vm_id: &str) {
+pub async fn delete_tap_device(vm_id: &str) -> Result<()> {
     let tap_device = &format!("fc-tap-{}", &vm_id[..4]);
 
     Command::new("ip")
@@ -101,5 +100,7 @@ pub async fn delete_tap_device(vm_id: &str) {
         .stdout(Stdio::null())
         .spawn()
         .expect("failed to add tap device to bridge")
-        .await;
+        .await?;
+
+    Ok(())
 }

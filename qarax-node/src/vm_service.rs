@@ -9,6 +9,8 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tonic::{Code, Request, Response, Status};
 
+use anyhow::Result;
+
 #[derive(Debug)]
 pub struct VmService {
     // TODO: Not sure about this at all
@@ -38,12 +40,19 @@ impl Node for VmService {
         let handler = handlers
             .entry(config.vm_id.to_owned())
             .or_insert_with(VmmHandler::new);
-        handler.configure_vm(&mut config).await;
+
+        handler
+            .configure_vm(&mut config)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
         tracing::info!("Configured VM...");
-        handler.start_vm().await;
+        handler
+            .start_vm()
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
         tracing::info!("Started VM...");
 
-        // TODO: there is no reason to return the config now
         Ok(Response::new(config))
     }
 
@@ -56,7 +65,10 @@ impl Node for VmService {
 
         if let Some(handler) = handlers.get(&vm_id) {
             tracing::info!("Fetched handler for vm {}", vm_id);
-            handler.stop_vm().await;
+            handler
+                .stop_vm()
+                .await
+                .map_err(|e| Status::internal(e.to_string()))?;
 
             handlers.remove(&vm_id);
             let response = NodeResponse {
