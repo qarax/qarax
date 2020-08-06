@@ -1,6 +1,6 @@
 use crate::vmm_handler::node::node_server::Node;
 use crate::vmm_handler::node::{
-    Response as NodeResponse, Status as NodeStatus, VmConfig, VmId, VmList, VmResponse,
+    Response as NodeResponse, Status as NodeStatus, VmConfig, VmId, VmList,
 };
 use crate::vmm_handler::VmmHandler;
 
