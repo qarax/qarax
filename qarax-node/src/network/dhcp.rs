@@ -61,9 +61,9 @@ pub fn get_ip(mac_address: MacAddress, tap_device: &str) -> Result<String> {
             Some(c) => {
                 if c.address.is_some() {
                     iface.update_ip_addrs(|addrs| {
-                        addrs.iter_mut().nth(0).map(|addr| {
+                        if let Some(addr) = addrs.iter_mut().next() {
                             *addr = IpCidr::Ipv4(c.address.unwrap());
-                        });
+                        }
                     });
                     ip_address = c.address.unwrap().address().to_string();
                     tracing::info!("Assigned an IPv4 address: {}", c.address.unwrap());
@@ -75,9 +75,9 @@ pub fn get_ip(mac_address: MacAddress, tap_device: &str) -> Result<String> {
 
         let mut timeout = dhcp.next_poll(timestamp);
         dhcp.next_poll(Instant::now());
-        iface
-            .poll_delay(&sockets, timestamp)
-            .map(|sockets_timeout| timeout = sockets_timeout);
+        if let Some(sockets_timeout) = iface.poll_delay(&sockets, timestamp) {
+            timeout = sockets_timeout
+        }
         phy_wait(fd, Some(timeout)).unwrap_or_else(|e| tracing::info!("Wait: {:?}", e));
     }
 }

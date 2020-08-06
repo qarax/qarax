@@ -8,8 +8,6 @@ use vmm_handler::node::node_server::NodeServer;
 
 use std::env;
 use std::time::Duration;
-use tracing;
-use tracing_appender;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

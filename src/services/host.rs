@@ -95,10 +95,7 @@ impl HostService {
                 extra_params,
             );
 
-            if let Err(e) = ac
-                .run_playbook()
-                .with_context(|| format!("Couldn't run playbook"))
-            {
+            if let Err(e) = ac.run_playbook().with_context(|| "Couldn't run playbook") {
                 eprintln!("{:?}", e);
                 Host::update_status(&db_host, Status::Down, &*conn).expect("Failed to update host");
                 return;
@@ -193,14 +190,12 @@ impl HostService {
                             // for this
                             Host::update_status(host, Status::Down, &*conn)
                                 .expect("Failed to update host");
-                            return ();
                         }
                     };
                 }
                 Err(e) => {
                     eprintln!("Could not connect to host {}, error: {}", host.id, e);
                     Host::update_status(host, Status::Down, &*conn).expect("Failed to update host");
-                    return ();
                 }
             };
         });

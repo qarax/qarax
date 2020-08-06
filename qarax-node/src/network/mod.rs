@@ -1,4 +1,3 @@
-use rand;
 use rand::prelude::*;
 use std::fmt;
 use std::process::Stdio;
@@ -18,7 +17,7 @@ const BRIDGE_NAME: &str = "fcbridge";
 pub struct MacAddress(pub [u8; 6]);
 
 impl MacAddress {
-    pub fn from_bytes(data: [u8; 06]) -> Self {
+    pub fn from_bytes(data: [u8; 6]) -> Self {
         let mut bytes = [0; 6];
         bytes.copy_from_slice(&data);
         Self(bytes)

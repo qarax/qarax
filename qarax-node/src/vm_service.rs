@@ -77,7 +77,7 @@ impl Node for VmService {
 
             Ok(Response::new(response))
         } else {
-            return Err(Status::new(Code::FailedPrecondition, "vm not found"));
+            Err(Status::new(Code::FailedPrecondition, "vm not found"))
         }
     }
 

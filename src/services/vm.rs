@@ -45,8 +45,8 @@ impl VmService {
             kernel: clone.kernel,
             root_fs: clone.root_file_system,
             kernel_params: clone.kernel_params,
-            network_mode: clone.network_mode.clone().unwrap_or(String::from("")),
-            address: clone.address.unwrap_or(String::from("")),
+            network_mode: clone.network_mode.clone().unwrap_or_else(String::new),
+            address: clone.address.unwrap_or_else(String::new),
         };
 
         match client.start_vm(request) {
