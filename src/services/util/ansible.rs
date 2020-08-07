@@ -32,7 +32,7 @@ impl<'a> AnsibleCommand<'a> {
     pub fn run_playbook(&self) -> Result<()> {
         // TODO: handle errors and write output properly
         let mut process = Command::new(CMD)
-            .args(self.to_string().split(" "))
+            .args(self.to_string().split(' '))
             .spawn()
             .expect("Ansible failed");
 
