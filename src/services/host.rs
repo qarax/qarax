@@ -15,7 +15,7 @@ use dashmap::DashMap;
 #[derive(Clone)]
 pub struct HostService {
     clients: Arc<RwLock<HashMap<Uuid, Client>>>,
-    locks: DashMap<Uuid, Arc<Mutex<bool>>>,
+    locks: DashMap<Uuid, Arc<Mutex<()>>>,
 }
 
 impl HostService {
@@ -41,7 +41,7 @@ impl HostService {
     pub fn install(&self, host_id: &str, host: &InstallHost, conn: DbConnection) -> Result<String> {
         let uuid = &Uuid::parse_str(host_id)?;
 
-        let lock: Arc<Mutex<bool>>;
+        let lock: Arc<Mutex<()>>;
         if let Some(ref v) = self.locks.get(uuid) {
             if let Ok(ref mut _m) = v.try_lock() {
                 println!("lock for host '{}' acquired", host_id);
@@ -52,7 +52,7 @@ impl HostService {
             }
         } else {
             println!("creating a lock for host '{}'", host_id);
-            lock = Arc::new(Mutex::new(true));
+            lock = Arc::new(Mutex::new(()));
         }
 
         let m = lock.lock().unwrap();
