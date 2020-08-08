@@ -106,20 +106,20 @@ impl HostService {
                     eprintln!("Failed to connect to qarax-node, {:?}", e);
                     Host::update_status(&db_host, Status::Down, &*conn)
                         .expect("Failed to update host");
-                    return;
                 }
                 Ok(c) => {
                     println!("Successfully connected to qarax-node");
-                    clients.write().unwrap().insert(db_host.id, c);
+                    clients.write().unwrap().insert(db_host.id, c.clone());
+                    if Self::health_check_internal(&c).is_err() {
+                        eprintln!("Health check failed, failing installation");
+                        Host::update_status(&db_host, Status::Down, &*conn)
+                            .expect("Failed to update host");
+                    } else {
+                        println!("Finished installation of {}", db_host.id);
+                        Host::update_status(&db_host, Status::Up, &*conn)
+                            .expect("Failed to update host");
+                    }
                 }
-            }
-
-            if Self::health_check_internal(clients, &db_host.id.to_string()).is_err() {
-                eprintln!("Health check failed, failing installation");
-                Host::update_status(&db_host, Status::Down, &*conn).expect("Failed to update host");
-            } else {
-                println!("Finished installation of {}", db_host.id);
-                Host::update_status(&db_host, Status::Up, &*conn).expect("Failed to update host");
             }
         });
 
@@ -127,29 +127,24 @@ impl HostService {
     }
 
     pub fn health_check(&self, host_id: &str) -> Result<String> {
-        Self::health_check_internal(Arc::clone(&self.clients), host_id)
-    }
-
-    fn health_check_internal(
-        clients: Arc<RwLock<HashMap<Uuid, Client>>>,
-        host_id: &str,
-    ) -> Result<String> {
-        use tonic::Request;
-
-        // TODO: do not pass the entire clients map, only the relevent client
-        match clients
+        match self
+            .clients
             .read()
             .unwrap()
             .get(&Uuid::parse_str(host_id).unwrap())
         {
-            Some(c) => {
-                let response = c.health_check(Request::new(()));
-                match response {
-                    Ok(_) => Ok(String::from("OK")),
-                    Err(e) => Err(anyhow!("Failed {:?}", e)),
-                }
-            }
+            Some(c) => Self::health_check_internal(c),
             None => Err(anyhow!("No client found for host")),
+        }
+    }
+
+    fn health_check_internal(client: &Client) -> Result<String> {
+        use tonic::Request;
+
+        let response = client.health_check(Request::new(()));
+        match response {
+            Ok(_) => Ok(String::from("OK")),
+            Err(e) => Err(anyhow!("Failed {:?}", e)),
         }
     }
 
@@ -172,14 +167,11 @@ impl HostService {
         hosts.iter().for_each(|host| {
             // TODO: this can and should be done concurrently
             match Client::connect(format!("http://{}:{}", host.address, host.port)) {
-                Ok(c) => {
+                Ok(client) => {
                     println!("Saving client for host {}", host.id);
-                    self.clients.write().unwrap().insert(host.id, c);
+                    let client = self.clients.write().unwrap().insert(host.id, client);
 
-                    match Self::health_check_internal(
-                        Arc::clone(&self.clients),
-                        &host.id.to_string(),
-                    ) {
+                    match Self::health_check_internal(&client.unwrap()) {
                         Ok(_) => {
                             println!("Successfully initialized host {}", host.id,);
                         }
