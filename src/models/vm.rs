@@ -75,7 +75,7 @@ impl Vm {
 
         match vms.find(vm_id).first(conn) {
             Ok(v) => Ok(v),
-            Err(e) => Err(e.into()),
+            Err(e) => Err(ModelError::NotFound(EntityType::Vm, vm_id.into(), anyhow!(e)).into()),
         }
     }
 
