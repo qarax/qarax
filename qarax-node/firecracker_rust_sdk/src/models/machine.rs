@@ -8,16 +8,27 @@ use crate::http::client::{Method, VmmClient};
 
 use anyhow::Result;
 
-#[derive(Debug)]
+#[derive(Serialize, Debug)]
 pub struct Machine {
+    #[serde(skip_serializing)]
     pub vm_id: String,
+
+    #[serde(skip_serializing)]
     client: VmmClient,
+
+    #[serde(rename(serialize = "machine-config"))]
     machine_configuration: MachineConfiguration,
+
+    #[serde(rename(serialize = "boot-source"))]
     boot_source: BootSource,
-    drive: Drive,
-    pub network: Option<NetworkInterface>,
+    drives: Vec<Drive>,
+
+    #[serde(rename(serialize = "network-interfaces"))]
+    pub network_interfaces: Vec<NetworkInterface>,
     logger: Logger,
-    pid: u32,
+
+    #[serde(skip_serializing)]
+    pid: Option<u32>,
 }
 
 impl Machine {
@@ -26,18 +37,18 @@ impl Machine {
         socket_path: String,
         machine_configuration: MachineConfiguration,
         boot_source: BootSource,
-        drive: Drive,
-        network: Option<NetworkInterface>,
+        drives: Vec<Drive>,
+        network_interfaces: Vec<NetworkInterface>,
         logger: Logger,
-        pid: u32,
+        pid: Option<u32>,
     ) -> Self {
         Machine {
             vm_id,
             client: VmmClient::new(socket_path),
             machine_configuration,
             boot_source,
-            drive,
-            network,
+            drives,
+            network_interfaces,
             logger,
             pid,
         }
@@ -55,27 +66,26 @@ impl Machine {
     }
 
     pub async fn configure_drive(&self) -> Result<String> {
-        let drive = serde_json::to_string(&self.drive)?;
+        let mut response = String::new();
+        for drive in &self.drives {
+            let drive_json = serde_json::to_string(&drive)?;
 
-        tracing::info!("Sending drive with {}\n", drive);
+            tracing::info!("Sending drive with {}\n", drive_json);
 
-        let drive_id = &self.drive.drive_id;
-        let endpoint = format!("/drives/{}", drive_id);
+            let drive_id = &drive.drive_id;
+            let endpoint = format!("/drives/{}", drive_id);
 
-        Ok(self
-            .client
-            .request(&endpoint, Method::PUT, &drive.as_bytes())
-            .await?)
+            response = self
+                .client
+                .request(&endpoint, Method::PUT, &drive_json.as_bytes())
+                .await?;
+        }
+
+        Ok(response)
     }
 
     pub async fn configure_logger(&self) -> Result<String> {
         // TODO: error handling
-        use nix::sys::stat;
-        use nix::unistd;
-        use std::path::Path;
-
-        unistd::mkfifo(Path::new(&self.logger.log_path), stat::Mode::S_IRWXU)?;
-
         let logger = serde_json::to_string(&self.logger)?;
 
         tracing::info!("Sending logger with {}\n", logger);
@@ -87,15 +97,19 @@ impl Machine {
     }
 
     pub async fn configure_network(&self) -> Result<String> {
-        let network_definition = self.network.as_ref().unwrap();
-        let network = serde_json::to_string(network_definition)?;
-        tracing::info!("Sending network with {}\n", network);
-        let endpoint = format!("/network-interfaces/{}", network_definition.iface_id);
+        let mut response = String::new();
+        for network in &self.network_interfaces {
+            let network_definition = serde_json::to_string(&network)?;
+            tracing::info!("Sending network with {}\n", network_definition);
+            let endpoint = format!("/network-interfaces/{}", network.iface_id);
 
-        Ok(self
-            .client
-            .request(&endpoint, Method::PUT, &network.as_bytes())
-            .await?)
+            response = self
+                .client
+                .request(&endpoint, Method::PUT, &network_definition.as_bytes())
+                .await?;
+        }
+
+        Ok(response)
     }
 
     pub async fn start(&self) -> Result<String> {
@@ -111,17 +125,22 @@ impl Machine {
             .await?)
     }
 
-    pub async fn stop(&self) -> Result<()> {
+    pub async fn stop(&mut self) -> Result<()> {
         // TODO error handling
         use nix::sys::signal;
         use nix::sys::wait::waitpid;
         use nix::unistd::Pid;
         use std::fs;
 
-        signal::kill(Pid::from_raw(self.pid as i32), signal::Signal::SIGTERM)?;
-        waitpid(Pid::from_raw(self.pid as i32), None)?;
+        let pid = &self.pid.take().unwrap();
+        signal::kill(Pid::from_raw(*pid as i32), signal::Signal::SIGTERM)?;
+        waitpid(Pid::from_raw(*pid as i32), None)?;
         fs::remove_file(&self.client.socket_path).expect("failed to remove file");
 
         Ok(())
+    }
+
+    pub fn set_pid(&mut self, pid: u32) {
+        self.pid.replace(pid);
     }
 }

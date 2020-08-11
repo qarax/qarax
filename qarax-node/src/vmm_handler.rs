@@ -11,10 +11,11 @@ use std::convert::TryFrom;
 use std::process::Stdio;
 use std::sync::Arc;
 
+use anyhow::{anyhow, Result};
+use tokio::fs::OpenOptions;
+use tokio::prelude::*;
 use tokio::process::Command;
 use tokio::sync::RwLock;
-
-use anyhow::{anyhow, Result};
 
 pub(crate) mod node {
     tonic::include_proto!("node");
@@ -49,7 +50,7 @@ impl VmmHandler {
             vm_config.kernel_params.to_string(),
         );
 
-        let mut network = None;
+        let mut network_interfaces = vec![];
 
         // TODO: use an enum like civilized person
         if vm_config.network_mode == "dhcp" {
@@ -62,79 +63,72 @@ impl VmmHandler {
                 network::get_ip(Arc::new(mac), Arc::new(get_tap_device(&vm_config.vm_id))).await?;
 
             tracing::info!("Assigning IP '{}' for VM {}", ip, &vm_config.vm_id);
-            network = Some(Self::configure_network(&mut bs, &vm_config.vm_id, mac));
+            network_interfaces.push(Self::configure_network(&mut bs, &vm_config.vm_id, mac));
             vm_config.address = ip;
         }
 
-        // TODO: move into own function and handle errors
-        // - check if socket exists before
-        // - make a sanity check on the api server
-        tracing::info!("Starting FC process...");
-
-        let child = Command::new(FIRECRACKER_BIN)
-            .args(vec!["--api-sock", &socket_path])
-            .stdout(Stdio::null())
-            .spawn()
-            .expect("Faild to start firecracker");
-
-        // TODO: proper polling that the api server is
-        // available required here
-        use std::{thread, time};
-        thread::sleep(time::Duration::from_millis(1000));
-
-        // TODO: get paths and ids from qarax
         let drive = drive::Drive::new(String::from("rootfs"), false, true, String::from("rootfs"));
+        let drives = vec![drive];
+
         let mut logger = logger::Logger::new(format!("/var/log/{}.log", vm_config.vm_id));
         // TODO: get the level from qarax-node's configuration (hopefully it'll have one)
         logger.level = Some(logger::Level::Debug);
+        create_log_pipe(&logger)?;
 
         let vmm = machine::Machine::new(
             vm_config.vm_id.to_owned(),
             socket_path,
             mc,
             bs,
-            drive,
-            network,
+            drives,
+            network_interfaces,
             logger,
-            child.id(),
+            None,
         );
-        vmm.configure_logger().await?;
-
-        if vmm.network.is_some() {
-            tracing::info!("Configuring network...");
-            vmm.configure_network().await?;
-        }
-
-        tracing::info!("Waiting for configuration...");
-        let (_, _) = tokio::join!(vmm.configure_boot_source(), vmm.configure_drive(),);
 
         self.machine.write().await.replace(vmm);
         Ok(())
     }
 
     pub async fn start_vm(&self) -> Result<()> {
-        let m = self.machine.read().await;
+        let mut machine_handler = self.machine.write().await;
 
-        if m.is_none() {
+        if machine_handler.is_none() {
             Err(anyhow!("No machine object!"))
         } else {
+            let machine = machine_handler.as_mut().unwrap();
+            let socket_path = &format!("/tmp/{}.sock", machine.vm_id);
+            let config_file = self.create_config_file(machine).await?;
+            let args = vec!["--api-sock", socket_path, "--config-file", &config_file];
+            tracing::info!("Starting firecracker with args: '{:#?}'", args);
+
+            let child = Command::new(FIRECRACKER_BIN)
+                .args(args)
+                .stdout(Stdio::null())
+                .spawn()
+                .expect("Faild to start firecracker");
+
+            machine.set_pid(child.id());
+
             tracing::info!("Starting VM machine...");
-            m.as_ref().unwrap().start().await?;
+            machine.start().await?;
             tracing::info!("Machine started");
+
             Ok(())
         }
     }
 
     pub async fn stop_vm(&self) -> Result<()> {
-        let m = self.machine.read().await;
-        if m.is_none() {
+        let mut machine = self.machine.write().await;
+
+        if machine.is_none() {
             Err(anyhow!("No machine object!"))
         } else {
             tracing::info!("Stopping VM machine...");
-            let machine = m.as_ref().unwrap();
+            let machine = machine.as_mut().unwrap();
             match machine.stop().await {
                 Ok(_) => {
-                    if machine.network.is_some() {
+                    if machine.network_interfaces.is_empty(){
                         tracing::info!("Removing tap device");
                         network::delete_tap_device(&machine.vm_id).await?;
                     }
@@ -145,6 +139,22 @@ impl VmmHandler {
                 Err(e) => Err(anyhow!("Failed to stop VM :( {}", e.to_string())),
             }
         }
+    }
+
+    async fn create_config_file(&self, machine: &machine::Machine) -> Result<String> {
+        let path = format!("/var/run/{}.config", machine.vm_id);
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&path)
+            .await?;
+
+        let config = serde_json::to_string(&machine).unwrap();
+        tracing::info!("Writing config {}", config);
+
+        file.write_all(config.as_bytes()).await?;
+        Ok(path)
     }
 
     fn configure_network(
@@ -169,6 +179,15 @@ impl VmmHandler {
 // TODO: turn this into a macro or something
 fn get_tap_device(vm_id: &str) -> String {
     format!("fc-tap-{}", &vm_id[..4])
+}
+
+fn create_log_pipe(logger: &logger::Logger) -> Result<()> {
+    use nix::sys::stat;
+    use nix::unistd;
+    use std::path::Path;
+
+    unistd::mkfifo(Path::new(&logger.log_path), stat::Mode::S_IRWXU)?;
+    Ok(())
 }
 
 impl TryFrom<i32> for Status {
