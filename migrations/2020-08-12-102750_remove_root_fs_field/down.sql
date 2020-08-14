@@ -1,0 +1,2 @@
+ALTER TABLE vms
+ADD COLUMN root_file_system VARCHAR(255) NOT NULL;

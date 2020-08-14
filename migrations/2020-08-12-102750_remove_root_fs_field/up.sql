@@ -1,0 +1,2 @@
+ALTER TABLE vms
+DROP COLUMN root_file_system CASCADE;
