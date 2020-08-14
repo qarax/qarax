@@ -79,6 +79,7 @@ mod tests {
     use super::*;
     use crate::services::host::HostService;
     use crate::services::vm::VmService;
+    use crate::services::storage::StorageService;
 
     use rocket::http::ContentType;
     use rocket::local::Client;
@@ -93,6 +94,7 @@ mod tests {
             .manage(Backend {
                 host_service: hs,
                 vm_service: vs,
+                storage_service: StorageService::new(),
             })
             .attach(DbConnection::fairing())
             .mount("/vms", routes());

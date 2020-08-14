@@ -1,4 +1,5 @@
 pub mod hosts;
+pub mod storage;
 pub mod vms;
 
 use rocket::http::{ContentType, Status};

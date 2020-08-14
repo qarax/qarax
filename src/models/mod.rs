@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 pub mod host;
 pub mod vm;
+pub mod storage;
 
 #[derive(Debug)]
 struct EntityId(Uuid);

@@ -86,6 +86,7 @@ mod tests {
     use super::*;
     use crate::services::host::HostService;
     use crate::services::vm::VmService;
+    use crate::services::storage::StorageService;
 
     use rocket::http::ContentType;
     use rocket::local::Client;
@@ -96,10 +97,12 @@ mod tests {
     fn get_client() -> (Client, DbConnection) {
         let hs = HostService::new();
         let vs = VmService::new();
+        
         let rocket = rocket::ignite()
             .manage(Backend {
                 host_service: hs,
                 vm_service: vs,
+                storage_service: StorageService::new(),
             })
             .attach(DbConnection::fairing())
             .mount("/hosts", routes());

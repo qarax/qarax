@@ -22,8 +22,10 @@ use rocket::State;
 
 use controllers::hosts;
 use controllers::vms;
+use controllers::storage;
 use database::DbConnection;
 use services::host::HostService;
+use services::storage::StorageService;
 use services::vm::VmService;
 use services::Backend;
 
@@ -39,6 +41,7 @@ pub fn rocket() -> Rocket {
         .manage(Backend {
             host_service: HostService::new(),
             vm_service: VmService::new(),
+            storage_service: StorageService::new(),
         })
         .attach(AdHoc::on_launch("Initialize hosts", |rocket| {
             let backend: State<Backend> = State::from(rocket).unwrap();
@@ -48,4 +51,6 @@ pub fn rocket() -> Rocket {
         }))
         .mount("/hosts", hosts::routes())
         .mount("/vms", vms::routes())
+        .mount("/storage", storage::routes())
+
 }
