@@ -7,9 +7,10 @@ use std::fmt;
 use thiserror::Error;
 use uuid::Uuid;
 
+pub mod drive;
 pub mod host;
-pub mod vm;
 pub mod storage;
+pub mod vm;
 
 #[derive(Debug)]
 struct EntityId(Uuid);

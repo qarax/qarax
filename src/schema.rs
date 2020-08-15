@@ -68,11 +68,4 @@ joinable!(vm_drives_map -> vms (vm_id));
 joinable!(vms -> hosts (host_id));
 joinable!(vms -> kernels (kernel));
 
-allow_tables_to_appear_in_same_query!(
-    drives,
-    hosts,
-    kernels,
-    storage,
-    vm_drives_map,
-    vms,
-);
+allow_tables_to_appear_in_same_query!(drives, hosts, kernels, storage, vm_drives_map, vms,);

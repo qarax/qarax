@@ -84,9 +84,10 @@ pub fn routes() -> Vec<rocket::Route> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::drive::DriveService;
     use crate::services::host::HostService;
-    use crate::services::vm::VmService;
     use crate::services::storage::StorageService;
+    use crate::services::vm::VmService;
 
     use rocket::http::ContentType;
     use rocket::local::Client;
@@ -97,12 +98,13 @@ mod tests {
     fn get_client() -> (Client, DbConnection) {
         let hs = HostService::new();
         let vs = VmService::new();
-        
+
         let rocket = rocket::ignite()
             .manage(Backend {
                 host_service: hs,
                 vm_service: vs,
                 storage_service: StorageService::new(),
+                drive_service: DriveService::new(),
             })
             .attach(DbConnection::fairing())
             .mount("/hosts", routes());

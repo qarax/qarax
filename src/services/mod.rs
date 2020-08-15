@@ -2,6 +2,7 @@ use crate::database::DbConnection;
 use anyhow::{anyhow, Context, Result};
 use uuid::Uuid;
 
+pub mod drive;
 pub mod host;
 mod rpc;
 pub mod storage;
@@ -13,4 +14,5 @@ pub struct Backend {
     pub host_service: host::HostService,
     pub vm_service: vm::VmService,
     pub storage_service: storage::StorageService,
+    pub drive_service: drive::DriveService,
 }

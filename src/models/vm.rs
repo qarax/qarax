@@ -1,3 +1,4 @@
+use super::drive::{AttachedDrive, Drive};
 use super::*;
 use crate::schema::vms;
 use diesel::PgConnection;
@@ -16,11 +17,10 @@ pub struct Vm {
     pub host_id: Option<Uuid>, // Add belongs_to macro
     pub vcpu: i32,
     pub memory: i32,
-    pub kernel: String,
-    pub root_file_system: String,
     pub address: Option<String>,
     pub network_mode: Option<String>,
     pub kernel_params: String,
+    pub kernel: Uuid,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -28,7 +28,7 @@ pub struct NewVm {
     pub name: String,
     pub vcpu: i32,
     pub memory: i32,
-    pub kernel: String,
+    pub kernel: Uuid,
     pub root_file_system: String,
     pub network_mode: Option<NetworkMode>, // TODO: remove option and use (DHCP, STATIC_IP, NONE)
     pub address: Option<String>,
@@ -94,6 +94,20 @@ impl Vm {
             Err(e) => Err(e.into()),
         }
     }
+
+    pub fn attach_drive(vm_id: Uuid, drive_id: Uuid, conn: &PgConnection) -> Result<()> {
+        use crate::schema::vm_drives_map;
+        let attached_drive = AttachedDrive { vm_id, drive_id };
+
+        match diesel::insert_into(vm_drives_map::table)
+            .values(&attached_drive)
+            .execute(conn)
+        {
+            Ok(_) => Ok(()),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     pub fn delete_all(conn: &PgConnection) -> Result<usize, diesel::result::Error> {
         use crate::schema::vms::dsl::*;
 
@@ -127,8 +141,7 @@ impl From<&NewVm> for Vm {
             host_id: None,
             vcpu: nv.vcpu,
             memory: nv.memory,
-            kernel: nv.kernel.to_owned(),
-            root_file_system: nv.root_file_system.to_owned(),
+            kernel: nv.kernel,
             address: Some(address),
             network_mode,
             kernel_params,

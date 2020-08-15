@@ -128,7 +128,7 @@ impl VmmHandler {
             let machine = machine.as_mut().unwrap();
             match machine.stop().await {
                 Ok(_) => {
-                    if machine.network_interfaces.is_empty(){
+                    if machine.network_interfaces.is_empty() {
                         tracing::info!("Removing tap device");
                         network::delete_tap_device(&machine.vm_id).await?;
                     }

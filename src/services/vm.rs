@@ -42,11 +42,11 @@ impl VmService {
             vm_id: clone.id.to_string(),
             memory: clone.memory,
             vcpus: clone.vcpu,
-            kernel: clone.kernel,
-            root_fs: clone.root_file_system,
+            kernel: clone.kernel.to_string(),
             kernel_params: clone.kernel_params,
             network_mode: clone.network_mode.clone().unwrap_or_else(String::new),
             address: clone.address.unwrap_or_else(String::new),
+            root_fs: String::from(""),
         };
 
         match client.start_vm(request) {
@@ -82,6 +82,10 @@ impl VmService {
         client.stop_vm(request)?;
 
         Ok(Uuid::parse_str(vm_id).unwrap())
+    }
+
+    pub fn attach_drive(&self, vm_id: String, drive_id: String, conn: &DbConnection) -> Result<()> {
+        Vm::attach_drive(Uuid::parse_str(&vm_id)?, Uuid::parse_str(&drive_id)?, conn)
     }
 
     #[allow(dead_code)]

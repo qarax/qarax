@@ -70,16 +70,39 @@ pub fn stop_vm(id: Uuid, backend: State<Backend>, conn: DbConnection) -> JsonVal
     }
 }
 
+#[post("/<vm_id>/drives/<drive_id>/attach")]
+pub fn attach_drive(
+    vm_id: Uuid,
+    drive_id: Uuid,
+    backend: State<Backend>,
+    conn: DbConnection,
+) -> ApiResponse {
+    match backend
+        .vm_service
+        .attach_drive(vm_id.to_string(), drive_id.to_string(), &conn)
+    {
+        Ok(id) => ApiResponse {
+            response: json!({ "vm_id": id }),
+            status: Status::Ok,
+        },
+        Err(e) => ApiResponse {
+            response: json!({ "error": e.to_string() }),
+            status: Status::BadRequest,
+        },
+    }
+}
+
 pub fn routes() -> Vec<rocket::Route> {
-    routes![index, by_id, add_vm, start_vm, stop_vm]
+    routes![index, by_id, add_vm, start_vm, stop_vm, attach_drive]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::drive::DriveService;
     use crate::services::host::HostService;
-    use crate::services::vm::VmService;
     use crate::services::storage::StorageService;
+    use crate::services::vm::VmService;
 
     use rocket::http::ContentType;
     use rocket::local::Client;
@@ -95,6 +118,7 @@ mod tests {
                 host_service: hs,
                 vm_service: vs,
                 storage_service: StorageService::new(),
+                drive_service: DriveService::new(),
             })
             .attach(DbConnection::fairing())
             .mount("/vms", routes());
