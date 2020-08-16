@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 pub mod drive;
 pub mod host;
+pub mod kernel;
 pub mod storage;
 pub mod vm;
 

@@ -4,6 +4,7 @@ use uuid::Uuid;
 
 pub mod drive;
 pub mod host;
+pub mod kernel;
 mod rpc;
 pub mod storage;
 mod util;
@@ -15,4 +16,5 @@ pub struct Backend {
     pub vm_service: vm::VmService,
     pub storage_service: storage::StorageService,
     pub drive_service: drive::DriveService,
+    pub kernel_service: kernel::KernelService,
 }

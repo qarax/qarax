@@ -86,6 +86,7 @@ mod tests {
     use super::*;
     use crate::services::drive::DriveService;
     use crate::services::host::HostService;
+    use crate::services::kernel::KernelService;
     use crate::services::storage::StorageService;
     use crate::services::vm::VmService;
 
@@ -105,6 +106,7 @@ mod tests {
                 vm_service: vs,
                 storage_service: StorageService::new(),
                 drive_service: DriveService::new(),
+                kernel_service: KernelService::new(),
             })
             .attach(DbConnection::fairing())
             .mount("/hosts", routes());

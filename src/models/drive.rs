@@ -55,7 +55,6 @@ impl Drive {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct NewDrive {
     pub name: String,
-    pub status: String,
     pub readonly: bool,
     pub rootfs: bool,
     pub storage_id: Uuid,

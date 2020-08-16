@@ -1,4 +1,4 @@
-use super::drive::{AttachedDrive, Drive};
+use super::drive::AttachedDrive;
 use super::*;
 use crate::schema::vms;
 use diesel::PgConnection;

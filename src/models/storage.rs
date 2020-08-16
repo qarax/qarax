@@ -60,11 +60,14 @@ impl From<&NewStorage> for Storage {
     }
 }
 
-#[derive(FromSqlRow, Serialize, Deserialize, Debug, AsExpression, Clone)]
+#[derive(FromSqlRow, Serialize, Deserialize, Debug, AsExpression, Clone, QueryableByName)]
 #[sql_type = "Jsonb"]
 pub struct StorageConfig {
+    #[sql_type = "Uuid"]
     host_id: Option<Uuid>,
+    #[sql_type = "Uuid"]
     path: Option<String>,
+    #[sql_type = "Varchar"]
     pool_name: Option<String>,
 }
 

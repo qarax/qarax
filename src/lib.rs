@@ -22,11 +22,13 @@ use rocket::State;
 
 use controllers::drives;
 use controllers::hosts;
+use controllers::kernels;
 use controllers::storage;
 use controllers::vms;
 use database::DbConnection;
 use services::drive::DriveService;
 use services::host::HostService;
+use services::kernel::KernelService;
 use services::storage::StorageService;
 use services::vm::VmService;
 use services::Backend;
@@ -45,6 +47,7 @@ pub fn rocket() -> Rocket {
             vm_service: VmService::new(),
             storage_service: StorageService::new(),
             drive_service: DriveService::new(),
+            kernel_service: KernelService::new(),
         })
         .attach(AdHoc::on_launch("Initialize hosts", |rocket| {
             let backend: State<Backend> = State::from(rocket).unwrap();
@@ -56,4 +59,5 @@ pub fn rocket() -> Rocket {
         .mount("/vms", vms::routes())
         .mount("/storage", storage::routes())
         .mount("/drives", drives::routes())
+        .mount("/kernels", kernels::routes())
 }

@@ -1,5 +1,6 @@
 pub mod drives;
 pub mod hosts;
+pub mod kernels;
 pub mod storage;
 pub mod vms;
 
