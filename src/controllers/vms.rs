@@ -81,8 +81,8 @@ pub fn attach_drive(
         .vm_service
         .attach_drive(vm_id.to_string(), drive_id.to_string(), &conn)
     {
-        Ok(id) => ApiResponse {
-            response: json!({ "vm_id": id }),
+        Ok(_) => ApiResponse {
+            response: json!({ "status": "ok" }),
             status: Status::Ok,
         },
         Err(e) => ApiResponse {

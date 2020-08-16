@@ -29,7 +29,6 @@ pub struct NewVm {
     pub vcpu: i32,
     pub memory: i32,
     pub kernel: Uuid,
-    pub root_file_system: String,
     pub network_mode: Option<NetworkMode>, // TODO: remove option and use (DHCP, STATIC_IP, NONE)
     pub address: Option<String>,
     pub kernel_params: Option<String>,
