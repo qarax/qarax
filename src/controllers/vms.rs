@@ -92,8 +92,31 @@ pub fn attach_drive(
     }
 }
 
+#[get("/<vm_id>/drives")]
+pub fn drives_for_vm(vm_id: Uuid, backend: State<Backend>, conn: DbConnection) -> ApiResponse {
+    let vm = match backend.vm_service.get_by_id(&vm_id.to_string(), &conn) {
+        Ok(v) => v,
+        Err(e) => {
+            return ApiResponse {
+                response: json!({ "error": e.to_string() }),
+                status: Status::BadRequest,
+            }
+        }
+    };
+    match backend.drive_service.get_drives_for_vms(&vm, &conn) {
+        Ok(drives) => ApiResponse {
+            response: json!({ "drives": drives }),
+            status: Status::Ok,
+        },
+        Err(e) => ApiResponse {
+            response: json!({ "error": e.to_string() }),
+            status: Status::BadRequest,
+        },
+    }
+}
+
 pub fn routes() -> Vec<rocket::Route> {
-    routes![index, by_id, add_vm, start_vm, stop_vm, attach_drive]
+    routes![index, by_id, add_vm, start_vm, stop_vm, attach_drive, drives_for_vm]
 }
 
 #[cfg(test)]
