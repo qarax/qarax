@@ -67,8 +67,18 @@ impl VmmHandler {
             vm_config.address = ip;
         }
 
-        let drive = drive::Drive::new(String::from("rootfs"), false, true, String::from("rootfs"));
-        let drives = vec![drive];
+        let fc_drives = vm_config
+            .drives
+            .iter()
+            .map(|drive| drive::Drive {
+                drive_id: drive.drive_id.clone(),
+                is_read_only: drive.is_read_only,
+                is_root_device: drive.is_root_device,
+                path_on_host: drive.path_on_host.clone(),
+                partuuid: None,
+                rate_limiter: None,
+            })
+            .collect();
 
         let mut logger = logger::Logger::new(format!("/var/log/{}.log", vm_config.vm_id));
         // TODO: get the level from qarax-node's configuration (hopefully it'll have one)
@@ -80,7 +90,7 @@ impl VmmHandler {
             socket_path,
             mc,
             bs,
-            drives,
+            fc_drives,
             network_interfaces,
             logger,
             None,
@@ -128,7 +138,7 @@ impl VmmHandler {
             let machine = machine.as_mut().unwrap();
             match machine.stop().await {
                 Ok(_) => {
-                    if machine.network_interfaces.is_empty(){
+                    if machine.network_interfaces.is_empty() {
                         tracing::info!("Removing tap device");
                         network::delete_tap_device(&machine.vm_id).await?;
                     }

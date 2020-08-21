@@ -50,10 +50,7 @@ pub fn add_vm(vm: Json<NewVm>, backend: State<Backend>, conn: DbConnection) -> A
 
 #[post("/<id>/start")]
 pub fn start_vm(id: Uuid, backend: State<Backend>, conn: DbConnection) -> JsonValue {
-    match backend
-        .vm_service
-        .start(&id.to_string(), &backend.host_service, &conn)
-    {
+    match backend.vm_service.start(&id.to_string(), &conn) {
         Ok(id) => json!({ "vm_id": id }),
         Err(e) => json!({ "error": format!("could not start vm: {}", e) }),
     }
@@ -61,25 +58,77 @@ pub fn start_vm(id: Uuid, backend: State<Backend>, conn: DbConnection) -> JsonVa
 
 #[post("/<id>/stop")]
 pub fn stop_vm(id: Uuid, backend: State<Backend>, conn: DbConnection) -> JsonValue {
-    match backend
-        .vm_service
-        .stop(&id.to_string(), &backend.host_service, &conn)
-    {
+    match backend.vm_service.stop(&id.to_string(), &conn) {
         Ok(id) => json!({ "vm_id": id }),
         Err(_) => json!({ "error": "could not stop vm" }),
     }
 }
 
+#[post("/<vm_id>/drives/<drive_id>/attach")]
+pub fn attach_drive(
+    vm_id: Uuid,
+    drive_id: Uuid,
+    backend: State<Backend>,
+    conn: DbConnection,
+) -> ApiResponse {
+    match backend
+        .vm_service
+        .attach_drive(vm_id.to_string(), drive_id.to_string(), &conn)
+    {
+        Ok(_) => ApiResponse {
+            response: json!({ "status": "ok" }),
+            status: Status::Ok,
+        },
+        Err(e) => ApiResponse {
+            response: json!({ "error": e.to_string() }),
+            status: Status::BadRequest,
+        },
+    }
+}
+
+#[get("/<vm_id>/drives")]
+pub fn drives_for_vm(vm_id: Uuid, backend: State<Backend>, conn: DbConnection) -> ApiResponse {
+    let vm = match backend.vm_service.get_by_id(&vm_id.to_string(), &conn) {
+        Ok(v) => v,
+        Err(e) => {
+            return ApiResponse {
+                response: json!({ "error": e.to_string() }),
+                status: Status::BadRequest,
+            }
+        }
+    };
+    match backend.drive_service.get_drives_for_vms(&vm, &conn) {
+        Ok(drives) => ApiResponse {
+            response: json!({ "drives": drives }),
+            status: Status::Ok,
+        },
+        Err(e) => ApiResponse {
+            response: json!({ "error": e.to_string() }),
+            status: Status::BadRequest,
+        },
+    }
+}
+
 pub fn routes() -> Vec<rocket::Route> {
-    routes![index, by_id, add_vm, start_vm, stop_vm]
+    routes![
+        index,
+        by_id,
+        add_vm,
+        start_vm,
+        stop_vm,
+        attach_drive,
+        drives_for_vm
+    ]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::drive::DriveService;
     use crate::services::host::HostService;
-    use crate::services::vm::VmService;
+    use crate::services::kernel::KernelService;
     use crate::services::storage::StorageService;
+    use crate::services::vm::VmService;
 
     use rocket::http::ContentType;
     use rocket::local::Client;
@@ -95,6 +144,8 @@ mod tests {
                 host_service: hs,
                 vm_service: vs,
                 storage_service: StorageService::new(),
+                drive_service: DriveService::new(),
+                kernel_service: KernelService::new(),
             })
             .attach(DbConnection::fairing())
             .mount("/vms", routes());

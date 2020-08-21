@@ -1,5 +1,5 @@
 use super::*;
-use crate::models::storage::{Storage, NewStorage};
+use crate::models::storage::{NewStorage, Storage};
 
 #[derive(Copy, Clone)]
 pub struct StorageService {}

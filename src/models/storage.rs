@@ -4,7 +4,6 @@ use diesel::deserialize::FromSql;
 use diesel::pg::Pg;
 use diesel::serialize::{IsNull, Output, ToSql};
 use diesel::sql_types::{Jsonb, Varchar};
-use serde_json;
 use std::convert::From;
 use std::io::Write;
 use uuid::Uuid;
@@ -60,12 +59,15 @@ impl From<&NewStorage> for Storage {
     }
 }
 
-#[derive(FromSqlRow, Serialize, Deserialize, Debug, AsExpression, Clone)]
+#[derive(FromSqlRow, Serialize, Deserialize, Debug, AsExpression, Clone, QueryableByName)]
 #[sql_type = "Jsonb"]
 pub struct StorageConfig {
-    host_id: Option<Uuid>,
-    path: Option<String>,
-    pool_name: Option<String>,
+    #[sql_type = "Uuid"]
+    pub host_id: Option<Uuid>,
+    #[sql_type = "Uuid"]
+    pub path: Option<String>,
+    #[sql_type = "Varchar"]
+    pub pool_name: Option<String>,
 }
 
 impl FromSql<Jsonb, Pg> for StorageConfig {

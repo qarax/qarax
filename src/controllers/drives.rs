@@ -1,13 +1,13 @@
 use super::*;
 use crate::database::DbConnection;
-use crate::models::storage::NewStorage;
+use crate::models::drive::NewDrive;
 use crate::services::Backend;
 
 #[get("/")]
 pub fn index(backend: State<Backend>, conn: DbConnection) -> ApiResponse {
-    match backend.storage_service.all(&conn) {
-        Ok(storages) => ApiResponse {
-            response: json!({ "storages": storages }),
+    match backend.drive_service.all(&conn) {
+        Ok(drives) => ApiResponse {
+            response: json!({ "drives": drives }),
             status: Status::Ok,
         },
         Err(e) => ApiResponse {
@@ -17,15 +17,15 @@ pub fn index(backend: State<Backend>, conn: DbConnection) -> ApiResponse {
     }
 }
 
-#[post("/", format = "json", data = "<storage>")]
-pub fn add_storage(
-    storage: Json<NewStorage>,
+#[post("/", format = "json", data = "<drive>")]
+pub fn add_drive(
+    drive: Json<NewDrive>,
     backend: State<Backend>,
     conn: DbConnection,
 ) -> ApiResponse {
-    match backend.storage_service.add(&storage.into_inner(), &conn) {
+    match backend.drive_service.add(&drive.into_inner(), &conn) {
         Ok(id) => ApiResponse {
-            response: json!({ "storage_id": id }),
+            response: json!({ "drive_id": id }),
             status: Status::Ok,
         },
         Err(e) => ApiResponse {
@@ -36,5 +36,5 @@ pub fn add_storage(
 }
 
 pub fn routes() -> Vec<rocket::Route> {
-    routes![index, add_storage]
+    routes![index, add_drive]
 }
