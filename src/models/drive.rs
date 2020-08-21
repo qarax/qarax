@@ -1,3 +1,4 @@
+use super::storage::Storage;
 use super::vm::Vm;
 use super::*;
 use crate::schema::drives;
@@ -49,6 +50,14 @@ impl Drive {
             Ok(_) => Ok(drive.id.to_owned()),
             Err(e) => Err(e.into()),
         }
+    }
+
+    pub fn get_storage(drive_id: Uuid, conn: &PgConnection) -> Result<Storage> {
+        crate::schema::storage::table
+            .inner_join(drives::table.on(drives::id.eq(drive_id)))
+            .select(crate::schema::storage::all_columns)
+            .get_result::<Storage>(conn)
+            .map_err(|e| anyhow!(e))
     }
 }
 
