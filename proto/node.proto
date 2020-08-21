@@ -8,10 +8,17 @@ message VmConfig {
     int32 memory = 2;
     int32 vcpus = 3;
     string kernel = 4;
-    string rootFs = 5;
-    string kernel_params = 6;
-    string network_mode = 7;
-    string address = 8;
+    string kernel_params = 5;
+    string network_mode = 6;
+    string address = 7;
+    repeated Drive drives = 8;
+}
+
+message Drive {
+    string drive_id = 1;
+    bool is_read_only = 2;
+    bool is_root_device = 3;
+    string path_on_host = 4;
 }
 
 enum Status {
