@@ -50,10 +50,7 @@ pub fn add_vm(vm: Json<NewVm>, backend: State<Backend>, conn: DbConnection) -> A
 
 #[post("/<id>/start")]
 pub fn start_vm(id: Uuid, backend: State<Backend>, conn: DbConnection) -> JsonValue {
-    match backend
-        .vm_service
-        .start(&id.to_string(), &backend.host_service, &conn)
-    {
+    match backend.vm_service.start(&id.to_string(), &conn) {
         Ok(id) => json!({ "vm_id": id }),
         Err(e) => json!({ "error": format!("could not start vm: {}", e) }),
     }
@@ -61,10 +58,7 @@ pub fn start_vm(id: Uuid, backend: State<Backend>, conn: DbConnection) -> JsonVa
 
 #[post("/<id>/stop")]
 pub fn stop_vm(id: Uuid, backend: State<Backend>, conn: DbConnection) -> JsonValue {
-    match backend
-        .vm_service
-        .stop(&id.to_string(), &backend.host_service, &conn)
-    {
+    match backend.vm_service.stop(&id.to_string(), &conn) {
         Ok(id) => json!({ "vm_id": id }),
         Err(_) => json!({ "error": "could not stop vm" }),
     }
@@ -116,7 +110,15 @@ pub fn drives_for_vm(vm_id: Uuid, backend: State<Backend>, conn: DbConnection) -
 }
 
 pub fn routes() -> Vec<rocket::Route> {
-    routes![index, by_id, add_vm, start_vm, stop_vm, attach_drive, drives_for_vm]
+    routes![
+        index,
+        by_id,
+        add_vm,
+        start_vm,
+        stop_vm,
+        attach_drive,
+        drives_for_vm
+    ]
 }
 
 #[cfg(test)]

@@ -37,10 +37,7 @@ pub fn add_kernel(
 
 #[get("/<id>/storage")]
 pub fn get_storage(id: Uuid, backend: State<Backend>, conn: DbConnection) -> ApiResponse {
-    match backend
-        .kernel_service
-        .get_storage(&id.to_string(), &conn)
-    {
+    match backend.kernel_service.get_storage(&id.to_string(), &conn) {
         Ok(storage) => ApiResponse {
             response: json!({ "storage": storage }),
             status: Status::Ok,
