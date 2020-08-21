@@ -1,4 +1,4 @@
-use super::storage::{Storage, StorageConfig};
+use super::storage::Storage;
 use super::*;
 use crate::schema::kernels;
 
@@ -31,11 +31,11 @@ impl Kernel {
         }
     }
 
-    pub fn get_storage_config(kernel_id: Uuid, conn: &PgConnection) -> Result<StorageConfig> {
+    pub fn get_storage(kernel_id: Uuid, conn: &PgConnection) -> Result<Storage> {
         crate::schema::storage::table
             .inner_join(kernels::table.on(kernels::id.eq(kernel_id)))
-            .select(crate::schema::storage::config)
-            .get_result::<StorageConfig>(conn)
+            .select(crate::schema::storage::all_columns)
+            .get_result::<Storage>(conn)
             .map_err(|e| anyhow!(e))
     }
 }

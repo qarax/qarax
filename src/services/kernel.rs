@@ -1,6 +1,6 @@
 use super::*;
 use crate::models::kernel::{Kernel, NewKernel};
-use crate::models::storage::StorageConfig;
+use crate::models::storage::Storage;
 
 #[derive(Copy, Clone)]
 pub struct KernelService {}
@@ -18,11 +18,7 @@ impl KernelService {
         Kernel::insert(new_kernel, conn)
     }
 
-    pub fn get_storage_config(
-        &self,
-        kernel_id: String,
-        conn: &DbConnection,
-    ) -> Result<StorageConfig> {
-        Kernel::get_storage_config(Uuid::parse_str(&kernel_id)?, conn)
+    pub fn get_storage(&self, kernel_id: &str, conn: &DbConnection) -> Result<Storage> {
+        Kernel::get_storage(Uuid::parse_str(kernel_id)?, conn)
     }
 }

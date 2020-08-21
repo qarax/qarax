@@ -35,14 +35,14 @@ pub fn add_kernel(
     }
 }
 
-#[get("/<id>/storage_config")]
-pub fn get_storage_config(id: Uuid, backend: State<Backend>, conn: DbConnection) -> ApiResponse {
+#[get("/<id>/storage")]
+pub fn get_storage(id: Uuid, backend: State<Backend>, conn: DbConnection) -> ApiResponse {
     match backend
         .kernel_service
-        .get_storage_config(id.to_string(), &conn)
+        .get_storage(&id.to_string(), &conn)
     {
-        Ok(id) => ApiResponse {
-            response: json!({ "kernel_id": id }),
+        Ok(storage) => ApiResponse {
+            response: json!({ "storage": storage }),
             status: Status::Ok,
         },
         Err(e) => ApiResponse {
@@ -53,5 +53,5 @@ pub fn get_storage_config(id: Uuid, backend: State<Backend>, conn: DbConnection)
 }
 
 pub fn routes() -> Vec<rocket::Route> {
-    routes![index, add_kernel, get_storage_config]
+    routes![index, add_kernel, get_storage]
 }
