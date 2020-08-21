@@ -26,29 +26,24 @@ use controllers::kernels;
 use controllers::storage;
 use controllers::vms;
 use database::DbConnection;
-use services::drive::DriveService;
-use services::host::HostService;
-use services::kernel::KernelService;
-use services::storage::StorageService;
-use services::vm::VmService;
-use services::Backend;
+
+pub use services::drive::DriveService;
+pub use services::host::HostService;
+pub use services::kernel::KernelService;
+pub use services::storage::StorageService;
+pub use services::vm::VmService;
+pub use services::Backend;
 
 embed_migrations!();
 
-pub fn rocket() -> Rocket {
+pub fn rocket(backend: Backend) -> Rocket {
     rocket::ignite()
         .attach(DbConnection::fairing())
         .attach(AdHoc::on_launch("Run migrations", |rocket| {
             let connection: DbConnection = DbConnection::get_one(rocket).unwrap();
             embedded_migrations::run(&*connection).expect("Database connection failed");
         }))
-        .manage(Backend {
-            host_service: HostService::new(),
-            vm_service: VmService::new(),
-            storage_service: StorageService::new(),
-            drive_service: DriveService::new(),
-            kernel_service: KernelService::new(),
-        })
+        .manage(backend)
         .attach(AdHoc::on_launch("Initialize hosts", |rocket| {
             let backend: State<Backend> = State::from(rocket).unwrap();
             backend
