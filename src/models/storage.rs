@@ -4,7 +4,6 @@ use diesel::deserialize::FromSql;
 use diesel::pg::Pg;
 use diesel::serialize::{IsNull, Output, ToSql};
 use diesel::sql_types::{Jsonb, Varchar};
-use serde_json;
 use std::convert::From;
 use std::io::Write;
 use uuid::Uuid;

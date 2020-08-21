@@ -122,12 +122,12 @@ impl VmService {
                     unimplemented!()
                 }
 
-                return VmDrive {
+                VmDrive {
                     drive_id: drive.id.to_string(),
                     is_read_only: drive.readonly,
                     is_root_device: drive.rootfs,
                     path_on_host: volume.get_path(),
-                };
+                }
             })
             .collect())
     }

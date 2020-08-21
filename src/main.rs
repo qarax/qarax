@@ -20,11 +20,11 @@ fn main() {
     ));
 
     let backend: Backend = Backend {
-        host_service: host_service,
-        vm_service: vm_service,
-        storage_service: storage_service,
-        drive_service: drive_service,
-        kernel_service: kernel_service,
+        host_service,
+        vm_service,
+        storage_service,
+        drive_service,
+        kernel_service,
     };
 
     qarax::rocket(backend).launch();
