@@ -64,11 +64,11 @@ impl From<&NewStorage> for Storage {
 #[sql_type = "Jsonb"]
 pub struct StorageConfig {
     #[sql_type = "Uuid"]
-    host_id: Option<Uuid>,
+    pub host_id: Option<Uuid>,
     #[sql_type = "Uuid"]
-    path: Option<String>,
+    pub path: Option<String>,
     #[sql_type = "Varchar"]
-    pool_name: Option<String>,
+    pub pool_name: Option<String>,
 }
 
 impl FromSql<Jsonb, Pg> for StorageConfig {
