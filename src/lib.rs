@@ -34,16 +34,39 @@ pub use services::storage::StorageService;
 pub use services::vm::VmService;
 pub use services::Backend;
 
+use std::sync::Arc;
+
 embed_migrations!();
 
-pub fn rocket(backend: Backend) -> Rocket {
+fn create_backend() -> Backend {
+    let host_service = Arc::new(HostService::new());
+    let drive_service = Arc::new(DriveService::new());
+    let kernel_service = Arc::new(KernelService::new());
+    let storage_service = Arc::new(StorageService::new());
+
+    let vm_service = Arc::new(VmService::new(
+        Arc::clone(&host_service),
+        Arc::clone(&drive_service),
+        Arc::clone(&kernel_service),
+    ));
+
+    Backend {
+        host_service,
+        vm_service,
+        storage_service,
+        drive_service,
+        kernel_service,
+    }
+}
+
+pub fn rocket() -> Rocket {
     rocket::ignite()
         .attach(DbConnection::fairing())
         .attach(AdHoc::on_launch("Run migrations", |rocket| {
             let connection: DbConnection = DbConnection::get_one(rocket).unwrap();
             embedded_migrations::run(&*connection).expect("Database connection failed");
         }))
-        .manage(backend)
+        .manage(create_backend())
         .attach(AdHoc::on_launch("Initialize hosts", |rocket| {
             let backend: State<Backend> = State::from(rocket).unwrap();
             backend
