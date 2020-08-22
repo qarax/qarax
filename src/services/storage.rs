@@ -16,4 +16,12 @@ impl StorageService {
     pub fn add(&self, new_storage: &NewStorage, conn: &DbConnection) -> Result<Uuid> {
         Storage::insert(new_storage, conn)
     }
+
+    #[allow(dead_code)]
+    pub fn delete_all(&self, conn: &DbConnection) -> Result<usize, String> {
+        match Storage::delete_all(conn) {
+            Ok(record_count) => Ok(record_count),
+            Err(e) => Err(e.to_string()),
+        }
+    }
 }

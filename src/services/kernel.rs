@@ -21,4 +21,12 @@ impl KernelService {
     pub fn get_storage(&self, kernel_id: &str, conn: &DbConnection) -> Result<Storage> {
         Kernel::get_storage(Uuid::parse_str(kernel_id)?, conn)
     }
+
+    #[allow(dead_code)]
+    pub fn delete_all(&self, conn: &DbConnection) -> Result<usize, String> {
+        match Kernel::delete_all(conn) {
+            Ok(record_count) => Ok(record_count),
+            Err(e) => Err(e.to_string()),
+        }
+    }
 }
