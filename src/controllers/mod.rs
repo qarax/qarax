@@ -4,6 +4,7 @@ pub mod kernels;
 pub mod storage;
 pub mod vms;
 
+use anyhow::Result;
 use rocket::http::{ContentType, Status};
 use rocket::request::Request;
 use rocket::response;

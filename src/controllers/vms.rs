@@ -124,8 +124,8 @@ pub fn routes() -> Vec<rocket::Route> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use crate::create_backend;
+    use crate::models::vm::{NetworkMode, NewVm};
 
     use rocket::http::ContentType;
     use rocket::local::Client;
@@ -145,6 +145,53 @@ mod tests {
         (client, conn)
     }
 
+    fn create_kernel(backend: &Backend, conn: &DbConnection) -> Result<uuid::Uuid> {
+        use crate::models::kernel::NewKernel;
+        use crate::models::storage::{NewStorage, StorageConfig, StorageType};
+
+        let sc = StorageConfig {
+            host_id: Some(uuid::Uuid::new_v4()),
+            path: Some(String::from("/var/storage")),
+            pool_name: None,
+        };
+
+        let ns = NewStorage {
+            name: String::from("dummy"),
+            storage_type: StorageType::Local,
+            config: sc,
+        };
+
+        let storage = backend.storage_service.add(&ns, conn)?;
+
+        let nk = NewKernel {
+            name: String::from("linux57"),
+            storage_id: storage,
+        };
+
+        let kernel_id: uuid::Uuid = backend.kernel_service.add(&nk, conn)?;
+
+        Ok(kernel_id)
+    }
+
+    fn create_payload(
+        kernel_id: uuid::Uuid,
+        network_mode: Option<NetworkMode>,
+        address: Option<String>,
+        kernel_params: Option<String>,
+    ) -> Result<String> {
+        let vm = NewVm {
+            name: String::from("vm1"),
+            vcpu: 1,
+            memory: 128,
+            kernel: kernel_id,
+            network_mode,
+            address,
+            kernel_params,
+        };
+
+        Ok(serde_json::to_string(&vm)?)
+    }
+
     #[test]
     fn test_index_empty() {
         let (client, _) = get_client();
@@ -158,16 +205,10 @@ mod tests {
 
     #[test]
     fn test_add_vm_no_network() {
-        let payload = r#"{
-            "name": "vm1",
-            "vcpu": 1,
-            "memory": 128,
-            "kernel": "vmlinux",
-            "root_file_system": "rootfs"
-            }"#;
-
         let (client, conn) = get_client();
         let backend: State<Backend> = State::from(&client.rocket()).unwrap();
+        let kernel_id = create_kernel(&backend, &conn).unwrap();
+        let payload = create_payload(kernel_id, None, None, None).unwrap();
 
         let mut response = client
             .post("/vms")
@@ -185,21 +226,16 @@ mod tests {
 
         // TODO: Stupid teardown
         backend.vm_service.delete_all(&conn).unwrap();
+        backend.kernel_service.delete_all(&conn).unwrap();
+        backend.storage_service.delete_all(&conn).unwrap();
     }
 
     #[test]
     fn test_add_vm_dhcp_network() {
-        let payload = r#"{
-            "name": "vm1",
-            "vcpu": 1,
-            "memory": 128,
-            "kernel": "vmlinux",
-            "root_file_system": "rootfs",
-            "network_mode": "dhcp"
-            }"#;
-
         let (client, conn) = get_client();
         let backend: State<Backend> = State::from(&client.rocket()).unwrap();
+        let kernel_id = create_kernel(&backend, &conn).unwrap();
+        let payload = create_payload(kernel_id, Some(NetworkMode::Dhcp), None, None).unwrap();
 
         let mut response = client
             .post("/vms")
@@ -217,22 +253,22 @@ mod tests {
 
         // TODO: Stupid teardown
         backend.vm_service.delete_all(&conn).unwrap();
+        backend.kernel_service.delete_all(&conn).unwrap();
+        backend.storage_service.delete_all(&conn).unwrap();
     }
 
     #[test]
     fn test_add_vm_static_ip_network() {
-        let payload = r#"{
-            "name": "vm1",
-            "vcpu": 1,
-            "memory": 128,
-            "kernel": "vmlinux",
-            "root_file_system": "rootfs",
-            "network_mode": "static_ip",
-            "address": "192.168.122.100"
-            }"#;
-
         let (client, conn) = get_client();
         let backend: State<Backend> = State::from(&client.rocket()).unwrap();
+        let kernel_id = create_kernel(&backend, &conn).unwrap();
+        let payload = create_payload(
+            kernel_id,
+            Some(NetworkMode::StaticIp),
+            Some(String::from("192.168.122.100")),
+            None,
+        )
+        .unwrap();
 
         let mut response = client
             .post("/vms")
@@ -251,23 +287,17 @@ mod tests {
 
         // TODO: Stupid teardown
         backend.vm_service.delete_all(&conn).unwrap();
+        backend.kernel_service.delete_all(&conn).unwrap();
+        backend.storage_service.delete_all(&conn).unwrap();
     }
 
     #[test]
     fn test_default_kernel_params() {
-        let payload = r#"{
-            "name": "vm1",
-            "vcpu": 1,
-            "memory": 128,
-            "kernel": "vmlinux",
-            "root_file_system": "rootfs",
-            "network_mode": "static_ip",
-            "address": "192.168.122.100"
-            }"#;
-
         let (client, conn) = get_client();
         let backend: State<Backend> = State::from(&client.rocket()).unwrap();
-
+        let kernel_id = create_kernel(&backend, &conn).unwrap();
+        let payload = create_payload(kernel_id, None, None, None).unwrap();
+        println!("{}", payload);
         let mut response = client
             .post("/vms")
             .header(ContentType::JSON)
@@ -287,23 +317,22 @@ mod tests {
 
         // TODO: Stupid teardown
         backend.vm_service.delete_all(&conn).unwrap();
+        backend.kernel_service.delete_all(&conn).unwrap();
+        backend.storage_service.delete_all(&conn).unwrap();
     }
 
     #[test]
     fn test_custom_kernel_params() {
-        let payload = r#"{
-            "name": "vm1",
-            "vcpu": 1,
-            "memory": 128,
-            "kernel": "vmlinux",
-            "root_file_system": "rootfs",
-            "network_mode": "static_ip",
-            "address": "192.168.122.100",
-            "kernel_params": "ip=1.1.1.1"
-            }"#;
-
         let (client, conn) = get_client();
         let backend: State<Backend> = State::from(&client.rocket()).unwrap();
+        let kernel_id = create_kernel(&backend, &conn).unwrap();
+        let payload = create_payload(
+            kernel_id,
+            Some(NetworkMode::StaticIp),
+            Some(String::from("192.168.122.100")),
+            Some(String::from("ip=1.1.1.1")),
+        )
+        .unwrap();
 
         let mut response = client
             .post("/vms")
@@ -321,5 +350,7 @@ mod tests {
 
         // TODO: Stupid teardown
         backend.vm_service.delete_all(&conn).unwrap();
+        backend.kernel_service.delete_all(&conn).unwrap();
+        backend.storage_service.delete_all(&conn).unwrap();
     }
 }
