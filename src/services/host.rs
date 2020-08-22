@@ -169,9 +169,9 @@ impl HostService {
             match Client::connect(format!("http://{}:{}", host.address, host.port)) {
                 Ok(client) => {
                     println!("Saving client for host {}", host.id);
-                    let client = self.clients.write().unwrap().insert(host.id, client);
+                    self.clients.write().unwrap().insert(host.id, client.clone());
 
-                    match Self::health_check_internal(&client.unwrap()) {
+                    match Self::health_check_internal(&client) {
                         Ok(_) => {
                             println!("Successfully initialized host {}", host.id,);
                         }
