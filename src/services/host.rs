@@ -169,7 +169,10 @@ impl HostService {
             match Client::connect(format!("http://{}:{}", host.address, host.port)) {
                 Ok(client) => {
                     println!("Saving client for host {}", host.id);
-                    self.clients.write().unwrap().insert(host.id, client.clone());
+                    self.clients
+                        .write()
+                        .unwrap()
+                        .insert(host.id, client.clone());
 
                     match Self::health_check_internal(&client) {
                         Ok(_) => {
