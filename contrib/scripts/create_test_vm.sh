@@ -3,8 +3,8 @@
 OS_VERSION="fedora-32"
 PASSWORD="fedora"
 OS_IMG="os.img"
-if test -f "$FILE"; then
-  echo "$FILE exists, nothing to do"
+if test -f "$OS_IMG"; then
+  echo "$OS_IMG exists, nothing to do"
   exit 0
 fi
 
