@@ -153,13 +153,12 @@ impl HostService {
         self.clients.read().unwrap().get(&host_id).cloned().unwrap()
     }
 
-    pub fn get_running_host(&self, conn: &DbConnection) -> Host {
-        // TODO: error handling
-        Host::by_status(Status::Up, conn)
-            .unwrap()
-            .first()
-            .cloned()
-            .unwrap()
+    pub fn get_running_host(&self, conn: &DbConnection) -> Result<Host> {
+        let hosts = Host::by_status(Status::Up, conn)?;
+        match hosts.first() {
+            Some(h) => Ok(h.clone()),
+            None => Err(anyhow!("No hosts available")),
+        }
     }
 
     pub fn initialize_hosts(&self, conn: &DbConnection) {

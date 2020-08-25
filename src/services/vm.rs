@@ -45,7 +45,7 @@ impl VmService {
         use super::rpc::client::node::VmConfig;
 
         // TODO: error handling
-        let host = self.host_service.get_running_host(conn);
+        let host = self.host_service.get_running_host(conn)?;
         let client = self.host_service.get_client(host.id);
         let mut vm = self.get_by_id(vm_id, conn).unwrap();
         let clone = vm.clone();
@@ -82,7 +82,7 @@ impl VmService {
         use super::rpc::client::node::VmId;
 
         // TODO: error handling
-        let host = self.host_service.get_running_host(conn);
+        let host = self.host_service.get_running_host(conn)?;
         let client = self.host_service.get_client(host.id);
         let request = VmId {
             vm_id: vm_id.to_owned(),

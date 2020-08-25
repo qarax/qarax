@@ -55,10 +55,10 @@ impl Host {
         }
     }
 
-    pub fn by_status(host_status: Status, conn: &PgConnection) -> Result<Vec<Host>, String> {
+    pub fn by_status(host_status: Status, conn: &PgConnection) -> Result<Vec<Host>> {
         match hosts.filter(host::status.eq(host_status)).get_results(conn) {
             Ok(h) => Ok(h),
-            Err(e) => Err(e.to_string()),
+            Err(e) => Err(ModelError::NoResults(EntityType::Host, anyhow!(e)).into()),
         }
     }
 

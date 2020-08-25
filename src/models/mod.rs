@@ -51,4 +51,6 @@ enum ModelError {
     FailedToAdd(EntityType, EntityId, Error),
     #[error("Failed to update '{0}' '{1}' to the database, error {2}")]
     FailedToUpdate(EntityType, EntityId, Error),
+    #[error("Could not get '{0}' results, error {1}")]
+    NoResults(EntityType, Error),
 }
