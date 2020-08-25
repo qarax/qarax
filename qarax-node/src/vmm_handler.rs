@@ -120,10 +120,6 @@ impl VmmHandler {
 
             machine.set_pid(child.id());
 
-            tracing::info!("Starting VM machine...");
-            machine.start().await?;
-            tracing::info!("Machine started");
-
             Ok(())
         }
     }

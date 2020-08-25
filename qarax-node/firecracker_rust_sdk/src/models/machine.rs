@@ -113,8 +113,6 @@ impl Machine {
     }
 
     pub async fn start(&self) -> Result<String> {
-        tracing::info!("Starting VM :O");
-
         Ok(self
             .client
             .request(
