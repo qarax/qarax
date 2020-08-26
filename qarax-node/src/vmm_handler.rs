@@ -58,7 +58,6 @@ impl VmmHandler {
             let mac = network::generate_mac();
             tracing::info!("Generated MAC address: '{}'", mac);
 
-            // TODO: The IP should be sent back to qarax
             let ip =
                 network::get_ip(Arc::new(mac), Arc::new(get_tap_device(&vm_config.vm_id))).await?;
 

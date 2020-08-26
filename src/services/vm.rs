@@ -44,7 +44,6 @@ impl VmService {
     pub fn start(&self, vm_id: &str, conn: &DbConnection) -> Result<Uuid> {
         use super::rpc::client::node::VmConfig;
 
-        // TODO: error handling
         let host = self.host_service.get_running_host(conn)?;
         let client = self.host_service.get_client(host.id);
         let mut vm = self.get_by_id(vm_id, conn).unwrap();
