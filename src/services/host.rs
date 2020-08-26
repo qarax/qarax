@@ -147,9 +147,13 @@ impl HostService {
         }
     }
 
-    pub fn get_client(&self, host_id: Uuid) -> Client {
+    pub fn get_client(&self, host_id: Uuid) -> Result<Client> {
         // TODO: error handling
-        self.clients.read().unwrap().get(&host_id).cloned().unwrap()
+        let client = self.clients.read().unwrap();
+        match client.get(&host_id) {
+            Some(client) => Ok(client.clone()),
+            None => Err(anyhow!("Client unavailable for host {}", host_id)),
+        }
     }
 
     pub fn get_running_host(&self, conn: &DbConnection) -> Result<Host> {
