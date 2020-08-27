@@ -131,18 +131,14 @@ impl VmmHandler {
         } else {
             tracing::info!("Stopping VM machine...");
             let machine = machine.as_mut().unwrap();
-            match machine.stop().await {
-                Ok(_) => {
-                    if machine.network_interfaces.is_empty() {
-                        tracing::info!("Removing tap device");
-                        network::delete_tap_device(&machine.vm_id).await?;
-                    }
-
-                    tracing::info!("VM stopped");
-                    Ok(())
-                }
-                Err(e) => Err(anyhow!("Failed to stop VM :( {}", e.to_string())),
+            machine.stop().await?;
+            if !machine.network_interfaces.is_empty() {
+                tracing::info!("Removing tap device");
+                network::delete_tap_device(&machine.vm_id).await?;
             }
+
+            tracing::info!("VM stopped");
+            Ok(())
         }
     }
 
