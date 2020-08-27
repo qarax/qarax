@@ -43,6 +43,9 @@ pub fn generate_mac() -> MacAddress {
     // bit should be 1
     buf[0] |= 2;
 
+    // Set LSB to zero to make it a unicast address
+    buf[0] &= 0b11110000;
+
     MacAddress::from_bytes(buf)
 }
 
