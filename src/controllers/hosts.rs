@@ -45,7 +45,7 @@ pub fn add_host(host: Json<NewHost>, backend: State<Backend>, conn: DbConnection
     }
 }
 
-#[get("/health/<id>")]
+#[get("/<id>/health")]
 pub fn health_check(id: Uuid, backend: State<Backend>) -> ApiResponse {
     match backend.host_service.health_check(&id.to_string()) {
         Ok(status) => ApiResponse {
