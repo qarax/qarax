@@ -13,7 +13,7 @@ mod dhcp;
 
 const BRIDGE_NAME: &str = "fcbridge";
 
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
 pub struct MacAddress(pub [u8; 6]);
 
 impl MacAddress {
