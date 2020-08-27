@@ -133,7 +133,8 @@ impl Machine {
         let pid = &self.pid.take().unwrap();
         signal::kill(Pid::from_raw(*pid as i32), signal::Signal::SIGTERM)?;
         waitpid(Pid::from_raw(*pid as i32), None)?;
-        fs::remove_file(&self.client.socket_path).expect("failed to remove file");
+        fs::remove_file(&self.client.socket_path).expect("failed to socket file");
+        fs::remove_file(&self.logger.log_path).expect("failed to log file");
 
         Ok(())
     }
