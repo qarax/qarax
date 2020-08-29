@@ -124,26 +124,15 @@ pub fn routes() -> Vec<rocket::Route> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::create_backend;
+    use crate::common;
     use crate::models::vm::{NetworkMode, NewVm};
 
     use rocket::http::ContentType;
-    use rocket::local::Client;
     use serde_json::Value;
 
     embed_migrations!();
 
-    fn get_client() -> (Client, DbConnection) {
-        let rocket = rocket::ignite()
-            .manage(create_backend())
-            .attach(DbConnection::fairing())
-            .mount("/vms", routes());
-
-        let conn = DbConnection::get_one(&rocket).expect("Database connection failed");
-        embedded_migrations::run(&*conn).expect("Failed to run migrations");
-        let client = Client::new(rocket).expect("Failed to get client");
-        (client, conn)
-    }
+    const MOUNT: &str = "/vms";
 
     fn create_kernel(backend: &Backend, conn: &DbConnection) -> Result<uuid::Uuid> {
         use crate::models::kernel::NewKernel;
@@ -194,7 +183,7 @@ mod tests {
 
     #[test]
     fn test_index_empty() {
-        let (client, _) = get_client();
+        let (client, _) = common::get_client(MOUNT, routes());
         let mut response = client.get("/vms").dispatch();
 
         let response = response.body_string();
@@ -205,7 +194,7 @@ mod tests {
 
     #[test]
     fn test_add_vm_no_network() {
-        let (client, conn) = get_client();
+        let (client, conn) = common::get_client(MOUNT, routes());
         let backend: State<Backend> = State::from(&client.rocket()).unwrap();
         let kernel_id = create_kernel(&backend, &conn).unwrap();
         let payload = create_payload(kernel_id, None, None, None).unwrap();
@@ -232,7 +221,7 @@ mod tests {
 
     #[test]
     fn test_add_vm_dhcp_network() {
-        let (client, conn) = get_client();
+        let (client, conn) = common::get_client(MOUNT, routes());
         let backend: State<Backend> = State::from(&client.rocket()).unwrap();
         let kernel_id = create_kernel(&backend, &conn).unwrap();
         let payload = create_payload(kernel_id, Some(NetworkMode::Dhcp), None, None).unwrap();
@@ -259,7 +248,7 @@ mod tests {
 
     #[test]
     fn test_add_vm_static_ip_network() {
-        let (client, conn) = get_client();
+        let (client, conn) = common::get_client(MOUNT, routes());
         let backend: State<Backend> = State::from(&client.rocket()).unwrap();
         let kernel_id = create_kernel(&backend, &conn).unwrap();
         let payload = create_payload(
@@ -293,7 +282,7 @@ mod tests {
 
     #[test]
     fn test_default_kernel_params() {
-        let (client, conn) = get_client();
+        let (client, conn) = common::get_client(MOUNT, routes());
         let backend: State<Backend> = State::from(&client.rocket()).unwrap();
         let kernel_id = create_kernel(&backend, &conn).unwrap();
         let payload = create_payload(kernel_id, None, None, None).unwrap();
@@ -323,7 +312,7 @@ mod tests {
 
     #[test]
     fn test_custom_kernel_params() {
-        let (client, conn) = get_client();
+        let (client, conn) = common::get_client(MOUNT, routes());
         let backend: State<Backend> = State::from(&client.rocket()).unwrap();
         let kernel_id = create_kernel(&backend, &conn).unwrap();
         let payload = create_payload(
