@@ -65,14 +65,20 @@ pub fn install(
     host: Json<InstallHost>,
     backend: State<Backend>,
     conn: DbConnection,
-) -> JsonValue {
+) -> ApiResponse {
     match backend
         .host_service
         .clone()
         .install(&host_id.to_string(), &host, conn)
     {
-        Ok(status) => json!({ "status": status }),
-        Err(e) => json!({ "error": e.to_string()}),
+        Ok(status) => ApiResponse {
+            response: json!({ "status": status }),
+            status: Status::Ok,
+        },
+        Err(e) => ApiResponse {
+            response: json!({ "error": e.to_string()}),
+            status: Status::BadRequest,
+        },
     }
 }
 

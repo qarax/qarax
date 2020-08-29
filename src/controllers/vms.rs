@@ -3,7 +3,7 @@ use crate::database::DbConnection;
 use crate::models::vm::NewVm;
 use crate::services::Backend;
 
-use rocket_contrib::json::{Json, JsonValue};
+use rocket_contrib::json::Json;
 use rocket_contrib::uuid::Uuid;
 
 #[get("/")]
@@ -49,18 +49,30 @@ pub fn add_vm(vm: Json<NewVm>, backend: State<Backend>, conn: DbConnection) -> A
 }
 
 #[post("/<id>/start")]
-pub fn start_vm(id: Uuid, backend: State<Backend>, conn: DbConnection) -> JsonValue {
+pub fn start_vm(id: Uuid, backend: State<Backend>, conn: DbConnection) -> ApiResponse {
     match backend.vm_service.start(&id.to_string(), &conn) {
-        Ok(id) => json!({ "vm_id": id }),
-        Err(e) => json!({ "error": format!("could not start vm: {}", e) }),
+        Ok(id) => ApiResponse {
+            response: json!({ "vm_id": id }),
+            status: Status::Ok,
+        },
+        Err(e) => ApiResponse {
+            response: json!({ "error": format!("could not start vm: {}", e) }),
+            status: Status::BadRequest,
+        },
     }
 }
 
 #[post("/<id>/stop")]
-pub fn stop_vm(id: Uuid, backend: State<Backend>, conn: DbConnection) -> JsonValue {
+pub fn stop_vm(id: Uuid, backend: State<Backend>, conn: DbConnection) -> ApiResponse {
     match backend.vm_service.stop(&id.to_string(), &conn) {
-        Ok(id) => json!({ "vm_id": id }),
-        Err(_) => json!({ "error": "could not stop vm" }),
+        Ok(id) => ApiResponse {
+            response: json!({ "vm_id": id }),
+            status: Status::Ok,
+        },
+        Err(_) => ApiResponse {
+            response: json!({ "error": "could not stop vm" }),
+            status: Status::BadRequest,
+        },
     }
 }
 
