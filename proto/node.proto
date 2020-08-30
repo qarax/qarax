@@ -10,8 +10,9 @@ message VmConfig {
     string kernel = 4;
     string kernel_params = 5;
     string network_mode = 6;
-    string address = 7;
-    repeated Drive drives = 8;
+    string ip_address = 7;
+    string mac_address= 8;
+    repeated Drive drives = 9;
 }
 
 message Drive {

@@ -55,7 +55,8 @@ impl VmService {
             kernel: self.get_kernel_path(&vm.kernel.to_string(), conn)?,
             kernel_params: clone.kernel_params,
             network_mode: clone.network_mode.clone().unwrap_or_else(String::new),
-            address: clone.address.unwrap_or_else(String::new),
+            ip_address: clone.ip_address.unwrap_or_else(String::new),
+            mac_address: clone.mac_address.unwrap_or_else(String::new),
             drives: self.create_vm_drives(&vm, conn)?,
         };
 
@@ -65,7 +66,9 @@ impl VmService {
             Ok(config) => {
                 let network_mode = vm.network_mode.as_ref().unwrap();
                 if NetworkMode::from_str(network_mode.as_str()).unwrap() == NetworkMode::Dhcp {
-                    vm.address = Some(config.into_inner().address);
+                    let inner: &VmConfig = &config.into_inner();
+                    vm.ip_address = Some(inner.ip_address.clone());
+                    vm.mac_address = Some(inner.mac_address.clone());
                     Vm::update(&vm, conn)?;
                 }
             }

@@ -17,7 +17,8 @@ pub struct Vm {
     pub host_id: Option<Uuid>, // Add belongs_to macro
     pub vcpu: i32,
     pub memory: i32,
-    pub address: Option<String>,
+    pub ip_address: Option<String>,
+    pub mac_address: Option<String>,
     pub network_mode: Option<String>,
     pub kernel_params: String,
     pub kernel: Uuid,
@@ -30,7 +31,8 @@ pub struct NewVm {
     pub memory: i32,
     pub kernel: Uuid,
     pub network_mode: Option<NetworkMode>, // TODO: remove option and use (DHCP, STATIC_IP, NONE)
-    pub address: Option<String>,
+    pub ip_address: Option<String>,
+    pub mac_address: Option<String>,
     pub kernel_params: Option<String>,
 }
 
@@ -117,15 +119,15 @@ impl Vm {
 impl From<&NewVm> for Vm {
     fn from(nv: &NewVm) -> Self {
         let network_mode: Option<String>;
-        let address = if let Some(n) = &nv.network_mode {
+        let ip_address = if let Some(n) = &nv.network_mode {
             network_mode = Some(n.as_str());
             match n {
-                NetworkMode::Dhcp => String::from(""),
-                NetworkMode::StaticIp => nv.address.as_ref().unwrap().to_owned(),
+                NetworkMode::Dhcp => Some(String::from("")),
+                NetworkMode::StaticIp => nv.ip_address.clone(),
             }
         } else {
             network_mode = None;
-            String::from("")
+            None
         };
 
         let kernel_params = match &nv.kernel_params {
@@ -141,7 +143,8 @@ impl From<&NewVm> for Vm {
             vcpu: nv.vcpu,
             memory: nv.memory,
             kernel: nv.kernel,
-            address: Some(address),
+            ip_address: ip_address,
+            mac_address: nv.mac_address.clone(),
             network_mode,
             kernel_params,
         }

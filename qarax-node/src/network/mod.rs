@@ -4,6 +4,7 @@ use std::process::Stdio;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
+use thiserror::Error;
 use tokio::process::Command;
 use tokio::time::{self, Duration};
 
@@ -13,7 +14,13 @@ mod dhcp;
 
 const BRIDGE_NAME: &str = "fcbridge";
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Error, Debug)]
+pub enum MacErrors {
+    #[error("Failed to parse string {0}, error: {1}")]
+    MacParsingError(String, String),
+}
+
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub struct MacAddress(pub [u8; 6]);
 
 impl MacAddress {
@@ -21,6 +28,21 @@ impl MacAddress {
         let mut bytes = [0; 6];
         bytes.copy_from_slice(&data);
         Self(bytes)
+    }
+}
+
+impl std::str::FromStr for MacAddress {
+    type Err = MacErrors;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let slice: Vec<&str> = s.split(':').collect();
+        let mut bytes: [u8; 6] = [0; 6];
+
+        for (i, octect) in slice.iter().enumerate() {
+            bytes[i] = u8::from_str_radix(*octect, 16)
+                .map_err(|e| MacErrors::MacParsingError(s.to_owned(), e.to_string()))?;
+        }
+
+        Ok(Self::from_bytes(bytes))
     }
 }
 
@@ -105,4 +127,19 @@ pub async fn delete_tap_device(vm_id: &str) -> Result<()> {
         .await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::str::FromStr;
+
+    #[test]
+    fn test_mac_address_from_slice() -> Result<()> {
+        let mac_string = String::from("b6:dd:3f:6e:a9:1b");
+        let mac = MacAddress::from_str(&mac_string)?;
+
+        assert_eq!(mac, MacAddress([0xb6, 0xdd, 0x3f, 0x6e, 0xa9, 0x1b]));
+        Ok(())
+    }
 }
