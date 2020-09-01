@@ -54,7 +54,7 @@ impl VmService {
             vcpus: clone.vcpu,
             kernel: self.get_kernel_path(&vm.kernel.to_string(), conn)?,
             kernel_params: clone.kernel_params,
-            network_mode: clone.network_mode.clone().unwrap_or_else(String::new),
+            network_mode: clone.network_mode.clone(),
             ip_address: clone.ip_address.unwrap_or_else(String::new),
             mac_address: clone.mac_address.unwrap_or_else(String::new),
             drives: self.create_vm_drives(&vm, conn)?,
@@ -64,8 +64,7 @@ impl VmService {
 
         match client.start_vm(request) {
             Ok(config) => {
-                let network_mode = vm.network_mode.as_ref().unwrap();
-                if NetworkMode::from_str(network_mode.as_str()).unwrap() == NetworkMode::Dhcp {
+                if NetworkMode::from_str(&vm.network_mode)? == NetworkMode::Dhcp {
                     let inner: &VmConfig = &config.into_inner();
                     vm.ip_address = Some(inner.ip_address.clone());
                     vm.mac_address = Some(inner.mac_address.clone());

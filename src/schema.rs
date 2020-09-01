@@ -56,7 +56,7 @@ table! {
         memory -> Int4,
         ip_address -> Nullable<Varchar>,
         mac_address -> Nullable<Varchar>,
-        network_mode -> Nullable<Varchar>,
+        network_mode -> Varchar,
         kernel_params -> Varchar,
         kernel -> Uuid,
     }

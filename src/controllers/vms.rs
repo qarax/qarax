@@ -176,7 +176,7 @@ mod tests {
 
     fn create_payload(
         kernel_id: uuid::Uuid,
-        network_mode: Option<NetworkMode>,
+        network_mode: NetworkMode,
         ip_address: Option<String>,
         mac_address: Option<String>,
         kernel_params: Option<String>,
@@ -211,7 +211,7 @@ mod tests {
         let (client, conn) = common::get_client(MOUNT, routes());
         let backend: State<Backend> = State::from(&client.rocket()).unwrap();
         let kernel_id = create_kernel(&backend, &conn).unwrap();
-        let payload = create_payload(kernel_id, None, None, None, None).unwrap();
+        let payload = create_payload(kernel_id, NetworkMode::None, None, None, None).unwrap();
 
         let mut response = client
             .post("/vms")
@@ -225,7 +225,7 @@ mod tests {
         assert_eq!(backend.vm_service.get_all(&conn).unwrap().len(), 1);
 
         let vm = backend.vm_service.get_by_id(vm_id, &conn).unwrap();
-        assert_eq!(vm.network_mode, None);
+        assert_eq!(vm.network_mode, NetworkMode::None.as_str());
 
         // TODO: Stupid teardown
         backend.vm_service.delete_all(&conn).unwrap();
@@ -238,7 +238,7 @@ mod tests {
         let (client, conn) = common::get_client(MOUNT, routes());
         let backend: State<Backend> = State::from(&client.rocket()).unwrap();
         let kernel_id = create_kernel(&backend, &conn).unwrap();
-        let payload = create_payload(kernel_id, Some(NetworkMode::Dhcp), None, None, None).unwrap();
+        let payload = create_payload(kernel_id, NetworkMode::Dhcp, None, None, None).unwrap();
 
         let mut response = client
             .post("/vms")
@@ -252,7 +252,7 @@ mod tests {
         assert_eq!(backend.vm_service.get_all(&conn).unwrap().len(), 1);
 
         let vm = backend.vm_service.get_by_id(vm_id, &conn).unwrap();
-        assert_eq!(vm.network_mode, Some(String::from("dhcp")));
+        assert_eq!(vm.network_mode, String::from("dhcp"));
 
         // TODO: Stupid teardown
         backend.vm_service.delete_all(&conn).unwrap();
@@ -267,7 +267,7 @@ mod tests {
         let kernel_id = create_kernel(&backend, &conn).unwrap();
         let payload = create_payload(
             kernel_id,
-            Some(NetworkMode::StaticIp),
+            NetworkMode::StaticIp,
             Some(String::from("192.168.122.100")),
             None,
             None,
@@ -286,7 +286,7 @@ mod tests {
         assert_eq!(backend.vm_service.get_all(&conn).unwrap().len(), 1);
 
         let vm = backend.vm_service.get_by_id(vm_id, &conn).unwrap();
-        assert_eq!(vm.network_mode, Some(String::from("static_ip")));
+        assert_eq!(vm.network_mode, String::from("static_ip"));
         assert_eq!(vm.ip_address, Some(String::from("192.168.122.100")));
 
         // TODO: Stupid teardown
@@ -300,7 +300,7 @@ mod tests {
         let (client, conn) = common::get_client(MOUNT, routes());
         let backend: State<Backend> = State::from(&client.rocket()).unwrap();
         let kernel_id = create_kernel(&backend, &conn).unwrap();
-        let payload = create_payload(kernel_id, None, None, None, None).unwrap();
+        let payload = create_payload(kernel_id, NetworkMode::None, None, None, None).unwrap();
         println!("{}", payload);
         let mut response = client
             .post("/vms")
@@ -332,7 +332,7 @@ mod tests {
         let kernel_id = create_kernel(&backend, &conn).unwrap();
         let payload = create_payload(
             kernel_id,
-            Some(NetworkMode::StaticIp),
+            NetworkMode::StaticIp,
             Some(String::from("192.168.122.100")),
             None,
             Some(String::from("ip=1.1.1.1")),
