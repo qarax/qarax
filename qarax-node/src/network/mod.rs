@@ -90,7 +90,7 @@ pub async fn get_ip(mac: Arc<MacAddress>, tap_device: Arc<String>) -> Result<Str
 }
 
 pub async fn create_tap_device(vm_id: &str) -> Result<()> {
-    // TODO: use a utility or something and handle errors
+    // TODO: use a utility or something
     let tap_device = &format!("fc-tap-{}", &vm_id[..4]);
     Command::new("ip")
         .args(vec!["tuntap", "add", tap_device, "mode", "tap"])

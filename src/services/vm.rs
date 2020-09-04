@@ -82,7 +82,6 @@ impl VmService {
     pub fn stop(&self, vm_id: &str, conn: &DbConnection) -> Result<Uuid> {
         use super::rpc::client::node::VmId;
 
-        // TODO: error handling
         let host = self.host_service.get_running_host(conn)?;
         let client = self.host_service.get_client(host.id)?;
         let request = VmId {
