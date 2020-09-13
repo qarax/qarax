@@ -115,9 +115,8 @@ mod tests {
         let payload = r#"{ 
         "name":"hosto",
         "address": "1.1.1.1",
-        "user": "root",
+        "host_user": "root",
         "password": "passwordo",
-        "local_node_path": "/home/",
         "port": 8001}"#;
 
         let (client, conn) = common::get_client(MOUNT, routes());
@@ -140,9 +139,8 @@ mod tests {
         let payload = r#"{ 
         "name":"hosto",
         "address": "1.1.1.1",
-        "user": "root",
+        "host_user": "root",
         "password": "passwordo",
-        "local_node_path": "/home/",
         "port": 8001}"#;
 
         let (client, conn) = common::get_client(MOUNT, routes());
@@ -181,9 +179,8 @@ mod tests {
         let payload = r#"{
             "name":"hosto",
             "address": "1.1.1.1",
-            "user": "root",
+            "host_user": "root",
             "password": "passwordo",
-            "local_node_path": "/home/",
             "port": 8001}"#;
 
         let (client, conn) = common::get_client(MOUNT, routes());

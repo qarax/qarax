@@ -23,9 +23,8 @@ pub struct NewHost {
     pub name: String,
     pub address: String,
     pub port: i32,
-    pub user: String,
+    pub host_user: String,
     pub password: String,
-    pub local_node_path: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -99,7 +98,7 @@ impl From<&NewHost> for Host {
             name: nh.name.to_owned(),
             address: nh.address.to_owned(),
             port: nh.port.to_owned(),
-            host_user: nh.user.to_owned(),
+            host_user: nh.host_user.to_owned(),
             password: nh.password.to_owned(),
             status: Status::Down,
         }
