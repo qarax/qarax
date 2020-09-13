@@ -19,14 +19,14 @@ impl Kernel {
         kernels.load::<Kernel>(conn).map_err(|e| anyhow!(e))
     }
 
-    pub fn insert(new_drive: &NewKernel, conn: &PgConnection) -> Result<Uuid> {
-        let drive = Kernel::from(new_drive);
+    pub fn insert(new_kernel: &NewKernel, conn: &PgConnection) -> Result<Uuid> {
+        let kernel = Kernel::from(new_kernel);
 
         match diesel::insert_into(kernels::table)
-            .values(&drive)
+            .values(&kernel)
             .execute(conn)
         {
-            Ok(_) => Ok(drive.id.to_owned()),
+            Ok(_) => Ok(kernel.id.to_owned()),
             Err(e) => Err(e.into()),
         }
     }
