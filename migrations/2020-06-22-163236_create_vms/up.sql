@@ -9,6 +9,6 @@ CREATE TABLE vms (
     root_file_system VARCHAR(255) NOT NULL,
     ip_address VARCHAR(16),
     mac_address VARCHAR(20),
-    network_mode VARCHAR(10),
+    network_mode VARCHAR(10) NOT NULL,
     kernel_params VARCHAR(1000) NOT NULL
 )
