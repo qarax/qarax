@@ -1,0 +1,448 @@
+openapi: 3.0.1
+info:
+  title: Qarax API
+  version: 0.1.0
+  description: The API for Qarax manager
+  license:
+    name: Apache 2.0
+    url: 'http://www.apache.org/licenses/LICENSE-2.0.html'
+externalDocs:
+  description: Find out more about Qarax
+  url: 'https://github.com/qarax/qarax'
+tags:
+  - name: Hosts
+  - name: VMs
+  - name: Storage
+  - name: Kernels
+  - name: Drives
+components:
+  schemas:
+    drive:
+      properties:
+        id:
+          format: uuid
+          type: string
+        name:
+          type: string
+        readonly:
+          type: boolean
+        rootfs:
+          type: boolean
+        status:
+          type: string
+        storage_id:
+          format: uuid
+          type: string
+      type: object
+    host:
+      properties:
+        address:
+          type: string
+        host_user:
+          type: string
+        id:
+          format: uuid
+          type: string
+        name:
+          type: string
+        password:
+          type: string
+        port:
+          format: int32
+          type: integer
+        status:
+          type: string
+      type: object
+    installHost:
+      properties:
+        local_node_path:
+          type: string
+        fc_version:
+          type: string
+      type: object
+    kernel:
+      properties:
+        id:
+          format: uuid
+          type: string
+        name:
+          type: string
+        storage_id:
+          format: uuid
+          type: string
+      type: object
+    storage:
+      properties:
+        config:
+          type: object
+        id:
+          format: uuid
+          type: string
+        name:
+          type: string
+        status:
+          type: string
+        storage_type:
+          type: string
+      type: object
+    vm:
+      properties:
+        address:
+          type: string
+        host_id:
+          format: uuid
+          type: string
+        id:
+          format: uuid
+          type: string
+        kernel:
+          format: uuid
+          type: string
+        kernel_params:
+          type: string
+        memory:
+          format: int32
+          type: integer
+        name:
+          type: string
+        network_mode:
+          type: string
+        status:
+          format: int32
+          type: integer
+        vcpu:
+          format: int32
+          type: integer
+      type: object
+paths:
+  /hosts:
+    get:
+      summary: Get hosts list
+      description: Get hosts list
+      operationId: ''
+      tags:
+        - Hosts
+      responses:
+        '200':
+          description: successful operation
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/host'
+    post:
+      summary: Create new host
+      description: Create new host
+      operationId: ''
+      tags:
+        - Hosts
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/host'
+        required: true
+      responses:
+        default:
+          description: Default error sample response
+  '/hosts/{hostId}':
+    get:
+      summary: Get host by ID
+      description: ''
+      tags:
+        - Hosts
+      operationId: ''
+      parameters:
+        - name: hostId
+          in: path
+          description: ID of host
+          required: true
+          schema:
+            type: string
+      responses:
+        default:
+          description: Default error sample response
+  '/hosts/{hostId}/install':
+    post:
+      summary: Install qarax node on host
+      description: Install and run qarax-node on host
+      tags:
+        - Hosts
+      parameters:
+        - name: hostId
+          in: path
+          description: ID of host
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/installHost'
+      responses:
+        default:
+          description: Default error sample response
+  '/hosts/{hostId}/health':
+    get:
+      summary: Host health check
+      description: ''
+      operationId: ''
+      parameters:
+        - name: hostId
+          in: path
+          description: ID of host
+          required: true
+          schema:
+            type: string
+      responses:
+        default:
+          description: Default error sample response
+      tags:
+        - Hosts
+  /drives/:
+    get:
+      summary: Get drives list
+      description: ''
+      operationId: ''
+      responses:
+        '200':
+          description: successful operation
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/drive'
+        default:
+          description: Default error sample response
+      tags:
+        - Drives
+    post:
+      summary: Add new drive
+      description: ''
+      operationId: ''
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/drive'
+      responses:
+        default:
+          description: Default error sample response
+      tags:
+        - Drives
+  /storage/:
+    get:
+      summary: get storages list
+      description: ''
+      operationId: ''
+      responses:
+        '200':
+          description: successful operation
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/storage'
+      tags:
+        - Storage
+    post:
+      summary: Add new storage
+      description: ''
+      operationId: ''
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/storage'
+      responses:
+        default:
+          description: Default error sample response
+      tags:
+        - Storage
+  /kernels/:
+    get:
+      summary: get kernels list
+      description: ''
+      operationId: ''
+      responses:
+        '200':
+          description: successful operation
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/kernel'
+      tags:
+        - Kernels
+    post:
+      summary: Add new kernel
+      description: ''
+      operationId: ''
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/kernel'
+      responses:
+        default:
+          description: Default error sample response
+      tags:
+        - Kernels
+  '/kernels/{kernelId}/storage':
+    summary: Get kernels' storage
+    get:
+      summary: ''
+      description: ''
+      operationId: ''
+      parameters:
+        - name: kernelId
+          in: path
+          description: ID of a kernel
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: successful operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/storage'
+      tags:
+        - Kernels
+  /vms/:
+    get:
+      summary: get vms list
+      description: ''
+      operationId: ''
+      responses:
+        '200':
+          description: successful operation
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/vm'
+      tags:
+        - VMs
+    post:
+      summary: Add new VM
+      description: ''
+      operationId: ''
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/vm'
+      responses:
+        default:
+          description: Default error sample response
+      tags:
+        - VMs
+  '/vms/{vmId}/':
+    get:
+      summary: 'VM details'
+      description: ''
+      operationId: ''
+      parameters:
+        - name: vmId
+          in: path
+          description: ID of a VM
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: successful operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/vm'
+      tags:
+        - VMs
+  '/vms/{vmId}/start':
+    post:
+      summary: 'Start VM'
+      description: ''
+      operationId: ''
+      parameters:
+        - name: vmId
+          in: path
+          description: ID of a VM
+          required: true
+          schema:
+            type: string
+      responses:
+        default:
+          description: Default error sample response
+      tags:
+        - VMs
+  '/vms/{vmId}/stop':
+    post:
+      summary: 'Stop VM'
+      description: ''
+      operationId: ''
+      parameters:
+        - name: vmId
+          in: path
+          description: ID of a VM
+          required: true
+          schema:
+            type: string
+      responses:
+        default:
+          description: Default error sample response
+      tags:
+        - VMs
+  '/vms/{vmId}/drives/':
+    get:
+      summary: ''
+      description: ''
+      operationId: ''
+      parameters:
+        - name: vmId
+          in: path
+          description: ID of a VM
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: successful operation
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/drive'
+      tags:
+        - VMs
+  '/vms/{vmId}/drives/{driveId}/attach':
+    post:
+      summary: Add drive to VM
+      description: ''
+      operationId: ''
+      parameters:
+        - name: vmId
+          in: path
+          description: ID of a VM
+          required: true
+          schema:
+            type: string
+        - name: driveId
+          in: path
+          description: ID of a drive
+          required: true
+          schema:
+            type: string
+      responses:
+        default:
+          description: Default error sample response
+      tags:
+        - VMs
