@@ -1,4 +1,4 @@
-# swagger_client.StorageApi
+# qarax.StorageApi
 
 All URIs are relative to */*
 
@@ -16,12 +16,12 @@ get storages list
 ```python
 from __future__ import print_function
 import time
-import swagger_client
-from swagger_client.rest import ApiException
+import qarax
+from qarax.rest import ApiException
 from pprint import pprint
 
 # create an instance of the API class
-api_instance = swagger_client.StorageApi()
+api_instance = qarax.StorageApi()
 
 try:
     # get storages list
@@ -58,13 +58,13 @@ Add new storage
 ```python
 from __future__ import print_function
 import time
-import swagger_client
-from swagger_client.rest import ApiException
+import qarax
+from qarax.rest import ApiException
 from pprint import pprint
 
 # create an instance of the API class
-api_instance = swagger_client.StorageApi()
-body = swagger_client.Storage() # Storage |  (optional)
+api_instance = qarax.StorageApi()
+body = qarax.Storage() # Storage |  (optional)
 
 try:
     # Add new storage

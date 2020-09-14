@@ -14,9 +14,9 @@ from __future__ import absolute_import
 
 import unittest
 
-import swagger_client
-from swagger_client.api.kernels_api import KernelsApi  # noqa: E501
-from swagger_client.rest import ApiException
+import qarax
+from qarax.api.kernels_api import KernelsApi  # noqa: E501
+from qarax.rest import ApiException
 
 
 class TestKernelsApi(unittest.TestCase):

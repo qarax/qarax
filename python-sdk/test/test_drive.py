@@ -14,9 +14,9 @@ from __future__ import absolute_import
 
 import unittest
 
-import swagger_client
-from swagger_client.models.drive import Drive  # noqa: E501
-from swagger_client.rest import ApiException
+import qarax
+from qarax.models.drive import Drive  # noqa: E501
+from qarax.rest import ApiException
 
 
 class TestDrive(unittest.TestCase):
@@ -31,7 +31,7 @@ class TestDrive(unittest.TestCase):
     def testDrive(self):
         """Test Drive"""
         # FIXME: construct object with mandatory attributes with example values
-        # model = swagger_client.models.drive.Drive()  # noqa: E501
+        # model = qarax.models.drive.Drive()  # noqa: E501
         pass
 
 

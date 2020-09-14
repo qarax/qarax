@@ -1,4 +1,4 @@
-# swagger_client.DrivesApi
+# qarax.DrivesApi
 
 All URIs are relative to */*
 
@@ -16,12 +16,12 @@ Get drives list
 ```python
 from __future__ import print_function
 import time
-import swagger_client
-from swagger_client.rest import ApiException
+import qarax
+from qarax.rest import ApiException
 from pprint import pprint
 
 # create an instance of the API class
-api_instance = swagger_client.DrivesApi()
+api_instance = qarax.DrivesApi()
 
 try:
     # Get drives list
@@ -58,13 +58,13 @@ Add new drive
 ```python
 from __future__ import print_function
 import time
-import swagger_client
-from swagger_client.rest import ApiException
+import qarax
+from qarax.rest import ApiException
 from pprint import pprint
 
 # create an instance of the API class
-api_instance = swagger_client.DrivesApi()
-body = swagger_client.Drive() # Drive |  (optional)
+api_instance = qarax.DrivesApi()
+body = qarax.Drive() # Drive |  (optional)
 
 try:
     # Add new drive

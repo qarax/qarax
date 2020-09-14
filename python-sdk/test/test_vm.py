@@ -14,9 +14,9 @@ from __future__ import absolute_import
 
 import unittest
 
-import swagger_client
-from swagger_client.models.vm import Vm  # noqa: E501
-from swagger_client.rest import ApiException
+import qarax
+from qarax.models.vm import Vm  # noqa: E501
+from qarax.rest import ApiException
 
 
 class TestVm(unittest.TestCase):
@@ -31,7 +31,7 @@ class TestVm(unittest.TestCase):
     def testVm(self):
         """Test Vm"""
         # FIXME: construct object with mandatory attributes with example values
-        # model = swagger_client.models.vm.Vm()  # noqa: E501
+        # model = qarax.models.vm.Vm()  # noqa: E501
         pass
 
 

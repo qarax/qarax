@@ -14,9 +14,9 @@ from __future__ import absolute_import
 
 import unittest
 
-import swagger_client
-from swagger_client.models.storage import Storage  # noqa: E501
-from swagger_client.rest import ApiException
+import qarax
+from qarax.models.storage import Storage  # noqa: E501
+from qarax.rest import ApiException
 
 
 class TestStorage(unittest.TestCase):
@@ -31,7 +31,7 @@ class TestStorage(unittest.TestCase):
     def testStorage(self):
         """Test Storage"""
         # FIXME: construct object with mandatory attributes with example values
-        # model = swagger_client.models.storage.Storage()  # noqa: E501
+        # model = qarax.models.storage.Storage()  # noqa: E501
         pass
 
 

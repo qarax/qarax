@@ -1,4 +1,4 @@
-# swagger_client.KernelsApi
+# qarax.KernelsApi
 
 All URIs are relative to */*
 
@@ -17,12 +17,12 @@ get kernels list
 ```python
 from __future__ import print_function
 import time
-import swagger_client
-from swagger_client.rest import ApiException
+import qarax
+from qarax.rest import ApiException
 from pprint import pprint
 
 # create an instance of the API class
-api_instance = swagger_client.KernelsApi()
+api_instance = qarax.KernelsApi()
 
 try:
     # get kernels list
@@ -59,12 +59,12 @@ No authorization required
 ```python
 from __future__ import print_function
 import time
-import swagger_client
-from swagger_client.rest import ApiException
+import qarax
+from qarax.rest import ApiException
 from pprint import pprint
 
 # create an instance of the API class
-api_instance = swagger_client.KernelsApi()
+api_instance = qarax.KernelsApi()
 kernel_id = 'kernel_id_example' # str | ID of a kernel
 
 try:
@@ -104,13 +104,13 @@ Add new kernel
 ```python
 from __future__ import print_function
 import time
-import swagger_client
-from swagger_client.rest import ApiException
+import qarax
+from qarax.rest import ApiException
 from pprint import pprint
 
 # create an instance of the API class
-api_instance = swagger_client.KernelsApi()
-body = swagger_client.Kernel() # Kernel |  (optional)
+api_instance = qarax.KernelsApi()
+body = qarax.Kernel() # Kernel |  (optional)
 
 try:
     # Add new kernel

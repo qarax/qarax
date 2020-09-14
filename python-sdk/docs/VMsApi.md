@@ -1,4 +1,4 @@
-# swagger_client.VMsApi
+# qarax.VMsApi
 
 All URIs are relative to */*
 
@@ -21,12 +21,12 @@ get vms list
 ```python
 from __future__ import print_function
 import time
-import swagger_client
-from swagger_client.rest import ApiException
+import qarax
+from qarax.rest import ApiException
 from pprint import pprint
 
 # create an instance of the API class
-api_instance = swagger_client.VMsApi()
+api_instance = qarax.VMsApi()
 
 try:
     # get vms list
@@ -63,13 +63,13 @@ Add new VM
 ```python
 from __future__ import print_function
 import time
-import swagger_client
-from swagger_client.rest import ApiException
+import qarax
+from qarax.rest import ApiException
 from pprint import pprint
 
 # create an instance of the API class
-api_instance = swagger_client.VMsApi()
-body = swagger_client.Vm() # Vm |  (optional)
+api_instance = qarax.VMsApi()
+body = qarax.Vm() # Vm |  (optional)
 
 try:
     # Add new VM
@@ -108,12 +108,12 @@ Add drive to VM
 ```python
 from __future__ import print_function
 import time
-import swagger_client
-from swagger_client.rest import ApiException
+import qarax
+from qarax.rest import ApiException
 from pprint import pprint
 
 # create an instance of the API class
-api_instance = swagger_client.VMsApi()
+api_instance = qarax.VMsApi()
 vm_id = 'vm_id_example' # str | ID of a VM
 drive_id = 'drive_id_example' # str | ID of a drive
 
@@ -155,12 +155,12 @@ No authorization required
 ```python
 from __future__ import print_function
 import time
-import swagger_client
-from swagger_client.rest import ApiException
+import qarax
+from qarax.rest import ApiException
 from pprint import pprint
 
 # create an instance of the API class
-api_instance = swagger_client.VMsApi()
+api_instance = qarax.VMsApi()
 vm_id = 'vm_id_example' # str | ID of a VM
 
 try:
@@ -200,12 +200,12 @@ VM details
 ```python
 from __future__ import print_function
 import time
-import swagger_client
-from swagger_client.rest import ApiException
+import qarax
+from qarax.rest import ApiException
 from pprint import pprint
 
 # create an instance of the API class
-api_instance = swagger_client.VMsApi()
+api_instance = qarax.VMsApi()
 vm_id = 'vm_id_example' # str | ID of a VM
 
 try:
@@ -246,12 +246,12 @@ Start VM
 ```python
 from __future__ import print_function
 import time
-import swagger_client
-from swagger_client.rest import ApiException
+import qarax
+from qarax.rest import ApiException
 from pprint import pprint
 
 # create an instance of the API class
-api_instance = swagger_client.VMsApi()
+api_instance = qarax.VMsApi()
 vm_id = 'vm_id_example' # str | ID of a VM
 
 try:
@@ -291,12 +291,12 @@ Stop VM
 ```python
 from __future__ import print_function
 import time
-import swagger_client
-from swagger_client.rest import ApiException
+import qarax
+from qarax.rest import ApiException
 from pprint import pprint
 
 # create an instance of the API class
-api_instance = swagger_client.VMsApi()
+api_instance = qarax.VMsApi()
 vm_id = 'vm_id_example' # str | ID of a VM
 
 try:

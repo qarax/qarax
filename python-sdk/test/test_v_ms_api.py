@@ -14,9 +14,9 @@ from __future__ import absolute_import
 
 import unittest
 
-import swagger_client
-from swagger_client.api.v_ms_api import VMsApi  # noqa: E501
-from swagger_client.rest import ApiException
+import qarax
+from qarax.api.v_ms_api import VMsApi  # noqa: E501
+from qarax.rest import ApiException
 
 
 class TestVMsApi(unittest.TestCase):

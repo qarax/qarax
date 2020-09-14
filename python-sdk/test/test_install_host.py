@@ -14,9 +14,9 @@ from __future__ import absolute_import
 
 import unittest
 
-import swagger_client
-from swagger_client.models.install_host import InstallHost  # noqa: E501
-from swagger_client.rest import ApiException
+import qarax
+from qarax.models.install_host import InstallHost  # noqa: E501
+from qarax.rest import ApiException
 
 
 class TestInstallHost(unittest.TestCase):
@@ -31,7 +31,7 @@ class TestInstallHost(unittest.TestCase):
     def testInstallHost(self):
         """Test InstallHost"""
         # FIXME: construct object with mandatory attributes with example values
-        # model = swagger_client.models.install_host.InstallHost()  # noqa: E501
+        # model = qarax.models.install_host.InstallHost()  # noqa: E501
         pass
 
 

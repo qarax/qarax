@@ -23,7 +23,7 @@ pip install git+https://github.com/GIT_USER_ID/GIT_REPO_ID.git
 
 Then import the package:
 ```python
-import swagger_client 
+import qarax 
 ```
 
 ### Setuptools
@@ -37,7 +37,7 @@ python setup.py install --user
 
 Then import the package:
 ```python
-import swagger_client
+import qarax
 ```
 
 ## Getting Started
@@ -47,12 +47,12 @@ Please follow the [installation procedure](#installation--usage) and then run th
 ```python
 from __future__ import print_function
 import time
-import swagger_client
-from swagger_client.rest import ApiException
+import qarax
+from qarax.rest import ApiException
 from pprint import pprint
 
 # create an instance of the API class
-api_instance = swagger_client.DrivesApi(swagger_client.ApiClient(configuration))
+api_instance = qarax.DrivesApi(qarax.ApiClient(configuration))
 
 try:
     # Get drives list
@@ -62,8 +62,8 @@ except ApiException as e:
     print("Exception when calling DrivesApi->drives_get: %s\n" % e)
 
 # create an instance of the API class
-api_instance = swagger_client.DrivesApi(swagger_client.ApiClient(configuration))
-body = swagger_client.Drive() # Drive |  (optional)
+api_instance = qarax.DrivesApi(qarax.ApiClient(configuration))
+body = qarax.Drive() # Drive |  (optional)
 
 try:
     # Add new drive

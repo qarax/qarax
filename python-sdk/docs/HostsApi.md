@@ -1,4 +1,4 @@
-# swagger_client.HostsApi
+# qarax.HostsApi
 
 All URIs are relative to */*
 
@@ -21,12 +21,12 @@ Get hosts list
 ```python
 from __future__ import print_function
 import time
-import swagger_client
-from swagger_client.rest import ApiException
+import qarax
+from qarax.rest import ApiException
 from pprint import pprint
 
 # create an instance of the API class
-api_instance = swagger_client.HostsApi()
+api_instance = qarax.HostsApi()
 
 try:
     # Get hosts list
@@ -63,12 +63,12 @@ Get host by ID
 ```python
 from __future__ import print_function
 import time
-import swagger_client
-from swagger_client.rest import ApiException
+import qarax
+from qarax.rest import ApiException
 from pprint import pprint
 
 # create an instance of the API class
-api_instance = swagger_client.HostsApi()
+api_instance = qarax.HostsApi()
 host_id = 'host_id_example' # str | ID of host
 
 try:
@@ -108,12 +108,12 @@ Host health check
 ```python
 from __future__ import print_function
 import time
-import swagger_client
-from swagger_client.rest import ApiException
+import qarax
+from qarax.rest import ApiException
 from pprint import pprint
 
 # create an instance of the API class
-api_instance = swagger_client.HostsApi()
+api_instance = qarax.HostsApi()
 host_id = 'host_id_example' # str | ID of host
 
 try:
@@ -155,14 +155,14 @@ Install and run qarax-node on host
 ```python
 from __future__ import print_function
 import time
-import swagger_client
-from swagger_client.rest import ApiException
+import qarax
+from qarax.rest import ApiException
 from pprint import pprint
 
 # create an instance of the API class
-api_instance = swagger_client.HostsApi()
+api_instance = qarax.HostsApi()
 host_id = 'host_id_example' # str | ID of host
-body = swagger_client.InstallHost() # InstallHost |  (optional)
+body = qarax.InstallHost() # InstallHost |  (optional)
 
 try:
     # Install qarax node on host
@@ -204,13 +204,13 @@ Create new host
 ```python
 from __future__ import print_function
 import time
-import swagger_client
-from swagger_client.rest import ApiException
+import qarax
+from qarax.rest import ApiException
 from pprint import pprint
 
 # create an instance of the API class
-api_instance = swagger_client.HostsApi()
-body = swagger_client.Host() # Host | 
+api_instance = qarax.HostsApi()
+body = qarax.Host() # Host | 
 
 try:
     # Create new host

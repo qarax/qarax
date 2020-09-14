@@ -22,3 +22,7 @@ Cargo.lock
 #already existing elements were commented out
 
 #/target
+# e2e
+e2e/.cache/
+e2e/venv/
+e2e/*.log
