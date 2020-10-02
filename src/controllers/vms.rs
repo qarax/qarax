@@ -38,7 +38,7 @@ pub fn by_id(id: Uuid, backend: State<Backend>, conn: DbConnection) -> ApiRespon
 pub fn add_vm(vm: Json<NewVm>, backend: State<Backend>, conn: DbConnection) -> ApiResponse {
     match backend.vm_service.add_vm(&vm.into_inner(), &conn) {
         Ok(id) => ApiResponse {
-            response: json!({ "vm_id": id }),
+            response: json!({ "id": id }),
             status: Status::Ok,
         },
         Err(e) => ApiResponse {
@@ -52,7 +52,7 @@ pub fn add_vm(vm: Json<NewVm>, backend: State<Backend>, conn: DbConnection) -> A
 pub fn start_vm(id: Uuid, backend: State<Backend>, conn: DbConnection) -> ApiResponse {
     match backend.vm_service.start(&id.to_string(), &conn) {
         Ok(id) => ApiResponse {
-            response: json!({ "vm_id": id }),
+            response: json!({ "id": id }),
             status: Status::Ok,
         },
         Err(e) => ApiResponse {
@@ -66,7 +66,7 @@ pub fn start_vm(id: Uuid, backend: State<Backend>, conn: DbConnection) -> ApiRes
 pub fn stop_vm(id: Uuid, backend: State<Backend>, conn: DbConnection) -> ApiResponse {
     match backend.vm_service.stop(&id.to_string(), &conn) {
         Ok(id) => ApiResponse {
-            response: json!({ "vm_id": id }),
+            response: json!({ "id": id }),
             status: Status::Ok,
         },
         Err(_) => ApiResponse {
@@ -220,7 +220,7 @@ mod tests {
             .dispatch();
 
         let response: Value = serde_json::from_str(&response.body_string().unwrap()).unwrap();
-        let vm_id = response["vm_id"].as_str().unwrap();
+        let vm_id = response["id"].as_str().unwrap();
 
         assert_eq!(backend.vm_service.get_all(&conn).unwrap().len(), 1);
 
@@ -247,7 +247,7 @@ mod tests {
             .dispatch();
 
         let response: Value = serde_json::from_str(&response.body_string().unwrap()).unwrap();
-        let vm_id = response["vm_id"].as_str().unwrap();
+        let vm_id = response["id"].as_str().unwrap();
 
         assert_eq!(backend.vm_service.get_all(&conn).unwrap().len(), 1);
 
@@ -281,7 +281,7 @@ mod tests {
             .dispatch();
 
         let response: Value = serde_json::from_str(&response.body_string().unwrap()).unwrap();
-        let vm_id = response["vm_id"].as_str().unwrap();
+        let vm_id = response["id"].as_str().unwrap();
 
         assert_eq!(backend.vm_service.get_all(&conn).unwrap().len(), 1);
 
@@ -309,7 +309,7 @@ mod tests {
             .dispatch();
 
         let response: Value = serde_json::from_str(&response.body_string().unwrap()).unwrap();
-        let vm_id = response["vm_id"].as_str().unwrap();
+        let vm_id = response["id"].as_str().unwrap();
 
         assert_eq!(backend.vm_service.get_all(&conn).unwrap().len(), 1);
 
@@ -346,7 +346,7 @@ mod tests {
             .dispatch();
 
         let response: Value = serde_json::from_str(&response.body_string().unwrap()).unwrap();
-        let vm_id = response["vm_id"].as_str().unwrap();
+        let vm_id = response["id"].as_str().unwrap();
 
         assert_eq!(backend.vm_service.get_all(&conn).unwrap().len(), 1);
 

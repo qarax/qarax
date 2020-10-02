@@ -25,7 +25,7 @@ pub fn add_kernel(
 ) -> ApiResponse {
     match backend.kernel_service.add(&kernel.into_inner(), &conn) {
         Ok(id) => ApiResponse {
-            response: json!({ "kernel_id": id }),
+            response: json!({ "id": id }),
             status: Status::Ok,
         },
         Err(e) => ApiResponse {

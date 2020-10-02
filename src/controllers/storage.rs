@@ -25,7 +25,7 @@ pub fn add_storage(
 ) -> ApiResponse {
     match backend.storage_service.add(&storage.into_inner(), &conn) {
         Ok(id) => ApiResponse {
-            response: json!({ "storage_id": id }),
+            response: json!({ "id": id }),
             status: Status::Ok,
         },
         Err(e) => ApiResponse {

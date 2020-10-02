@@ -41,7 +41,7 @@ $ curl -XPOST http://localhost:8000/hosts -d '{ "name":"hosto", "address": "192.
 ```
 Example reply:
 ```json
-{"host_id":"365e5061-62b9-41e5-9766-47fcd2c51721"}
+{"id":"365e5061-62b9-41e5-9766-47fcd2c51721"}
 ```
 
 Installing a host:
