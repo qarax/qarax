@@ -37,7 +37,7 @@ Note: a simple `cargo test` will not work as the tests require a database and ca
 
 Adding a host:
 ```shell
-$ curl -XPOST http://localhost:8000/hosts -d '{ "name":"hosto", "address": "192.168.122.45", "user": "root", "password": "fedora", "port": 50051}' -H "Content-Type: application/json"
+$ curl -XPOST http://localhost:8000/hosts -d '{ "name":"hosto", "address": "192.168.122.45", "host_user": "root", "password": "fedora", "port": 50051}' -H "Content-Type: application/json"
 ```
 Example reply:
 ```json
