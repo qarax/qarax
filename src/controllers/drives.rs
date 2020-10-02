@@ -25,7 +25,7 @@ pub fn add_drive(
 ) -> ApiResponse {
     match backend.drive_service.add(&drive.into_inner(), &conn) {
         Ok(id) => ApiResponse {
-            response: json!({ "drive_id": id }),
+            response: json!({ "id": id }),
             status: Status::Ok,
         },
         Err(e) => ApiResponse {
