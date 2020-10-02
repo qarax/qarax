@@ -79,7 +79,7 @@ impl HostService {
         );
 
         // TODO: make configurable
-        extra_params.insert(String::from("fcversion"), String::from("0.21.1"));
+        extra_params.insert(String::from("fcversion"), String::from("0.22.0"));
         extra_params.insert(
             String::from("local_node_path"),
             host.local_node_path.to_owned(),
