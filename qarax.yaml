@@ -59,6 +59,8 @@ components:
           type: string
         fc_version:
           type: string
+        status:
+          type: string
       type: object
     kernel:
       properties:
@@ -114,6 +116,27 @@ components:
           format: int32
           type: integer
       type: object
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+    HealthResponse:
+      type: object
+      properties:
+        host_status:
+          type: string
+    AttachDrive:
+      type: object
+      properties:
+        status:
+          type: string
+    PostResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
 paths:
   /hosts:
     get:
@@ -131,6 +154,12 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/host'
+        default:
+          description: unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
     post:
       summary: Create new host
       description: Create new host
@@ -144,8 +173,18 @@ paths:
               $ref: '#/components/schemas/host'
         required: true
       responses:
+        '200':
+          description: successful operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PostResponse'
         default:
-          description: Default error sample response
+          description: unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   '/hosts/{hostId}':
     get:
       summary: Get host by ID
@@ -161,8 +200,19 @@ paths:
           schema:
             type: string
       responses:
+        '200':
+          description: successful operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/host'
         default:
-          description: Default error sample response
+          description: unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+                
   '/hosts/{hostId}/install':
     post:
       summary: Install qarax node on host
@@ -182,8 +232,20 @@ paths:
             schema:
               $ref: '#/components/schemas/installHost'
       responses:
+        '200':
+          description: successful operation
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/installHost'
         default:
-          description: Default error sample response
+          description: unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   '/hosts/{hostId}/health':
     get:
       summary: Host health check
@@ -198,7 +260,11 @@ paths:
             type: string
       responses:
         default:
-          description: Default error sample response
+          description: Host health check result
+          content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/HealthResponse'
       tags:
         - Hosts
   /drives/:
@@ -216,7 +282,11 @@ paths:
                 items:
                   $ref: '#/components/schemas/drive'
         default:
-          description: Default error sample response
+          description: unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
       tags:
         - Drives
     post:
@@ -229,8 +299,18 @@ paths:
             schema:
               $ref: '#/components/schemas/drive'
       responses:
+        '200':
+          description: successful operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PostResponse'
         default:
-          description: Default error sample response
+          description: unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
       tags:
         - Drives
   /storage/:
@@ -247,6 +327,12 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/storage'
+        default:
+          description: unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
       tags:
         - Storage
     post:
@@ -259,8 +345,18 @@ paths:
             schema:
               $ref: '#/components/schemas/storage'
       responses:
+        '200':
+          description: successful operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PostResponse'
         default:
-          description: Default error sample response
+          description: unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
       tags:
         - Storage
   /kernels/:
@@ -277,6 +373,12 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/kernel'
+        default:
+          description: unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
       tags:
         - Kernels
     post:
@@ -289,8 +391,18 @@ paths:
             schema:
               $ref: '#/components/schemas/kernel'
       responses:
+        '200':
+          description: successful operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PostResponse'
         default:
-          description: Default error sample response
+          description: unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
       tags:
         - Kernels
   '/kernels/{kernelId}/storage':
@@ -313,6 +425,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/storage'
+        default:
+          description: unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
       tags:
         - Kernels
   /vms/:
@@ -329,6 +447,12 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/vm'
+        default:
+          description: unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
       tags:
         - VMs
     post:
@@ -341,8 +465,18 @@ paths:
             schema:
               $ref: '#/components/schemas/vm'
       responses:
+        '200':
+          description: successful operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PostResponse'
         default:
-          description: Default error sample response
+          description: unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
       tags:
         - VMs
   '/vms/{vmId}/':
@@ -364,6 +498,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/vm'
+        default:
+          description: unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
       tags:
         - VMs
   '/vms/{vmId}/start':
@@ -379,8 +519,18 @@ paths:
           schema:
             type: string
       responses:
+        '200':
+          description: host status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PostResponse'
         default:
-          description: Default error sample response
+          description: unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
       tags:
         - VMs
   '/vms/{vmId}/stop':
@@ -396,8 +546,18 @@ paths:
           schema:
             type: string
       responses:
+        '200':
+          description: host status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PostResponse'
         default:
-          description: Default error sample response
+          description: unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
       tags:
         - VMs
   '/vms/{vmId}/drives/':
@@ -421,6 +581,12 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/drive'
+        default:
+          description: unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
       tags:
         - VMs
   '/vms/{vmId}/drives/{driveId}/attach':
@@ -442,7 +608,19 @@ paths:
           schema:
             type: string
       responses:
+        '200':
+          description: successful operation
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AttachDrive'
         default:
-          description: Default error sample response
+          description: unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
       tags:
         - VMs
