@@ -26,15 +26,29 @@ if [  "${fc_host_status}" == 'running' ]; then
     exit 0
 fi
 
-MAC_ADDRESS=$(virsh dumpxml "${VM_NAME}" | grep "mac address" | awk -F\' '{ print $2}')
-echo "Setting IP address to ${VM_IP} for MAC address ${MAC_ADDRESS}"
+mac_address=$(virsh dumpxml "${VM_NAME}" | grep "mac address" | awk -F\' '{ print $2}')
+echo "Setting IP address to ${VM_IP} for MAC address ${mac_address}"
 
-xml_entry="<host mac=\"${MAC_ADDRESS}\" name=\"${VM_NAME}\" ip=\"${VM_IP}\"/>"
+xml_entry="<host mac=\"${mac_address}\" name=\"${VM_NAME}\" ip=\"${VM_IP}\"/>"
+existing_entry=$(virsh net-dumpxml "${LIBVIRT_NETWORK}" | grep "${VM_NAME}")
+quote_stripped_entry=$(echo $existing_entry | sed -e 's/\"//g')
 
-# TODO: check both IP and MAC, since this wouldn't work if we use a new VM after previously defining one
-if virsh net-dumpxml "${LIBVIRT_NETWORK}" | grep -q "${VM_NAME}"; then
+if [[ "$xml_entry" == "$quote_stripped_entry" ]]; then
     echo "IP address is already configured"
 else
+    if [[ -n "$existing_entry" ]]; then
+        existing_mac=$(virsh net-dumpxml --network default | grep fchost | awk -F\' '{ print $2}')
+        if [[ "$existing_mac" != "$mac_address" ]]; then
+            echo "Removing existing entry..."
+            existing_entry=$(echo "${existing_entry}" | sed -e 's/^[[:space:]]*//')
+            virsh net-update ${LIBVIRT_NETWORK} delete ip-dhcp-host "${existing_entry}" --live --config
+
+            echo "Removing existing lease..."
+            dhcp_release virbr0 "${VM_IP}" "${existing_mac}"
+        fi
+    fi
+
+    echo "Adding DHCP entry to ${LIBVIRT_NETWORK} network..."
     virsh net-update ${LIBVIRT_NETWORK} add-last ip-dhcp-host "${xml_entry}" --live --config
 fi
 
