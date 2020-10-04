@@ -24,9 +24,13 @@ from qarax.api.v_ms_api import VMsApi
 from qarax.api_client import ApiClient
 from qarax.configuration import Configuration
 # import models into sdk package
+from qarax.models.attach_drive import AttachDrive
 from qarax.models.drive import Drive
+from qarax.models.error import Error
+from qarax.models.health_response import HealthResponse
 from qarax.models.host import Host
 from qarax.models.install_host import InstallHost
 from qarax.models.kernel import Kernel
+from qarax.models.post_response import PostResponse
 from qarax.models.storage import Storage
 from qarax.models.vm import Vm

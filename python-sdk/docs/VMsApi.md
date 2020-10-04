@@ -55,7 +55,7 @@ No authorization required
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
 # **vms_post**
-> vms_post(body=body)
+> PostResponse vms_post(body=body)
 
 Add new VM
 
@@ -73,7 +73,8 @@ body = qarax.Vm() # Vm |  (optional)
 
 try:
     # Add new VM
-    api_instance.vms_post(body=body)
+    api_response = api_instance.vms_post(body=body)
+    pprint(api_response)
 except ApiException as e:
     print("Exception when calling VMsApi->vms_post: %s\n" % e)
 ```
@@ -86,7 +87,7 @@ Name | Type | Description  | Notes
 
 ### Return type
 
-void (empty response body)
+[**PostResponse**](PostResponse.md)
 
 ### Authorization
 
@@ -95,12 +96,12 @@ No authorization required
 ### HTTP request headers
 
  - **Content-Type**: application/json
- - **Accept**: Not defined
+ - **Accept**: application/json
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
 # **vms_vm_id_drives_drive_id_attach_post**
-> vms_vm_id_drives_drive_id_attach_post(vm_id, drive_id)
+> list[AttachDrive] vms_vm_id_drives_drive_id_attach_post(vm_id, drive_id)
 
 Add drive to VM
 
@@ -119,7 +120,8 @@ drive_id = 'drive_id_example' # str | ID of a drive
 
 try:
     # Add drive to VM
-    api_instance.vms_vm_id_drives_drive_id_attach_post(vm_id, drive_id)
+    api_response = api_instance.vms_vm_id_drives_drive_id_attach_post(vm_id, drive_id)
+    pprint(api_response)
 except ApiException as e:
     print("Exception when calling VMsApi->vms_vm_id_drives_drive_id_attach_post: %s\n" % e)
 ```
@@ -133,7 +135,7 @@ Name | Type | Description  | Notes
 
 ### Return type
 
-void (empty response body)
+[**list[AttachDrive]**](AttachDrive.md)
 
 ### Authorization
 
@@ -142,7 +144,7 @@ No authorization required
 ### HTTP request headers
 
  - **Content-Type**: Not defined
- - **Accept**: Not defined
+ - **Accept**: application/json
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
@@ -238,7 +240,7 @@ No authorization required
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
 # **vms_vm_id_start_post**
-> vms_vm_id_start_post(vm_id)
+> PostResponse vms_vm_id_start_post(vm_id)
 
 Start VM
 
@@ -256,7 +258,8 @@ vm_id = 'vm_id_example' # str | ID of a VM
 
 try:
     # Start VM
-    api_instance.vms_vm_id_start_post(vm_id)
+    api_response = api_instance.vms_vm_id_start_post(vm_id)
+    pprint(api_response)
 except ApiException as e:
     print("Exception when calling VMsApi->vms_vm_id_start_post: %s\n" % e)
 ```
@@ -269,7 +272,7 @@ Name | Type | Description  | Notes
 
 ### Return type
 
-void (empty response body)
+[**PostResponse**](PostResponse.md)
 
 ### Authorization
 
@@ -278,12 +281,12 @@ No authorization required
 ### HTTP request headers
 
  - **Content-Type**: Not defined
- - **Accept**: Not defined
+ - **Accept**: application/json
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
 # **vms_vm_id_stop_post**
-> vms_vm_id_stop_post(vm_id)
+> PostResponse vms_vm_id_stop_post(vm_id)
 
 Stop VM
 
@@ -301,7 +304,8 @@ vm_id = 'vm_id_example' # str | ID of a VM
 
 try:
     # Stop VM
-    api_instance.vms_vm_id_stop_post(vm_id)
+    api_response = api_instance.vms_vm_id_stop_post(vm_id)
+    pprint(api_response)
 except ApiException as e:
     print("Exception when calling VMsApi->vms_vm_id_stop_post: %s\n" % e)
 ```
@@ -314,7 +318,7 @@ Name | Type | Description  | Notes
 
 ### Return type
 
-void (empty response body)
+[**PostResponse**](PostResponse.md)
 
 ### Authorization
 
@@ -323,7 +327,7 @@ No authorization required
 ### HTTP request headers
 
  - **Content-Type**: Not defined
- - **Accept**: Not defined
+ - **Accept**: application/json
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 

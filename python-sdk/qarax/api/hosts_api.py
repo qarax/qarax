@@ -129,7 +129,7 @@ class HostsApi(object):
 
         :param async_req bool
         :param str host_id: ID of host (required)
-        :return: None
+        :return: Host
                  If the method is called asynchronously,
                  returns the request thread.
         """
@@ -150,7 +150,7 @@ class HostsApi(object):
 
         :param async_req bool
         :param str host_id: ID of host (required)
-        :return: None
+        :return: Host
                  If the method is called asynchronously,
                  returns the request thread.
         """
@@ -189,6 +189,10 @@ class HostsApi(object):
         local_var_files = {}
 
         body_params = None
+        # HTTP header `Accept`
+        header_params['Accept'] = self.api_client.select_header_accept(
+            ['application/json'])  # noqa: E501
+
         # Authentication setting
         auth_settings = []  # noqa: E501
 
@@ -200,7 +204,7 @@ class HostsApi(object):
             body=body_params,
             post_params=form_params,
             files=local_var_files,
-            response_type=None,  # noqa: E501
+            response_type='Host',  # noqa: E501
             auth_settings=auth_settings,
             async_req=params.get('async_req'),
             _return_http_data_only=params.get('_return_http_data_only'),
@@ -218,7 +222,7 @@ class HostsApi(object):
 
         :param async_req bool
         :param str host_id: ID of host (required)
-        :return: None
+        :return: HealthResponse
                  If the method is called asynchronously,
                  returns the request thread.
         """
@@ -239,7 +243,7 @@ class HostsApi(object):
 
         :param async_req bool
         :param str host_id: ID of host (required)
-        :return: None
+        :return: HealthResponse
                  If the method is called asynchronously,
                  returns the request thread.
         """
@@ -278,6 +282,10 @@ class HostsApi(object):
         local_var_files = {}
 
         body_params = None
+        # HTTP header `Accept`
+        header_params['Accept'] = self.api_client.select_header_accept(
+            ['application/json'])  # noqa: E501
+
         # Authentication setting
         auth_settings = []  # noqa: E501
 
@@ -289,7 +297,7 @@ class HostsApi(object):
             body=body_params,
             post_params=form_params,
             files=local_var_files,
-            response_type=None,  # noqa: E501
+            response_type='HealthResponse',  # noqa: E501
             auth_settings=auth_settings,
             async_req=params.get('async_req'),
             _return_http_data_only=params.get('_return_http_data_only'),
@@ -309,7 +317,7 @@ class HostsApi(object):
         :param async_req bool
         :param str host_id: ID of host (required)
         :param InstallHost body:
-        :return: None
+        :return: list[InstallHost]
                  If the method is called asynchronously,
                  returns the request thread.
         """
@@ -332,7 +340,7 @@ class HostsApi(object):
         :param async_req bool
         :param str host_id: ID of host (required)
         :param InstallHost body:
-        :return: None
+        :return: list[InstallHost]
                  If the method is called asynchronously,
                  returns the request thread.
         """
@@ -373,6 +381,10 @@ class HostsApi(object):
         body_params = None
         if 'body' in params:
             body_params = params['body']
+        # HTTP header `Accept`
+        header_params['Accept'] = self.api_client.select_header_accept(
+            ['application/json'])  # noqa: E501
+
         # HTTP header `Content-Type`
         header_params['Content-Type'] = self.api_client.select_header_content_type(  # noqa: E501
             ['application/json'])  # noqa: E501
@@ -388,7 +400,7 @@ class HostsApi(object):
             body=body_params,
             post_params=form_params,
             files=local_var_files,
-            response_type=None,  # noqa: E501
+            response_type='list[InstallHost]',  # noqa: E501
             auth_settings=auth_settings,
             async_req=params.get('async_req'),
             _return_http_data_only=params.get('_return_http_data_only'),
@@ -407,7 +419,7 @@ class HostsApi(object):
 
         :param async_req bool
         :param Host body: (required)
-        :return: None
+        :return: PostResponse
                  If the method is called asynchronously,
                  returns the request thread.
         """
@@ -429,7 +441,7 @@ class HostsApi(object):
 
         :param async_req bool
         :param Host body: (required)
-        :return: None
+        :return: PostResponse
                  If the method is called asynchronously,
                  returns the request thread.
         """
@@ -468,6 +480,10 @@ class HostsApi(object):
         body_params = None
         if 'body' in params:
             body_params = params['body']
+        # HTTP header `Accept`
+        header_params['Accept'] = self.api_client.select_header_accept(
+            ['application/json'])  # noqa: E501
+
         # HTTP header `Content-Type`
         header_params['Content-Type'] = self.api_client.select_header_content_type(  # noqa: E501
             ['application/json'])  # noqa: E501
@@ -483,7 +499,7 @@ class HostsApi(object):
             body=body_params,
             post_params=form_params,
             files=local_var_files,
-            response_type=None,  # noqa: E501
+            response_type='PostResponse',  # noqa: E501
             auth_settings=auth_settings,
             async_req=params.get('async_req'),
             _return_http_data_only=params.get('_return_http_data_only'),
