@@ -68,6 +68,7 @@ impl VmService {
                     let inner: &VmConfig = &config.into_inner();
                     vm.ip_address = Some(inner.ip_address.clone());
                     vm.mac_address = Some(inner.mac_address.clone());
+                    vm.host_id = Some(host.id);
                     Vm::update(&vm, conn)?;
                 }
             }
