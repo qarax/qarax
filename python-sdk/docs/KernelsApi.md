@@ -96,7 +96,7 @@ No authorization required
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
 # **kernels_post**
-> kernels_post(body=body)
+> PostResponse kernels_post(body=body)
 
 Add new kernel
 
@@ -114,7 +114,8 @@ body = qarax.Kernel() # Kernel |  (optional)
 
 try:
     # Add new kernel
-    api_instance.kernels_post(body=body)
+    api_response = api_instance.kernels_post(body=body)
+    pprint(api_response)
 except ApiException as e:
     print("Exception when calling KernelsApi->kernels_post: %s\n" % e)
 ```
@@ -127,7 +128,7 @@ Name | Type | Description  | Notes
 
 ### Return type
 
-void (empty response body)
+[**PostResponse**](PostResponse.md)
 
 ### Authorization
 
@@ -136,7 +137,7 @@ No authorization required
 ### HTTP request headers
 
  - **Content-Type**: application/json
- - **Accept**: Not defined
+ - **Accept**: application/json
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 

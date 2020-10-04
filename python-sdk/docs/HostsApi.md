@@ -55,7 +55,7 @@ No authorization required
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
 # **hosts_host_id_get**
-> hosts_host_id_get(host_id)
+> Host hosts_host_id_get(host_id)
 
 Get host by ID
 
@@ -73,7 +73,8 @@ host_id = 'host_id_example' # str | ID of host
 
 try:
     # Get host by ID
-    api_instance.hosts_host_id_get(host_id)
+    api_response = api_instance.hosts_host_id_get(host_id)
+    pprint(api_response)
 except ApiException as e:
     print("Exception when calling HostsApi->hosts_host_id_get: %s\n" % e)
 ```
@@ -86,7 +87,7 @@ Name | Type | Description  | Notes
 
 ### Return type
 
-void (empty response body)
+[**Host**](Host.md)
 
 ### Authorization
 
@@ -95,12 +96,12 @@ No authorization required
 ### HTTP request headers
 
  - **Content-Type**: Not defined
- - **Accept**: Not defined
+ - **Accept**: application/json
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
 # **hosts_host_id_health_get**
-> hosts_host_id_health_get(host_id)
+> HealthResponse hosts_host_id_health_get(host_id)
 
 Host health check
 
@@ -118,7 +119,8 @@ host_id = 'host_id_example' # str | ID of host
 
 try:
     # Host health check
-    api_instance.hosts_host_id_health_get(host_id)
+    api_response = api_instance.hosts_host_id_health_get(host_id)
+    pprint(api_response)
 except ApiException as e:
     print("Exception when calling HostsApi->hosts_host_id_health_get: %s\n" % e)
 ```
@@ -131,7 +133,7 @@ Name | Type | Description  | Notes
 
 ### Return type
 
-void (empty response body)
+[**HealthResponse**](HealthResponse.md)
 
 ### Authorization
 
@@ -140,12 +142,12 @@ No authorization required
 ### HTTP request headers
 
  - **Content-Type**: Not defined
- - **Accept**: Not defined
+ - **Accept**: application/json
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
 # **hosts_host_id_install_post**
-> hosts_host_id_install_post(host_id, body=body)
+> list[InstallHost] hosts_host_id_install_post(host_id, body=body)
 
 Install qarax node on host
 
@@ -166,7 +168,8 @@ body = qarax.InstallHost() # InstallHost |  (optional)
 
 try:
     # Install qarax node on host
-    api_instance.hosts_host_id_install_post(host_id, body=body)
+    api_response = api_instance.hosts_host_id_install_post(host_id, body=body)
+    pprint(api_response)
 except ApiException as e:
     print("Exception when calling HostsApi->hosts_host_id_install_post: %s\n" % e)
 ```
@@ -180,7 +183,7 @@ Name | Type | Description  | Notes
 
 ### Return type
 
-void (empty response body)
+[**list[InstallHost]**](InstallHost.md)
 
 ### Authorization
 
@@ -189,12 +192,12 @@ No authorization required
 ### HTTP request headers
 
  - **Content-Type**: application/json
- - **Accept**: Not defined
+ - **Accept**: application/json
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
 # **hosts_post**
-> hosts_post(body)
+> PostResponse hosts_post(body)
 
 Create new host
 
@@ -214,7 +217,8 @@ body = qarax.Host() # Host |
 
 try:
     # Create new host
-    api_instance.hosts_post(body)
+    api_response = api_instance.hosts_post(body)
+    pprint(api_response)
 except ApiException as e:
     print("Exception when calling HostsApi->hosts_post: %s\n" % e)
 ```
@@ -227,7 +231,7 @@ Name | Type | Description  | Notes
 
 ### Return type
 
-void (empty response body)
+[**PostResponse**](PostResponse.md)
 
 ### Authorization
 
@@ -236,7 +240,7 @@ No authorization required
 ### HTTP request headers
 
  - **Content-Type**: application/json
- - **Accept**: Not defined
+ - **Accept**: application/json
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 

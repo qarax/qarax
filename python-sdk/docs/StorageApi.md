@@ -50,7 +50,7 @@ No authorization required
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
 # **storage_post**
-> storage_post(body=body)
+> PostResponse storage_post(body=body)
 
 Add new storage
 
@@ -68,7 +68,8 @@ body = qarax.Storage() # Storage |  (optional)
 
 try:
     # Add new storage
-    api_instance.storage_post(body=body)
+    api_response = api_instance.storage_post(body=body)
+    pprint(api_response)
 except ApiException as e:
     print("Exception when calling StorageApi->storage_post: %s\n" % e)
 ```
@@ -81,7 +82,7 @@ Name | Type | Description  | Notes
 
 ### Return type
 
-void (empty response body)
+[**PostResponse**](PostResponse.md)
 
 ### Authorization
 
@@ -90,7 +91,7 @@ No authorization required
 ### HTTP request headers
 
  - **Content-Type**: application/json
- - **Accept**: Not defined
+ - **Accept**: application/json
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 

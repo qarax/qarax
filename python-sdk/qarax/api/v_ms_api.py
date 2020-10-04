@@ -127,7 +127,7 @@ class VMsApi(object):
 
         :param async_req bool
         :param Vm body:
-        :return: None
+        :return: PostResponse
                  If the method is called asynchronously,
                  returns the request thread.
         """
@@ -148,7 +148,7 @@ class VMsApi(object):
 
         :param async_req bool
         :param Vm body:
-        :return: None
+        :return: PostResponse
                  If the method is called asynchronously,
                  returns the request thread.
         """
@@ -183,6 +183,10 @@ class VMsApi(object):
         body_params = None
         if 'body' in params:
             body_params = params['body']
+        # HTTP header `Accept`
+        header_params['Accept'] = self.api_client.select_header_accept(
+            ['application/json'])  # noqa: E501
+
         # HTTP header `Content-Type`
         header_params['Content-Type'] = self.api_client.select_header_content_type(  # noqa: E501
             ['application/json'])  # noqa: E501
@@ -198,7 +202,7 @@ class VMsApi(object):
             body=body_params,
             post_params=form_params,
             files=local_var_files,
-            response_type=None,  # noqa: E501
+            response_type='PostResponse',  # noqa: E501
             auth_settings=auth_settings,
             async_req=params.get('async_req'),
             _return_http_data_only=params.get('_return_http_data_only'),
@@ -217,7 +221,7 @@ class VMsApi(object):
         :param async_req bool
         :param str vm_id: ID of a VM (required)
         :param str drive_id: ID of a drive (required)
-        :return: None
+        :return: list[AttachDrive]
                  If the method is called asynchronously,
                  returns the request thread.
         """
@@ -239,7 +243,7 @@ class VMsApi(object):
         :param async_req bool
         :param str vm_id: ID of a VM (required)
         :param str drive_id: ID of a drive (required)
-        :return: None
+        :return: list[AttachDrive]
                  If the method is called asynchronously,
                  returns the request thread.
         """
@@ -284,6 +288,10 @@ class VMsApi(object):
         local_var_files = {}
 
         body_params = None
+        # HTTP header `Accept`
+        header_params['Accept'] = self.api_client.select_header_accept(
+            ['application/json'])  # noqa: E501
+
         # Authentication setting
         auth_settings = []  # noqa: E501
 
@@ -295,7 +303,7 @@ class VMsApi(object):
             body=body_params,
             post_params=form_params,
             files=local_var_files,
-            response_type=None,  # noqa: E501
+            response_type='list[AttachDrive]',  # noqa: E501
             auth_settings=auth_settings,
             async_req=params.get('async_req'),
             _return_http_data_only=params.get('_return_http_data_only'),
@@ -499,7 +507,7 @@ class VMsApi(object):
 
         :param async_req bool
         :param str vm_id: ID of a VM (required)
-        :return: None
+        :return: PostResponse
                  If the method is called asynchronously,
                  returns the request thread.
         """
@@ -520,7 +528,7 @@ class VMsApi(object):
 
         :param async_req bool
         :param str vm_id: ID of a VM (required)
-        :return: None
+        :return: PostResponse
                  If the method is called asynchronously,
                  returns the request thread.
         """
@@ -559,6 +567,10 @@ class VMsApi(object):
         local_var_files = {}
 
         body_params = None
+        # HTTP header `Accept`
+        header_params['Accept'] = self.api_client.select_header_accept(
+            ['application/json'])  # noqa: E501
+
         # Authentication setting
         auth_settings = []  # noqa: E501
 
@@ -570,7 +582,7 @@ class VMsApi(object):
             body=body_params,
             post_params=form_params,
             files=local_var_files,
-            response_type=None,  # noqa: E501
+            response_type='PostResponse',  # noqa: E501
             auth_settings=auth_settings,
             async_req=params.get('async_req'),
             _return_http_data_only=params.get('_return_http_data_only'),
@@ -588,7 +600,7 @@ class VMsApi(object):
 
         :param async_req bool
         :param str vm_id: ID of a VM (required)
-        :return: None
+        :return: PostResponse
                  If the method is called asynchronously,
                  returns the request thread.
         """
@@ -609,7 +621,7 @@ class VMsApi(object):
 
         :param async_req bool
         :param str vm_id: ID of a VM (required)
-        :return: None
+        :return: PostResponse
                  If the method is called asynchronously,
                  returns the request thread.
         """
@@ -648,6 +660,10 @@ class VMsApi(object):
         local_var_files = {}
 
         body_params = None
+        # HTTP header `Accept`
+        header_params['Accept'] = self.api_client.select_header_accept(
+            ['application/json'])  # noqa: E501
+
         # Authentication setting
         auth_settings = []  # noqa: E501
 
@@ -659,7 +675,7 @@ class VMsApi(object):
             body=body_params,
             post_params=form_params,
             files=local_var_files,
-            response_type=None,  # noqa: E501
+            response_type='PostResponse',  # noqa: E501
             auth_settings=auth_settings,
             async_req=params.get('async_req'),
             _return_http_data_only=params.get('_return_http_data_only'),
