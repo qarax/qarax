@@ -32,7 +32,7 @@ pub struct InstallHost {
     pub local_node_path: String,
 
     #[serde(rename = "fcversion")]
-    pub fc_version: String,
+    pub fcversion: String,
 }
 
 impl Host {
