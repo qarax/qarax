@@ -35,7 +35,7 @@ pub fn by_id(id: Uuid, backend: State<Backend>, conn: DbConnection) -> ApiRespon
 pub fn add_host(host: Json<NewHost>, backend: State<Backend>, conn: DbConnection) -> ApiResponse {
     match backend.host_service.add_host(&host.into_inner(), &conn) {
         Ok(id) => ApiResponse {
-            response: json!({ "id": id }),
+            response: json!({"response":{ "id": id }}),
             status: Status::Ok,
         },
         Err(e) => ApiResponse {
@@ -49,7 +49,7 @@ pub fn add_host(host: Json<NewHost>, backend: State<Backend>, conn: DbConnection
 pub fn health_check(id: Uuid, backend: State<Backend>) -> ApiResponse {
     match backend.host_service.health_check(&id.to_string()) {
         Ok(status) => ApiResponse {
-            response: json!({ "host_status": status }),
+            response: json!({"response" : { "host_status": status }}),
             status: Status::Ok,
         },
         Err(e) => ApiResponse {
@@ -72,7 +72,7 @@ pub fn install(
         .install(&host_id.to_string(), &host, conn)
     {
         Ok(status) => ApiResponse {
-            response: json!({ "status": status }),
+            response: json!({"response": { "status": status }}),
             status: Status::Ok,
         },
         Err(e) => ApiResponse {
@@ -154,7 +154,7 @@ mod tests {
         assert_eq!(response.is_some(), true);
 
         let response: Value = serde_json::from_str(&response.unwrap()).unwrap();
-        let host_id = response["id"].as_str().unwrap();
+        let host_id = response["response"]["id"].as_str().unwrap();
 
         let backend: State<Backend> = State::from(&client.rocket()).unwrap();
 
