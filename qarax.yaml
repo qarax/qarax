@@ -57,7 +57,7 @@ components:
       properties:
         local_node_path:
           type: string
-        fc_version:
+        fcversion:
           type: string
         status:
           type: string
@@ -140,9 +140,9 @@ components:
 paths:
   /hosts:
     get:
+      operationId: listHosts
       summary: Get hosts list
       description: Get hosts list
-      operationId: ''
       tags:
         - Hosts
       responses:
@@ -161,9 +161,9 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
     post:
+      operationId: addHost
       summary: Create new host
       description: Create new host
-      operationId: ''
       tags:
         - Hosts
       requestBody:
@@ -187,11 +187,11 @@ paths:
                 $ref: '#/components/schemas/Error'
   '/hosts/{hostId}':
     get:
+      operationId: getHost
       summary: Get host by ID
       description: ''
       tags:
         - Hosts
-      operationId: ''
       parameters:
         - name: hostId
           in: path
@@ -215,6 +215,7 @@ paths:
                 
   '/hosts/{hostId}/install':
     post:
+      operationId: installHost
       summary: Install qarax node on host
       description: Install and run qarax-node on host
       tags:
@@ -237,9 +238,7 @@ paths:
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/installHost'
+                $ref: '#/components/schemas/installHost'
         default:
           description: unexpected error
           content:
@@ -248,9 +247,9 @@ paths:
                 $ref: '#/components/schemas/Error'
   '/hosts/{hostId}/health':
     get:
+      operationId : healthCheck
       summary: Host health check
       description: ''
-      operationId: ''
       parameters:
         - name: hostId
           in: path
@@ -269,9 +268,9 @@ paths:
         - Hosts
   /drives/:
     get:
+      operationId: listDrives
       summary: Get drives list
       description: ''
-      operationId: ''
       responses:
         '200':
           description: successful operation
@@ -290,9 +289,9 @@ paths:
       tags:
         - Drives
     post:
+      operationId: addDrive
       summary: Add new drive
       description: ''
-      operationId: ''
       requestBody:
         content:
           application/json:
@@ -315,9 +314,9 @@ paths:
         - Drives
   /storage/:
     get:
+      operationId: listStorage
       summary: get storages list
       description: ''
-      operationId: ''
       responses:
         '200':
           description: successful operation
@@ -336,9 +335,9 @@ paths:
       tags:
         - Storage
     post:
+      operationId: addStorage
       summary: Add new storage
       description: ''
-      operationId: ''
       requestBody:
         content:
           application/json:
@@ -361,9 +360,9 @@ paths:
         - Storage
   /kernels/:
     get:
+      operationId: listKernel
       summary: get kernels list
       description: ''
-      operationId: ''
       responses:
         '200':
           description: successful operation
@@ -382,9 +381,9 @@ paths:
       tags:
         - Kernels
     post:
+      operationId: addKernel
       summary: Add new kernel
       description: ''
-      operationId: ''
       requestBody:
         content:
           application/json:
@@ -408,9 +407,9 @@ paths:
   '/kernels/{kernelId}/storage':
     summary: Get kernels' storage
     get:
+      operationId: getKernelStorage
       summary: ''
       description: ''
-      operationId: ''
       parameters:
         - name: kernelId
           in: path
@@ -435,9 +434,9 @@ paths:
         - Kernels
   /vms/:
     get:
+      operationId: listVms
       summary: get vms list
       description: ''
-      operationId: ''
       responses:
         '200':
           description: successful operation
@@ -456,9 +455,9 @@ paths:
       tags:
         - VMs
     post:
+      operationId: addVM
       summary: Add new VM
       description: ''
-      operationId: ''
       requestBody:
         content:
           application/json:
@@ -481,9 +480,9 @@ paths:
         - VMs
   '/vms/{vmId}/':
     get:
+      operationId: getVM
       summary: 'VM details'
       description: ''
-      operationId: ''
       parameters:
         - name: vmId
           in: path
@@ -508,9 +507,9 @@ paths:
         - VMs
   '/vms/{vmId}/start':
     post:
+      operationId: startVM
       summary: 'Start VM'
       description: ''
-      operationId: ''
       parameters:
         - name: vmId
           in: path
@@ -535,9 +534,9 @@ paths:
         - VMs
   '/vms/{vmId}/stop':
     post:
+      operationId: stopVM
       summary: 'Stop VM'
       description: ''
-      operationId: ''
       parameters:
         - name: vmId
           in: path
@@ -562,9 +561,9 @@ paths:
         - VMs
   '/vms/{vmId}/drives/':
     get:
+      operationId: listVmDrives
       summary: ''
       description: ''
-      operationId: ''
       parameters:
         - name: vmId
           in: path
@@ -591,9 +590,9 @@ paths:
         - VMs
   '/vms/{vmId}/drives/{driveId}/attach':
     post:
+      operationId: attachDrive
       summary: Add drive to VM
       description: ''
-      operationId: ''
       parameters:
         - name: vmId
           in: path
