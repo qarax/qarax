@@ -1,0 +1,14 @@
+diff --git a/python-sdk/qarax/api_client.py b/python-sdk/qarax/api_client.py
+index e0b7001..e133046 100644
+--- a/python-sdk/qarax/api_client.py
++++ b/python-sdk/qarax/api_client.py
+@@ -277,6 +277,9 @@ class ApiClient(object):
+         # fetch data from response object
+         try:
+             data = json.loads(response.data)
++            values_view = data.values()
++            value_iterator = iter(values_view)
++            data = next(value_iterator)
+         except ValueError:
+             data = response.data
+ 
