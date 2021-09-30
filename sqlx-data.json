@@ -1,0 +1,720 @@
+{
+  "db": "PostgreSQL",
+  "07bb841146b9ad3a3817a75aa4a33ae5927ab8e1b89788b8d2c9adbb6a4642a5": {
+    "query": "\nSELECT id, name, address, port, status as \"status: _\", host_user, password\nFROM hosts\nWHERE status = $1\n        ",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "id",
+          "type_info": "Uuid"
+        },
+        {
+          "ordinal": 1,
+          "name": "name",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 2,
+          "name": "address",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 3,
+          "name": "port",
+          "type_info": "Int4"
+        },
+        {
+          "ordinal": 4,
+          "name": "status: _",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 5,
+          "name": "host_user",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 6,
+          "name": "password",
+          "type_info": "Varchar"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Text"
+        ]
+      },
+      "nullable": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ]
+    }
+  },
+  "1e626c395ad653ea32126a7caaec3f0e7b63f529d435b2c758d9ad28964a464b": {
+    "query": "\nSELECT id, name, storage_id\nFROM kernels\nWHERE id = $1\n        ",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "id",
+          "type_info": "Uuid"
+        },
+        {
+          "ordinal": 1,
+          "name": "name",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 2,
+          "name": "storage_id",
+          "type_info": "Uuid"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Uuid"
+        ]
+      },
+      "nullable": [
+        false,
+        false,
+        false
+      ]
+    }
+  },
+  "32df66156541a8b3ea8496ae7f1104e5c6e59919162b4980674aca6f6e7ac30f": {
+    "query": "\nSELECT id, name, address, port, status as \"status: _\", host_user, password FROM hosts\n        ",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "id",
+          "type_info": "Uuid"
+        },
+        {
+          "ordinal": 1,
+          "name": "name",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 2,
+          "name": "address",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 3,
+          "name": "port",
+          "type_info": "Int4"
+        },
+        {
+          "ordinal": 4,
+          "name": "status: _",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 5,
+          "name": "host_user",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 6,
+          "name": "password",
+          "type_info": "Varchar"
+        }
+      ],
+      "parameters": {
+        "Left": []
+      },
+      "nullable": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ]
+    }
+  },
+  "4057db1b975235f473b4c90e719e2880e723a88e27f996752a9dbc7d79298cfa": {
+    "query": "\nSELECT id, name, status as \"status: _\", readonly, rootfs, storage_id, cache_type as \"cache_type: _\"\nFROM drives\nWHERE id = $1\n        ",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "id",
+          "type_info": "Uuid"
+        },
+        {
+          "ordinal": 1,
+          "name": "name",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 2,
+          "name": "status: _",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 3,
+          "name": "readonly",
+          "type_info": "Bool"
+        },
+        {
+          "ordinal": 4,
+          "name": "rootfs",
+          "type_info": "Bool"
+        },
+        {
+          "ordinal": 5,
+          "name": "storage_id",
+          "type_info": "Uuid"
+        },
+        {
+          "ordinal": 6,
+          "name": "cache_type: _",
+          "type_info": "Varchar"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Uuid"
+        ]
+      },
+      "nullable": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ]
+    }
+  },
+  "6245b372df1d167da1982c3b5849afc6b4e9d6e5d60863501d1a11f7c72fce47": {
+    "query": "\nINSERT INTO drives (name, status, readonly, rootfs, storage_id, cache_type)\nVALUES ( $1, $2, $3, $4, $5, $6)\nRETURNING id\n        ",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "id",
+          "type_info": "Uuid"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Varchar",
+          "Varchar",
+          "Bool",
+          "Bool",
+          "Uuid",
+          "Varchar"
+        ]
+      },
+      "nullable": [
+        false
+      ]
+    }
+  },
+  "78cd637b2de85d5e474708e1f234b35ca6723a0e156daf245d382ffda2001064": {
+    "query": "\nINSERT INTO vms (name, status, vcpu, memory, kernel, network_mode, ip_address, mac_address, kernel_params)\nVALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)\nRETURNING id\n        ",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "id",
+          "type_info": "Uuid"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Varchar",
+          "Int4",
+          "Int4",
+          "Int4",
+          "Uuid",
+          "Varchar",
+          "Varchar",
+          "Varchar",
+          "Varchar"
+        ]
+      },
+      "nullable": [
+        false
+      ]
+    }
+  },
+  "7b66b5735ca0c7eed38124f7061cfa81c72ba1b69158ddb34554e0be2efa3869": {
+    "query": "\nSELECT id, name, status as \"status: _\", readonly, rootfs, storage_id, cache_type as \"cache_type: _\"\nFROM drives\n        ",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "id",
+          "type_info": "Uuid"
+        },
+        {
+          "ordinal": 1,
+          "name": "name",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 2,
+          "name": "status: _",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 3,
+          "name": "readonly",
+          "type_info": "Bool"
+        },
+        {
+          "ordinal": 4,
+          "name": "rootfs",
+          "type_info": "Bool"
+        },
+        {
+          "ordinal": 5,
+          "name": "storage_id",
+          "type_info": "Uuid"
+        },
+        {
+          "ordinal": 6,
+          "name": "cache_type: _",
+          "type_info": "Varchar"
+        }
+      ],
+      "parameters": {
+        "Left": []
+      },
+      "nullable": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ]
+    }
+  },
+  "8b7b0c7855030fb80ffe7c78991db6db1dd627681451619bc40071dc657534d7": {
+    "query": "\nSELECT id, name, storage_id\nFROM kernels\n        ",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "id",
+          "type_info": "Uuid"
+        },
+        {
+          "ordinal": 1,
+          "name": "name",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 2,
+          "name": "storage_id",
+          "type_info": "Uuid"
+        }
+      ],
+      "parameters": {
+        "Left": []
+      },
+      "nullable": [
+        false,
+        false,
+        false
+      ]
+    }
+  },
+  "99d6fef0b3405828251be9a841af7d9173090770bf4ee6d09f985f51afa89fea": {
+    "query": "\nINSERT INTO storage (name, status, storage_type, config)\nVALUES ( $1, $2, $3, $4)\nRETURNING id\n        ",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "id",
+          "type_info": "Uuid"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Varchar",
+          "Varchar",
+          "Varchar",
+          "Jsonb"
+        ]
+      },
+      "nullable": [
+        false
+      ]
+    }
+  },
+  "9fa08c89958adf399ccd08abe4e103c1ab31bd8dcbac2e058ec22eafadaef77c": {
+    "query": "\nSELECT id, name, status as \"status: _\", host_id, vcpu, memory, ip_address, mac_address, network_mode as \"network_mode: _\", kernel_params, kernel\nFROM vms\n        ",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "id",
+          "type_info": "Uuid"
+        },
+        {
+          "ordinal": 1,
+          "name": "name",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 2,
+          "name": "status: _",
+          "type_info": "Int4"
+        },
+        {
+          "ordinal": 3,
+          "name": "host_id",
+          "type_info": "Uuid"
+        },
+        {
+          "ordinal": 4,
+          "name": "vcpu",
+          "type_info": "Int4"
+        },
+        {
+          "ordinal": 5,
+          "name": "memory",
+          "type_info": "Int4"
+        },
+        {
+          "ordinal": 6,
+          "name": "ip_address",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 7,
+          "name": "mac_address",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 8,
+          "name": "network_mode: _",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 9,
+          "name": "kernel_params",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 10,
+          "name": "kernel",
+          "type_info": "Uuid"
+        }
+      ],
+      "parameters": {
+        "Left": []
+      },
+      "nullable": [
+        false,
+        false,
+        false,
+        true,
+        false,
+        false,
+        true,
+        true,
+        false,
+        false,
+        false
+      ]
+    }
+  },
+  "bb1744d2627e4d355024804d4b9e2a8d6507c0fa254f58d32dfdd192e6d8bf56": {
+    "query": "\nINSERT INTO kernels (name, storage_id)\nVALUES ( $1, $2)\nRETURNING id\n        ",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "id",
+          "type_info": "Uuid"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Varchar",
+          "Uuid"
+        ]
+      },
+      "nullable": [
+        false
+      ]
+    }
+  },
+  "c7e806bfde9604aafc55c1247196e4de668e7e82a42046cab71beb7c58df9499": {
+    "query": "\nSELECT id, name, status as \"status: _\", storage_type as \"storage_type: _\", config as \"config: Json<StorageConfig>\" \nFROM storage\nWHERE id = $1\n        ",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "id",
+          "type_info": "Uuid"
+        },
+        {
+          "ordinal": 1,
+          "name": "name",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 2,
+          "name": "status: _",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 3,
+          "name": "storage_type: _",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 4,
+          "name": "config: Json<StorageConfig>",
+          "type_info": "Jsonb"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Uuid"
+        ]
+      },
+      "nullable": [
+        false,
+        false,
+        false,
+        false,
+        false
+      ]
+    }
+  },
+  "d110072da939f046c6f28a31078ed428880d09dd2980be69af0dfd5b09d9d650": {
+    "query": "\nSELECT id, name, status as \"status: _\", storage_type as \"storage_type: _\", config as \"config: Json<StorageConfig>\" \nFROM storage\n        ",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "id",
+          "type_info": "Uuid"
+        },
+        {
+          "ordinal": 1,
+          "name": "name",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 2,
+          "name": "status: _",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 3,
+          "name": "storage_type: _",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 4,
+          "name": "config: Json<StorageConfig>",
+          "type_info": "Jsonb"
+        }
+      ],
+      "parameters": {
+        "Left": []
+      },
+      "nullable": [
+        false,
+        false,
+        false,
+        false,
+        false
+      ]
+    }
+  },
+  "d5bfcdb696ac060779cacd9b7ecfb7d814a0e5f2e44b2d289359c53681db1ff4": {
+    "query": "\nSELECT id, name, address, port, status as \"status: _\", host_user, password\nFROM hosts\nWHERE id = $1\n        ",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "id",
+          "type_info": "Uuid"
+        },
+        {
+          "ordinal": 1,
+          "name": "name",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 2,
+          "name": "address",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 3,
+          "name": "port",
+          "type_info": "Int4"
+        },
+        {
+          "ordinal": 4,
+          "name": "status: _",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 5,
+          "name": "host_user",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 6,
+          "name": "password",
+          "type_info": "Varchar"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Uuid"
+        ]
+      },
+      "nullable": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ]
+    }
+  },
+  "d9665b90ce830e0b5bd17a2d85c275e0490cf27c0c9e632b6ccce2c2d5067986": {
+    "query": "\nUPDATE hosts\nSET status = $1\nWHERE id = $2\n        ",
+    "describe": {
+      "columns": [],
+      "parameters": {
+        "Left": [
+          "Varchar",
+          "Uuid"
+        ]
+      },
+      "nullable": []
+    }
+  },
+  "e1b81ed79f8e4b07b3d3a15b2c9d14fc8c96748280bba782aca15e3efa974c3b": {
+    "query": "\nSELECT id, name, status as \"status: _\", host_id, vcpu, memory, ip_address, mac_address, network_mode as \"network_mode: _\", kernel_params, kernel\nFROM vms\nWHERE id = $1\n        ",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "id",
+          "type_info": "Uuid"
+        },
+        {
+          "ordinal": 1,
+          "name": "name",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 2,
+          "name": "status: _",
+          "type_info": "Int4"
+        },
+        {
+          "ordinal": 3,
+          "name": "host_id",
+          "type_info": "Uuid"
+        },
+        {
+          "ordinal": 4,
+          "name": "vcpu",
+          "type_info": "Int4"
+        },
+        {
+          "ordinal": 5,
+          "name": "memory",
+          "type_info": "Int4"
+        },
+        {
+          "ordinal": 6,
+          "name": "ip_address",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 7,
+          "name": "mac_address",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 8,
+          "name": "network_mode: _",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 9,
+          "name": "kernel_params",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 10,
+          "name": "kernel",
+          "type_info": "Uuid"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Uuid"
+        ]
+      },
+      "nullable": [
+        false,
+        false,
+        false,
+        true,
+        false,
+        false,
+        true,
+        true,
+        false,
+        false,
+        false
+      ]
+    }
+  },
+  "e7db70043945c347a36d423037eec73eae0eba61c2c485bab6a98da7e775c7ec": {
+    "query": "\nINSERT INTO hosts (name, address, port, status, host_user, password)\nVALUES ( $1, $2, $3, $4, $5, $6 )\nRETURNING id\n",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "id",
+          "type_info": "Uuid"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Varchar",
+          "Varchar",
+          "Int4",
+          "Varchar",
+          "Varchar",
+          "Varchar"
+        ]
+      },
+      "nullable": [
+        false
+      ]
+    }
+  }
+}

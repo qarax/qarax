@@ -1,31 +1,45 @@
-mod network;
-mod vm_service;
-mod vmm_handler;
+mod vm;
 
-use tonic::transport::Server;
-use vm_service::VmService;
-use vmm_handler::node::node_server::NodeServer;
+use vm::vmm_service::VmmService;
 
-use std::env;
+use clap::Clap;
+use std::net::SocketAddr;
 use std::time::Duration;
+use tonic::transport::Server;
+use vm::node::node_server::NodeServer;
+
+#[derive(Clap, Debug)]
+#[clap(
+    name = "qarax-node",
+    rename_all = "kebab-case",
+    rename_all_env = "screaming-snake"
+)]
+pub struct Args {
+    #[clap(short, long, default_value = "50051", env)]
+    port: u16,
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let log_path = "qarax-node.log";
+    let args = Args::parse();
+    if std::env::var_os("RUST_LOG").is_none() {
+        std::env::set_var("RUST_LOG", "qarax-node=debug")
+    }
 
-    let file_appender = tracing_appender::rolling::daily(env::current_dir().unwrap(), log_path);
-    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
-    tracing_subscriber::fmt().with_writer(non_blocking).init();
+    tracing_subscriber::fmt::fmt().init();
 
-    let addr = "0.0.0.0:50051".parse()?;
+    let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
+    health_reporter
+        .set_serving::<NodeServer<VmmService>>()
+        .await;
 
-    let vm_service = VmService::new();
-
-    tracing::info!("Starting server on port 50051...");
+    tracing::info!("Starting on port {}", args.port);
+    let addr = SocketAddr::from(([0, 0, 0, 0], args.port));
 
     Server::builder()
         .tcp_keepalive(Some(Duration::from_secs(60)))
-        .add_service(NodeServer::new(vm_service))
+        .add_service(health_service)
+        .add_service(NodeServer::new(VmmService::default()))
         .serve(addr)
         .await?;
 

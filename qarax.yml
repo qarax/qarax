@@ -1,0 +1,185 @@
+openapi: 3.0.1
+info:
+  title: qarax API
+  version: 0.1.0
+  description: The API for qarax manager
+  license:
+    name: Apache 2.0
+    url: 'http://www.apache.org/licenses/LICENSE-2.0.html'
+externalDocs:
+  description: Find out more about Qarax
+  url: 'https://github.com/qarax/qarax'
+tags:
+  - name: Hosts
+components:
+  schemas:
+    HostList:
+      properties:
+        response:
+          type: array
+          items:
+            $ref: '#/components/schemas/Host'
+    StringResponse:
+      properties:
+        response:
+          type: string
+    Host:
+      properties:
+        address:
+          type: string
+        host_user:
+          type: string
+        id:
+          format: uuid
+          type: string
+          readOnly: true
+        name:
+          type: string
+        password:
+          type: string
+          writeOnly: true
+        port:
+          format: int32
+          type: integer
+        status:
+          type: string
+          readOnly: true
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+    CreationResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+paths:
+  /hosts:
+    get:
+      operationId: listHosts
+      summary: Get hosts list
+      description: Get hosts list
+      tags:
+        - Hosts
+      responses:
+        '200':
+          description: successful operation
+          content:
+            application/json:
+              schema:
+                type: HostList
+        default:
+          description: unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      operationId: addHost
+      summary: Create new host
+      description: Create new host
+      tags:
+        - Hosts
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Host'
+        required: true
+      responses:
+        '200':
+          description: successful operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreationResponse'
+        default:
+          description: unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  '/hosts/{hostId}':
+    get:
+      operationId: getHost
+      summary: Get host by ID
+      description: ''
+      tags:
+        - Hosts
+      parameters:
+        - name: hostId
+          in: path
+          description: ID of host
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: successful operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Host'
+        default:
+          description: unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  '/hosts/{hostId}/install':
+    post:
+      operationId: installHost
+      summary: Install qarax node on host
+      description: Install and run qarax-node on host
+      tags:
+        - Hosts
+      parameters:
+        - name: hostId
+          in: path
+          description: ID of host
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: successful operation
+          content:
+            application/json:
+              schema:
+                type: StringResponse
+        default:
+          description: unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  '/hosts/{hostId}/healthcheck':
+    post:
+      operationId: healthcheck
+      summary: Healthcehck a host
+      description: Runs healthcheck on a host, currently just ensures gRPC connectivity
+      tags:
+        - Hosts
+      parameters:
+        - name: hostId
+          in: path
+          description: ID of host
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: successful operation
+          content:
+            application/json:
+              schema:
+                type: StringResponse
+        default:
+          description: unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'

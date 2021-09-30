@@ -1,29 +1,26 @@
 [package]
 name = "qarax-node"
 version = "0.1.0"
-authors = ["Benny Zlotnik <bzlotnik@protonmail.com>"]
 edition = "2018"
 
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
 [dependencies]
-tonic = "0.2"
-prost = "0.6"
-futures = "0.3"
-tokio = { version = "0.2", features = ["full"] }
-async-stream = "0.2"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-tracing = "0.1"
-tracing-subscriber = "0.2"
-tracing-appender = "0.1"
+clap = "3.0.0-beta.4"
+tokio = { version = "1.12.0", features = ["full"] }
+tonic = "0.5.2"
+tracing = "0.1.28"
+tracing-subscriber = "0.2.24"
+prost = "0.8.0"
+tonic-health = "0.4.1"
 firecracker_rust_sdk = { path = "./firecracker_rust_sdk" }
-rand = "0.7.3"
-smoltcp = { git = "https://github.com/bennyz/smoltcp", branch = "qarax-branch", features= ["proto-dhcpv4", "log"]}
-anyhow = "1.0"
-thiserror = "1.0"
-nix = "0.17.0"
+nix = "0.23.0"
+anyhow = "1.0.44"
+serde = "1.0.130"
+serde_json = "1.0.68"
 
 [build-dependencies]
-tonic-build = "0.2"
+tonic-build = "0.5.2"
 
 [[bin]]
 name = "qarax-node"
