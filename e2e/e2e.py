@@ -122,6 +122,7 @@ def test_install_host(api_client, vm_ip, host_config):
 
     except qarax.ApiException as e:
         log.error("Exception when calling HostsApi->add_host: %s\n" % e)
+        raise e
 
     healthcheck = api_instance.healthcheck(host_id)
     assert healthcheck['response'] == 'ok'
