@@ -26,7 +26,7 @@ $ cargo test -- --test-threads 1
 ```
 Note: a simple `cargo test` will not work as the tests require a database and cannot be run in parallel.
 
-For e2e tests:
+#### e2e tests
 ```shell
 $ python -m venv /tmp/qarax-e2e
 $ source /tmp/qarax-e2e/bin/activate
