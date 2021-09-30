@@ -1,5 +1,5 @@
 [package]
-name = "qarax-axum"
+name = "qarax"
 version = "0.1.0"
 authors = ["Benny Zlotnik <bzlotnik@protonmail.com>"]
 edition = "2018"
