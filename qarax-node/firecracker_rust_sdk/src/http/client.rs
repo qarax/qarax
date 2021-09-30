@@ -42,7 +42,7 @@ impl VmmClient {
             .body(Body::from(body.to_vec()))?;
 
         let resp = self.client.request(req).await?;
-        tracing::debug!("incoming status: {}", resp.status());
+        tracing::debug!("Incoming status: {}", resp.status());
 
         let bytes = resp
             .into_body()

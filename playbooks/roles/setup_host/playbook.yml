@@ -1,9 +1,12 @@
 - hosts: all
+  gather_facts: no
   tasks:
+    - name: Wait for SSH connection
+      wait_for_connection:
+        delay: 10
+        timeout: 300
+        sleep: 20
     - name: install packages
       include: tasks/install.yml
-    - name: compile firecracker
-      include: tasks/compile.yml
-      when: build is defined and build == "compile"
     - name: setup network
       include: tasks/setup_network.yml

@@ -5,9 +5,21 @@
 
 - name: download firecracker
   get_url:
-    url: "https://github.com/firecracker-microvm/firecracker/releases/download/v{{ fcversion }}/firecracker-v{{ fcversion}}-x86_64"
-    dest: ./firecracker
+    url: "https://github.com/firecracker-microvm/firecracker/releases/download/v{{ fcversion }}/firecracker-v{{ fcversion }}-x86_64.tgz"
+    dest: ./firecracker.tgz
   when: not firecracker.stat.exists
+
+- name: extract binary
+  ansible.builtin.unarchive:
+    remote_src: yes
+    src: firecracker.tgz
+    dest: .
+
+- name: copy binary
+  copy:
+    remote_src: True
+    src: ./release-v{{ fcversion }}/firecracker-v{{ fcversion }}-x86_64
+    dest: ./firecracker
 
 - name: set execute permissions
   file:

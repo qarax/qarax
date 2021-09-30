@@ -60,11 +60,11 @@ impl Machine {
 
         Ok(self
             .client
-            .request("/boot-source", Method::PUT, &boot_source.as_bytes())
+            .request("/boot-source", Method::PUT, boot_source.as_bytes())
             .await?)
     }
 
-    pub async fn configure_drive(&self) -> Result<String> {
+    pub async fn configure_drives(&self) -> Result<String> {
         let mut response = String::new();
         for drive in &self.drives {
             let drive_json = serde_json::to_string(&drive)?;

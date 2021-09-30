@@ -13,7 +13,7 @@
 - name: copy qarax-node binary
   copy:
     # TODO: maybe build it directly somewhere else
-    src: "{{ local_node_path }}/target/debug/qarax-node"
+    src: "{{ local_node_path }}/target/x86_64-unknown-linux-musl/debug/qarax-node"
     dest: $HOME/
   when: local_node_path is defined
 

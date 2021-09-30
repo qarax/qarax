@@ -1,1 +1,0 @@
-DROP TABLE vm_drives_map;

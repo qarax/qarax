@@ -20,6 +20,13 @@ message Drive {
     bool is_read_only = 2;
     bool is_root_device = 3;
     string path_on_host = 4;
+    CacheType cache_type = 5;
+}
+
+enum CacheType {
+    NONE = 0;
+    WRITE_BACK = 1;
+    UNSAFE = 2;
 }
 
 enum Status {
@@ -48,5 +55,4 @@ service Node {
     rpc StartVM(VmConfig) returns (VmConfig) {}
     rpc StopVM(VmID) returns (Response) {}
     rpc ListVms(google.protobuf.Empty) returns (VmList) {}
-    rpc HealthCheck(google.protobuf.Empty) returns (Response) {}
 }
