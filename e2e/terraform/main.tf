@@ -45,7 +45,7 @@ resource "libvirt_domain" "domain-centos" {
   name   = "centos-terraform"
   memory = "1512"
   vcpu   = 1
-  cpu {
+  cpu =  {
     mode = "host-passthrough"
   }
 
