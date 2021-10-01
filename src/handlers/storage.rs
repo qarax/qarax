@@ -30,7 +30,7 @@ pub async fn add(
 
     Ok(ApiResponse {
         data: storage_id,
-        code: StatusCode::OK,
+        code: StatusCode::CREATED,
     })
 }
 
@@ -47,7 +47,7 @@ pub async fn get(
 
     Ok(ApiResponse {
         data: storage,
-        code: StatusCode::CREATED,
+        code: StatusCode::OK,
     })
 }
 
@@ -89,7 +89,7 @@ mod tests {
     async fn test_add() {
         let pool = setup().await.unwrap();
         let env = Environment::new(pool.clone()).await.unwrap();
-        let app = app(env.clone());
+        let app = app(&env).await;
 
         let host = NewStorage {
             name: "test_storage".to_owned(),
