@@ -3,12 +3,13 @@ use std::collections::BTreeMap;
 use crate::handlers::ansible::AnsibleCommand;
 use crate::handlers::models::hosts::HostError;
 
-use super::models::hosts::{NewHost, Status};
+use super::models::hosts::NewHost;
 use super::rpc::client::Client;
 use super::*;
 use axum::extract::{Json, Path};
 use models::hosts as host_model;
 use models::hosts::Host;
+use models::hosts::Status as HostStatus;
 use sqlx::PgPool;
 
 pub async fn list(
@@ -77,7 +78,7 @@ pub async fn install(
         }
     })?;
 
-    host_model::update_status(env.db(), host_id, Status::Installing)
+    host_model::update_status(env.db(), host_id, HostStatus::Installing)
         .await
         .map_err(|e| {
             tracing::error!("Failed to update host: {}, error:{}", host_id, e);
@@ -108,7 +109,7 @@ pub async fn install(
         match playbook.run_playbook().await {
             Ok(_) => {
                 tracing::info!("Installation successful");
-                host_model::update_status(env.db(), host_id, Status::Up)
+                host_model::update_status(env.db(), host_id, HostStatus::Up)
                     .await
                     .unwrap();
             }
@@ -124,7 +125,7 @@ pub async fn install(
 }
 
 pub async fn find_running_host(pool: &PgPool) -> Result<Host, ServerError> {
-    let hosts = host_model::by_status(pool, host_model::Status::Up)
+    let hosts = host_model::by_status(pool, HostStatus::Up)
         .await
         .map_err(|e| {
             tracing::error!("Failed to a suitable host, error:{}", e);
@@ -138,6 +139,61 @@ pub async fn find_running_host(pool: &PgPool) -> Result<Host, ServerError> {
     Ok(hosts[0].clone())
 }
 
+pub async fn initalize_hosts(env: &Environment) -> Result<(), ServerError> {
+    // TODO: add lookup method that can search multiple statuses
+    let running_hosts = host_model::by_status(env.db(), HostStatus::Up)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed fetch hosts, error:{}", e);
+            ServerError::Internal
+        })?;
+
+    let unknown_hosts = host_model::by_status(env.db(), HostStatus::Unknown)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed fetch hosts, error:{}", e);
+            ServerError::Internal
+        })?;
+
+    if running_hosts.is_empty() && unknown_hosts.is_empty() {
+        tracing::info!("No hosts were running or unknown, skipping initialization...");
+        return Ok(());
+    }
+
+    // TODO: parallelize this
+    for host in [running_hosts, unknown_hosts].concat() {
+        host_model::update_status(env.db(), host.id, HostStatus::Initializing)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to update host: {}, error:{}", host.id, e);
+                ServerError::Internal
+            })?;
+        tracing::info!("Initializing host: {}...", host.id);
+        if let Err(e) = health_check_internal(&host).await {
+            host_model::update_status(env.db(), host.id, HostStatus::Unknown)
+                .await
+                // TODO implement TryFrom for these errors
+                .map_err(|e| {
+                    tracing::error!("Failed to update host: {}, error:{}", host.id, e);
+                });
+
+            tracing::error!("Failed to initialize host: {}, error: {}", host.id, e);
+
+            continue;
+        }
+
+        host_model::update_status(env.db(), host.id, HostStatus::Up)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to update host: {}, error:{}", host.id, e);
+            });
+
+        tracing::info!("Host {} intialized...", host.id);
+    }
+
+    Ok(())
+}
+
 pub async fn health_check(
     Extension(env): Extension<Environment>,
     Path(host_id): Path<Uuid>,
@@ -149,34 +205,30 @@ pub async fn health_check(
         return Err(ServerError::Validation(host_id.to_string()));
     };
 
-    match Client::connect(format!("{}:{}", host.address, host.port).parse().unwrap()).await {
-        Ok(client) => {
-            health_check_internal(&client).await.map_err(|e| {
-                tracing::error!("Failed to health check host: {}, error:{}", host_id, e);
-                ServerError::Internal
-            })?;
-
-            env.clients().write().await.insert(host_id, client);
-
-            Ok(ApiResponse {
-                code: StatusCode::OK,
-                data: String::from("ok"),
-            })
-        }
-        Err(e) => {
-            tracing::error!("Failed to health check host: {}, error:{}", host_id, e);
-            Err(ServerError::Internal)
-        }
+    if health_check_internal(&host).await.is_err() {
+        tracing::error!("Healthcheck for host: {} failed", host_id);
+        return Err(ServerError::Validation(host_id.to_string()));
     }
+
+    Ok(ApiResponse {
+        code: StatusCode::OK,
+        data: String::from("ok"),
+    })
 }
 
-async fn health_check_internal(client: &Client) -> Result<String, String> {
-    let response = client.clone().health_check().await;
-    match response {
-        Ok(_) => Ok(String::from("OK")),
+async fn health_check_internal(host: &Host) -> Result<(), String> {
+    match Client::connect(format!("{}:{}", host.address, host.port).parse().unwrap()).await {
+        Ok(client) => {
+            if let Err(e) = client.clone().health_check().await {
+                tracing::error!("Healthcheck failed: {}", e);
+                return Err(e.to_string());
+            }
+
+            Ok(())
+        }
         Err(e) => {
-            tracing::error!("failed {}", e);
-            Err(String::from("Failed"))
+            tracing::error!("Could not connect to host {}, error: {}", host.id, e);
+            return Err(String::from("Could not connect to host"));
         }
     }
 }
@@ -211,7 +263,7 @@ mod tests {
     async fn test_add() {
         let pool = setup().await.unwrap();
         let env = Environment::new(pool.clone()).await.unwrap();
-        let app = app(env.clone());
+        let app = app(&env).await;
 
         let host = NewHost {
             name: String::from("test_host"),
