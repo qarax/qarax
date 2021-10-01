@@ -28,10 +28,7 @@ Note: a simple `cargo test` will not work as the tests require a database and ca
 
 #### e2e tests
 ```shell
-$ python -m venv /tmp/qarax-e2e
-$ source /tmp/qarax-e2e/bin/activate
-$ pip install -r requirements.txt
-$ pytest -svv e2e.py
+./e2e/run_tests.sh
 ```
 
 # FAQ
