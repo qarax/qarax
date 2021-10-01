@@ -106,7 +106,6 @@ WHERE id = $1
 }
 
 pub async fn by_status(pool: &PgPool, status: Status) -> Result<Vec<Host>, HostError> {
-    tracing::info!("status {}", status.to_string());
     let hosts = sqlx::query_as!(
         Host,
         r#"
@@ -123,7 +122,11 @@ WHERE status = $1
     Ok(hosts)
 }
 
-pub async fn update_status(pool: &PgPool, host_id: Uuid, status: Status) -> anyhow::Result<bool> {
+pub async fn update_status(
+    pool: &PgPool,
+    host_id: Uuid,
+    status: Status,
+) -> Result<bool, HostError> {
     let row_affected = sqlx::query!(
         r#"
 UPDATE hosts

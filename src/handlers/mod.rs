@@ -25,7 +25,23 @@ pub mod rpc;
 pub mod storage;
 pub mod vms;
 
-pub fn app(env: Environment) -> Router<BoxRoute> {
+pub async fn initialize_env(env: &Environment) -> () {
+    tracing::info!("Initializing hosts...");
+
+    match hosts::initalize_hosts(env).await {
+        Ok(_) => (),
+        Err(e) => {
+            tracing::error!("Failed to initialize hosts: {}", e);
+        }
+    }
+
+    tracing::info!("Finished initalizing hosts");
+
+    ()
+}
+
+pub async fn app(env: &Environment) -> Router<BoxRoute> {
+    initialize_env(env).await;
     Router::new()
         .route("/", get(|| async { "hello" }))
         .nest("/hosts", hosts())
@@ -33,7 +49,7 @@ pub fn app(env: Environment) -> Router<BoxRoute> {
         .nest("/drives", drives())
         .nest("/kernels", kernels())
         .nest("/vms", vms())
-        .layer(AddExtensionLayer::new(env))
+        .layer(AddExtensionLayer::new(env.clone()))
         .layer(tower_http::trace::TraceLayer::new_for_http())
         .boxed()
 }
