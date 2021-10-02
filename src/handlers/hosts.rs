@@ -162,31 +162,14 @@ pub async fn initalize_hosts(env: &Environment) -> Result<(), ServerError> {
 
     // TODO: parallelize this
     for host in [running_hosts, unknown_hosts].concat() {
-        host_model::update_status(env.db(), host.id, HostStatus::Initializing)
-            .await
-            .map_err(|e| {
-                tracing::error!("Failed to update host: {}, error:{}", host.id, e);
-                ServerError::Internal
-            })?;
+        update_host_status(env.db(), &host.id, HostStatus::Initializing).await;
         tracing::info!("Initializing host: {}...", host.id);
         if let Err(e) = health_check_internal(&host).await {
-            host_model::update_status(env.db(), host.id, HostStatus::Unknown)
-                .await
-                // TODO implement TryFrom for these errors
-                .map_err(|e| {
-                    tracing::error!("Failed to update host: {}, error:{}", host.id, e);
-                });
-
+            update_host_status(env.db(), &host.id, HostStatus::Unknown).await;
             tracing::error!("Failed to initialize host: {}, error: {}", host.id, e);
 
             continue;
         }
-
-        host_model::update_status(env.db(), host.id, HostStatus::Up)
-            .await
-            .map_err(|e| {
-                tracing::error!("Failed to update host: {}, error:{}", host.id, e);
-            });
 
         tracing::info!("Host {} intialized...", host.id);
     }
@@ -229,6 +212,15 @@ async fn health_check_internal(host: &Host) -> Result<(), String> {
         Err(e) => {
             tracing::error!("Could not connect to host {}, error: {}", host.id, e);
             return Err(String::from("Could not connect to host"));
+        }
+    }
+}
+
+async fn update_host_status(pool: &PgPool, host_id: &Uuid, status: HostStatus) -> () {
+    match host_model::update_status(pool, *host_id, status).await {
+        Ok(_) => (),
+        Err(e) => {
+            tracing::error!("Failed to update host: {}, error:{}", host_id, e);
         }
     }
 }
