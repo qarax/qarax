@@ -7,14 +7,14 @@ use crate::handlers::rpc::client::Client;
 
 #[derive(Clone, Debug)]
 pub struct Environment {
-    pool: PgPool,
+    pool: Arc<PgPool>,
     clients: Arc<RwLock<HashMap<Uuid, Client>>>,
 }
 
 impl Environment {
     pub async fn new(pool: PgPool) -> anyhow::Result<Self> {
         Ok(Self {
-            pool,
+            pool: Arc::new(pool),
             clients: Arc::new(RwLock::new(HashMap::new())),
         })
     }

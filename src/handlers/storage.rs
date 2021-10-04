@@ -89,7 +89,7 @@ mod tests {
     async fn test_add() {
         let pool = setup().await.unwrap();
         let env = Environment::new(pool.clone()).await.unwrap();
-        let app = app(&env).await;
+        let app = app(env.clone()).await;
 
         let host = NewStorage {
             name: "test_storage".to_owned(),
@@ -115,6 +115,6 @@ mod tests {
 
         assert_eq!(StatusCode::CREATED, response.status());
 
-        teardown(&env.db()).await;
+        teardown(env.db()).await;
     }
 }

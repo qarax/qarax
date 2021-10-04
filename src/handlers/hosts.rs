@@ -139,7 +139,7 @@ pub async fn find_running_host(pool: &PgPool) -> Result<Host, ServerError> {
     Ok(hosts[0].clone())
 }
 
-pub async fn initalize_hosts(env: &Environment) -> Result<(), ServerError> {
+pub async fn initalize_hosts(env: Environment) -> Result<(), ServerError> {
     // TODO: add lookup method that can search multiple statuses
     let running_hosts = host_model::by_status(env.db(), HostStatus::Up)
         .await
@@ -162,16 +162,10 @@ pub async fn initalize_hosts(env: &Environment) -> Result<(), ServerError> {
 
     // TODO: parallelize this
     for host in [running_hosts, unknown_hosts].concat() {
-        update_host_status(env.db(), &host.id, HostStatus::Initializing).await;
-        tracing::info!("Initializing host: {}...", host.id);
-        if let Err(e) = health_check_internal(&host).await {
-            update_host_status(env.db(), &host.id, HostStatus::Unknown).await;
-            tracing::error!("Failed to initialize host: {}, error: {}", host.id, e);
-
-            continue;
-        }
-
-        tracing::info!("Host {} intialized...", host.id);
+        let env = env.clone();
+        tokio::spawn(async move {
+            initialize_host(&host, env).await;
+        });
     }
 
     Ok(())
@@ -216,6 +210,18 @@ async fn health_check_internal(host: &Host) -> Result<(), String> {
     }
 }
 
+async fn initialize_host(host: &Host, env: Environment) {
+    update_host_status(env.db(), &host.id, HostStatus::Initializing).await;
+    tracing::info!("Initializing host: {}...", host.id);
+    if let Err(e) = health_check_internal(&host).await {
+        update_host_status(env.db(), &host.id, HostStatus::Unknown).await;
+        tracing::error!("Failed to initialize host: {}, error: {}", host.id, e);
+        return;
+    }
+
+    tracing::info!("Host {} intialized...", host.id);
+}
+
 async fn update_host_status(pool: &PgPool, host_id: &Uuid, status: HostStatus) -> () {
     match host_model::update_status(pool, *host_id, status).await {
         Ok(_) => (),
@@ -255,7 +261,7 @@ mod tests {
     async fn test_add() {
         let pool = setup().await.unwrap();
         let env = Environment::new(pool.clone()).await.unwrap();
-        let app = app(&env).await;
+        let app = app(env.clone()).await;
 
         let host = NewHost {
             name: String::from("test_host"),
@@ -279,6 +285,6 @@ mod tests {
 
         assert_eq!(StatusCode::CREATED, response.status());
 
-        teardown(&env.db()).await;
+        teardown(env.db()).await;
     }
 }

@@ -38,7 +38,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let addr = SocketAddr::from(([127, 0, 0, 1], args.port));
     tracing::info!("listening on {}", addr);
     axum::Server::bind(&addr)
-        .serve(handlers::app(&environment).await.into_make_service())
+        .serve(handlers::app(environment).await.into_make_service())
         .await?;
 
     Ok(())
