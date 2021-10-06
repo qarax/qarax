@@ -119,7 +119,7 @@ where
 pub enum ServerError {
     #[error("Internal error")]
     #[serde(rename(serialize = "internal error"))]
-    Internal,
+    Internal(String),
     #[error("Validation error")]
     #[serde(rename(serialize = "validation error"))]
     Validation(String),
@@ -134,7 +134,10 @@ impl IntoResponse for ServerError {
 
     fn into_response(self) -> Response<Self::Body> {
         let code = match self {
-            ServerError::Internal => StatusCode::INTERNAL_SERVER_ERROR,
+            ServerError::Internal(ref s) => {
+                tracing::error!("Internal error: {}", s);
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
             ServerError::Validation(_) => StatusCode::CONFLICT,
             Self::EntityNotFound(_) => StatusCode::NOT_FOUND,
         };

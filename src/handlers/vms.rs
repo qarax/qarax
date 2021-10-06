@@ -9,10 +9,9 @@ use models::vms::{NewVm, Vm};
 pub async fn list(
     Extension(env): Extension<Environment>,
 ) -> Result<ApiResponse<Vec<Vm>>, ServerError> {
-    let vms = vm_model::list(env.db()).await.map_err(|e| {
-        tracing::error!("Failed to list vms, error: {}", e);
-        ServerError::Internal
-    })?;
+    let vms = vm_model::list(env.db())
+        .await
+        .map_err(|e| ServerError::Internal(e.to_string()))?;
 
     Ok(ApiResponse {
         data: vms,
@@ -24,10 +23,9 @@ pub async fn add(
     Extension(env): Extension<Environment>,
     Json(vm): Json<NewVm>,
 ) -> Result<ApiResponse<Uuid>, ServerError> {
-    let vm_id = vm_model::add(env.db(), &vm).await.map_err(|e| {
-        tracing::error!("Can't add vm: {}", e);
-        ServerError::Internal
-    })?;
+    let vm_id = vm_model::add(env.db(), &vm)
+        .await
+        .map_err(|e| ServerError::Internal(e.to_string()))?;
 
     Ok(ApiResponse {
         data: vm_id,
@@ -39,10 +37,9 @@ pub async fn get(
     Extension(env): Extension<Environment>,
     Path(vm_id): Path<Uuid>,
 ) -> Result<ApiResponse<Vm>, ServerError> {
-    let vm = vm_model::by_id(env.db(), &vm_id).await.map_err(|e| {
-        tracing::error!("Can't find vm, error: {}", e);
-        ServerError::Internal
-    })?;
+    let vm = vm_model::by_id(env.db(), &vm_id)
+        .await
+        .map_err(|e| ServerError::Internal(e.to_string()))?;
 
     Ok(ApiResponse {
         data: vm,
@@ -55,14 +52,12 @@ pub async fn start(
     Path(vm_id): Path<Uuid>,
 ) -> Result<ApiResponse<String>, ServerError> {
     let host = hosts::find_running_host(env.db()).await?;
-    tracing::debug!("found host {:?}", host);
     let clients = &*env.clients().read().await;
 
     let client = clients.get(&host.id).unwrap();
-    let vm = vm_model::by_id(env.db(), &vm_id).await.map_err(|e| {
-        tracing::error!("Can't find vm, error: {}", e);
-        ServerError::Internal
-    })?;
+    let vm = vm_model::by_id(env.db(), &vm_id)
+        .await
+        .map_err(|e| ServerError::Internal(e.to_string()))?;
 
     let request = VmConfig {
         vm_id: vm.id.to_string(),
@@ -84,10 +79,10 @@ pub async fn start(
 
     tracing::info!("Starting VM {} with config: {:?}", vm.id, request);
 
-    let response = client.start_vm(request).await.map_err(|e| {
-        tracing::error!("Can't start vm, error: {}", e);
-        ServerError::Internal
-    })?;
+    let response = client
+        .start_vm(request)
+        .await
+        .map_err(|e| ServerError::Internal(e.to_string()))?;
 
     Ok(ApiResponse {
         code: StatusCode::ACCEPTED,

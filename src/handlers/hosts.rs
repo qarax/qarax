@@ -16,10 +16,9 @@ pub async fn list(
     Extension(env): Extension<Environment>,
 ) -> Result<ApiResponse<Vec<Host>>, ServerError> {
     tracing::info!("list works");
-    let hosts = host_model::list(env.db()).await.map_err(|e| {
-        tracing::error!("Failed to list hosts, error: {}", e);
-        ServerError::Internal
-    })?;
+    let hosts = host_model::list(env.db())
+        .await
+        .map_err(|e| ServerError::Internal(e.to_string()))?;
 
     Ok(ApiResponse {
         data: hosts,
@@ -53,7 +52,7 @@ pub async fn get(
             HostError::Find(id, sqlx::Error::RowNotFound) => {
                 ServerError::EntityNotFound(id.to_string())
             }
-            _ => ServerError::Internal,
+            _ => ServerError::Internal(e.to_string()),
         }
     })?;
 
@@ -74,16 +73,13 @@ pub async fn install(
             HostError::Find(id, sqlx::Error::RowNotFound) => {
                 ServerError::EntityNotFound(id.to_string())
             }
-            _ => ServerError::Internal,
+            _ => ServerError::Internal(e.to_string()),
         }
     })?;
 
     host_model::update_status(env.db(), host_id, HostStatus::Installing)
         .await
-        .map_err(|e| {
-            tracing::error!("Failed to update host: {}, error:{}", host_id, e);
-            ServerError::Internal
-        })?;
+        .map_err(|e| ServerError::Internal(e.to_string()))?;
 
     let mut extra_params = BTreeMap::new();
     extra_params.insert(String::from("ansible_password"), host.password.to_owned());
@@ -127,10 +123,7 @@ pub async fn install(
 pub async fn find_running_host(pool: &PgPool) -> Result<Host, ServerError> {
     let hosts = host_model::by_status(pool, HostStatus::Up)
         .await
-        .map_err(|e| {
-            tracing::error!("Failed to a suitable host, error:{}", e);
-            ServerError::Internal
-        })?;
+        .map_err(|e| ServerError::Internal(e.to_string()))?;
 
     if hosts.is_empty() {
         return Err(ServerError::EntityNotFound(String::from("host")));
@@ -143,17 +136,11 @@ pub async fn initalize_hosts(env: Environment) -> Result<(), ServerError> {
     // TODO: add lookup method that can search multiple statuses
     let running_hosts = host_model::by_status(env.db(), HostStatus::Up)
         .await
-        .map_err(|e| {
-            tracing::error!("Failed fetch hosts, error:{}", e);
-            ServerError::Internal
-        })?;
+        .map_err(|e| ServerError::Internal(e.to_string()))?;
 
     let unknown_hosts = host_model::by_status(env.db(), HostStatus::Unknown)
         .await
-        .map_err(|e| {
-            tracing::error!("Failed fetch hosts, error:{}", e);
-            ServerError::Internal
-        })?;
+        .map_err(|e| ServerError::Internal(e.to_string()))?;
 
     if running_hosts.is_empty() && unknown_hosts.is_empty() {
         tracing::info!("No hosts were running or unknown, skipping initialization...");

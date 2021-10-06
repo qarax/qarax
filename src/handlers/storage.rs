@@ -8,10 +8,9 @@ use models::storage::{NewStorage, Storage};
 pub async fn list(
     Extension(env): Extension<Environment>,
 ) -> Result<ApiResponse<Vec<Storage>>, ServerError> {
-    let storages = storage_model::list(env.db()).await.map_err(|e| {
-        tracing::error!("Failed to list storages, error: {}", e);
-        ServerError::Internal
-    })?;
+    let storages = storage_model::list(env.db())
+        .await
+        .map_err(|e| ServerError::Internal(e.to_string()))?;
 
     Ok(ApiResponse {
         data: storages,
@@ -23,10 +22,9 @@ pub async fn add(
     Extension(env): Extension<Environment>,
     Json(storage): Json<NewStorage>,
 ) -> Result<ApiResponse<Uuid>, ServerError> {
-    let storage_id = storage_model::add(env.db(), &storage).await.map_err(|e| {
-        tracing::error!("Can't add storage: {}", e);
-        ServerError::Internal
-    })?;
+    let storage_id = storage_model::add(env.db(), &storage)
+        .await
+        .map_err(|e| ServerError::Internal(e.to_string()))?;
 
     Ok(ApiResponse {
         data: storage_id,
@@ -40,10 +38,7 @@ pub async fn get(
 ) -> Result<ApiResponse<Storage>, ServerError> {
     let storage = storage_model::by_id(env.db(), storage_id)
         .await
-        .map_err(|e| {
-            tracing::error!("Can't find storage, error: {}", e);
-            ServerError::Internal
-        })?;
+        .map_err(|e| ServerError::Internal(e.to_string()))?;
 
     Ok(ApiResponse {
         data: storage,
