@@ -49,8 +49,8 @@ pub enum HostError {
     #[error("Can't update host: {0}, error: {1}")]
     Updated(Uuid, sqlx::Error),
 
-    #[error("{0}, error: {1}")]
-    Other(String, sqlx::Error),
+    #[error("{0}")]
+    Other(sqlx::Error),
 }
 
 pub async fn list(pool: &PgPool) -> Result<Vec<Host>, HostError> {
@@ -105,6 +105,38 @@ WHERE id = $1
     Ok(host)
 }
 
+pub async fn by_address(pool: &PgPool, address: &str) -> Result<Host, HostError> {
+    let host = sqlx::query_as!(
+        Host,
+        r#"
+SELECT id, name, address, port, status as "status: _", host_user, password
+FROM hosts
+WHERE address = $1
+        "#,
+        address
+    )
+    .fetch_one(pool)
+    .await?;
+
+    Ok(host)
+}
+
+pub async fn by_name(pool: &PgPool, host_name: &str) -> Result<Host, HostError> {
+    let host = sqlx::query_as!(
+        Host,
+        r#"
+SELECT id, name, address, port, status as "status: _", host_user, password
+FROM hosts
+WHERE name = $1
+        "#,
+        host_name
+    )
+    .fetch_one(pool)
+    .await?;
+
+    Ok(host)
+}
+
 pub async fn by_status(pool: &PgPool, status: Status) -> Result<Vec<Host>, HostError> {
     let hosts = sqlx::query_as!(
         Host,
@@ -117,7 +149,7 @@ WHERE status = $1
     )
     .fetch_all(pool)
     .await
-    .map_err(|e| HostError::Other(String::from("Couldn't find host"), e))?;
+    .map_err(|e| HostError::Other(e))?;
 
     Ok(hosts)
 }

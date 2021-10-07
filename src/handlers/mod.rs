@@ -124,7 +124,7 @@ pub enum ServerError {
     #[serde(rename(serialize = "validation error"))]
     Validation(String),
     #[error("Entity not found")]
-    #[serde(rename(serialize = "entity_not_found"))]
+    #[serde(rename(serialize = "entity not found"))]
     EntityNotFound(String),
 }
 

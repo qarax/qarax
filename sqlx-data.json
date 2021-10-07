@@ -142,6 +142,62 @@
       ]
     }
   },
+  "3baf8d42fd98faada111d37e66b1db0368390632e6a3814d59eacde05084c3f5": {
+    "query": "\nSELECT id, name, address, port, status as \"status: _\", host_user, password\nFROM hosts\nWHERE address = $1\n        ",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "id",
+          "type_info": "Uuid"
+        },
+        {
+          "ordinal": 1,
+          "name": "name",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 2,
+          "name": "address",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 3,
+          "name": "port",
+          "type_info": "Int4"
+        },
+        {
+          "ordinal": 4,
+          "name": "status: _",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 5,
+          "name": "host_user",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 6,
+          "name": "password",
+          "type_info": "Varchar"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Text"
+        ]
+      },
+      "nullable": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ]
+    }
+  },
   "4057db1b975235f473b4c90e719e2880e723a88e27f996752a9dbc7d79298cfa": {
     "query": "\nSELECT id, name, status as \"status: _\", readonly, rootfs, storage_id, cache_type as \"cache_type: _\"\nFROM drives\nWHERE id = $1\n        ",
     "describe": {
@@ -236,7 +292,7 @@
       "parameters": {
         "Left": [
           "Varchar",
-          "Int4",
+          "Varchar",
           "Int4",
           "Int4",
           "Uuid",
@@ -375,7 +431,7 @@
         {
           "ordinal": 2,
           "name": "status: _",
-          "type_info": "Int4"
+          "type_info": "Varchar"
         },
         {
           "ordinal": 3,
@@ -629,7 +685,7 @@
         {
           "ordinal": 2,
           "name": "status: _",
-          "type_info": "Int4"
+          "type_info": "Varchar"
         },
         {
           "ordinal": 3,
@@ -713,6 +769,62 @@
         ]
       },
       "nullable": [
+        false
+      ]
+    }
+  },
+  "ef42aad2ab9548eec81037210b58ca2966f7d3a8f0e7d5eecd4c7862d252f0e2": {
+    "query": "\nSELECT id, name, address, port, status as \"status: _\", host_user, password\nFROM hosts\nWHERE name = $1\n        ",
+    "describe": {
+      "columns": [
+        {
+          "ordinal": 0,
+          "name": "id",
+          "type_info": "Uuid"
+        },
+        {
+          "ordinal": 1,
+          "name": "name",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 2,
+          "name": "address",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 3,
+          "name": "port",
+          "type_info": "Int4"
+        },
+        {
+          "ordinal": 4,
+          "name": "status: _",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 5,
+          "name": "host_user",
+          "type_info": "Varchar"
+        },
+        {
+          "ordinal": 6,
+          "name": "password",
+          "type_info": "Varchar"
+        }
+      ],
+      "parameters": {
+        "Left": [
+          "Text"
+        ]
+      },
+      "nullable": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
         false
       ]
     }

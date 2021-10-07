@@ -12,13 +12,37 @@ use models::hosts::Host;
 use models::hosts::Status as HostStatus;
 use sqlx::PgPool;
 
+#[derive(Debug)]
+enum HostHandlerError {
+    HostNotFound(Uuid),
+    NameAlreadyExists(String),
+    AddressAlreadyExists(String),
+    Other(HostError),
+}
+
+impl From<HostHandlerError> for ServerError {
+    fn from(err: HostHandlerError) -> Self {
+        match err {
+            HostHandlerError::AddressAlreadyExists(address) => {
+                ServerError::Validation(format!("host address '{}' already exists", address))
+            }
+            HostHandlerError::HostNotFound(id) => {
+                ServerError::EntityNotFound(format!("host id '{}' not found", id))
+            }
+            HostHandlerError::NameAlreadyExists(name) => {
+                ServerError::Validation(format!("address {} already exists", name))
+            }
+            HostHandlerError::Other(e) => ServerError::Internal(format!("Internal error {}", e)),
+        }
+    }
+}
+
 pub async fn list(
     Extension(env): Extension<Environment>,
 ) -> Result<ApiResponse<Vec<Host>>, ServerError> {
-    tracing::info!("list works");
     let hosts = host_model::list(env.db())
         .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
+        .map_err(HostHandlerError::Other)?;
 
     Ok(ApiResponse {
         data: hosts,
@@ -30,10 +54,22 @@ pub async fn add(
     Extension(env): Extension<Environment>,
     Json(host): Json<NewHost>,
 ) -> Result<ApiResponse<Uuid>, ServerError> {
-    let host_id = host_model::add(env.db(), &host).await.map_err(|e| {
-        tracing::error!("Failed to add host {}", e);
-        ServerError::Validation(e.to_string())
-    })?;
+    if host_model::by_name(env.db(), &host.name).await.is_ok() {
+        Err(HostHandlerError::NameAlreadyExists(host.name.to_string()))?
+    }
+
+    if host_model::by_address(env.db(), &host.address)
+        .await
+        .is_ok()
+    {
+        Err(HostHandlerError::AddressAlreadyExists(
+            host.address.to_string(),
+        ))?
+    }
+
+    let host_id = host_model::add(env.db(), &host)
+        .await
+        .map_err(HostHandlerError::Other)?;
 
     Ok(ApiResponse {
         data: host_id,
@@ -45,16 +81,9 @@ pub async fn get(
     Extension(env): Extension<Environment>,
     Path(host_id): Path<Uuid>,
 ) -> Result<ApiResponse<Host>, ServerError> {
-    let host = host_model::by_id(env.db(), &host_id).await.map_err(|e| {
-        tracing::error!("Failed to find host: {}, error:{}", host_id, e);
-
-        match e {
-            HostError::Find(id, sqlx::Error::RowNotFound) => {
-                ServerError::EntityNotFound(id.to_string())
-            }
-            _ => ServerError::Internal(e.to_string()),
-        }
-    })?;
+    let host = host_model::by_id(env.db(), &host_id)
+        .await
+        .map_err(|_| HostHandlerError::HostNotFound(host_id))?;
 
     Ok(ApiResponse {
         data: host,
