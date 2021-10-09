@@ -26,11 +26,12 @@ pub struct NewHost {
 #[sqlx(rename_all = "lowercase")]
 #[sqlx(type_name = "varchar")]
 #[serde(rename_all = "lowercase")]
-#[strum(serialize_all = "lowercase")]
+#[strum(serialize_all = "snake_case")]
 pub enum Status {
     Unknown,
     Down,
     Installing,
+    InstallationFailed,
     Initializing,
     Up,
 }
@@ -47,7 +48,7 @@ pub enum HostError {
     Find(Uuid, sqlx::Error),
 
     #[error("Can't update host: {0}, error: {1}")]
-    Updated(Uuid, sqlx::Error),
+    Update(Uuid, sqlx::Error),
 
     #[error("{0}")]
     Other(sqlx::Error),
@@ -170,7 +171,7 @@ WHERE id = $2
     )
     .execute(pool)
     .await
-    .map_err(|e| HostError::Updated(host_id, e))?
+    .map_err(|e| HostError::Update(host_id, e))?
     .rows_affected();
 
     Ok(row_affected > 0)

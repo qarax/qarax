@@ -14,15 +14,23 @@ use sqlx::PgPool;
 
 #[derive(Debug)]
 enum HostHandlerError {
+    CannotAddHost(String),
+    CannotUpdateHost(Uuid),
     HostNotFound(Uuid),
     NameAlreadyExists(String),
     AddressAlreadyExists(String),
-    Other(HostError),
+    Other,
 }
 
 impl From<HostHandlerError> for ServerError {
     fn from(err: HostHandlerError) -> Self {
         match err {
+            HostHandlerError::CannotAddHost(name) => {
+                ServerError::Internal(format!("Cannot add host {}", name))
+            }
+            HostHandlerError::CannotUpdateHost(host_id) => {
+                ServerError::Internal(format!("Cannot update host {}", host_id))
+            }
             HostHandlerError::AddressAlreadyExists(address) => {
                 ServerError::Validation(format!("host address '{}' already exists", address))
             }
@@ -32,7 +40,38 @@ impl From<HostHandlerError> for ServerError {
             HostHandlerError::NameAlreadyExists(name) => {
                 ServerError::Validation(format!("address {} already exists", name))
             }
-            HostHandlerError::Other(e) => ServerError::Internal(format!("Internal error {}", e)),
+            HostHandlerError::Other => ServerError::Internal(format!("Internal error")),
+        }
+    }
+}
+
+impl From<HostError> for HostHandlerError {
+    fn from(err: HostError) -> Self {
+        match err {
+            HostError::Add(host_id, e) => {
+                tracing::error!("cannot add host '{}': {}", host_id, e);
+                HostHandlerError::CannotAddHost(host_id)
+            }
+            HostError::Find(host_id, e @ sqlx::Error::RowNotFound) => {
+                tracing::error!("cannot find host '{}': {}", host_id, e);
+                HostHandlerError::HostNotFound(host_id)
+            }
+            HostError::Find(_, e) => {
+                tracing::error!("Unexpected error: {}", e);
+                HostHandlerError::Other
+            }
+            HostError::List(e) => {
+                tracing::error!("cannot list hosts: {}", e);
+                HostHandlerError::Other
+            }
+            HostError::Update(host_id, e) => {
+                tracing::error!("cannot update host '{}': {}", host_id, e);
+                HostHandlerError::CannotUpdateHost(host_id)
+            }
+            HostError::Other(e) => {
+                tracing::error!("Unexpected error: {}", e);
+                HostHandlerError::Other
+            }
         }
     }
 }
@@ -42,7 +81,7 @@ pub async fn list(
 ) -> Result<ApiResponse<Vec<Host>>, ServerError> {
     let hosts = host_model::list(env.db())
         .await
-        .map_err(HostHandlerError::Other)?;
+        .map_err(HostHandlerError::from)?;
 
     Ok(ApiResponse {
         data: hosts,
@@ -69,7 +108,7 @@ pub async fn add(
 
     let host_id = host_model::add(env.db(), &host)
         .await
-        .map_err(HostHandlerError::Other)?;
+        .map_err(HostHandlerError::from)?;
 
     Ok(ApiResponse {
         data: host_id,
@@ -83,7 +122,7 @@ pub async fn get(
 ) -> Result<ApiResponse<Host>, ServerError> {
     let host = host_model::by_id(env.db(), &host_id)
         .await
-        .map_err(|_| HostHandlerError::HostNotFound(host_id))?;
+        .map_err(HostHandlerError::from)?;
 
     Ok(ApiResponse {
         data: host,
@@ -95,20 +134,13 @@ pub async fn install(
     Extension(env): Extension<Environment>,
     Path(host_id): Path<Uuid>,
 ) -> Result<ApiResponse<String>, ServerError> {
-    let host = host_model::by_id(env.db(), &host_id).await.map_err(|e| {
-        tracing::error!("Failed to find host: {}, error:{}", host_id, e);
-
-        match e {
-            HostError::Find(id, sqlx::Error::RowNotFound) => {
-                ServerError::EntityNotFound(id.to_string())
-            }
-            _ => ServerError::Internal(e.to_string()),
-        }
-    })?;
+    let host = host_model::by_id(env.db(), &host_id)
+        .await
+        .map_err(HostHandlerError::from)?;
 
     host_model::update_status(env.db(), host_id, HostStatus::Installing)
         .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
+        .map_err(HostHandlerError::from)?;
 
     let mut extra_params = BTreeMap::new();
     extra_params.insert(String::from("ansible_password"), host.password.to_owned());
@@ -139,7 +171,12 @@ pub async fn install(
                     .unwrap();
             }
 
-            Err(e) => tracing::error!("Installation failed: {}", e),
+            Err(e) => {
+                tracing::error!("Installation failed: {}", e);
+                host_model::update_status(env.db(), host_id, HostStatus::InstallationFailed)
+                    .await
+                    .unwrap();
+            }
         }
     });
 
@@ -152,7 +189,7 @@ pub async fn install(
 pub async fn find_running_host(pool: &PgPool) -> Result<Host, ServerError> {
     let hosts = host_model::by_status(pool, HostStatus::Up)
         .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
+        .map_err(HostHandlerError::from)?;
 
     if hosts.is_empty() {
         return Err(ServerError::EntityNotFound(String::from("host")));
@@ -165,11 +202,11 @@ pub async fn initalize_hosts(env: Environment) -> Result<(), ServerError> {
     // TODO: add lookup method that can search multiple statuses
     let running_hosts = host_model::by_status(env.db(), HostStatus::Up)
         .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
+        .map_err(HostHandlerError::from)?;
 
     let unknown_hosts = host_model::by_status(env.db(), HostStatus::Unknown)
         .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
+        .map_err(HostHandlerError::from)?;
 
     if running_hosts.is_empty() && unknown_hosts.is_empty() {
         tracing::info!("No hosts were running or unknown, skipping initialization...");
@@ -227,24 +264,17 @@ async fn health_check_internal(host: &Host) -> Result<(), String> {
 }
 
 async fn initialize_host(host: &Host, env: Environment) {
-    update_host_status(env.db(), &host.id, HostStatus::Initializing).await;
+    host_model::update_status(env.db(), host.id, HostStatus::Initializing)
+        .await
+        .unwrap();
     tracing::info!("Initializing host: {}...", host.id);
     if let Err(e) = health_check_internal(&host).await {
-        update_host_status(env.db(), &host.id, HostStatus::Unknown).await;
+        let _ = host_model::update_status(env.db(), host.id, HostStatus::Unknown).await;
         tracing::error!("Failed to initialize host: {}, error: {}", host.id, e);
         return;
     }
 
-    tracing::info!("Host {} intialized...", host.id);
-}
-
-async fn update_host_status(pool: &PgPool, host_id: &Uuid, status: HostStatus) -> () {
-    match host_model::update_status(pool, *host_id, status).await {
-        Ok(_) => (),
-        Err(e) => {
-            tracing::error!("Failed to update host: {}, error:{}", host_id, e);
-        }
-    }
+    tracing::info!("Host {} initialized...", host.id);
 }
 
 #[cfg(test)]

@@ -13,7 +13,7 @@ uuid = { version = "0.8.2", features = ["serde", "v4"] }
 serde = { version = "1.0.130", features = ["derive"] }
 serde_json = "1.0.68"
 anyhow = "1.0.44"
-thiserror = "1.0.29"
+thiserror = "1.0.30"
 tracing = "0.1.29"
 tracing-subscriber = "0.2.25"
 dotenv = "0.15.0"
