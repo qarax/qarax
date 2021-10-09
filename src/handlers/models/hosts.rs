@@ -150,7 +150,7 @@ WHERE status = $1
     )
     .fetch_all(pool)
     .await
-    .map_err(|e| HostError::Other(e))?;
+    .map_err(HostError::Other)?;
 
     Ok(hosts)
 }
