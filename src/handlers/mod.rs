@@ -35,7 +35,7 @@ pub async fn initialize_env(env: Environment) -> () {
         }
     }
 
-    tracing::info!("Finished initalizing hosts");
+    tracing::info!("Finished initializing hosts");
 
     ()
 }

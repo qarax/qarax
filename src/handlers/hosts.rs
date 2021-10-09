@@ -11,6 +11,7 @@ use models::hosts as host_model;
 use models::hosts::Host;
 use models::hosts::Status as HostStatus;
 use sqlx::PgPool;
+use tokio::task::JoinHandle;
 
 #[derive(Debug)]
 enum HostHandlerError {
@@ -213,12 +214,18 @@ pub async fn initalize_hosts(env: Environment) -> Result<(), ServerError> {
         return Ok(());
     }
 
-    // TODO: parallelize this
+    let mut join_handles = vec![];
     for host in [running_hosts, unknown_hosts].concat() {
         let env = env.clone();
-        tokio::spawn(async move {
+        let join_handle: JoinHandle<()> = tokio::spawn(async move {
             initialize_host(&host, env).await;
         });
+
+        join_handles.push(join_handle);
+    }
+
+    for handle in join_handles {
+        let _ = handle.await;
     }
 
     Ok(())
@@ -273,6 +280,10 @@ async fn initialize_host(host: &Host, env: Environment) {
         tracing::error!("Failed to initialize host: {}, error: {}", host.id, e);
         return;
     }
+
+    host_model::update_status(env.db(), host.id, HostStatus::Up)
+        .await
+        .unwrap();
 
     tracing::info!("Host {} initialized...", host.id);
 }
