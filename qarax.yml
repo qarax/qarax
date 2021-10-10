@@ -44,6 +44,14 @@ components:
         status:
           type: string
           readOnly: true
+          enum:
+            - up
+            - down
+            - unknown
+            - initializing
+            - installing
+            - installation_failed
+
     Error:
       type: object
       properties:
