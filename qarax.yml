@@ -11,6 +11,7 @@ externalDocs:
   url: 'https://github.com/qarax/qarax'
 tags:
   - name: Hosts
+  - name: Vms
 components:
   schemas:
     HostList:
@@ -52,6 +53,35 @@ components:
             - installing
             - installation_failed
 
+    Vm:
+      properties:
+        id:
+          format: uuid
+          type: string
+          readOnly: true
+        name:
+          type: string
+        status:
+          type: string
+          readOnly: true
+        host_id:
+          format: uuid
+          type: string
+        vcpu:
+          type: int32
+        memory:
+          type: int32
+        ip_address:
+          format: ipv4
+          type: string
+        mac_address:
+          type: string
+        network_mode:
+          type: string # TODO: enum
+        kernel_parameters:
+          type: string
+        kernel:
+          type: string
     Error:
       type: object
       properties:
