@@ -8,6 +8,11 @@ log = logging.getLogger(__name__)
 class Terraform:
     def __init__(self, workdir=None):
         self.workdir = workdir
+    
+    def init(self): 
+        out, err = self._cmd('init')
+        
+        return out, err
 
     def apply(self):
         out, err = self._cmd('apply', '-auto-approve', '-no-color')
