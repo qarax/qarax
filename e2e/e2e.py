@@ -23,6 +23,11 @@ def tf():
 
 @pytest.fixture(scope="module", autouse=True)
 def vm(tf):
+    _, err = tf.init()
+    if err:
+        log.error(err)
+        raise Exception("Failed to init terraform plan")
+        
     _, err = tf.apply()
     if err:
         log.error(err)
