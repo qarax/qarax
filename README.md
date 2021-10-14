@@ -43,4 +43,4 @@ Note: a simple `cargo test` will not work as the tests require a database and ca
 
 > Will we succeed?
 
-Unclear at the moment. Only time will tell.
+No
