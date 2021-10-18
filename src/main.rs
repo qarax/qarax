@@ -1,4 +1,4 @@
-use clap::Clap;
+use clap::{AppSettings, Parser};
 use dotenv::dotenv;
 use std::{error::Error, net::SocketAddr};
 
@@ -6,7 +6,7 @@ mod database;
 mod env;
 mod handlers;
 
-#[derive(Clap, Debug)]
+#[derive(Parser, Debug)]
 #[clap(
     name = "qarax",
     rename_all = "kebab-case",

@@ -2,13 +2,13 @@ mod vm;
 
 use vm::vmm_service::VmmService;
 
-use clap::Clap;
+use clap::{AppSettings, Parser};
 use std::net::SocketAddr;
 use std::time::Duration;
 use tonic::transport::Server;
 use vm::node::node_server::NodeServer;
 
-#[derive(Clap, Debug)]
+#[derive(Parser, Debug)]
 #[clap(
     name = "qarax-node",
     rename_all = "kebab-case",
