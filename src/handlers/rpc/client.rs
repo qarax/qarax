@@ -1,9 +1,9 @@
 use super::*;
 
-use node::{node_client::NodeClient, Response as NodeResponse, VmConfig, VmId};
+use node::{node_client::NodeClient, VmConfig};
 use std::{net::SocketAddr, sync::Arc};
 use tokio::sync::RwLock;
-use tonic::{IntoRequest, Request};
+
 use tonic_health::proto::{health_client::HealthClient, HealthCheckRequest};
 
 #[derive(Clone, Debug)]

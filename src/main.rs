@@ -1,4 +1,4 @@
-use clap::{AppSettings, Parser};
+use clap::{Parser};
 use dotenv::dotenv;
 use std::{error::Error, net::SocketAddr};
 

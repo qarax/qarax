@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::handlers::models::drives::{CacheType, Drive, Status as DriveStatus};
+use crate::handlers::models::drives::{CacheType};
 use crate::handlers::rpc::node::{Drive as VmDrive, VmConfig};
 use axum::extract::{Json, Path};
 use models::vms as vm_model;

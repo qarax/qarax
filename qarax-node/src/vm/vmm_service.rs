@@ -1,12 +1,12 @@
 extern crate firecracker_rust_sdk;
 
 use super::node::node_server::Node;
-use super::node::{Response as NodeResponse, Status as NodeStatus, VmConfig, VmId, VmList};
+use super::node::{Response as NodeResponse, VmConfig, VmId, VmList};
 use super::vm_handler::VmHandler;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tonic::{Code, Request, Response, Status};
+use tonic::{Request, Response, Status};
 
 #[derive(Debug, Default)]
 pub struct VmmService {
@@ -44,11 +44,11 @@ impl Node for VmmService {
         Ok(Response::new(config))
     }
 
-    async fn stop_vm(&self, request: Request<VmId>) -> Result<Response<NodeResponse>, Status> {
+    async fn stop_vm(&self, _request: Request<VmId>) -> Result<Response<NodeResponse>, Status> {
         unimplemented!()
     }
 
-    async fn list_vms(&self, request: Request<()>) -> Result<Response<VmList>, Status> {
+    async fn list_vms(&self, _request: Request<()>) -> Result<Response<VmList>, Status> {
         unimplemented!()
     }
 }
