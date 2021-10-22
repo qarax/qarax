@@ -6,8 +6,13 @@ use sqlx::{
 };
 
 pub async fn connect(db_url: &str) -> anyhow::Result<PgPool> {
+    let max_connections = &dotenv::var("MAX_CONNECTIONS")
+        .unwrap_or(String::from("10"))
+        .parse()
+        .unwrap();
+
     let pool = PgPoolOptions::new()
-        .max_connections(10)
+        .max_connections(*max_connections)
         .connect(db_url)
         .await?;
 
