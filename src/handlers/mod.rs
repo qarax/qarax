@@ -25,7 +25,7 @@ pub mod rpc;
 pub mod storage;
 pub mod vms;
 
-pub async fn initialize_env(env: Environment) -> () {
+pub async fn initialize_env(env: Environment) {
     tracing::info!("Initializing hosts...");
 
     match hosts::initalize_hosts(env).await {
@@ -36,8 +36,6 @@ pub async fn initialize_env(env: Environment) -> () {
     }
 
     tracing::info!("Finished initializing hosts");
-
-    ()
 }
 
 pub async fn app(env: Environment) -> Router<BoxRoute> {

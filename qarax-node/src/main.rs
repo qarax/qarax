@@ -2,7 +2,7 @@ mod vm;
 
 use vm::vmm_service::VmmService;
 
-use clap::{Parser};
+use clap::Parser;
 use std::net::SocketAddr;
 use std::time::Duration;
 use tonic::transport::Server;
