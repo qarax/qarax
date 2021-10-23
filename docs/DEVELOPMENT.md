@@ -19,36 +19,43 @@ rust
 [SQLx CLI](https://github.com/launchbadge/sqlx/tree/master/sqlx-cli)
 ```
 # only for postgres
-cargo install sqlx-cli --no-default-features --features postgres
+$ cargo install sqlx-cli --no-default-features --features postgres
 ```
 
 #### .env setup (optional)
 ```
-cp .env.sample .env
+$ cp .env.sample .env
 ```
-Change the varibale values if needed.
+Current required values are:
+```
+DATABASE_URL
+LOCAL_NODE_PATH
+SSH_PUB_KEY
+```
 
 #### Install ansible collections
 ```
-ansible-galaxy collection install -r ./playbooks/requirements.yml
+$ ansible-galaxy collection install -r ./playbooks/requirements.yml
 ```
 
 #### Start database server
 ```
-sudo systemctl start postgresql
+$ sudo systemctl start postgresql
 ```
+
+### Compile dependencies
+This project compiles for the musl target rather than glibc, thus you install the target:
+```shell
+$ rustup target add x86_64-unknown-linux-musl
+```
+
+Transitive dependencies (namely `ring`) require `musl-gcc` (or your distro's equivalent). 
 
 #### Run the server
 
 ```shell
 cargo run --bin qarax
 ```
-
-> Having issues with buildning or running the project?
-1. `rustup target add x86_64-unknown-linux-musl`
-2. install `llvsm`
-3. install `musl-gcc`
-
 
 #### Execute tests
 
@@ -66,6 +73,4 @@ Install [Terraform](https://learn.hashicorp.com/tutorials/terraform/install-cli?
 ./e2e/run_tests.sh
 ```
 
-> Having issues with running e2e?
-1. install `libvirt`
-2. clean the databse from old runs using `truncate hosts cascade;`
+Running e2e requires `libvirt`, as the terraform plan uses the `libvirt` provides. `libvirtd` must be running. 
