@@ -5,3 +5,11 @@
     user: root
     state: present
     key: "{{ lookup('file', ssh_key_location) }}"
+
+- name: Create storage directories
+  ansible.builtin.file:
+    path: '/home/qarax/storage/{{ item.storage_type }}'
+    state: directory
+  loop:
+    - { storage_type: local }
+    - { storage_type: shared }
