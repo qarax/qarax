@@ -52,7 +52,7 @@ pub async fn start(
     Path(vm_id): Path<Uuid>,
 ) -> Result<ApiResponse<String>, ServerError> {
     let host = hosts::find_running_host(env.db()).await?;
-    let clients = &*env.clients().read().await;
+    let clients = &*env.vmm_clients().read().await;
 
     let client = clients.get(&host.id).unwrap();
     let vm = vm_model::by_id(env.db(), &vm_id)

@@ -39,6 +39,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .set_serving::<VmServiceServer<VmmService>>()
         .await;
 
+    health_reporter
+        .set_serving::<StorageServiceServer<StorageHandler>>()
+        .await;
+
     tracing::info!("Starting on port {}", args.port);
     let addr = SocketAddr::from(([0, 0, 0, 0], args.port));
 

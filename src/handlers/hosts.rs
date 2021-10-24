@@ -2,9 +2,10 @@ use std::collections::BTreeMap;
 
 use crate::handlers::ansible::AnsibleCommand;
 use crate::handlers::models::hosts::HostError;
+use crate::handlers::rpc::client::StorageClient;
 
 use super::models::hosts::NewHost;
-use super::rpc::client::Client;
+use super::rpc::client::VmmClient;
 use super::*;
 use axum::extract::{Json, Path};
 use models::hosts as host_model;
@@ -242,7 +243,7 @@ pub async fn health_check(
         return Err(ServerError::Validation(host_id.to_string()));
     };
 
-    if health_check_internal(&host).await.is_err() {
+    if health_check_internal(&host, env).await.is_err() {
         tracing::error!("Healthcheck for host: {} failed", host_id);
         return Err(ServerError::Validation(host_id.to_string()));
     }
@@ -253,13 +254,30 @@ pub async fn health_check(
     })
 }
 
-async fn health_check_internal(host: &Host) -> Result<(), String> {
-    match Client::connect(format!("{}:{}", host.address, host.port).parse().unwrap()).await {
+async fn health_check_internal(host: &Host, env: Environment) -> Result<(), String> {
+    match VmmClient::connect(format!("{}:{}", host.address, host.port).parse().unwrap()).await {
         Ok(client) => {
             if let Err(e) = client.clone().health_check().await {
                 tracing::error!("Healthcheck failed: {}", e);
                 return Err(e.to_string());
             }
+
+            env.vmm_clients().write().await.insert(host.id, client);
+        }
+        Err(e) => {
+            tracing::error!("Could not connect to host {}, error: {}", host.id, e);
+            return Err(String::from("Could not connect to host"));
+        }
+    }
+
+    match StorageClient::connect(format!("{}:{}", host.address, host.port).parse().unwrap()).await {
+        Ok(client) => {
+            if let Err(e) = client.clone().health_check().await {
+                tracing::error!("Healthcheck failed: {}", e);
+                return Err(e.to_string());
+            }
+
+            env.storage_clients().write().await.insert(host.id, client);
 
             Ok(())
         }
@@ -275,7 +293,7 @@ async fn initialize_host(host: &Host, env: Environment) {
         .await
         .unwrap();
     tracing::info!("Initializing host: {}...", host.id);
-    if let Err(e) = health_check_internal(&host).await {
+    if let Err(e) = health_check_internal(&host, env.clone()).await {
         let _ = host_model::update_status(env.db(), host.id, HostStatus::Unknown).await;
         tracing::error!("Failed to initialize host: {}, error: {}", host.id, e);
         return;

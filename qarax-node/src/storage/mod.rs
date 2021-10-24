@@ -1,8 +1,13 @@
 pub mod storage_handler;
 
+use strum_macros::{Display, EnumString};
+
 pub static STORAGE_PATH: &str = "/home/qarax/storage/";
 
-enum StorageType {
+#[derive(EnumString, Display)]
+pub enum StorageType {
+    #[strum(serialize = "local")]
     Local,
+    #[strum(serialize = "shared")]
     Shared,
 }

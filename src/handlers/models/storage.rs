@@ -44,7 +44,7 @@ pub enum Status {
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct StorageConfig {
     pub host_id: Option<Uuid>,
-    pub path: Option<String>,
+    pub path: Option<String>, // TODO: remove
     pub pool_name: Option<String>,
 }
 
