@@ -51,8 +51,24 @@ message VmID {
     string vmID = 1;
 }
 
-service Node {
+service VmService {
     rpc StartVM(VmConfig) returns (VmConfig) {}
     rpc StopVM(VmID) returns (Response) {}
     rpc ListVms(google.protobuf.Empty) returns (VmList) {}
+}
+
+
+message Storage {
+    string storageID = 1;
+    string storageName = 2;
+    StorageType storageType = 3;
+}
+
+enum StorageType {
+    LOCAL = 0;
+    SHARED = 1;
+}
+
+service StorageService {
+    rpc Create(Storage) returns (Response) {}
 }

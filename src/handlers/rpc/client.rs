@@ -1,6 +1,7 @@
 use super::*;
 
-use node::{node_client::NodeClient, VmConfig};
+use node::storage_service_client::StorageServiceClient;
+use node::{vm_service_client::VmServiceClient, VmConfig};
 use std::{net::SocketAddr, sync::Arc};
 use tokio::sync::RwLock;
 
@@ -9,12 +10,13 @@ use tonic_health::proto::{health_client::HealthClient, HealthCheckRequest};
 #[derive(Clone, Debug)]
 pub struct Client {
     address: SocketAddr,
-    client: Arc<RwLock<NodeClient<tonic::transport::Channel>>>,
+    client: Arc<RwLock<VmServiceClient<tonic::transport::Channel>>>,
 }
 
 impl Client {
     pub async fn connect(addr: SocketAddr) -> Result<Client, tonic::transport::Error> {
-        let client = NodeClient::connect(format!("http://{}:{}", addr.ip(), addr.port())).await?;
+        let client =
+            VmServiceClient::connect(format!("http://{}:{}", addr.ip(), addr.port())).await?;
 
         Ok(Self {
             address: addr,
