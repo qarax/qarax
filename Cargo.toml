@@ -15,22 +15,22 @@ serde_json = "1.0.68"
 anyhow = "1.0.44"
 thiserror = "1.0.30"
 tracing = "0.1.29"
-tracing-subscriber = "0.2.25"
+tracing-subscriber = { version = "0.3.1", features = ["env-filter"] }
 dotenv = "0.15.0"
 strum = "0.22.0"
 strum_macros = "0.22.0"
 tokio = { version = "1.12.0", features = ["full"] }
-hyper = { version = "0.14.13", features = ["full"] }
+hyper = { version = "0.14.14", features = ["full"] }
 tower = "0.4.10"
 http = "0.2.5"
 tower-http = { version = "0.1.1", features = ["trace"] }
-tonic = "0.5.2"
-prost = "0.8.0"
+tonic = "0.6.0"
+prost = "0.9.0"
 clap = "3.0.0-beta.5"
-tonic-health = "0.4.1"
+tonic-health = "0.5.0"
 
 [build-dependencies]
-tonic-build = "0.5.2"
+tonic-build = "0.6.0"
 
 [workspace]
 default-members = [".", "qarax-node"]

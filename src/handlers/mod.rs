@@ -5,9 +5,8 @@ use crate::env::Environment;
 use axum::{
     body::{Bytes, Full},
     extract::Extension,
-    handler::{get, post},
     response::{self, IntoResponse},
-    routing::BoxRoute,
+    routing::{get, post},
     AddExtensionLayer, Router,
 };
 use http::{Response, StatusCode};
@@ -38,7 +37,7 @@ pub async fn initialize_env(env: Environment) {
     tracing::info!("Finished initializing hosts");
 }
 
-pub async fn app(env: Environment) -> Router<BoxRoute> {
+pub async fn app(env: Environment) -> Router {
     initialize_env(env.clone()).await;
     Router::new()
         .route("/", get(|| async { "hello" }))
@@ -49,45 +48,39 @@ pub async fn app(env: Environment) -> Router<BoxRoute> {
         .nest("/vms", vms())
         .layer(AddExtensionLayer::new(env.clone()))
         .layer(tower_http::trace::TraceLayer::new_for_http())
-        .boxed()
 }
 
-pub fn hosts() -> Router<BoxRoute> {
+pub fn hosts() -> Router {
     Router::new()
         .route("/:id", get(hosts::get))
         .route("/:id/install", post(hosts::install))
         .route("/:id/healthcheck", post(hosts::health_check))
         .route("/", get(hosts::list).post(hosts::add))
-        .boxed()
 }
 
-pub fn storage() -> Router<BoxRoute> {
+pub fn storage() -> Router {
     Router::new()
         .route("/:id", get(storage::get))
         .route("/", get(storage::list).post(storage::add))
-        .boxed()
 }
 
-pub fn drives() -> Router<BoxRoute> {
+pub fn drives() -> Router {
     Router::new()
         .route("/:id", get(drives::get))
         .route("/", get(drives::list).post(drives::add))
-        .boxed()
 }
 
-pub fn kernels() -> Router<BoxRoute> {
+pub fn kernels() -> Router {
     Router::new()
         .route("/:id", get(kernels::get))
         .route("/", get(kernels::list).post(kernels::add))
-        .boxed()
 }
 
-pub fn vms() -> Router<BoxRoute> {
+pub fn vms() -> Router {
     Router::new()
         .route("/:id", get(vms::get))
         .route("/", get(vms::list).post(vms::add))
         .route("/:id/start", post(vms::start))
-        .boxed()
 }
 
 pub struct ApiResponse<T> {
