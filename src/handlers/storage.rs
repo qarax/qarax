@@ -31,8 +31,6 @@ pub async fn add(
         .map_err(|e| ServerError::Internal(e.to_string()))?;
 
     let clients = &*env.storage_clients().read().await;
-    tracing::info!("clients {:?}", clients);
-    tracing::info!("storage {:?}", storage);
     let client = clients.get(&storage.config.host_id.unwrap()).unwrap(); // TODO: handle errors properly
 
     client.create(storage).await.unwrap();

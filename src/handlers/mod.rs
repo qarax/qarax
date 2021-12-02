@@ -1,9 +1,7 @@
-use std::convert::Infallible;
-
 use crate::env::Environment;
 
 use axum::{
-    body::{Bytes, Full},
+    body::BoxBody,
     extract::Extension,
     response::{self, IntoResponse},
     routing::{get, post},
@@ -92,10 +90,7 @@ impl<T> IntoResponse for ApiResponse<T>
 where
     T: Send + Sync + Serialize,
 {
-    type Body = Full<Bytes>;
-    type BodyError = Infallible;
-
-    fn into_response(self) -> Response<Self::Body> {
+    fn into_response(self) -> Response<BoxBody> {
         let mut response = response::Json(json!({
             "response": self.data,
         }))
@@ -120,10 +115,7 @@ pub enum ServerError {
 }
 
 impl IntoResponse for ServerError {
-    type Body = Full<Bytes>;
-    type BodyError = Infallible;
-
-    fn into_response(self) -> Response<Self::Body> {
+    fn into_response(self) -> Response<BoxBody> {
         let code = match self {
             ServerError::Internal(ref s) => {
                 tracing::error!("Internal error: {}", s);
