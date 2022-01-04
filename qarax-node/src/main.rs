@@ -21,7 +21,7 @@ use storage::storage_handler::StorageHandler;
     rename_all_env = "screaming-snake"
 )]
 pub struct Args {
-    #[clap(short, long, default_value = "50051", env)]
+    #[clap(short, long, default_value = "50051")]
     port: u16,
 }
 

@@ -13,7 +13,7 @@ mod handlers;
     rename_all_env = "screaming-snake"
 )]
 pub struct Args {
-    #[clap(short, long, default_value = "3000", env)]
+    #[clap(short, long, default_value = "3000")]
     port: u16,
 }
 
