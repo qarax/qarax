@@ -7,10 +7,11 @@ use axum::{
     routing::{get, post},
     AddExtensionLayer, Router,
 };
-use http::{Response, StatusCode};
+use http::{Method, Response, StatusCode};
 use serde::Serialize;
 use serde_json::json;
 use thiserror::Error;
+use tower_http::cors::{any, CorsLayer};
 use uuid::Uuid;
 
 mod ansible;
@@ -46,6 +47,11 @@ pub async fn app(env: Environment) -> Router {
         .nest("/vms", vms())
         .layer(AddExtensionLayer::new(env.clone()))
         .layer(tower_http::trace::TraceLayer::new_for_http())
+        .layer(
+            CorsLayer::new()
+                .allow_origin(any())
+                .allow_methods(vec![Method::GET]),
+        )
 }
 
 pub fn hosts() -> Router {
