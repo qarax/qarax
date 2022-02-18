@@ -1,4 +1,9 @@
+mod rpc;
+mod storage;
 mod vm;
+
+use rpc::node::storage_service_server::StorageServiceServer;
+use rpc::node::vm_service_server::VmServiceServer;
 
 use vm::vmm_service::VmmService;
 
@@ -6,7 +11,8 @@ use clap::Parser;
 use std::net::SocketAddr;
 use std::time::Duration;
 use tonic::transport::Server;
-use vm::node::node_server::NodeServer;
+
+use storage::storage_handler::StorageHandler;
 
 #[derive(Parser, Debug)]
 #[clap(
@@ -15,7 +21,7 @@ use vm::node::node_server::NodeServer;
     rename_all_env = "screaming-snake"
 )]
 pub struct Args {
-    #[clap(short, long, default_value = "50051", env)]
+    #[clap(short, long, default_value = "50051")]
     port: u16,
 }
 
@@ -30,7 +36,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
     health_reporter
-        .set_serving::<NodeServer<VmmService>>()
+        .set_serving::<VmServiceServer<VmmService>>()
+        .await;
+
+    health_reporter
+        .set_serving::<StorageServiceServer<StorageHandler>>()
         .await;
 
     tracing::info!("Starting on port {}", args.port);
@@ -39,7 +49,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Server::builder()
         .tcp_keepalive(Some(Duration::from_secs(60)))
         .add_service(health_service)
-        .add_service(NodeServer::new(VmmService::default()))
+        .add_service(VmServiceServer::new(VmmService::default()))
+        .add_service(StorageServiceServer::new(StorageHandler::default()))
         .serve(addr)
         .await?;
 

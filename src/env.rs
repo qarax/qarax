@@ -3,19 +3,21 @@ use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
-use crate::handlers::rpc::client::Client;
+use crate::handlers::rpc::client::{StorageClient, VmmClient};
 
 #[derive(Clone, Debug)]
 pub struct Environment {
     pool: Arc<PgPool>,
-    clients: Arc<RwLock<HashMap<Uuid, Client>>>,
+    vmm_clients: Arc<RwLock<HashMap<Uuid, VmmClient>>>,
+    storage_clients: Arc<RwLock<HashMap<Uuid, StorageClient>>>,
 }
 
 impl Environment {
     pub async fn new(pool: PgPool) -> anyhow::Result<Self> {
         Ok(Self {
             pool: Arc::new(pool),
-            clients: Arc::new(RwLock::new(HashMap::new())),
+            vmm_clients: Arc::new(RwLock::new(HashMap::new())),
+            storage_clients: Arc::new(RwLock::new(HashMap::new())),
         })
     }
 
@@ -23,7 +25,11 @@ impl Environment {
         &self.pool
     }
 
-    pub fn clients(&self) -> &RwLock<HashMap<Uuid, Client>> {
-        &self.clients
+    pub fn vmm_clients(&self) -> &RwLock<HashMap<Uuid, VmmClient>> {
+        &self.vmm_clients
+    }
+
+    pub fn storage_clients(&self) -> &RwLock<HashMap<Uuid, StorageClient>> {
+        &self.storage_clients
     }
 }

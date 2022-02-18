@@ -44,9 +44,11 @@ $ sudo systemctl start postgresql
 ```
 
 ### Compile dependencies
+
 This project compiles for the musl target rather than glibc, thus you install the target:
+
 ```shell
-$ rustup target add x86_64-unknown-linux-musl
+rustup target add x86_64-unknown-linux-musl
 ```
 
 Transitive dependencies (namely `ring`) require `musl-gcc` (or your distro's equivalent). 

@@ -1,6 +1,85 @@
 use sqlx::types::Json;
 
+use crate::handlers::ServerError;
+
 use super::*;
+
+#[derive(Error, Debug)]
+pub enum StorageError {
+    #[error("Inavlid name: {0}")]
+    InvalidName(String),
+    #[error("Invalid config {0}")]
+    InvalidConfig(String),
+    #[error("Unexpected failure: {0}")]
+    Other(#[source] Box<dyn std::error::Error + Send + Sync>),
+}
+
+impl From<sqlx::Error> for StorageError {
+    fn from(e: sqlx::Error) -> Self {
+        StorageError::Other(Box::new(e))
+    }
+}
+
+impl From<StorageError> for ServerError {
+    fn from(e: StorageError) -> Self {
+        match e {
+            StorageError::InvalidName(e) => ServerError::Validation(e),
+            StorageError::InvalidConfig(e) => ServerError::Validation(e),
+            StorageError::Other(e) => ServerError::Internal(e.to_string()),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct StorageName(pub String);
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct NewStorage {
+    pub name: StorageName,
+    pub storage_type: StorageType,
+    pub config: StorageConfig,
+}
+
+impl StorageName {
+    pub fn new(name: String) -> Result<Self, StorageError> {
+        if !name.chars().all(char::is_alphanumeric) {
+            return Err(StorageError::InvalidName(name));
+        }
+
+        Ok(Self(name))
+    }
+}
+
+impl NewStorage {
+    pub fn new(
+        name: StorageName,
+        storage_type: StorageType,
+        config: StorageConfig,
+    ) -> Result<Self, StorageError> {
+        match storage_type {
+            StorageType::Local => {
+                if config.host_id.is_none() {
+                    return Err(StorageError::InvalidConfig(String::from(
+                        "missing host_id for local storage",
+                    )));
+                }
+            }
+            StorageType::Shared => {
+                if config.pool_name.is_none() {
+                    return Err(StorageError::InvalidConfig(String::from(
+                        "missing pool name for shared storage",
+                    )));
+                }
+            }
+        }
+
+        Ok(Self {
+            name,
+            storage_type,
+            config,
+        })
+    }
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Storage {
@@ -9,13 +88,6 @@ pub struct Storage {
     pub status: Status,
     pub storage_type: StorageType,
     pub config: Json<StorageConfig>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct NewStorage {
-    pub name: String,
-    pub storage_type: StorageType,
-    pub config: StorageConfig,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone, Eq, PartialEq, Type, EnumString, Display)]
@@ -44,20 +116,7 @@ pub enum Status {
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct StorageConfig {
     pub host_id: Option<Uuid>,
-    pub path: Option<String>,
     pub pool_name: Option<String>,
-}
-
-#[derive(Error, Debug)]
-pub enum StorageError {
-    #[error("Couldn't list storages: '{0}'")]
-    List(sqlx::Error),
-
-    #[error("Couldn't find storage: '{0}', error: '{1}'")]
-    Find(Uuid, sqlx::Error),
-
-    #[error("Couldn't add storage '{0}', error: '{1}'")]
-    Add(String, sqlx::Error),
 }
 
 pub async fn list(pool: &PgPool) -> Result<Vec<Storage>, StorageError> {
@@ -69,8 +128,7 @@ FROM storage
         "#
     )
     .fetch_all(pool)
-    .await
-    .map_err(StorageError::List)?;
+    .await?;
 
     Ok(storages)
 }
@@ -82,14 +140,13 @@ INSERT INTO storage (name, status, storage_type, config)
 VALUES ( $1, $2, $3, $4)
 RETURNING id
         "#,
-        storage.name,
+        storage.name.0,
         Status::Down as Status,
         storage.storage_type.to_string(),
         Json(&storage.config) as _,
     )
     .fetch_one(pool)
-    .await
-    .map_err(|e| StorageError::Add(storage.name.to_owned(), e))?;
+    .await?;
 
     Ok(rec.id)
 }
@@ -105,8 +162,7 @@ WHERE id = $1
         storage_id
     )
     .fetch_one(pool)
-    .await
-    .map_err(|e| StorageError::Find(storage_id, e))?;
+    .await?;
 
     Ok(storage)
 }

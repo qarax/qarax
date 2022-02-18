@@ -1,19 +1,23 @@
-use std::convert::Infallible;
-
 use crate::env::Environment;
 
 use axum::{
-    body::{Bytes, Full},
+    body::BoxBody,
     extract::Extension,
-    handler::{get, post},
     response::{self, IntoResponse},
-    routing::BoxRoute,
+    routing::{get, post},
     AddExtensionLayer, Router,
 };
-use http::{Response, StatusCode};
-use serde::Serialize;
+use http::{header::HeaderName, Method, Request, Response, StatusCode};
+use hyper::Body;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use thiserror::Error;
+use tower::ServiceBuilder;
+use tower_http::{
+    cors::{any, CorsLayer},
+    request_id::{MakeRequestId, PropagateRequestIdLayer, RequestId, SetRequestIdLayer},
+    trace::TraceLayer,
+};
 use uuid::Uuid;
 
 mod ansible;
@@ -38,8 +42,9 @@ pub async fn initialize_env(env: Environment) {
     tracing::info!("Finished initializing hosts");
 }
 
-pub async fn app(env: Environment) -> Router<BoxRoute> {
+pub async fn app(env: Environment) -> Router {
     initialize_env(env.clone()).await;
+    let x_request_id = HeaderName::from_static("x-request-id");
     Router::new()
         .route("/", get(|| async { "hello" }))
         .nest("/hosts", hosts())
@@ -47,47 +52,76 @@ pub async fn app(env: Environment) -> Router<BoxRoute> {
         .nest("/drives", drives())
         .nest("/kernels", kernels())
         .nest("/vms", vms())
-        .layer(AddExtensionLayer::new(env.clone()))
-        .layer(tower_http::trace::TraceLayer::new_for_http())
-        .boxed()
+        .layer(
+            ServiceBuilder::new()
+                .layer(PropagateRequestIdLayer::new(x_request_id.clone()))
+                .layer(SetRequestIdLayer::new(x_request_id, MakeRequestUuid))
+                .layer(
+                    TraceLayer::new_for_http().make_span_with(|request: &Request<Body>| {
+                        let request_id = request
+                            .extensions()
+                            .get::<RequestId>()
+                            .and_then(|id| id.header_value().to_str().ok())
+                            .unwrap_or_default();
+
+                        tracing::info_span!(
+                            "HTTP",
+                            http.method = %request.method(),
+                            http.url = %request.uri(),
+                            request_id = %request_id,
+                        )
+                    }),
+                )
+                .layer(
+                    CorsLayer::new()
+                        .allow_origin(any())
+                        .allow_methods(vec![Method::GET]),
+                )
+                .layer(AddExtensionLayer::new(env.clone())),
+        )
 }
 
-pub fn hosts() -> Router<BoxRoute> {
+pub fn hosts() -> Router {
     Router::new()
         .route("/:id", get(hosts::get))
         .route("/:id/install", post(hosts::install))
         .route("/:id/healthcheck", post(hosts::health_check))
         .route("/", get(hosts::list).post(hosts::add))
-        .boxed()
 }
 
-pub fn storage() -> Router<BoxRoute> {
+pub fn storage() -> Router {
     Router::new()
         .route("/:id", get(storage::get))
         .route("/", get(storage::list).post(storage::add))
-        .boxed()
 }
 
-pub fn drives() -> Router<BoxRoute> {
+pub fn drives() -> Router {
     Router::new()
         .route("/:id", get(drives::get))
         .route("/", get(drives::list).post(drives::add))
-        .boxed()
 }
 
-pub fn kernels() -> Router<BoxRoute> {
+pub fn kernels() -> Router {
     Router::new()
         .route("/:id", get(kernels::get))
         .route("/", get(kernels::list).post(kernels::add))
-        .boxed()
 }
 
-pub fn vms() -> Router<BoxRoute> {
+pub fn vms() -> Router {
     Router::new()
         .route("/:id", get(vms::get))
         .route("/", get(vms::list).post(vms::add))
         .route("/:id/start", post(vms::start))
-        .boxed()
+}
+
+#[derive(Clone, Copy)]
+struct MakeRequestUuid;
+
+impl MakeRequestId for MakeRequestUuid {
+    fn make_request_id<B>(&mut self, _: &Request<B>) -> Option<RequestId> {
+        let request_id = Uuid::new_v4().to_string().parse().unwrap();
+        Some(RequestId::new(request_id))
+    }
 }
 
 pub struct ApiResponse<T> {
@@ -99,10 +133,7 @@ impl<T> IntoResponse for ApiResponse<T>
 where
     T: Send + Sync + Serialize,
 {
-    type Body = Full<Bytes>;
-    type BodyError = Infallible;
-
-    fn into_response(self) -> Response<Self::Body> {
+    fn into_response(self) -> Response<BoxBody> {
         let mut response = response::Json(json!({
             "response": self.data,
         }))
@@ -127,10 +158,7 @@ pub enum ServerError {
 }
 
 impl IntoResponse for ServerError {
-    type Body = Full<Bytes>;
-    type BodyError = Infallible;
-
-    fn into_response(self) -> Response<Self::Body> {
+    fn into_response(self) -> Response<BoxBody> {
         let code = match self {
             ServerError::Internal(ref s) => {
                 tracing::error!("Internal error: {}", s);

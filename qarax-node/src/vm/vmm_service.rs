@@ -1,8 +1,8 @@
 extern crate firecracker_rust_sdk;
 
-use super::node::node_server::Node;
-use super::node::{Response as NodeResponse, VmConfig, VmId, VmList};
 use super::vm_handler::VmHandler;
+use crate::rpc::node::vm_service_server::VmService;
+use crate::rpc::node::{Response as NodeResponse, VmConfig, VmId, VmList};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -14,7 +14,7 @@ pub struct VmmService {
 }
 
 #[tonic::async_trait]
-impl Node for VmmService {
+impl VmService for VmmService {
     async fn start_vm(&self, request: Request<VmConfig>) -> Result<Response<VmConfig>, Status> {
         let mut config = request.into_inner();
         tracing::info!(

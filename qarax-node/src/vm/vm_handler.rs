@@ -1,6 +1,7 @@
 use std::{process::Stdio, sync::Arc};
 
-use super::node::VmConfig;
+use crate::rpc::node::VmConfig;
+
 use anyhow::{anyhow, Result};
 use firecracker_rust_sdk::models::{boot_source, drive, logger, machine, machine_configuration};
 use tokio::{fs::OpenOptions, io::AsyncWriteExt, process::Command, sync::RwLock};
