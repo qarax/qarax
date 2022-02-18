@@ -41,17 +41,11 @@ impl VmmClient {
             .header("Content-Type", "application/json")
             .body(Body::from(body.to_vec()))?;
 
-        let resp = self.client.request(req).await?;
+        let mut resp = self.client.request(req).await?;
         tracing::debug!("Incoming status: {}", resp.status());
 
-        let bytes = resp
-            .into_body()
-            .try_fold(Vec::default(), |mut buf, bytes| async {
-                buf.extend(bytes);
-                Ok(buf)
-            })
-            .await?;
+        let bytes = hyper::body::to_bytes(resp.body_mut()).await?;
 
-        Ok(String::from_utf8(bytes).expect("Couldn't convert to string"))
+        Ok(String::from_utf8(bytes.to_vec()).expect("Couldn't convert to string"))
     }
 }
