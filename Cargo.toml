@@ -8,26 +8,39 @@ edition = "2021"
 
 [dependencies]
 axum = { git = "https://github.com/tokio-rs/axum" }
-sqlx = { version = "0.5.10", features = ["runtime-tokio-rustls", "postgres", "uuid", "json", "migrate", "macros", "offline"] }
+sqlx = { version = "0.5.10", features = [
+    "runtime-tokio-rustls",
+    "postgres",
+    "uuid",
+    "json",
+    "migrate",
+    "macros",
+    "offline",
+] }
 uuid = { version = "0.8.2", features = ["serde", "v4"] }
 serde = { version = "1.0.136", features = ["derive"] }
-serde_json = "1.0.78"
+serde_json = "1.0.79"
 anyhow = "1.0.53"
 thiserror = "1.0.30"
-tracing = "0.1.29"
-tracing-subscriber = { version = "0.3.7", features = ["env-filter"] }
+tracing = { version = "0.1.31", features = ["log"] }
+tracing-subscriber = { version = "0.3.9", features = [
+    "env-filter",
+    "registry",
+] }
 dotenv = "0.15.0"
 strum = "0.23.0"
 strum_macros = "0.23.1"
-tokio = { version = "1.16.1", features = ["full"] }
-hyper = { version = "0.14.16", features = ["full"] }
-tower = "0.4.11"
+tokio = { version = "1.17.0", features = ["full"] }
+hyper = { version = "0.14.17", features = ["full"] }
+tower = "0.4.12"
 http = "0.2.6"
-tower-http = { version = "0.2.1", features = ["trace", "cors"] }
+tower-http = { version = "0.2.2", features = ["trace", "cors", "request-id"] }
 tonic = "0.6.2"
 prost = "0.9.0"
-clap = "3.0.13"
+clap = "3.1.0"
 tonic-health = "0.5.0"
+tracing-bunyan-formatter = "0.3.2"
+tracing-log = "0.1.2"
 
 [build-dependencies]
 tonic-build = "0.6.2"
@@ -35,4 +48,3 @@ tonic-build = "0.6.2"
 [workspace]
 default-members = [".", "qarax-node"]
 members = [".", "qarax-node"]
-

@@ -6,9 +6,7 @@ use std::path::Path;
 use tonic::{Request, Response, Status};
 
 use crate::rpc::node::storage_service_server::StorageService;
-use crate::rpc::node::{
-    Response as NodeResponse, Status as NodeStatus, Storage, StorageType as RequestStorageType,
-};
+use crate::rpc::node::{Response as NodeResponse, Status as NodeStatus, Storage};
 
 #[derive(Debug, Default)]
 pub(crate) struct StorageHandler {}
@@ -20,6 +18,7 @@ impl StorageService for StorageHandler {
         let path = Path::new(&STORAGE_PATH);
         let path = path.join(StorageType::from(storage.storage_type).to_string());
         let path = path.join(storage.storage_id);
+
         // TODO: create kernel_store and volume_store
         fs::create_dir_all(path)?;
 

@@ -7,11 +7,17 @@ use axum::{
     routing::{get, post},
     AddExtensionLayer, Router,
 };
-use http::{Method, Response, StatusCode};
-use serde::Serialize;
+use http::{header::HeaderName, Method, Request, Response, StatusCode};
+use hyper::Body;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use thiserror::Error;
-use tower_http::cors::{any, CorsLayer};
+use tower::ServiceBuilder;
+use tower_http::{
+    cors::{any, CorsLayer},
+    request_id::{MakeRequestId, PropagateRequestIdLayer, RequestId, SetRequestIdLayer},
+    trace::TraceLayer,
+};
 use uuid::Uuid;
 
 mod ansible;
@@ -38,6 +44,7 @@ pub async fn initialize_env(env: Environment) {
 
 pub async fn app(env: Environment) -> Router {
     initialize_env(env.clone()).await;
+    let x_request_id = HeaderName::from_static("x-request-id");
     Router::new()
         .route("/", get(|| async { "hello" }))
         .nest("/hosts", hosts())
@@ -45,12 +52,32 @@ pub async fn app(env: Environment) -> Router {
         .nest("/drives", drives())
         .nest("/kernels", kernels())
         .nest("/vms", vms())
-        .layer(AddExtensionLayer::new(env.clone()))
-        .layer(tower_http::trace::TraceLayer::new_for_http())
         .layer(
-            CorsLayer::new()
-                .allow_origin(any())
-                .allow_methods(vec![Method::GET]),
+            ServiceBuilder::new()
+                .layer(PropagateRequestIdLayer::new(x_request_id.clone()))
+                .layer(SetRequestIdLayer::new(x_request_id, MakeRequestUuid))
+                .layer(
+                    TraceLayer::new_for_http().make_span_with(|request: &Request<Body>| {
+                        let request_id = request
+                            .extensions()
+                            .get::<RequestId>()
+                            .and_then(|id| id.header_value().to_str().ok())
+                            .unwrap_or_default();
+
+                        tracing::info_span!(
+                            "HTTP",
+                            http.method = %request.method(),
+                            http.url = %request.uri(),
+                            request_id = %request_id,
+                        )
+                    }),
+                )
+                .layer(
+                    CorsLayer::new()
+                        .allow_origin(any())
+                        .allow_methods(vec![Method::GET]),
+                )
+                .layer(AddExtensionLayer::new(env.clone())),
         )
 }
 
@@ -85,6 +112,16 @@ pub fn vms() -> Router {
         .route("/:id", get(vms::get))
         .route("/", get(vms::list).post(vms::add))
         .route("/:id/start", post(vms::start))
+}
+
+#[derive(Clone, Copy)]
+struct MakeRequestUuid;
+
+impl MakeRequestId for MakeRequestUuid {
+    fn make_request_id<B>(&mut self, _: &Request<B>) -> Option<RequestId> {
+        let request_id = Uuid::new_v4().to_string().parse().unwrap();
+        Some(RequestId::new(request_id))
+    }
 }
 
 pub struct ApiResponse<T> {

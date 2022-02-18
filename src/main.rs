@@ -2,9 +2,12 @@ use clap::Parser;
 use dotenv::dotenv;
 use std::{error::Error, net::SocketAddr};
 
+use crate::telemtry::{get_subscriber, init_subscriber};
+
 mod database;
 mod env;
 mod handlers;
+mod telemtry;
 
 #[derive(Parser, Debug)]
 #[clap(
@@ -22,13 +25,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
     dotenv().ok();
 
-    if std::env::var_os("RUST_LOG").is_none() {
-        std::env::set_var("RUST_LOG", "qarax=debug,tower_http=debug")
-    }
-
-    tracing_subscriber::fmt::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
+    let subscriber = get_subscriber("qarax".into(), "info".into(), std::io::stdout);
+    init_subscriber(subscriber);
 
     let db_url = &dotenv::var("DATABASE_URL").expect("DATABASE_URL is not set!");
     database::run_migrations(db_url).await?;
