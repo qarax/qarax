@@ -1,5 +1,4 @@
 use super::*;
-use futures::stream::TryStreamExt;
 use hyper::{Body, Client, Request};
 use hyperlocal::{UnixClientExt, UnixConnector, Uri};
 
