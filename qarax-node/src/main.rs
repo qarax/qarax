@@ -10,9 +10,10 @@ use common::telemetry::{get_subscriber, init_subscriber};
 use std::net::SocketAddr;
 use std::time::Duration;
 use tonic::transport::Server;
+use tracing::Span;
 use vm::vmm_service::VmmService;
 
-use storage::storage_handler::StorageHandler;
+use storage::handler::StorageHandler;
 
 #[derive(Parser, Debug)]
 #[clap(
@@ -44,6 +45,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr = SocketAddr::from(([0, 0, 0, 0], args.port));
 
     Server::builder()
+        .trace_fn(|_| Span::current())
         .tcp_keepalive(Some(Duration::from_secs(60)))
         .add_service(health_service)
         .add_service(VmServiceServer::new(VmmService::default()))

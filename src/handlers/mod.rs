@@ -77,7 +77,7 @@ pub async fn app(env: Environment) -> Router {
                         .allow_origin(Any)
                         .allow_methods(vec![Method::GET]),
                 )
-                .layer(AddExtensionLayer::new(env.clone())),
+                .layer(AddExtensionLayer::new(env)),
         )
 }
 
