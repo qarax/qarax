@@ -14,7 +14,7 @@ use serde_json::json;
 use thiserror::Error;
 use tower::ServiceBuilder;
 use tower_http::{
-    cors::{any, CorsLayer},
+    cors::{CorsLayer, Any},
     request_id::{MakeRequestId, PropagateRequestIdLayer, RequestId, SetRequestIdLayer},
     trace::TraceLayer,
 };
@@ -74,7 +74,7 @@ pub async fn app(env: Environment) -> Router {
                 )
                 .layer(
                     CorsLayer::new()
-                        .allow_origin(any())
+                        .allow_origin(Any)
                         .allow_methods(vec![Method::GET]),
                 )
                 .layer(AddExtensionLayer::new(env.clone())),
