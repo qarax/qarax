@@ -5,7 +5,7 @@ qarax aims to be a [firecracker](https://firecracker-microvm.github.io/) orchest
 ## Prerequisites
 
 ```
-postgresql
+podman
 ansible
 rust
 ```
