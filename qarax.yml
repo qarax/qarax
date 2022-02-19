@@ -12,6 +12,7 @@ externalDocs:
 tags:
   - name: Hosts
   - name: Vms
+  - name: Storage
 components:
   schemas:
     StringResponse:
@@ -85,6 +86,35 @@ components:
           type: string
         kernel:
           type: string
+
+    Storage:
+      properties:
+        id:
+          format: uuid
+          type: string
+          readOnly: true
+        name:
+          type: string
+        status:
+          type: string
+          readOnly: true
+          enum:
+            - up
+            - down
+            - unknown
+        type:
+          type: string
+          enum:
+            - local
+            - shared
+        config:
+          type: object
+          properties:
+            path:
+              type: string
+            host_id:
+              format: uuid
+              type: string
     Error:
       type: object
       properties:
@@ -148,7 +178,7 @@ paths:
     get:
       operationId: getHost
       summary: Get host by ID
-      description: ''
+      description: ""
       tags:
         - Hosts
       parameters:
@@ -355,6 +385,82 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/StringResponse"
+        default:
+          description: unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /storage:
+    get:
+      operationId: listStorage
+      summary: Get storage list
+      description: Get storage list
+      tags:
+        - Storage
+      responses:
+        "200":
+          description: successful operation
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Storage"
+        default:
+          description: unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      operationId: addStorage
+      summary: Create new storage
+      description: Create new storage
+      tags:
+        - Storage
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Storage"
+        required: true
+      responses:
+        "200":
+          description: successful operation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreationResponse"
+        default:
+          description: unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  "/storage/{storageId}":
+    get:
+      operationId: getStorage
+      summary: Get storage by ID
+      description: ""
+      tags:
+        - Storage
+      parameters:
+        - name: storageId
+          in: path
+          description: ID of storage
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: successful operation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Storage"
         default:
           description: unexpected error
           content:
