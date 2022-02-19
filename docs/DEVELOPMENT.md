@@ -10,7 +10,7 @@ cd qarax
 #### install Prerequisites
 
 ```
-postgresql
+podman
 ansible
 rust
 ```
@@ -40,7 +40,7 @@ $ ansible-galaxy collection install -r ./playbooks/requirements.yml
 
 #### Start database server
 ```
-$ sudo systemctl start postgresql
+$ ./scripts/start_db.sh
 ```
 
 ### Compile dependencies
