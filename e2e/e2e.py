@@ -5,7 +5,10 @@ import os
 import pytest
 import qarax
 from qarax.api import hosts_api
+from qarax.api import storage_api
 from qarax.model.host import Host
+from qarax.model.storage import Storage
+from qarax.model.storage_config import StorageConfig
 
 import terraform
 import util
@@ -147,3 +150,32 @@ def test_install_host(api_client, vm_ip, host_config):
 
     healthcheck = api_instance.healthcheck(host_id)
     assert healthcheck["response"] == "ok"
+
+
+@pytest.mark.order(2)
+def test_add_storage(api_client):
+
+    # TODO: Something more robust will be needed in the future
+    # maybe set names to the hosts and look them up by name
+    host_api_instance = hosts_api.HostsApi(api_client)
+    host_id = host_api_instance.list_hosts()["response"][0]["id"]
+
+    storage = Storage(
+        name="e2e-test-storage",
+        storage_type="local",
+        config=StorageConfig(host_id=host_id),
+    )
+
+    storage_api_instance = storage_api.StorageApi(api_client)
+    try:
+        log.info("Adding storage to database")
+        log.info("Adding storage '%s'", storage.name)
+        api_response = storage_api_instance.add_storage(storage)
+        storage_id = api_response["response"]
+        log.info("Added storage '%s'", storage_id)
+    except qarax.ApiException as e:
+        log.error("Exception when calling StorageApi->add_Storage: %s\n" % e)
+        raise e
+
+    storages = storage_api_instance.list_storage()["response"]
+    assert len(storages) == 1

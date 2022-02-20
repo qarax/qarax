@@ -126,6 +126,20 @@ components:
         id:
           type: string
           format: uuid
+    HostListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Host'
+    StorageListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Storage'
 paths:
   /hosts:
     get:
@@ -140,9 +154,7 @@ paths:
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/Host"
+                $ref: "#/components/schemas/HostListResponse"
         default:
           description: unexpected error
           content:
@@ -405,9 +417,7 @@ paths:
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/Storage"
+                $ref: "#/components/schemas/StorageListResponse"
         default:
           description: unexpected error
           content:
