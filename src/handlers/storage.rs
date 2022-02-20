@@ -1,4 +1,5 @@
 use super::models::storage::{StorageConfig, StorageError, StorageName, StorageType};
+use super::rpc::client::StorageCreateRequest;
 use super::*;
 
 use axum::extract::{Json, Path};
@@ -22,16 +23,23 @@ pub async fn list(
 pub async fn add(
     Extension(env): Extension<Environment>,
     Json(storage_request): Json<NewStorageRequest>,
+    Extension(request_id): Extension<RequestId>,
 ) -> Result<ApiResponse<Uuid>, ServerError> {
     let storage = storage_request.try_into()?;
     let storage_id = storage_model::add(env.db(), &storage).await?;
 
+    // TODO: perhaps this can be skipped?
     let storage = storage_model::by_id(env.db(), storage_id).await?;
 
     let clients = &*env.storage_clients().read().await;
     let client = clients.get(&storage.config.host_id.unwrap()).unwrap(); // TODO: handle errors properly
 
-    client.create(storage).await.unwrap();
+    let request = StorageCreateRequest {
+        storage,
+        request_id: request_id.into_header_value().to_str().unwrap().to_string(),
+    };
+
+    client.create(request.into()).await.unwrap();
 
     Ok(ApiResponse {
         data: storage_id,

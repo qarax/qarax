@@ -5,14 +5,15 @@ mod vm;
 use rpc::node::storage_service_server::StorageServiceServer;
 use rpc::node::vm_service_server::VmServiceServer;
 
-use vm::vmm_service::VmmService;
-
 use clap::Parser;
+use common::telemetry::{get_subscriber, init_subscriber};
 use std::net::SocketAddr;
 use std::time::Duration;
 use tonic::transport::Server;
+use tracing::Span;
+use vm::vmm_service::VmmService;
 
-use storage::storage_handler::StorageHandler;
+use storage::handler::StorageHandler;
 
 #[derive(Parser, Debug)]
 #[clap(
@@ -28,11 +29,8 @@ pub struct Args {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
-    if std::env::var_os("RUST_LOG").is_none() {
-        std::env::set_var("RUST_LOG", "qarax-node=debug")
-    }
-
-    tracing_subscriber::fmt::fmt().init();
+    let subscriber = get_subscriber("qarax-node".into(), "info".into(), std::io::stdout);
+    init_subscriber(subscriber);
 
     let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
     health_reporter
@@ -47,6 +45,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr = SocketAddr::from(([0, 0, 0, 0], args.port));
 
     Server::builder()
+        .trace_fn(|_| Span::current())
         .tcp_keepalive(Some(Duration::from_secs(60)))
         .add_service(health_service)
         .add_service(VmServiceServer::new(VmmService::default()))

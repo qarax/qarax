@@ -9,13 +9,18 @@ use node::{
 };
 use std::{net::SocketAddr, sync::Arc};
 use tokio::sync::RwLock;
+use tonic::metadata::MetadataValue;
+use tonic::service::Interceptor;
+use tonic::transport::Channel;
+use tonic::{Request, Status};
+use tracing::instrument;
 
 use tonic_health::proto::{health_client::HealthClient, HealthCheckRequest};
 
 #[derive(Clone, Debug)]
 pub struct VmmClient {
     address: SocketAddr,
-    client: Arc<RwLock<VmServiceClient<tonic::transport::Channel>>>,
+    client: Arc<RwLock<VmServiceClient<Channel>>>,
 }
 
 impl VmmClient {
@@ -58,20 +63,20 @@ impl VmmClient {
 #[derive(Clone, Debug)]
 pub struct StorageClient {
     address: SocketAddr,
-    client: Arc<RwLock<StorageServiceClient<tonic::transport::Channel>>>,
+    channel: Channel,
 }
 
 impl StorageClient {
     pub async fn connect(addr: SocketAddr) -> Result<Self, tonic::transport::Error> {
-        let client =
-            StorageServiceClient::connect(format!("http://{}:{}", addr.ip(), addr.port())).await?;
-
+        let address = format!("http://{}:{}", addr.ip(), addr.port());
+        let channel = Channel::from_shared(address).unwrap().connect_lazy();
         Ok(Self {
             address: addr,
-            client: Arc::new(RwLock::new(client)),
+            channel,
         })
     }
 
+    #[instrument]
     pub async fn health_check(&self) -> Result<(), tonic::Status> {
         let mut client = HealthClient::connect(format!(
             "http://{}:{}",
@@ -89,15 +94,57 @@ impl StorageClient {
         Ok(())
     }
 
+    #[instrument]
     pub async fn create(
         &self,
-        storage: Storage,
+        request: StorageCreateRequest,
     ) -> Result<tonic::Response<NodeResponse>, tonic::Status> {
-        self.client
-            .write()
-            .await
-            .create(StorageConfig::from(storage))
-            .await
+        let interceptor = RequestIdInterceptor {
+            request_id: Some(request.request_id),
+        };
+
+        let channel = self.channel.clone();
+        let mut client = StorageServiceClient::with_interceptor(channel, interceptor);
+        client.create(StorageConfig::from(request.storage)).await
+    }
+}
+
+struct RequestIdInterceptor {
+    request_id: Option<String>,
+}
+
+impl Interceptor for RequestIdInterceptor {
+    fn call(&mut self, mut request: Request<()>) -> Result<Request<()>, Status> {
+        if let Some(request_id) = &self.request_id {
+            request
+                .metadata_mut()
+                .insert("request_id", MetadataValue::from_str(request_id).unwrap());
+        }
+
+        Ok(request)
+    }
+}
+
+pub struct StorageCreateRequest {
+    pub storage: Storage,
+    pub request_id: String,
+}
+
+impl std::fmt::Debug for StorageCreateRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StorageCreateRequest")
+            .field("storage", &self.storage)
+            .field("request_id", &self.request_id)
+            .finish()
+    }
+}
+
+impl From<StorageCreateRequest> for Request<StorageCreateRequest> {
+    fn from(r: StorageCreateRequest) -> Self {
+        Request::new(StorageCreateRequest {
+            storage: r.storage,
+            request_id: r.request_id,
+        })
     }
 }
 

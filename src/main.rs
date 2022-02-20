@@ -2,12 +2,11 @@ use clap::Parser;
 use dotenv::dotenv;
 use std::{error::Error, net::SocketAddr};
 
-use crate::telemtry::{get_subscriber, init_subscriber};
+use common::telemetry::{get_subscriber, init_subscriber};
 
 mod database;
 mod env;
 mod handlers;
-mod telemtry;
 
 #[derive(Parser, Debug)]
 #[clap(

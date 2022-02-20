@@ -4,6 +4,7 @@ use std::fs;
 use std::path::Path;
 
 use tonic::{Request, Response, Status};
+use tracing::instrument;
 
 use crate::rpc::node::storage_service_server::StorageService;
 use crate::rpc::node::{Response as NodeResponse, Status as NodeStatus, Storage};
@@ -13,7 +14,14 @@ pub(crate) struct StorageHandler {}
 
 #[tonic::async_trait]
 impl StorageService for StorageHandler {
+    #[instrument]
     async fn create(&self, request: Request<Storage>) -> Result<Response<NodeResponse>, Status> {
+        tracing::info!("request metadata {:?}", request.metadata());
+        request
+            .metadata()
+            .get("request_id")
+            .map(|id| tracing::info!("request_id: {:?}", id.to_str()));
+
         let storage = request.into_inner();
         let path = Path::new(&STORAGE_PATH);
         let path = path.join(StorageType::from(storage.storage_type).to_string());
