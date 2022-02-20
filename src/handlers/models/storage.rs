@@ -1,6 +1,8 @@
 use sqlx::types::Json;
 
 use crate::handlers::ServerError;
+use lazy_static::lazy_static;
+use regex::Regex;
 
 use super::*;
 
@@ -23,8 +25,10 @@ impl From<sqlx::Error> for StorageError {
 impl From<StorageError> for ServerError {
     fn from(e: StorageError) -> Self {
         match e {
-            StorageError::InvalidName(e) => ServerError::Validation(e),
-            StorageError::InvalidConfig(e) => ServerError::Validation(e),
+            StorageError::InvalidName(e) => ServerError::Validation(format!("Invalid name {e}")),
+            StorageError::InvalidConfig(e) => {
+                ServerError::Validation(format!("Invalid config {e}"))
+            }
             StorageError::Other(e) => ServerError::Internal(e.to_string()),
         }
     }
@@ -42,7 +46,10 @@ pub struct NewStorage {
 
 impl StorageName {
     pub fn new(name: String) -> Result<Self, StorageError> {
-        if !name.chars().all(char::is_alphanumeric) {
+        lazy_static! {
+            static ref RE: Regex = Regex::new("^[a-zA-Z0-9-_]+$").unwrap();
+        }
+        if !RE.is_match(&name) {
             return Err(StorageError::InvalidName(name));
         }
 
