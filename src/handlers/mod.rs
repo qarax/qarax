@@ -24,7 +24,6 @@ mod ansible;
 pub mod drives;
 pub mod hosts;
 pub mod kernels;
-mod models;
 pub mod rpc;
 pub mod storage;
 pub mod vms;

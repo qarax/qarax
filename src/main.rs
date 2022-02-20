@@ -7,6 +7,7 @@ use common::telemetry::{get_subscriber, init_subscriber};
 mod database;
 mod env;
 mod handlers;
+mod models;
 
 #[derive(Parser, Debug)]
 #[clap(

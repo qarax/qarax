@@ -19,7 +19,7 @@ tokio = { version = "1.17.0", features = ["full"] }
 tracing = "0.1.31"
 tracing-subscriber = "0.3.9"
 tracing-appender = "0.2.0"
-anyhow = "1.0.53"
+anyhow = "1.0.54"
 thiserror = "1.0.30"
 nix = "0.23.1"
 

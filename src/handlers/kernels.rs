@@ -2,8 +2,8 @@ use super::*;
 
 use axum::extract::{Json, Path};
 
-use models::kernels as kernel_model;
-use models::kernels::{Kernel, NewKernel};
+use crate::models::kernels as kernel_model;
+use crate::models::kernels::{Kernel, NewKernel};
 
 pub async fn list(
     Extension(env): Extension<Environment>,

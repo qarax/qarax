@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::handlers::models::storage::{Storage, StorageType};
+use crate::models::storage::{Storage, StorageType};
 
 use node::storage_service_client::StorageServiceClient;
 use node::{

@@ -1,10 +1,10 @@
 use super::*;
 
-use crate::handlers::models::drives::CacheType;
 use crate::handlers::rpc::node::{Drive as VmDrive, VmConfig};
+use crate::models::drives::CacheType;
+use crate::models::vms as vm_model;
+use crate::models::vms::{NewVm, Vm};
 use axum::extract::{Json, Path};
-use models::vms as vm_model;
-use models::vms::{NewVm, Vm};
 
 pub async fn list(
     Extension(env): Extension<Environment>,

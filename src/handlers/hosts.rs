@@ -1,16 +1,16 @@
 use std::collections::BTreeMap;
 
 use crate::handlers::ansible::AnsibleCommand;
-use crate::handlers::models::hosts::HostError;
 use crate::handlers::rpc::client::StorageClient;
+use crate::models::hosts::HostError;
 
-use super::models::hosts::NewHost;
 use super::rpc::client::VmmClient;
 use super::*;
+use crate::models::hosts as host_model;
+use crate::models::hosts::Host;
+use crate::models::hosts::NewHost;
+use crate::models::hosts::Status as HostStatus;
 use axum::extract::{Json, Path};
-use models::hosts as host_model;
-use models::hosts::Host;
-use models::hosts::Status as HostStatus;
 use sqlx::PgPool;
 use tokio::task::JoinHandle;
 
