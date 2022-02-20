@@ -153,7 +153,7 @@ def test_install_host(api_client, vm_ip, host_config):
 
 
 @pytest.mark.order(2)
-def test_add_storage(api_client):
+def test_add_storage(api_client, host_config):
 
     # TODO: Something more robust will be needed in the future
     # maybe set names to the hosts and look them up by name
@@ -178,4 +178,11 @@ def test_add_storage(api_client):
         raise e
 
     storages = storage_api_instance.list_storage()["response"]
+
     assert len(storages) == 1
+    assert util.check_if_path_exists(
+        f"/home/qarax/storage/local/{storage_id}",
+        host_config["address"],
+        host_config["username"],
+        host_config["password"],
+    )
