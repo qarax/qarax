@@ -120,6 +120,9 @@ def api_client(qarax_configuration):
 
 @pytest.mark.order(1)
 def test_install_host(api_client, vm_ip, host_config):
+    # TODO: this is a hack, find a sensible way to do this
+    api_client.default_headers["x-request-id"] = "test_install_host"
+
     api_instance = hosts_api.HostsApi(api_client)
     host = Host(
         name=host_config["name"],
@@ -154,6 +157,8 @@ def test_install_host(api_client, vm_ip, host_config):
 
 @pytest.mark.order(2)
 def test_add_storage(api_client, host_config):
+    # TODO: this is a hack, find a sensible way to do this
+    api_client.default_headers["x-request-id"] = "test_add_storage"
 
     # TODO: Something more robust will be needed in the future
     # maybe set names to the hosts and look them up by name
