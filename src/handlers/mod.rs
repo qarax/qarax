@@ -147,10 +147,8 @@ where
 #[derive(Error, Debug, Serialize)]
 pub enum ServerError {
     #[error("Internal error")]
-    #[serde(rename(serialize = "internal error"))]
     Internal(String),
-    #[error("Validation error")]
-    #[serde(rename(serialize = "validation error"))]
+    #[error("Validation error: {0}")]
     Validation(String),
     #[error("Entity not found")]
     #[serde(rename(serialize = "entity not found"))]
@@ -164,8 +162,14 @@ impl IntoResponse for ServerError {
                 tracing::error!("Internal error: {}", s);
                 StatusCode::INTERNAL_SERVER_ERROR
             }
-            ServerError::Validation(_) => StatusCode::CONFLICT,
-            Self::EntityNotFound(_) => StatusCode::NOT_FOUND,
+            ServerError::Validation(ref e) => {
+                tracing::error!("Validation error: {}", e);
+                StatusCode::CONFLICT
+            }
+            Self::EntityNotFound(ref e) => {
+                tracing::error!("Entity not found: {}", e);
+                StatusCode::NOT_FOUND
+            }
         };
 
         let mut response = response::Json(json!({
