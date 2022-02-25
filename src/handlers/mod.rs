@@ -90,8 +90,8 @@ pub fn hosts() -> Router {
 
 pub fn storage() -> Router {
     Router::new()
-        .route("/:id", get(storage::get))
-        .route("/", get(storage::list).post(storage::add))
+        .route("/:id", get(storage::handler::get))
+        .route("/", get(storage::handler::list).post(storage::handler::add))
 }
 
 pub fn drives() -> Router {
