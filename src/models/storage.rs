@@ -44,6 +44,12 @@ pub struct NewStorage {
     pub config: StorageConfig,
 }
 
+impl AsRef<str> for StorageName {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
 impl StorageName {
     pub fn new(name: String) -> Result<Self, StorageError> {
         lazy_static! {
