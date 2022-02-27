@@ -21,12 +21,11 @@ use tower_http::{
 use uuid::Uuid;
 
 mod ansible;
-pub mod drives;
 pub mod hosts;
-pub mod kernels;
 pub mod rpc;
 pub mod storage;
 pub mod vms;
+pub mod volumes;
 
 pub async fn initialize_env(env: Environment) {
     tracing::info!("Initializing hosts...");
@@ -48,8 +47,6 @@ pub async fn app(env: Environment) -> Router {
         .route("/", get(|| async { "hello" }))
         .nest("/hosts", hosts())
         .nest("/storage", storage())
-        .nest("/drives", drives())
-        .nest("/kernels", kernels())
         .nest("/vms", vms())
         .layer(
             ServiceBuilder::new()
@@ -92,18 +89,7 @@ pub fn storage() -> Router {
     Router::new()
         .route("/:id", get(storage::handler::get))
         .route("/", get(storage::handler::list).post(storage::handler::add))
-}
-
-pub fn drives() -> Router {
-    Router::new()
-        .route("/:id", get(drives::get))
-        .route("/", get(drives::list).post(drives::add))
-}
-
-pub fn kernels() -> Router {
-    Router::new()
-        .route("/:id", get(kernels::get))
-        .route("/", get(kernels::list).post(kernels::add))
+        .route("/:id/volumes", post(storage::handler::create_volume))
 }
 
 pub fn vms() -> Router {

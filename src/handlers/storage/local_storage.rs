@@ -1,54 +1,68 @@
-use http::HeaderValue;
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::storage::Storage;
+use crate::handlers::rpc::client::{StorageClient, StorageCreateRequest};
 use crate::models::storage::{self as storage_model, NewStorage};
-use crate::{
-    handlers::rpc::client::{StorageClient, StorageCreateRequest},
-    models::storage::StorageConfig,
-};
+use crate::models::volumes::{self as volume_model, NewVolume, Volume, VolumeError};
 
 #[derive(Debug)]
 pub struct LocalStorage {
-    name: String,
-    config: StorageConfig,
+    storage: storage_model::Storage,
+    client: StorageClient,
     pool: PgPool,
 }
 
 impl LocalStorage {
-    pub fn new(name: String, config: StorageConfig, pool: PgPool) -> Self {
-        Self { name, config, pool }
+    pub fn new(storage: storage_model::Storage, client: StorageClient, pool: PgPool) -> Self {
+        Self {
+            storage,
+            client,
+            pool,
+        }
     }
 }
 
 #[async_trait::async_trait]
 impl Storage for LocalStorage {
-    #[tracing::instrument]
-    async fn create(
-        &self,
-        client: &StorageClient,
-        new_storage: NewStorage,
-    ) -> Result<Uuid, crate::models::storage::StorageError>
-    where
-        Self: Sized,
-    {
-        let current = tracing::span::Span::current();
-        tracing::info!("request_id = {:?}", current.metadata().unwrap().fields());
-        let storage_id = storage_model::add(&self.pool, &new_storage).await?;
-        let storage = storage_model::by_id(&self.pool, storage_id).await?;
-        let request = StorageCreateRequest {
-            storage,
-            request_id: "create".to_owned(),
-        };
+    type Persistence = PgPool;
+    type RpcClient = StorageClient;
 
-        client.create(request).await.unwrap();
-        Ok(storage_id)
+    fn id(&self) -> Uuid {
+        self.storage.id
     }
 
     #[tracing::instrument]
-    async fn create_volume(&self) -> Result<(), crate::models::storage::StorageError> {
-        todo!()
+    async fn create(
+        client: Self::RpcClient,
+        pool: Self::Persistence,
+        new_storage: NewStorage,
+    ) -> Result<Self, crate::models::storage::StorageError>
+    where
+        Self: Sized,
+    {
+        let storage_id = storage_model::add(&pool, &new_storage).await?;
+        let storage = storage_model::by_id(&pool, storage_id).await?;
+        let request = StorageCreateRequest {
+            storage: storage.clone(),
+            request_id: "create".to_owned(),
+        };
+
+        // TODO handle errors
+        client.create(request).await.unwrap();
+
+        Ok(Self {
+            storage,
+            client,
+            pool,
+        })
+    }
+
+    #[tracing::instrument]
+    async fn create_volume(&self, new_volume: NewVolume) -> Result<Volume, VolumeError> {
+        let volume_id = volume_model::add(&self.pool, &new_volume, self.id()).await?;
+        let volume = volume_model::by_id(&self.pool, volume_id).await?;
+        Ok(volume)
     }
 
     #[tracing::instrument]

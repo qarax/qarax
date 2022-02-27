@@ -1,12 +1,17 @@
+use std::borrow::BorrowMut;
+
 use super::local_storage::LocalStorage;
-use super::rpc::client::StorageCreateRequest;
 use super::storage::Storage;
 use super::*;
+use crate::handlers::rpc::client::StorageClient;
+use crate::handlers::volumes::NewVolumeRequest;
 use crate::models::storage as storage_model;
 use crate::models::storage::{NewStorage, Storage as StorageModel};
 use crate::models::storage::{StorageConfig, StorageError, StorageName, StorageType};
+use crate::models::volumes::{NewVolume, Volume};
 
 use axum::extract::{Json, Path};
+use sqlx::PgPool;
 
 #[tracing::instrument(skip(env))]
 pub async fn list(
@@ -29,20 +34,15 @@ pub async fn add(
     let clients = env.storage_clients().read().await;
     let storage_client = clients.get(&new_storage.config.host_id.unwrap()).unwrap();
 
-    let storage_id = match new_storage.storage_type {
+    let storage = match new_storage.storage_type {
         StorageType::Local => {
-            let local_storage = LocalStorage::new(
-                new_storage.name.as_ref().to_owned(),
-                new_storage.config.clone(),
-                env.db().clone(),
-            );
-            local_storage.create(storage_client, new_storage).await?
+            LocalStorage::create(storage_client.clone(), env.db().clone(), new_storage).await?
         }
         StorageType::Shared => todo!(),
     };
 
     Ok(ApiResponse {
-        data: storage_id,
+        data: storage.id(),
         code: StatusCode::CREATED,
     })
 }
@@ -56,6 +56,33 @@ pub async fn get(
 
     Ok(ApiResponse {
         data: storage,
+        code: StatusCode::OK,
+    })
+}
+
+#[tracing::instrument(skip(env), fields(storage_id=%storage_id))]
+pub async fn create_volume(
+    Extension(env): Extension<Environment>,
+    Path(storage_id): Path<Uuid>,
+    Json(volume_request): Json<NewVolumeRequest>,
+) -> Result<ApiResponse<Uuid>, ServerError> {
+    let storage: StorageModel = storage_model::by_id(env.db(), storage_id).await?;
+    let concrete_storage = match storage.storage_type {
+        StorageType::Local => {
+            let clients = env.storage_clients().read().await;
+            let storage_client = clients.get(&storage.config.host_id.unwrap()).unwrap();
+
+            LocalStorage::new(storage, storage_client.clone(), env.db().clone())
+        }
+        StorageType::Shared => todo!(),
+    };
+
+    let new_volume = NewVolume::try_from(volume_request)?;
+
+    let volume = concrete_storage.create_volume(new_volume).await?;
+
+    Ok(ApiResponse {
+        data: volume.id,
         code: StatusCode::OK,
     })
 }

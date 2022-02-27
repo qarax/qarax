@@ -3,75 +3,80 @@ package node;
 
 import "google/protobuf/empty.proto";
 
-message VmConfig {
-    string vmID = 1;
-    int32 memory = 2;
-    int32 vcpus = 3;
-    string kernel = 4;
-    string kernel_params = 5;
-    string network_mode = 6;
-    string ip_address = 7;
-    string mac_address= 8;
-    repeated Drive drives = 9;
-}
-
-message Drive {
-    string drive_id = 1;
-    bool is_read_only = 2;
-    bool is_root_device = 3;
-    string path_on_host = 4;
-    CacheType cache_type = 5;
-}
-
-enum CacheType {
-    NONE = 0;
-    WRITE_BACK = 1;
-    UNSAFE = 2;
-}
-
-enum Status {
-    SUCCESS = 0;
-    FAILURE = 1;
-}
-
-message Response {
-    Status status = 1;
-}
-
-message VmResponse {
-    Status status = 1;
-    VmConfig config = 2;
-}
-
-message VmList {
-    repeated string vmID = 1;
-}
-
-message VmID {
-    string vmID = 1;
-}
-
-message Storage {
-    string storageID = 1;
-    string storageName = 2;
-    StorageType storageType = 3;
-}
-
-enum StorageType {
-    LOCAL = 0;
-    SHARED = 1;
-}
-
 service VmService {
-    rpc StartVM(VmConfig) returns (VmConfig) {}
-    rpc StopVM(VmID) returns (Response) {}
-    rpc ListVms(google.protobuf.Empty) returns (VmList) {}
+  rpc StartVM(VmConfig) returns (VmConfig) {}
+  rpc StopVM(VmID) returns (Response) {}
+  rpc ListVms(google.protobuf.Empty) returns (VmList) {}
 }
 
 service StorageService {
-    rpc Create(Storage) returns (Response) {}
+  rpc Create(Storage) returns (Response) {}
+  rpc CreateVolume(VolumeRequest) returns (Response) {}
 }
 
-service DriveService {
-    rpc Create(Drive) returns (Response) {}
+message VmConfig {
+  string vmID = 1;
+  int32 memory = 2;
+  int32 vcpus = 3;
+  string kernel = 4;
+  string kernel_params = 5;
+  string network_mode = 6;
+  string ip_address = 7;
+  string mac_address = 8;
+  repeated Drive drives = 9;
+}
+
+message Drive {
+  string drive_id = 1;
+  bool is_read_only = 2;
+  bool is_root_device = 3;
+  string path_on_host = 4;
+  CacheType cache_type = 5;
+}
+
+message VolumeRequest {
+  string volume_id = 1;
+  string storage_id = 2;
+  string name = 3;
+  int64 size = 4;
+  VolumeType volume_type = 5;
+  optional string url = 6;
+}
+
+enum VolumeType {
+  DRIVE = 0;
+  KERNEL = 1;
+}
+
+enum CacheType {
+  NONE = 0;
+  WRITE_BACK = 1;
+  UNSAFE = 2;
+}
+
+enum Status {
+  SUCCESS = 0;
+  FAILURE = 1;
+}
+
+message Response { Status status = 1; }
+
+message VmResponse {
+  Status status = 1;
+  VmConfig config = 2;
+}
+
+message VmList { repeated string vmID = 1; }
+
+message VmID { string vmID = 1; }
+
+message Storage {
+  string storageID = 1;
+  string storageName = 2;
+  StorageType storageType = 3;
+}
+
+enum StorageType {
+  LOCAL = 0;
+  SHARED = 1;
 }

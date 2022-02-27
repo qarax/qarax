@@ -1,7 +1,6 @@
 use super::*;
 
 use crate::handlers::rpc::node::{Drive as VmDrive, VmConfig};
-use crate::models::drives::CacheType;
 use crate::models::vms as vm_model;
 use crate::models::vms::{NewVm, Vm};
 use axum::extract::{Json, Path};
@@ -73,7 +72,7 @@ pub async fn start(
             is_read_only: false,
             is_root_device: true,
             path_on_host: String::from("/root/bionic.rootfs.ext4"), // TODO super temporary
-            cache_type: CacheType::None as i32,
+            cache_type: 0,
         }],
     };
 
