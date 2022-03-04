@@ -36,8 +36,9 @@ impl From<VolumeError> for ServerError {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct NewVolume {
     pub name: VolumeName,
-    pub size: i64,
+    pub size: Option<i64>,
     pub url: Option<String>,
+    pub volume_type: VolumeType,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -69,6 +70,7 @@ pub struct Volume {
     pub size: i64,
     pub storage_id: Uuid,
     pub status: Status,
+    pub volume_type: VolumeType,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone, Eq, PartialEq, Type, EnumString, Display)]
@@ -76,22 +78,39 @@ pub struct Volume {
 #[sqlx(type_name = "varchar")]
 #[strum(serialize_all = "snake_case")]
 pub enum Status {
-    #[strum(serialize = "up")]
+    #[strum(serialize = "plugged")]
     Plugged,
-    #[strum(serialize = "down")]
+    #[strum(serialize = "unplugged")]
     Unplugged,
 }
 
-pub async fn add(pool: &PgPool, volume: &NewVolume, storage_id: Uuid) -> Result<Uuid, VolumeError> {
+#[derive(Deserialize, Serialize, Debug, Clone, Eq, PartialEq, Type, EnumString, Display)]
+#[sqlx(rename_all = "lowercase")]
+#[sqlx(type_name = "varchar")]
+#[strum(serialize_all = "snake_case")]
+pub enum VolumeType {
+    #[strum(serialize = "drive")]
+    Drive,
+    #[strum(serialize = "kernel")]
+    Kernel,
+}
+
+pub async fn add(
+    pool: &PgPool,
+    volume: &NewVolume,
+    storage_id: Uuid,
+    size: i64,
+) -> Result<Uuid, VolumeError> {
     let rec = sqlx::query!(
         r#"
-INSERT INTO volumes (name, status, size, storage_id)
-VALUES ( $1, $2, $3, $4)
+INSERT INTO volumes (name, status, size, volume_type, storage_id)
+VALUES ( $1, $2, $3, $4, $5)
 RETURNING id
         "#,
         volume.name.0,
         Status::Unplugged as Status,
-        volume.size,
+        size,
+        volume.volume_type.to_string(),
         storage_id,
     )
     .fetch_one(pool)
@@ -104,7 +123,7 @@ pub async fn by_id(pool: &PgPool, volume_id: Uuid) -> Result<Volume, VolumeError
     let volume = sqlx::query_as!(
         Volume,
         r#"
-SELECT id, name, size, storage_id, status as "status: _" 
+SELECT id, name, size, storage_id, status as "status: _", volume_type as "volume_type: _"
 FROM volumes
 WHERE id = $1
         "#,

@@ -1,6 +1,8 @@
+use super::node::VolumeRequest;
 use super::*;
 
 use crate::models::storage::{Storage, StorageType};
+use crate::models::volumes::{Volume, VolumeType};
 
 use node::storage_service_client::StorageServiceClient;
 use node::{
@@ -107,6 +109,20 @@ impl StorageClient {
         let mut client = StorageServiceClient::with_interceptor(channel, interceptor);
         client.create(StorageConfig::from(request.storage)).await
     }
+
+    #[instrument]
+    pub async fn create_volume(
+        &self,
+        request: VolumeCreateRequest,
+    ) -> Result<tonic::Response<NodeResponse>, tonic::Status> {
+        let interceptor = RequestIdInterceptor {
+            request_id: Some(request.request_id.clone()),
+        };
+
+        let channel = self.channel.clone();
+        let mut client = StorageServiceClient::with_interceptor(channel, interceptor);
+        client.create_volume(VolumeRequest::from(request)).await
+    }
 }
 
 struct RequestIdInterceptor {
@@ -157,6 +173,45 @@ impl From<Storage> for StorageConfig {
                 StorageType::Local => 0,
                 StorageType::Shared => 1,
             },
+        }
+    }
+}
+
+pub struct VolumeCreateRequest {
+    pub volume: Volume,
+    pub request_id: String,
+    pub storage: Storage,
+    pub url: String,
+}
+
+impl std::fmt::Debug for VolumeCreateRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VolumeCreateRequest")
+            .field("volume", &self.volume)
+            .field("request_id", &self.request_id)
+            .finish()
+    }
+}
+
+impl From<VolumeCreateRequest> for VolumeRequest {
+    fn from(r: VolumeCreateRequest) -> Self {
+        VolumeRequest {
+            storage: Some(StorageConfig::from(r.storage)),
+            name: r.volume.name,
+            size: r.volume.size,
+            volume_id: r.volume.id.to_string(),
+            url: Some(r.url),
+            volume_type: r.volume.volume_type as i32,
+        }
+    }
+}
+
+impl From<i32> for VolumeType {
+    fn from(volume_type: i32) -> Self {
+        match volume_type {
+            0 => VolumeType::Drive,
+            1 => VolumeType::Kernel,
+            _ => panic!("Invalid volume type"),
         }
     }
 }

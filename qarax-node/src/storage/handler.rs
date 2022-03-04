@@ -7,7 +7,7 @@ use tonic::{Request, Response, Status};
 use tracing::instrument;
 
 use crate::rpc::node::storage_service_server::StorageService;
-use crate::rpc::node::{Response as NodeResponse, Status as NodeStatus, Storage};
+use crate::rpc::node::{Response as NodeResponse, Status as NodeStatus, Storage, VolumeRequest};
 
 #[derive(Debug, Default)]
 pub(crate) struct StorageHandler {}
@@ -29,6 +29,24 @@ impl StorageService for StorageHandler {
 
         // TODO: create kernel_store and volume_store
         fs::create_dir_all(path)?;
+
+        let response = NodeResponse {
+            status: NodeStatus::Success as i32,
+        };
+
+        Ok(Response::new(response))
+    }
+
+    #[instrument]
+    async fn create_volume(
+        &self,
+        request: Request<VolumeRequest>,
+    ) -> Result<Response<NodeResponse>, Status> {
+        tracing::info!("request metadata {:?}", request.metadata());
+        request
+            .metadata()
+            .get("request_id")
+            .map(|id| tracing::info!("request_id: {:?}", id.to_str()));
 
         let response = NodeResponse {
             status: NodeStatus::Success as i32,

@@ -1,8 +1,10 @@
+use http::header::CONTENT_LENGTH;
+use http::HeaderValue;
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::storage::Storage;
-use crate::handlers::rpc::client::{StorageClient, StorageCreateRequest};
+use crate::handlers::rpc::client::{StorageClient, StorageCreateRequest, VolumeCreateRequest};
 use crate::models::storage::{self as storage_model, NewStorage};
 use crate::models::volumes::{self as volume_model, NewVolume, Volume, VolumeError};
 
@@ -60,9 +62,38 @@ impl Storage for LocalStorage {
 
     #[tracing::instrument]
     async fn create_volume(&self, new_volume: NewVolume) -> Result<Volume, VolumeError> {
-        let volume_id = volume_model::add(&self.pool, &new_volume, self.id()).await?;
-        let volume = volume_model::by_id(&self.pool, volume_id).await?;
-        Ok(volume)
+        if let Some(url) = &new_volume.url {
+            let http_client = reqwest::Client::new();
+            let response = http_client.head(url).send().await.unwrap();
+
+            let headers = response.headers();
+            if headers.contains_key(CONTENT_LENGTH) {
+                let size = HeaderValue::to_str(&headers[CONTENT_LENGTH]).unwrap();
+                let volume_id = volume_model::add(
+                    &self.pool,
+                    &new_volume,
+                    self.id(),
+                    size.parse::<i64>().unwrap(),
+                )
+                .await?;
+                let volume = volume_model::by_id(&self.pool, volume_id).await?;
+                self.client
+                    .create_volume(VolumeCreateRequest {
+                        storage: self.storage.clone(),
+                        volume: volume.clone(),
+                        request_id: "create_volume".to_owned(),
+                        url: url.to_string(),
+                    })
+                    .await
+                    .unwrap();
+
+                return Ok(volume);
+            }
+        }
+
+        Err(VolumeError::Other(
+            "url is not valid (TODO: support creation of empty volumes)".into(),
+        ))
     }
 
     #[tracing::instrument]

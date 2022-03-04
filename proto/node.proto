@@ -36,7 +36,7 @@ message Drive {
 
 message VolumeRequest {
   string volume_id = 1;
-  string storage_id = 2;
+  Storage storage = 2;
   string name = 3;
   int64 size = 4;
   VolumeType volume_type = 5;
@@ -59,6 +59,11 @@ enum Status {
   FAILURE = 1;
 }
 
+enum StorageType {
+  LOCAL = 0;
+  SHARED = 1;
+}
+
 message Response { Status status = 1; }
 
 message VmResponse {
@@ -74,9 +79,4 @@ message Storage {
   string storageID = 1;
   string storageName = 2;
   StorageType storageType = 3;
-}
-
-enum StorageType {
-  LOCAL = 0;
-  SHARED = 1;
 }

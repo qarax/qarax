@@ -2,10 +2,9 @@ use crate::env::Environment;
 
 use axum::{
     body::BoxBody,
-    extract::Extension,
     response::{self, IntoResponse},
     routing::{get, post},
-    AddExtensionLayer, Router,
+    Extension, Router,
 };
 use http::{header::HeaderName, Method, Request, Response, StatusCode};
 use hyper::Body;
@@ -73,7 +72,7 @@ pub async fn app(env: Environment) -> Router {
                         .allow_origin(Any)
                         .allow_methods(vec![Method::GET]),
                 )
-                .layer(AddExtensionLayer::new(env)),
+                .layer(Extension(env)),
         )
 }
 

@@ -1,17 +1,13 @@
-use std::borrow::BorrowMut;
-
 use super::local_storage::LocalStorage;
 use super::storage::Storage;
 use super::*;
-use crate::handlers::rpc::client::StorageClient;
 use crate::handlers::volumes::NewVolumeRequest;
 use crate::models::storage as storage_model;
 use crate::models::storage::{NewStorage, Storage as StorageModel};
 use crate::models::storage::{StorageConfig, StorageError, StorageName, StorageType};
-use crate::models::volumes::{NewVolume, Volume};
+use crate::models::volumes::NewVolume;
 
 use axum::extract::{Json, Path};
-use sqlx::PgPool;
 
 #[tracing::instrument(skip(env))]
 pub async fn list(
