@@ -1,7 +1,7 @@
 use super::*;
 
-use std::fs;
 use std::path::Path;
+use tokio::fs::{self, File};
 
 use tonic::{Request, Response, Status};
 use tracing::instrument;
@@ -28,7 +28,7 @@ impl StorageService for StorageHandler {
         let path = path.join(storage.storage_id);
 
         // TODO: create kernel_store and volume_store
-        fs::create_dir_all(path)?;
+        fs::create_dir_all(path).await?;
 
         let response = NodeResponse {
             status: NodeStatus::Success as i32,
@@ -47,6 +47,20 @@ impl StorageService for StorageHandler {
             .metadata()
             .get("request_id")
             .map(|id| tracing::info!("request_id: {:?}", id.to_str()));
+
+        // Create empty file
+        let volume: VolumeRequest = request.into_inner();
+
+        // TODO: extract to method, this is a repetition of the code from create()
+        let path = Path::new(&STORAGE_PATH);
+        let path =
+            path.join(StorageType::from(volume.storage.as_ref().unwrap().storage_type).to_string());
+        let path = path.join(volume.storage.unwrap().storage_id);
+
+        let path = path.join(volume.volume_id);
+        let file = File::create(&path).await?;
+        file.set_len(volume.size as u64).await?;
+        tracing::info!(file = ?path.as_os_str(), size = volume.size, "Created volume");
 
         let response = NodeResponse {
             status: NodeStatus::Success as i32,
