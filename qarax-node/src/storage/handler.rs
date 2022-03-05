@@ -62,6 +62,12 @@ impl StorageService for StorageHandler {
         file.set_len(volume.size as u64).await?;
         tracing::info!(file = ?path.as_os_str(), size = volume.size, "Created volume");
 
+        if let Some(url) = volume.url {
+            let size = volume.size;
+            tracing::info!(url = ?url.clone(), "Downloading from url");
+            download::download(&url, &path, size as u64).await.unwrap();
+        }
+
         let response = NodeResponse {
             status: NodeStatus::Success as i32,
         };

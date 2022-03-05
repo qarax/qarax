@@ -1,3 +1,4 @@
+mod download;
 pub mod handler;
 
 use strum_macros::{Display, EnumString};
