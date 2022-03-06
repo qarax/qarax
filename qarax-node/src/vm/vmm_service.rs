@@ -1,47 +1,16 @@
 extern crate firecracker_rust_sdk;
 
-use super::vm_handler::VmHandler;
 use crate::rpc::node::vm_service_server::VmService;
 use crate::rpc::node::{Response as NodeResponse, VmConfig, VmId, VmList};
-use std::collections::HashMap;
-use std::sync::Arc;
-use tokio::sync::RwLock;
 use tonic::{Request, Response, Status};
 
 #[derive(Debug, Default)]
-pub struct VmmService {
-    handlers: Arc<RwLock<HashMap<String, VmHandler>>>,
-}
+pub struct VmmService {}
 
 #[tonic::async_trait]
 impl VmService for VmmService {
     async fn start_vm(&self, request: Request<VmConfig>) -> Result<Response<VmConfig>, Status> {
-        let mut config = request.into_inner();
-        tracing::info!(
-            "Starting VM {}, {}, {}",
-            &config.vm_id,
-            &config.memory,
-            &config.vcpus
-        );
-
-        let mut handlers = self.handlers.write().await;
-        let handler = handlers
-            .entry(config.vm_id.to_owned())
-            .or_insert_with(VmHandler::default);
-
-        handler
-            .configure_vm(&mut config)
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
-
-        tracing::info!("Configured VM...");
-        handler
-            .start_vm()
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
-        tracing::info!("Started VM...");
-
-        Ok(Response::new(config))
+        unimplemented!()
     }
 
     async fn stop_vm(&self, _request: Request<VmId>) -> Result<Response<NodeResponse>, Status> {
