@@ -25,9 +25,9 @@ impl From<sqlx::Error> for VolumeError {
 impl From<VolumeError> for ServerError {
     fn from(e: VolumeError) -> Self {
         match e {
-            VolumeError::InvalidName(e) => ServerError::Validation(format!("{e}")),
-            VolumeError::InvalidSize(e) => ServerError::Validation(format!("{e}")),
-            VolumeError::StorageNotFound(e) => ServerError::Validation(format!("{e}")),
+            VolumeError::InvalidName(e) => ServerError::Validation(e.to_string()),
+            VolumeError::InvalidSize(e) => ServerError::Validation(e.to_string()),
+            VolumeError::StorageNotFound(e) => ServerError::Validation(e.to_string()),
             VolumeError::Other(e) => ServerError::Internal(e.to_string()),
         }
     }

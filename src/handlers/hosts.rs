@@ -283,7 +283,7 @@ async fn health_check_internal(host: &Host, env: Environment) -> Result<(), Stri
         }
         Err(e) => {
             tracing::error!("Could not connect to host {}, error: {}", host.id, e);
-            return Err(String::from("Could not connect to host"));
+            Err(String::from("Could not connect to host"))
         }
     }
 }
