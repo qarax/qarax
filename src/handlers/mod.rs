@@ -142,8 +142,8 @@ pub enum ServerError {
 impl IntoResponse for ServerError {
     fn into_response(self) -> Response<BoxBody> {
         let code = match self {
-            ServerError::Internal(ref s) => {
-                tracing::error!("Internal error: {}", s);
+            ServerError::Internal(_) => {
+                tracing::error!("Internal error");
                 StatusCode::INTERNAL_SERVER_ERROR
             }
             ServerError::Validation(ref e) => {
