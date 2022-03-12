@@ -22,6 +22,7 @@ use uuid::Uuid;
 mod ansible;
 pub mod drives;
 pub mod hosts;
+pub mod kernels;
 pub mod rpc;
 pub mod storage;
 pub mod vms;
@@ -49,6 +50,7 @@ pub async fn app(env: Environment) -> Router {
         .nest("/storage", storage())
         .nest("/vms", vms())
         .nest("/drives", drives())
+        .nest("/kernels", kernels())
         .layer(
             ServiceBuilder::new()
                 .layer(PropagateRequestIdLayer::new(x_request_id.clone()))
@@ -104,6 +106,12 @@ pub fn drives() -> Router {
     Router::new()
         .route("/:id", get(drives::get))
         .route("/", get(drives::list).post(drives::add))
+}
+
+pub fn kernels() -> Router {
+    Router::new()
+        .route("/:id", get(kernels::get))
+        .route("/", get(kernels::list).post(kernels::add))
 }
 
 #[derive(Clone, Copy)]
