@@ -44,7 +44,7 @@ impl Storage for LocalStorage {
         Self: Sized,
     {
         let storage_id = storage_model::add(&pool, &new_storage).await?;
-        let storage = storage_model::by_id(&pool, storage_id).await?;
+        let storage = storage_model::by_id(&pool, &storage_id).await?;
         let request = StorageCreateRequest {
             storage: storage.clone(),
             request_id: "create".to_owned(),

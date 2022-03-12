@@ -48,7 +48,7 @@ pub async fn get(
     Extension(env): Extension<Environment>,
     Path(storage_id): Path<Uuid>,
 ) -> Result<ApiResponse<StorageModel>, ServerError> {
-    let storage = storage_model::by_id(env.db(), storage_id).await?;
+    let storage = storage_model::by_id(env.db(), &storage_id).await?;
 
     Ok(ApiResponse {
         data: storage,
@@ -62,7 +62,21 @@ pub async fn create_volume(
     Path(storage_id): Path<Uuid>,
     Json(volume_request): Json<NewVolumeRequest>,
 ) -> Result<ApiResponse<Uuid>, ServerError> {
-    let storage: StorageModel = storage_model::by_id(env.db(), storage_id).await?;
+    let new_volume = NewVolume::try_from(volume_request)?;
+    let volume_id = create_volume_contcrete(&storage_id, new_volume, env).await?;
+
+    Ok(ApiResponse {
+        data: volume_id,
+        code: StatusCode::OK,
+    })
+}
+
+pub(crate) async fn create_volume_contcrete(
+    storage_id: &Uuid,
+    new_volume: NewVolume,
+    env: Environment,
+) -> Result<Uuid, ServerError> {
+    let storage: StorageModel = storage_model::by_id(env.db(), &storage_id).await?;
     let concrete_storage = match storage.storage_type {
         StorageType::Local => {
             let clients = env.storage_clients().read().await;
@@ -73,14 +87,8 @@ pub async fn create_volume(
         StorageType::Shared => todo!(),
     };
 
-    let new_volume = NewVolume::try_from(volume_request)?;
-
     let volume = concrete_storage.create_volume(new_volume).await?;
-
-    Ok(ApiResponse {
-        data: volume.id,
-        code: StatusCode::OK,
-    })
+    Ok(volume.id)
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

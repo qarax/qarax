@@ -164,7 +164,7 @@ RETURNING id
     Ok(rec.id)
 }
 
-pub async fn by_id(pool: &PgPool, storage_id: Uuid) -> Result<Storage, StorageError> {
+pub async fn by_id(pool: &PgPool, storage_id: &Uuid) -> Result<Storage, StorageError> {
     let storage = sqlx::query_as!(
         Storage,
         r#"

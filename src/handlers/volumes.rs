@@ -1,4 +1,8 @@
-use crate::models::volumes::{NewVolume, VolumeError, VolumeName, VolumeType};
+use crate::models::{
+    drives::NewDrive,
+    volumes::{NewVolume, VolumeError, VolumeType},
+    ValidName,
+};
 
 use super::*;
 
@@ -13,7 +17,7 @@ impl TryFrom<NewVolumeRequest> for NewVolume {
     type Error = VolumeError;
 
     fn try_from(value: NewVolumeRequest) -> Result<Self, Self::Error> {
-        let name = VolumeName::new(value.name)?;
+        let name = ValidName::new(value.name)?;
         if let Some(size) = value.size {
             if size <= 0 {
                 return Err(VolumeError::InvalidSize(size.to_string()));
