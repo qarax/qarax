@@ -64,7 +64,6 @@ pub async fn get(
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct NewDriveRequest {
     pub name: String,
-    pub storage_type: String,
     pub config: DriveConfig,
     pub storage_id: Uuid,
     pub url: Url,

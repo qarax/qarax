@@ -44,7 +44,8 @@ pub struct NewDrive {
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, Type)]
 pub struct DriveConfig {
-    pub cache_type: Option<CacheType>,
+    #[serde(default = "CacheType::default")]
+    pub cache_type: CacheType,
     pub read_only: Option<bool>,
     pub root_device: Option<bool>,
 }
@@ -94,7 +95,7 @@ RETURNING id
         "#,
         Status::Unplugged as Status,
         Json(&drive.config) as _,
-        drive.volume_id,
+        drive.volume_id.unwrap(),
     )
     .fetch_one(pool)
     .await?;
