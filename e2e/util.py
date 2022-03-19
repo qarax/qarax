@@ -25,6 +25,17 @@ def check_if_path_exists(path, host, username, password):
     return True
 
 
+def create_dir(path, host):
+    ssh = _connect_to_host(host["address"], host["username"], host["password"])
+    sftp = ssh.open_sftp()
+    try:
+        sftp.mkdir(path)
+    except Exception as e:
+        log.error("Couldn't create path '%s': %r", path, e)
+        return False
+    return True
+
+
 def wait_for_status(func, timeout=60, status="up", step=1):
     with Timer(timeout=timeout) as timer:
         while not timer.passed():

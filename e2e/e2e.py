@@ -156,37 +156,39 @@ def test_install_host(api_client, vm_ip, host_config):
 
 
 @pytest.mark.order(2)
-def test_add_storage(api_client, host_config):
+def test_add_storage_local(api_client, host_config):
     # TODO: this is a hack, find a sensible way to do this
-    api_client.default_headers["x-request-id"] = "test_add_storage"
+    api_client.default_headers["x-request-id"] = "test_add_storage_local"
 
     # TODO: Something more robust will be needed in the future
     # maybe set names to the hosts and look them up by name
     host_api_instance = hosts_api.HostsApi(api_client)
     host_id = host_api_instance.list_hosts()["response"][0]["id"]
-
+    util.create_dir("/root/local_storage/", host_config)
     storage = Storage(
-        name="e2e-test-storage",
+        name="e2e-test-storage-local",
         storage_type="local",
-        config=StorageConfig(host_id=host_id),
+        config=StorageConfig(
+            host_id=host_id,
+            path_on_host="/root/local_storage/",
+        ),
     )
 
     storage_api_instance = storage_api.StorageApi(api_client)
+    log.info("Adding storage '%s'", storage.name)
     try:
-        log.info("Adding storage to database")
-        log.info("Adding storage '%s'", storage.name)
         api_response = storage_api_instance.add_storage(storage)
         storage_id = api_response["response"]
-        log.info("Added storage '%s'", storage_id)
     except qarax.ApiException as e:
         log.error("Exception when calling StorageApi->add_Storage: %s\n" % e)
         raise e
 
+    log.info("Added storage '%s'", storage_id)
     storages = storage_api_instance.list_storage()["response"]
 
     assert len(storages) == 1
     assert util.check_if_path_exists(
-        f"/home/qarax/storage/local/{storage_id}",
+        f"/home/qarax/storage/{storage_id}",
         host_config["address"],
         host_config["username"],
         host_config["password"],
