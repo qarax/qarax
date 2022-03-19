@@ -13,7 +13,7 @@ use crate::{
     },
 };
 
-use super::{storage::handler::create_volume_contcrete, ApiResponse, ServerError};
+use super::{storage::handler::create_volume_concrete, ApiResponse, ServerError};
 
 #[tracing::instrument(skip(env))]
 pub async fn add(
@@ -24,7 +24,7 @@ pub async fn add(
     let mut new_kernel: NewKernel = kernel_request.try_into()?;
     let new_volume = NewVolume::try_from(new_kernel.clone())?;
     let volume_id =
-        create_volume_contcrete(&new_kernel.storage_id, new_volume, env.clone()).await?;
+        create_volume_concrete(&new_kernel.storage_id, new_volume, env.clone()).await?;
     new_kernel.volume_id = Some(volume_id);
 
     let kernel_id = kernel_model::add(env.db(), &new_kernel).await?;

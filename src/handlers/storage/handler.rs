@@ -63,7 +63,7 @@ pub async fn create_volume(
     Json(volume_request): Json<NewVolumeRequest>,
 ) -> Result<ApiResponse<Uuid>, ServerError> {
     let new_volume = NewVolume::try_from(volume_request)?;
-    let volume_id = create_volume_contcrete(&storage_id, new_volume, env).await?;
+    let volume_id = create_volume_concrete(&storage_id, new_volume, env).await?;
 
     Ok(ApiResponse {
         data: volume_id,
@@ -71,7 +71,7 @@ pub async fn create_volume(
     })
 }
 
-pub(crate) async fn create_volume_contcrete(
+pub(crate) async fn create_volume_concrete(
     storage_id: &Uuid,
     new_volume: NewVolume,
     env: Environment,

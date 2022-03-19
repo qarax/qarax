@@ -14,7 +14,7 @@ use crate::{
     },
 };
 
-use super::{storage::handler::create_volume_contcrete, ApiResponse, ServerError};
+use super::{storage::handler::create_volume_concrete, ApiResponse, ServerError};
 
 #[tracing::instrument(skip(env))]
 pub async fn add(
@@ -24,7 +24,7 @@ pub async fn add(
     // Create new volume
     let mut new_drive: NewDrive = drive_request.try_into()?;
     let new_volume = NewVolume::try_from(new_drive.clone())?;
-    let volume_id = create_volume_contcrete(&new_drive.storage_id, new_volume, env.clone()).await?;
+    let volume_id = create_volume_concrete(&new_drive.storage_id, new_volume, env.clone()).await?;
     new_drive.volume_id = Some(volume_id);
 
     // Create new drive object
