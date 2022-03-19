@@ -1,6 +1,31 @@
+use crate::handlers::ServerError;
+
 use super::*;
 
 const DEFAUL_KERNEL_PARAMS: &str = "console=ttyS0 reboot=k panic=1 pci=off";
+
+#[derive(Error, Debug)]
+pub enum VmError {
+    #[error("Inavlid name: {0}")]
+    InvalidName(#[from] ValidationError),
+    #[error("Unexpected failure: {0}")]
+    Other(#[source] Box<dyn std::error::Error + Send + Sync>),
+}
+
+impl From<sqlx::Error> for VmError {
+    fn from(e: sqlx::Error) -> Self {
+        VmError::Other(Box::new(e))
+    }
+}
+
+impl From<VmError> for ServerError {
+    fn from(e: VmError) -> Self {
+        match e {
+            VmError::InvalidName(e) => ServerError::Validation(e.to_string()),
+            VmError::Other(e) => ServerError::Internal(e.to_string()),
+        }
+    }
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Vm {
@@ -61,18 +86,6 @@ impl Default for NetworkMode {
     }
 }
 
-#[derive(Error, Debug)]
-pub enum VmError {
-    #[error("Failed to list vms: {0}")]
-    List(#[from] sqlx::Error),
-
-    #[error("Failed to add vms: {0}, error: {1}")]
-    Add(String, sqlx::Error),
-
-    #[error("Can't find vms: {0}, error: {1}")]
-    Find(Uuid, sqlx::Error),
-}
-
 pub async fn list(pool: &PgPool) -> Result<Vec<Vm>, VmError> {
     let vms = sqlx::query_as!(
         Vm,
@@ -82,8 +95,7 @@ FROM vms
         "#
     )
     .fetch_all(pool)
-    .await
-    .map_err(VmError::List)?;
+    .await?;
 
     Ok(vms)
 }
@@ -99,8 +111,7 @@ WHERE id = $1
         vm_id
     )
     .fetch_one(pool)
-    .await
-    .map_err(|e| VmError::Find(*vm_id, e))?;
+    .await?;
 
     Ok(vm)
 }
@@ -129,8 +140,7 @@ RETURNING id
         kernel_params,
     )
     .fetch_one(pool)
-    .await
-    .map_err(|e| VmError::Add(vm.name.to_owned(), e))?;
+    .await?;
 
     Ok(rec.id)
 }

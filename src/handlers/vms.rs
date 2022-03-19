@@ -8,9 +8,7 @@ use axum::extract::{Json, Path};
 pub async fn list(
     Extension(env): Extension<Environment>,
 ) -> Result<ApiResponse<Vec<Vm>>, ServerError> {
-    let vms = vm_model::list(env.db())
-        .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
+    let vms = vm_model::list(env.db()).await?;
 
     Ok(ApiResponse {
         data: vms,
@@ -22,9 +20,7 @@ pub async fn add(
     Extension(env): Extension<Environment>,
     Json(vm): Json<NewVm>,
 ) -> Result<ApiResponse<Uuid>, ServerError> {
-    let vm_id = vm_model::add(env.db(), &vm)
-        .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
+    let vm_id = vm_model::add(env.db(), &vm).await?;
 
     Ok(ApiResponse {
         data: vm_id,
@@ -54,37 +50,7 @@ pub async fn start(
     let clients = &*env.vmm_clients().read().await;
 
     let client = clients.get(&host.id).unwrap();
-    let vm = vm_model::by_id(env.db(), &vm_id)
-        .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
+    let vm = vm_model::by_id(env.db(), &vm_id).await?;
 
-    let request = VmConfig {
-        vm_id: vm.id.to_string(),
-        memory: vm.memory,
-        vcpus: vm.vcpu,
-        kernel: String::from("/root/vmlinux.bin"), // TODO super temporary
-        kernel_params: String::from("console=ttyS0 reboot=k panic=1 pci=off"), // TODO super temporary
-        network_mode: String::new(),
-        ip_address: String::new(),
-        mac_address: String::new(),
-        drives: vec![VmDrive {
-            drive_id: String::from("1"),
-            is_read_only: false,
-            is_root_device: true,
-            path_on_host: String::from("/root/bionic.rootfs.ext4"), // TODO super temporary
-            cache_type: 0,
-        }],
-    };
-
-    tracing::info!("Starting VM {} with config: {:?}", vm.id, request);
-
-    let response = client
-        .start_vm(request)
-        .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
-
-    Ok(ApiResponse {
-        code: StatusCode::ACCEPTED,
-        data: response.into_inner().vm_id,
-    })
+    todo!()
 }

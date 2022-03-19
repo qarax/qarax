@@ -30,7 +30,7 @@ message Drive {
   string drive_id = 1;
   bool is_read_only = 2;
   bool is_root_device = 3;
-  string path_on_host = 4;
+  Storage storage = 4;
   CacheType cache_type = 5;
 }
 
