@@ -151,6 +151,7 @@ mod tests {
             config: StorageConfig {
                 host_id: Some(Uuid::new_v4()),
                 pool_name: None,
+                path_on_host: None,
             },
         };
 

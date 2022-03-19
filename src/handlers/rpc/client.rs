@@ -1,13 +1,13 @@
 use super::node::VolumeRequest;
 use super::*;
 
-use crate::models::storage::{Storage, StorageType};
+use crate::models::storage::{Storage, StorageConfig, StorageType};
 use crate::models::volumes::{Volume, VolumeType};
 
 use node::storage_service_client::StorageServiceClient;
 use node::{
-    vm_service_client::VmServiceClient, Response as NodeResponse, Storage as StorageConfig,
-    VmConfig,
+    vm_service_client::VmServiceClient, Response as NodeResponse, Storage as RpcStorage,
+    StorageConfig as RpcStorageConfig, VmConfig,
 };
 use std::{net::SocketAddr, sync::Arc};
 use tokio::sync::RwLock;
@@ -107,7 +107,7 @@ impl StorageClient {
 
         let channel = self.channel.clone();
         let mut client = StorageServiceClient::with_interceptor(channel, interceptor);
-        client.create(StorageConfig::from(request.storage)).await
+        client.create(RpcStorage::from(request.storage)).await
     }
 
     #[instrument]
@@ -164,7 +164,7 @@ impl From<StorageCreateRequest> for Request<StorageCreateRequest> {
     }
 }
 
-impl From<Storage> for StorageConfig {
+impl From<Storage> for RpcStorage {
     fn from(storage: Storage) -> Self {
         Self {
             storage_id: storage.id.to_string(),
@@ -172,6 +172,18 @@ impl From<Storage> for StorageConfig {
             storage_type: match storage.storage_type {
                 StorageType::Local => 0,
                 StorageType::Shared => 1,
+            },
+            config: Some(RpcStorageConfig::from(storage.config)),
+        }
+    }
+}
+
+impl From<StorageConfig> for RpcStorageConfig {
+    fn from(from: StorageConfig) -> Self {
+        Self {
+            path_on_host: match from.path_on_host {
+                Some(path) => Some(path),
+                None => None,
             },
         }
     }
@@ -196,7 +208,7 @@ impl std::fmt::Debug for VolumeCreateRequest {
 impl From<VolumeCreateRequest> for VolumeRequest {
     fn from(r: VolumeCreateRequest) -> Self {
         VolumeRequest {
-            storage: Some(StorageConfig::from(r.storage)),
+            storage: Some(RpcStorage::from(r.storage)),
             name: r.volume.name,
             size: r.volume.size,
             volume_id: r.volume.id.to_string(),

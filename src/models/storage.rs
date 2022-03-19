@@ -1,4 +1,4 @@
-use sqlx::types::Json;
+use sqlx::{types::Json, Decode};
 
 use crate::handlers::ServerError;
 use lazy_static::lazy_static;
@@ -76,6 +76,11 @@ impl NewStorage {
                         "missing host_id for local storage",
                     )));
                 }
+                if config.path_on_host.is_none() {
+                    return Err(StorageError::InvalidConfig(String::from(
+                        "missing host_id for local storage",
+                    )));
+                }
             }
             StorageType::Shared => {
                 if config.pool_name.is_none() {
@@ -100,7 +105,32 @@ pub struct Storage {
     pub name: String,
     pub status: Status,
     pub storage_type: StorageType,
+    pub config: StorageConfig,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct StorageRow {
+    pub id: Uuid,
+    pub name: String,
+    pub status: Status,
+    pub storage_type: StorageType,
     pub config: Json<StorageConfig>,
+}
+
+impl From<StorageRow> for Storage {
+    fn from(row: StorageRow) -> Self {
+        Self {
+            id: row.id,
+            name: row.name,
+            status: row.status,
+            storage_type: row.storage_type,
+            config: StorageConfig {
+                host_id: row.config.host_id,
+                path_on_host: row.config.path_on_host.to_owned(),
+                pool_name: row.config.pool_name.to_owned(),
+            },
+        }
+    }
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone, Eq, PartialEq, Type, EnumString, Display)]
@@ -126,22 +156,26 @@ pub enum Status {
     Down,
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug, Clone, Decode)]
 pub struct StorageConfig {
     pub host_id: Option<Uuid>,
+    pub path_on_host: Option<String>,
     pub pool_name: Option<String>,
 }
 
 pub async fn list(pool: &PgPool) -> Result<Vec<Storage>, StorageError> {
     let storages = sqlx::query_as!(
-        Storage,
+        StorageRow,
         r#"
 SELECT id, name, status as "status: _", storage_type as "storage_type: _", config as "config: Json<StorageConfig>" 
 FROM storage
         "#
     )
     .fetch_all(pool)
-    .await?;
+    .await?
+    .iter()
+    .map(|r| r.to_owned().into())
+    .collect();
 
     Ok(storages)
 }
@@ -166,7 +200,7 @@ RETURNING id
 
 pub async fn by_id(pool: &PgPool, storage_id: &Uuid) -> Result<Storage, StorageError> {
     let storage = sqlx::query_as!(
-        Storage,
+        StorageRow,
         r#"
 SELECT id, name, status as "status: _", storage_type as "storage_type: _", config as "config: Json<StorageConfig>" 
 FROM storage
@@ -175,7 +209,8 @@ WHERE id = $1
         storage_id
     )
     .fetch_one(pool)
-    .await?;
+    .await?
+    .into();
 
     Ok(storage)
 }

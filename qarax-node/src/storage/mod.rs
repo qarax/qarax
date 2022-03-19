@@ -5,7 +5,7 @@ use strum_macros::{Display, EnumString};
 
 pub static STORAGE_PATH: &str = "/home/qarax/storage/";
 
-#[derive(EnumString, Display)]
+#[derive(EnumString, Display, PartialEq)]
 pub enum StorageType {
     #[strum(serialize = "local")]
     Local,

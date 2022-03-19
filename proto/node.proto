@@ -79,4 +79,9 @@ message Storage {
   string storageID = 1;
   string storageName = 2;
   StorageType storageType = 3;
+  optional StorageConfig config = 4;
+}
+
+message StorageConfig {
+  optional string path_on_host = 1;
 }

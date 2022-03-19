@@ -7,7 +7,9 @@ use tonic::{Request, Response, Status};
 use tracing::instrument;
 
 use crate::rpc::node::storage_service_server::StorageService;
-use crate::rpc::node::{Response as NodeResponse, Status as NodeStatus, Storage, VolumeRequest};
+use crate::rpc::node::{
+    Response as NodeResponse, Status as NodeStatus, Storage, VolumeRequest, VolumeType,
+};
 
 #[derive(Debug, Default)]
 pub(crate) struct StorageHandler {}
@@ -23,12 +25,20 @@ impl StorageService for StorageHandler {
             .map(|id| tracing::info!("request_id: {:?}", id.to_str()));
 
         let storage = request.into_inner();
+
         let path = Path::new(&STORAGE_PATH);
-        let path = path.join(StorageType::from(storage.storage_type).to_string());
         let path = path.join(storage.storage_id);
 
+        let storage_type = StorageType::from(storage.storage_type);
+        if storage_type == StorageType::Local {
+            let path_on_host = storage.config.unwrap().path_on_host.unwrap();
+            tracing::info!("Creating symlink from {:?} to {:?}", path, path_on_host);
+            tokio::fs::symlink(path_on_host, &path).await?;
+        }
+
         // TODO: create kernel_store and volume_store
-        fs::create_dir_all(path).await?;
+        fs::create_dir_all(path.join("kernels")).await?;
+        fs::create_dir_all(path.join("drives")).await?;
 
         let response = NodeResponse {
             status: NodeStatus::Success as i32,
@@ -51,12 +61,16 @@ impl StorageService for StorageHandler {
         // Create empty file
         let volume: VolumeRequest = request.into_inner();
 
-        // TODO: extract to method, this is a repetition of the code from create()
         let path = Path::new(&STORAGE_PATH);
-        let path =
-            path.join(StorageType::from(volume.storage.as_ref().unwrap().storage_type).to_string());
         let path = path.join(volume.storage.unwrap().storage_id);
 
+        let volume_type = VolumeType::from(volume.volume_type);
+        let volume_path = match volume_type {
+            VolumeType::Drive => "drives",
+            VolumeType::Kernel => "kernels",
+        };
+
+        let path = path.join(volume_path);
         let path = path.join(volume.volume_id);
         let file = File::create(&path).await?;
         file.set_len(volume.size as u64).await?;
@@ -81,6 +95,16 @@ impl From<i32> for StorageType {
         match st {
             0 => StorageType::Local,
             1 => StorageType::Shared,
+            _ => panic!("Unknown storage type"),
+        }
+    }
+}
+
+impl From<i32> for VolumeType {
+    fn from(st: i32) -> Self {
+        match st {
+            0 => VolumeType::Drive,
+            1 => VolumeType::Kernel,
             _ => panic!("Unknown storage type"),
         }
     }
