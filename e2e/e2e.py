@@ -1,9 +1,11 @@
 import functools
 import logging
+from multiprocessing import connection
 import os
 
 import pytest
 import qarax
+import libvirt
 from qarax.api import hosts_api
 from qarax.api import storage_api
 from qarax.model.host import Host
@@ -14,6 +16,11 @@ import terraform
 import util
 
 log = logging.getLogger(__name__)
+
+
+@pytest.fixture(scope="module")
+def create_snapshot():
+    path = os.path.join(os.path.abspath(os.path.dirname(__file__)), "terraform")
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -42,12 +49,40 @@ def vm(tf):
         log.error(err)
         raise Exception("Failed to show terraform resource")
 
+    libvirt_connection = libvirt.open("qemu:///system")
+    domain = libvirt_connection.lookupByName("centos-terraform")
+
+    snapshot_path = os.path.join(
+        os.path.abspath(os.path.dirname(__file__)), "e2e-snap-1"
+    )
+    SNAPSHOT_XML = f"""
+<domainsnapshot>
+  <name>e2e-snapshot</name>
+  <disks>
+    <disk name='vda' snapshot='external'>
+      <source file='{snapshot_path}'/>
+    </disk>
+  </disks>
+</domainsnapshot>
+"""
+
+    snap = domain.snapshotCreateXML(
+        SNAPSHOT_XML,
+        flags=libvirt.VIR_DOMAIN_SNAPSHOT_CREATE_DISK_ONLY
+        | libvirt.VIR_DOMAIN_SNAPSHOT_CREATE_QUIESCE,
+    )
+
     yield vm_json
+
+    log.info("Removing VM and snapshot...")
+    domain.destroy()
+    snap.delete()
+    #os.remove(snapshot_path)
 
 
 @pytest.fixture(scope="module", autouse=True)
 def vm_ip(vm):
-    log.info("Getting VM IP address")
+    log.info("Getting VM IP address...")
     vm_ip = None
 
     for resource in vm["values"]["root_module"]["resources"]:
