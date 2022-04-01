@@ -17,3 +17,4 @@ git+https://github.com/bennyz/qarax-python-sdk@master#egg=qarax
 six==1.16.0
 toml==0.10.2
 urllib3==1.26.8
+libvirt-python==8.1.0

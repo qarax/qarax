@@ -1,9 +1,15 @@
 import functools
 import logging
+from multiprocessing import connection
 import os
 
 import pytest
 import qarax
+import libvirt
+import time
+
+import xml.etree.ElementTree as ET
+
 from qarax.api import hosts_api
 from qarax.api import storage_api
 from qarax.model.host import Host
@@ -26,7 +32,7 @@ def tf():
 
 
 @pytest.fixture(scope="module", autouse=True)
-def vm(tf):
+def vm(tf, pytestconfig):
     _, err = tf.init()
     if err:
         log.error(err)
@@ -42,12 +48,48 @@ def vm(tf):
         log.error(err)
         raise Exception("Failed to show terraform resource")
 
+    libvirt_connection = libvirt.open("qemu:///system")
+    domain = libvirt_connection.lookupByName("centos-terraform")
+
+    snapshot_path = os.path.join(
+        os.path.abspath(os.path.dirname(__file__)), "tmp/" f"e2e-snap-{time.time()}"
+    )
+
+    SNAPSHOT_XML = f"""
+<domainsnapshot>
+  <name>e2e-snapshot</name>
+  <disks>
+    <disk name='vda' snapshot='external'>
+      <source file='{snapshot_path}'/>
+    </disk>
+  </disks>
+</domainsnapshot>
+"""
+
+    snapshot = domain.snapshotCreateXML(
+        SNAPSHOT_XML,
+        flags=libvirt.VIR_DOMAIN_SNAPSHOT_CREATE_DISK_ONLY
+        | libvirt.VIR_DOMAIN_SNAPSHOT_CREATE_QUIESCE,
+    )
+
     yield vm_json
+    root = ET.fromstring(domain.XMLDesc())
+    disk = root.find("./devices/disk[@type='file'][@device='disk']")
+    disk_str = ET.tostring(disk, encoding="unicode", method="xml")
+    log.info("Found disk %r...", disk_str)
+
+    if pytestconfig.getoption("keep"):
+        log.info("Destroying VM and removing snapshot %s...", snapshot_path)
+        domain.destroy()
+        domain.detachDeviceFlags(disk_str, libvirt.VIR_DOMAIN_AFFECT_CONFIG)
+        snapshot.delete(libvirt.VIR_DOMAIN_SNAPSHOT_DELETE_METADATA_ONLY)
+        os.remove(snapshot_path)
+        domain.undefine()
 
 
 @pytest.fixture(scope="module", autouse=True)
 def vm_ip(vm):
-    log.info("Getting VM IP address")
+    log.info("Getting VM IP address...")
     vm_ip = None
 
     for resource in vm["values"]["root_module"]["resources"]:
@@ -63,8 +105,6 @@ def vm_ip(vm):
 
 @pytest.fixture(scope="module", autouse=True)
 def host_config(vm_ip):
-    import time
-
     host_config = {
         "name": "e2e-test-host" + str(time.time()),
         "address": vm_ip,

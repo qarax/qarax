@@ -11,5 +11,11 @@ fi
 python3 -m venv /tmp/qarax-e2e
 source /tmp/qarax-e2e/bin/activate
 pip install -r ${SCRIPT_DIR}/requirements.txt
-PYTHONPATH=${SCRIPT_DIR} pytest -svv ${SCRIPT_DIR}/e2e.py
+
+if [ $1 == "--keep" ]; then
+     PYTHONPATH=${SCRIPT_DIR} pytest -svv ${SCRIPT_DIR}/e2e.py --keep
+else
+     PYTHONPATH=${SCRIPT_DIR} pytest -svv ${SCRIPT_DIR}/e2e.py
+fi
+
 deactivate
