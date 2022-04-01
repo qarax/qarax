@@ -6,6 +6,10 @@ import os
 import pytest
 import qarax
 import libvirt
+import time
+
+import xml.etree.ElementTree as ET
+
 from qarax.api import hosts_api
 from qarax.api import storage_api
 from qarax.model.host import Host
@@ -16,11 +20,6 @@ import terraform
 import util
 
 log = logging.getLogger(__name__)
-
-
-@pytest.fixture(scope="module")
-def create_snapshot():
-    path = os.path.join(os.path.abspath(os.path.dirname(__file__)), "terraform")
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -53,8 +52,9 @@ def vm(tf):
     domain = libvirt_connection.lookupByName("centos-terraform")
 
     snapshot_path = os.path.join(
-        os.path.abspath(os.path.dirname(__file__)), "e2e-snap-1"
+        os.path.abspath(os.path.dirname(__file__)), "tmp/" f"e2e-snap-{time.time()}"
     )
+
     SNAPSHOT_XML = f"""
 <domainsnapshot>
   <name>e2e-snapshot</name>
@@ -66,18 +66,24 @@ def vm(tf):
 </domainsnapshot>
 """
 
-    snap = domain.snapshotCreateXML(
+    snapshot = domain.snapshotCreateXML(
         SNAPSHOT_XML,
         flags=libvirt.VIR_DOMAIN_SNAPSHOT_CREATE_DISK_ONLY
         | libvirt.VIR_DOMAIN_SNAPSHOT_CREATE_QUIESCE,
     )
 
     yield vm_json
+    root = ET.fromstring(domain.XMLDesc())
+    disk = root.find("./devices/disk[@type='file'][@device='disk']")
+    disk_str = ET.tostring(disk, encoding="unicode", method="xml")
+    log.info("Found disk %r...", disk_str)
 
-    log.info("Removing VM and snapshot...")
+    log.info("Destroying VM and removing snapshot %s...", snapshot_path)
     domain.destroy()
-    snap.delete()
-    #os.remove(snapshot_path)
+    domain.detachDeviceFlags(disk_str, libvirt.VIR_DOMAIN_AFFECT_CONFIG)
+    snapshot.delete(libvirt.VIR_DOMAIN_SNAPSHOT_DELETE_METADATA_ONLY)
+    os.remove(snapshot_path)
+    domain.undefine()
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -98,8 +104,6 @@ def vm_ip(vm):
 
 @pytest.fixture(scope="module", autouse=True)
 def host_config(vm_ip):
-    import time
-
     host_config = {
         "name": "e2e-test-host" + str(time.time()),
         "address": vm_ip,
