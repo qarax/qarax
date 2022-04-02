@@ -32,7 +32,7 @@ def tf():
 
 
 @pytest.fixture(scope="module", autouse=True)
-def vm(tf, pytestconfig):
+def vm(tf, request):
     _, err = tf.init()
     if err:
         log.error(err)
@@ -76,9 +76,8 @@ def vm(tf, pytestconfig):
     root = ET.fromstring(domain.XMLDesc())
     disk = root.find("./devices/disk[@type='file'][@device='disk']")
     disk_str = ET.tostring(disk, encoding="unicode", method="xml")
-    log.info("Found disk %r...", disk_str)
 
-    if pytestconfig.getoption("keep"):
+    if request.config.getoption("keep"):
         log.info("Destroying VM and removing snapshot %s...", snapshot_path)
         domain.destroy()
         domain.detachDeviceFlags(disk_str, libvirt.VIR_DOMAIN_AFFECT_CONFIG)
