@@ -23,6 +23,7 @@ mod ansible;
 pub mod drives;
 pub mod hosts;
 pub mod kernels;
+pub mod networks;
 pub mod rpc;
 pub mod storage;
 pub mod vms;
@@ -51,6 +52,7 @@ pub async fn app(env: Environment) -> Router {
         .nest("/vms", vms())
         .nest("/drives", drives())
         .nest("/kernels", kernels())
+        .nest("/networks", networks())
         .layer(
             ServiceBuilder::new()
                 .layer(PropagateRequestIdLayer::new(x_request_id.clone()))
@@ -112,6 +114,12 @@ pub fn kernels() -> Router {
     Router::new()
         .route("/:id", get(kernels::get))
         .route("/", get(kernels::list).post(kernels::add))
+}
+
+pub fn networks() -> Router {
+    Router::new()
+        .route("/:id", get(networks::get))
+        .route("/", get(networks::list).post(networks::add))
 }
 
 #[derive(Clone, Copy)]
