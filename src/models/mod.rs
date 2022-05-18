@@ -10,6 +10,7 @@ use thiserror::Error;
 pub mod drives;
 pub mod hosts;
 pub mod kernels;
+pub mod networks;
 pub mod storage;
 pub mod vms;
 pub mod volumes;
