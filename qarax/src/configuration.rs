@@ -62,10 +62,7 @@ impl DatabaseSettings {
 pub fn get_configuration() -> Result<Settings, config::ConfigError> {
     // Get our base path which is one level up from current_dir
     let base_path = std::env::current_dir().expect("Failed to get current directory.");
-    let configuration_directory = base_path
-        .parent()
-        .expect("Failed to get parent directory")
-        .join("configuration");
+    let configuration_directory = base_path.join("configuration");
     let environment: Environment = std::env::var("APP_ENVIRONMENT")
         .unwrap_or_else(|_| "local".into())
         .try_into()
