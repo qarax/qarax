@@ -1,0 +1,102 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nSELECT id,\n        name,\n        status as \"status: _\",\n        host_id as \"host_id?\",\n        vcpu,\n        memory,\n        ip_address as \"ip_address?\", \n        mac_address as \"mac_address?\", \n        network_mode as \"network_mode: _\", \n        kernel_params, \n        kernel\nFROM vms\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "status: _",
+        "type_info": {
+          "Custom": {
+            "name": "vm_status",
+            "kind": {
+              "Enum": [
+                "UNKNOWN",
+                "DOWN",
+                "UP"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "host_id?",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 4,
+        "name": "vcpu",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "memory",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "ip_address?",
+        "type_info": "Inet"
+      },
+      {
+        "ordinal": 7,
+        "name": "mac_address?",
+        "type_info": "Macaddr"
+      },
+      {
+        "ordinal": 8,
+        "name": "network_mode: _",
+        "type_info": {
+          "Custom": {
+            "name": "network_mode",
+            "kind": {
+              "Enum": [
+                "STATIC",
+                "DHCP",
+                "NONE"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "kernel_params",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 10,
+        "name": "kernel",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "c793b10195ee37947a35b8e3c0ec0e08d978cabd366c6881c4e62af3e7a42714"
+}

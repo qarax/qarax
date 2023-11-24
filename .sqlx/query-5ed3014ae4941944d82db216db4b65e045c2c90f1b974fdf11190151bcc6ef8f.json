@@ -1,0 +1,72 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id, name, address, port, host_user, password, status as \"status: _\"\n        FROM hosts\n        WHERE name = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "address",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "port",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "host_user",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "password",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 6,
+        "name": "status: _",
+        "type_info": {
+          "Custom": {
+            "name": "host_status",
+            "kind": {
+              "Enum": [
+                "UNKNOWN",
+                "DOWN",
+                "INSTALLING",
+                "INSTALLATION_FAILED",
+                "INITIALIZING",
+                "UP"
+              ]
+            }
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "5ed3014ae4941944d82db216db4b65e045c2c90f1b974fdf11190151bcc6ef8f"
+}
