@@ -1,19 +1,8 @@
-mod rpc;
-mod storage;
-mod vm;
-
-use rpc::node::storage_service_server::StorageServiceServer;
-use rpc::node::vm_service_server::VmServiceServer;
+use std::net::SocketAddr;
 
 use clap::Parser;
-use common::telemetry::{get_subscriber, init_subscriber};
-use std::net::SocketAddr;
-use std::time::Duration;
-use tonic::transport::Server;
-use tracing::Span;
-use vm::vmm_service::VmmService;
-
-use storage::handler::StorageHandler;
+use common::telemtry::{get_subscriber, init_subscriber};
+use qarax_node::startup::run;
 
 #[derive(Parser, Debug)]
 #[clap(
@@ -29,29 +18,19 @@ pub struct Args {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
+
     let subscriber = get_subscriber("qarax-node".into(), "info".into(), std::io::stdout);
     init_subscriber(subscriber);
-
-    let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
-    health_reporter
-        .set_serving::<VmServiceServer<VmmService>>()
-        .await;
-
-    health_reporter
-        .set_serving::<StorageServiceServer<StorageHandler>>()
-        .await;
-
-    tracing::info!("Starting on port {}", args.port);
-    let addr = SocketAddr::from(([0, 0, 0, 0], args.port));
-
-    Server::builder()
-        .trace_fn(|_| Span::current())
-        .tcp_keepalive(Some(Duration::from_secs(60)))
-        .add_service(health_service)
-        .add_service(VmServiceServer::new(VmmService::default()))
-        .add_service(StorageServiceServer::new(StorageHandler::default()))
-        .serve(addr)
-        .await?;
+    match run().await {
+        Ok(r) => {
+            tracing::info!("qarax-node is running on port {}", args.port);
+            let addr: SocketAddr = SocketAddr::from(([0, 0, 0, 0], args.port));
+            r.serve(addr).await?;
+        }
+        Err(e) => {
+            tracing::error!("qarax-node failed to start: {}", e);
+        }
+    }
 
     Ok(())
 }

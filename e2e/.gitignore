@@ -1,6 +1,0 @@
-.terraform*
-terraform.tfstate*
-.cache*
-
-__pycache__
-tmp/

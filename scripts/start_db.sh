@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-
 set -eo pipefail
 
 DB_USER=${POSTGRES_USER:=postgres}
@@ -13,7 +12,7 @@ if [[ -z "${SKIP_DOCKER}" ]]; then
         -e POSTGRES_PASSWORD=${DB_PASSWORD} \
         -e POSTGRES_DB=${DB_NAME} \
         -p "${DB_PORT}":5432 \
-        -d docker.io/library/postgres:14 
+        -d docker.io/library/postgres:15
 fi
 
 export PGPASSWORD="${DB_PASSWORD}"
@@ -26,6 +25,8 @@ echo >&2 "Postgres is up and running on port ${DB_PORT} - running migrations now
 
 export DATABASE_URL=postgres://${DB_USER}:${DB_PASSWORD}@localhost:${DB_PORT}/${DB_NAME}
 sqlx database create
+echo "Created DB ${DATABASE_URL}"
 
-sqlx migrate run
+sqlx mig run
+echo "ran migrations"
 echo >&2 "Postgres has been migrated, ready to go!"

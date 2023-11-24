@@ -1,3 +1,3 @@
-pub(crate) mod node {
+pub mod node {
     tonic::include_proto!("node");
 }

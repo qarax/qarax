@@ -3,95 +3,47 @@ package node;
 
 import "google/protobuf/empty.proto";
 
-service VmService {
-  rpc StartVM(VmConfig) returns (VmConfig) {}
-  rpc StopVM(VmID) returns (Response) {}
-  rpc ListVms(google.protobuf.Empty) returns (VmList) {}
-}
-
-service StorageService {
-  rpc Create(Storage) returns (Response) {}
-  rpc CreateVolume(VolumeRequest) returns (Response) {}
-}
+message VmID { string id = 1; }
+message VmList { repeated VmConfig vms = 1; }
 
 message VmConfig {
   string vmID = 1;
   int32 memory = 2;
   int32 vcpus = 3;
   string kernel = 4;
-  string kernel_params = 5;
+  string kernelParams = 5;
   repeated Drive drives = 6;
-  repeated Network networks = 7; 
+}
+
+message VmState {
+  VmConfig config = 1;
+  VmStatus status = 2;
 }
 
 message Drive {
-  string drive_id = 1;
-  bool is_read_only = 2;
-  bool is_root_device = 3;
-  Storage storage = 4;
-  CacheType cache_type = 5;
+  string id = 1;
+  string pathOnHost = 2;
+  bool readOnly = 3;
+  bool isRoot = 4;
+  optional IoEngine ioEngine = 5;
+  optional string partuuid = 6;
+
+  // TODO: add rate limiter
 }
 
-message VolumeRequest {
-  string volume_id = 1;
-  Storage storage = 2;
-  string name = 3;
-  int64 size = 4;
-  VolumeType volume_type = 5;
-  optional string url = 6;
+enum IoEngine {
+  SYNC = 0;
+  ASYNC = 1;
 }
 
-message Network {
-  string network_id = 1;
-  optional string ip = 2;
-  optional string mac_address = 3;
-  NetworkType network_type = 4;
+enum VmStatus {
+  STOPPED = 0;
+  RUNNING = 1;
 }
 
-enum NetworkType {
-  DHCP = 0;
-  STATIC = 1;
-}
-
-enum VolumeType {
-  DRIVE = 0;
-  KERNEL = 1;
-}
-
-enum CacheType {
-  NONE = 0;
-  WRITE_BACK = 1;
-  UNSAFE = 2;
-}
-
-enum Status {
-  SUCCESS = 0;
-  FAILURE = 1;
-}
-
-enum StorageType {
-  LOCAL = 0;
-  SHARED = 1;
-}
-
-message Response { Status status = 1; }
-
-message VmResponse {
-  Status status = 1;
-  VmConfig config = 2;
-}
-
-message VmList { repeated string vmID = 1; }
-
-message VmID { string vmID = 1; }
-
-message Storage {
-  string storageID = 1;
-  string storageName = 2;
-  StorageType storageType = 3;
-  optional StorageConfig config = 4;
-}
-
-message StorageConfig {
-  optional string path_on_host = 1;
+service VmService {
+  rpc StartVM(VmConfig) returns (VmConfig) {}
+  rpc StopVM(VmID) returns (google.protobuf.Empty) {}
+  rpc ListVms(google.protobuf.Empty) returns (VmList) {}
+  rpc GetVmInfo(VmID) returns (VmState) {}
 }

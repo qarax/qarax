@@ -1,3 +1,0 @@
-- include: prologue.yml
-- include: setup_firecracker.yml
-- include: build_qarax_node.yml
