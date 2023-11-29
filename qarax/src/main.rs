@@ -1,4 +1,4 @@
-use std::net::TcpListener;
+use tokio::net::TcpListener;
 
 use common::telemtry::{get_subscriber, init_subscriber};
 use qarax::{configuration::get_configuration, database, startup::run};
@@ -22,8 +22,8 @@ async fn main() -> std::io::Result<()> {
     let db_options = configuration.database.without_db();
     let connection_pool = PgPool::connect_lazy_with(db_options);
     tracing::info!("Starting server on {}", address);
-    let listener = TcpListener::bind(address)?;
-    match run(listener, connection_pool) {
+    let listener = TcpListener::bind(address).await?;
+    match run(listener, connection_pool).await {
         Ok(server) => {
             server.await.unwrap();
         }

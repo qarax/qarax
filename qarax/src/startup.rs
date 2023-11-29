@@ -1,17 +1,16 @@
-use std::net::TcpListener;
+use axum::{routing::IntoMakeService, serve::Serve, Router};
+use tokio::net::TcpListener;
 
-use axum::{routing::IntoMakeService, Router, Server};
-use hyper::server::conn::AddrIncoming;
 use sqlx::PgPool;
 
 use crate::{handlers::app, App};
 
-pub fn run(
+pub async fn run(
     listener: TcpListener,
     db_pool: PgPool,
-) -> Result<Server<AddrIncoming, IntoMakeService<Router>>, Box<dyn std::error::Error>> {
+) -> Result<Serve<IntoMakeService<Router>, Router>, Box<dyn std::error::Error + Send>> {
     let a = App::new(db_pool);
     let app = app(a);
-    let server = axum::Server::from_tcp(listener)?.serve(app.into_make_service());
+    let server = axum::serve(listener, app.into_make_service());
     Ok(server)
 }

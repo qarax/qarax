@@ -40,10 +40,7 @@ pub struct VmRow {
 
 impl From<VmRow> for Vm {
     fn from(vm: VmRow) -> Self {
-        let mac = match vm.mac_address {
-            Some(mac) => Some(mac.bytes().to_vec()),
-            None => None,
-        };
+        let mac = vm.mac_address.map(|mac| mac.bytes().to_vec());
         Vm {
             id: vm.id,
             name: vm.name,
@@ -65,17 +62,15 @@ impl From<VmRow> for Vm {
 #[sqlx(type_name = "network_mode")]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
+#[derive(Default)]
 pub enum NetworkMode {
     Static,
     Dhcp,
+    #[default]
     None,
 }
 
-impl Default for NetworkMode {
-    fn default() -> Self {
-        NetworkMode::None
-    }
-}
+
 
 #[derive(Deserialize, Serialize, Debug, Clone, Eq, PartialEq, Type, EnumString, Display)]
 #[sqlx(rename_all = "SCREAMING_SNAKE_CASE")]

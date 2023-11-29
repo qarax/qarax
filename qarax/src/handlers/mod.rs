@@ -1,6 +1,6 @@
 use crate::{errors::Error, App};
 use axum::{
-    body::{Body, BoxBody},
+    body::Body,
     response::{self, IntoResponse, Response},
     routing::get,
     Extension, Json, Router,
@@ -68,7 +68,7 @@ impl<T> IntoResponse for ApiResponse<T>
 where
     T: Send + Sync + Serialize,
 {
-    fn into_response(self) -> Response<BoxBody> {
+    fn into_response(self) -> Response {
         let mut response = response::Json(json!({
             "response": self.data,
         }))

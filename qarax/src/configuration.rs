@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use secrecy::{ExposeSecret, Secret};
 use sqlx::postgres::{PgConnectOptions, PgSslMode};
 
@@ -61,7 +63,8 @@ impl DatabaseSettings {
 
 pub fn get_configuration() -> Result<Settings, config::ConfigError> {
     // Get our base path which is one level up from current_dir
-    let base_path = std::env::current_dir().expect("Failed to get current directory.");
+    let base_path = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/.."));
+    println!("Current directory: {:?}", std::env::current_dir().unwrap());
     let configuration_directory = base_path.join("configuration");
     let environment: Environment = std::env::var("APP_ENVIRONMENT")
         .unwrap_or_else(|_| "local".into())

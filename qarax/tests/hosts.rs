@@ -1,15 +1,13 @@
-use std::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
 
 use common::telemtry::{get_subscriber, init_subscriber};
-use http::{Method, Request, StatusCode};
-use hyper::Body;
 use once_cell::sync::Lazy;
 use qarax::{
     configuration::{get_configuration, DatabaseSettings},
     model::hosts::NewHost,
     startup::run,
 };
-use serde_json::json;
+use reqwest::StatusCode;
 use sqlx::{Connection, Executor, PgConnection, PgPool};
 use tokio::runtime::Runtime;
 use uuid::Uuid;
@@ -52,17 +50,20 @@ pub async fn configure_database(config: &DatabaseSettings) -> PgPool {
 
 async fn spawn_app() -> TestApp {
     Lazy::force(&TRACING);
-    let listener = TcpListener::bind("127.0.0.1:0").expect("Failed to bind random port");
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("Failed to bind random port");
     let port = listener.local_addr().unwrap().port();
     let address = format!("http://127.0.0.1:{}", port);
+    println!("Address: {}", address);
     let mut configuration =
         qarax::configuration::get_configuration().expect("Failed to read configuration.");
     configuration.database.name = Uuid::new_v4().to_string();
     tracing::info!("Using database {}", configuration.database.name);
     let connection_pool = configure_database(&configuration.database).await;
 
-    let server = run(listener, connection_pool.clone()).expect("Failed to bind address");
-    let _ = tokio::spawn(server);
+    let server = run(listener, connection_pool.clone()).await;
+    let _ = tokio::spawn(async { server.unwrap().await });
     TestApp {
         db_name: configuration.database.name,
         address,
@@ -73,21 +74,14 @@ async fn spawn_app() -> TestApp {
 #[tokio::test]
 async fn test_list_hosts_empty() {
     let app = spawn_app().await;
-    let client = hyper::client::Client::new();
-    let req = Request::builder()
-        .method(Method::GET)
-        .uri(&format!("{}/hosts", &app.address))
-        .body(Body::empty())
-        .unwrap();
-    let res = client.request(req).await.unwrap();
-    assert_eq!(res.status(), StatusCode::OK);
+    let res: Result<reqwest::Response, reqwest::Error> =
+        reqwest::get(&format!("{}/hosts", &app.address)).await;
+    assert_eq!(res.unwrap().status(), StatusCode::OK);
 }
 
 #[tokio::test]
 async fn test_add_host() {
     let app = spawn_app().await;
-    let client = hyper::client::Client::new();
-
     let host = NewHost {
         name: String::from("test_host"),
         address: String::from("127.0.0.1"),
@@ -95,14 +89,14 @@ async fn test_add_host() {
         host_user: String::from("root"),
         password: String::from("pass"),
     };
-
-    let req = Request::builder()
-        .method(Method::POST)
-        .uri(&format!("{}/hosts", &app.address))
+    let client = reqwest::Client::new();
+    let res = client
+        .post(&format!("{}/hosts", &app.address))
         .header("Content-Type", "application/json")
-        .body(Body::from(json!(&host).to_string()));
-    let res = client.request(req.unwrap()).await.unwrap();
-    assert_eq!(res.status(), StatusCode::CREATED);
+        .json(&host)
+        .send()
+        .await;
+    assert_eq!(res.unwrap().status(), StatusCode::CREATED);
 }
 
 impl Drop for TestApp {

@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 #[instrument(skip(env))]
 pub async fn list(Extension(env): Extension<App>) -> Result<ApiResponse<Vec<Host>>> {
-    let hosts = hosts::list(&env.pool()).await?;
+    let hosts = hosts::list(env.pool()).await?;
     Ok(ApiResponse {
         data: hosts,
         code: StatusCode::OK,
@@ -22,8 +22,8 @@ pub async fn add(
     Extension(env): Extension<App>,
     Json(host): Json<NewHost>,
 ) -> Result<ApiResponse<Uuid>> {
-    host.validate_unique_name(&env.pool(), &host.name).await?;
-    let id = hosts::add(&env.pool(), &host).await?;
+    host.validate_unique_name(env.pool(), &host.name).await?;
+    let id = hosts::add(env.pool(), &host).await?;
     Ok(ApiResponse {
         data: id,
         code: StatusCode::CREATED,
