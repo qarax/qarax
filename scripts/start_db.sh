@@ -6,7 +6,7 @@ DB_PASSWORD="${POSTGRES_PASSWORD:=password}"
 DB_NAME="${POSTGRES_DB:=qarax}"
 DB_PORT="${POSTGRES_PORT:=5432}"
 if [[ -z "${SKIP_DOCKER}" ]]; then
-    podman run \
+	docker run \
         --network=host \
         -e POSTGRES_USER=${DB_USER} \
         -e POSTGRES_PASSWORD=${DB_PASSWORD} \

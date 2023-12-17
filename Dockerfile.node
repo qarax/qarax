@@ -1,0 +1,30 @@
+# Builder stage
+FROM rust:latest as builder
+WORKDIR /usr/src/app
+
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    protobuf-compiler \
+    # Add any other runtime dependencies here \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy workspace configuration files
+COPY ./Cargo.toml ./Cargo.lock ./
+
+# Create dummy directories for other workspace members if necessary
+RUN mkdir some_other_directory_if_needed
+
+# Copy the directories relevant to qarax-node and its dependencies
+COPY ./qarax-node ./qarax-node
+COPY ./common ./common
+COPY ./qarax ./qarax
+COPY ./proto ./proto
+COPY ./firecracker /usr/bin/firecracker
+COPY ./jailer /usr/bin/jailer
+
+
+# Build dependencies (to cache them)
+RUN cargo build -p qarax-node --tests --release
+
+# Run the tests
+CMD ["cargo", "test", "-p", "qarax-node", "--release"]
