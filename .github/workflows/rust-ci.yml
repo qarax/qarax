@@ -25,16 +25,14 @@ jobs:
         with:
           command: fmt
           args: --all -- --check
-  test:
-    name: Test
+  build-and-test:
+    name: Build and Test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
-      - uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: nightly
-          override: true
-      - uses: actions-rs/cargo@v1
-        with:
-          command: ./run_tests.sh
+      - name: Set up Docker
+        uses: docker/setup-buildx-action@v1
+      - name: Make run_tests.sh executable
+        run: chmod +x run_tests.sh
+      - name: Build and run Docker container
+        run: ./run_tests.sh
