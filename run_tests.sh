@@ -1,4 +1,5 @@
-docker build -t qarax-node-test -f Dockerfile.node .
+# qarax-node-tests
+docker build -t qarax-node-test -f Dockerfile.node-test .
 docker run --rm \
     --privileged \
     --ipc=host \
