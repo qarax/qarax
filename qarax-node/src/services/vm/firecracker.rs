@@ -45,6 +45,7 @@ impl<'a> FirecrackerVmmManager<'a> {
             .chroot_base_dir(Path::new(CHROOT_BASE))
             .cgroup_version(firec::config::CgroupVersion::V2)
             .exec_file(input.firecracker_exec.clone())
+            .mode(JailerMode::Tmux(None))
             .build()
             .kernel_args(input.kernel_args)
             .machine_cfg()

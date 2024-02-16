@@ -51,9 +51,7 @@ impl NewHost {
         pool: &PgPool,
         name: &str,
     ) -> Result<(), errors::Error> {
-        let host = by_name(pool, name)
-            .await
-            .map_err(errors::Error::Sqlx)?;
+        let host = by_name(pool, name).await.map_err(errors::Error::Sqlx)?;
 
         if host.is_some() {
             let mut errors = ValidationErrors::new();

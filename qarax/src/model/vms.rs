@@ -70,8 +70,6 @@ pub enum NetworkMode {
     None,
 }
 
-
-
 #[derive(Deserialize, Serialize, Debug, Clone, Eq, PartialEq, Type, EnumString, Display)]
 #[sqlx(rename_all = "SCREAMING_SNAKE_CASE")]
 #[sqlx(type_name = "vm_status")]

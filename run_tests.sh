@@ -10,4 +10,4 @@ docker run --rm \
     --device=/dev/vsock:/dev/vsock \
     --device=/dev/kvm:/dev/kvm \
     --device=/dev/loop-control:/dev/loop-control \
-    qarax-node-tests:latest
+    qarax-node-test:latest
