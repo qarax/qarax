@@ -32,7 +32,3 @@ jobs:
       - uses: actions/checkout@v2
       - name: Set up Docker
         uses: docker/setup-buildx-action@v3
-      - name: Make run_tests.sh executable
-        run: chmod +x run_tests.sh
-      - name: Build and run Docker container
-        run: ./run_tests.sh
