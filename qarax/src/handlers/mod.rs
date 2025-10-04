@@ -1,11 +1,11 @@
-use crate::{errors::Error, App};
+use crate::{App, errors::Error};
 use axum::{
+    Extension, Json, Router,
     body::Body,
     response::{self, IntoResponse, Response},
     routing::get,
-    Extension, Json, Router,
 };
-use http::{header::HeaderName, Request, StatusCode};
+use http::{Request, StatusCode, header::HeaderName};
 use serde::Serialize;
 use serde_json::json;
 use serde_with::DisplayFromStr;

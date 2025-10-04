@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
-    model::hosts::{self, Host, NewHost},
     App,
+    model::hosts::{self, Host, NewHost},
 };
 use axum::{Extension, Json};
 use http::StatusCode;

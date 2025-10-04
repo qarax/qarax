@@ -1,9 +1,9 @@
-use axum::{routing::IntoMakeService, serve::Serve, Router};
+use axum::{Router, routing::IntoMakeService, serve::Serve};
 use tokio::net::TcpListener;
 
 use sqlx::PgPool;
 
-use crate::{handlers::app, App};
+use crate::{App, handlers::app};
 
 pub async fn run(
     listener: TcpListener,

@@ -1,7 +1,7 @@
 use sqlx::{
+    PgPool,
     migrate::MigrateDatabase,
     postgres::{self},
-    PgPool,
 };
 
 pub async fn run_migrations(db_url: &str) -> Result<(), sqlx::Error> {

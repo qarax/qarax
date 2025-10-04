@@ -2,8 +2,8 @@ use std::net::IpAddr;
 
 use serde::{Deserialize, Serialize};
 use sqlx::{
-    types::{ipnetwork::IpNetwork, mac_address::MacAddress},
     PgPool, Type,
+    types::{ipnetwork::IpNetwork, mac_address::MacAddress},
 };
 use strum_macros::{Display, EnumString};
 use uuid::Uuid;

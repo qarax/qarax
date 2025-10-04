@@ -3,7 +3,7 @@ use tokio::net::{TcpListener, TcpStream};
 use common::telemtry::{get_subscriber, init_subscriber};
 use once_cell::sync::Lazy;
 use qarax::{
-    configuration::{get_configuration, DatabaseSettings},
+    configuration::{DatabaseSettings, get_configuration},
     model::hosts::NewHost,
     startup::run,
 };

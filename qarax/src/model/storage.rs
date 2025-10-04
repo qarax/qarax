@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use sqlx::{types::Json, FromRow, PgPool, Type};
+use sqlx::{FromRow, PgPool, Type, types::Json};
 use strum_macros::{Display, EnumString};
 use uuid::Uuid;
 

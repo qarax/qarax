@@ -3,8 +3,8 @@ use http::StatusCode;
 use tracing::instrument;
 
 use crate::{
-    model::vms::{self, Vm},
     App,
+    model::vms::{self, Vm},
 };
 
 use super::{ApiResponse, Result};

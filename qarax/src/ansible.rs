@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use std::{collections::BTreeMap, fmt};
 use tokio::process::Command;
 
@@ -49,7 +49,8 @@ impl<'a> AnsibleCommand<'a> {
             .spawn()
             .context("Ansible failed")?;
 
-        match process.wait().await {
+        let wait_result = process.wait().await;
+        match wait_result {
             Ok(status) => {
                 if status.success() {
                     Ok(())
