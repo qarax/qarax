@@ -4,6 +4,11 @@ CREATE TYPE vm_status AS ENUM (
     'UP'
 );
 
+CREATE TYPE hypervisor AS ENUM (
+    'CLOUD_HV',
+    'FIRECRACKER'
+);
+
 CREATE TABLE vms (
     id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
     name VARCHAR(50) UNIQUE NOT NULL,
@@ -11,8 +16,8 @@ CREATE TABLE vms (
     host_id UUID REFERENCES hosts(id),
     vcpu INTEGER NOT NULL,
     memory INTEGER NOT NULL,
-    kernel_params VARCHAR(1000) NOT NULL,
-    kernel UUID NOT NULL,
+    hypervisor hypervisor NOT NULL,
+    config JSONB NOT NULL,
     created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
