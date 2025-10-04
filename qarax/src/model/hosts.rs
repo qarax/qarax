@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use sqlx::{types::Uuid, PgPool, Type};
+use sqlx::{PgPool, Type, types::Uuid};
 use strum_macros::{Display, EnumString};
 use validator::{Validate, ValidationError, ValidationErrors};
 
