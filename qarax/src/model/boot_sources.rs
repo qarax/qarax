@@ -60,7 +60,10 @@ FROM boot_sources
     .fetch_all(pool)
     .await?;
 
-    let boot_sources: Vec<BootSource> = boot_sources.into_iter().map(|bs: BootSourceRow| bs.into()).collect();
+    let boot_sources: Vec<BootSource> = boot_sources
+        .into_iter()
+        .map(|bs: BootSourceRow| bs.into())
+        .collect();
     Ok(boot_sources)
 }
 

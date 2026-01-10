@@ -1,0 +1,96 @@
+# Containerfile for qarax VMM Host Image
+# This creates a bootable container image with qarax-node and Cloud Hypervisor
+# for use as a Virtual Machine Manager (VMM) host.
+#
+# Build instructions:
+#   cargo build --release -p qarax-node
+#   podman build -f deployments/Containerfile.qarax-vmm -t quay.io/yourorg/qarax-vmm-host:latest .
+#   podman push quay.io/yourorg/qarax-vmm-host:latest
+#
+# Deploy to host:
+#   ssh root@vmm-host "bootc switch quay.io/yourorg/qarax-vmm-host:latest && systemctl reboot"
+
+FROM quay.io/centos-bootc/centos-bootc:stream9
+
+# Build arguments for version pinning
+ARG CLOUD_HYPERVISOR_VERSION=v38.0
+ARG QARAX_VERSION=0.1.0
+
+# Install system dependencies for running VMs
+RUN dnf install -y \
+    # QEMU utilities for disk image management
+    qemu-img \
+    # Networking tools
+    iproute-tc \
+    socat \
+    iptables \
+    nftables \
+    bridge-utils \
+    # Storage tools
+    lvm2 \
+    # Monitoring and debugging
+    htop \
+    strace \
+    tcpdump \
+    # System utilities
+    vim-minimal \
+    curl \
+    && dnf clean all
+
+# Install Cloud Hypervisor
+RUN curl -fsSL \
+    "https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/${CLOUD_HYPERVISOR_VERSION}/cloud-hypervisor" \
+    -o /usr/local/bin/cloud-hypervisor && \
+    chmod +x /usr/local/bin/cloud-hypervisor && \
+    cloud-hypervisor --version
+
+
+
+# Copy qarax-node binary (must be built before image build)
+# Build with: cargo build --release -p qarax-node
+COPY target/release/qarax-node /usr/local/bin/qarax-node
+RUN chmod +x /usr/local/bin/qarax-node
+
+# Setup qarax-node systemd service
+COPY deployments/qarax-node.service /etc/systemd/system/qarax-node.service
+RUN systemctl enable qarax-node
+
+# Configure system for VM workloads
+COPY deployments/vm-network.conf /etc/sysctl.d/99-vm-network.conf
+COPY deployments/vm-modules.conf /etc/modules-load.d/vm-modules.conf
+
+# Create necessary directories
+RUN mkdir -p /var/lib/qarax/vms \
+    /var/lib/qarax/images \
+    /var/lib/qarax/disks \
+    /etc/qarax-node
+
+# Configure networking for VMs
+# Enable IP forwarding and bridge networking
+RUN echo "net.ipv4.ip_forward = 1" >> /etc/sysctl.d/99-vm-network.conf && \
+    echo "net.ipv6.conf.all.forwarding = 1" >> /etc/sysctl.d/99-vm-network.conf && \
+    echo "net.bridge.bridge-nf-call-iptables = 0" >> /etc/sysctl.d/99-vm-network.conf
+
+# Load required kernel modules for VM networking
+RUN echo "kvm" >> /etc/modules-load.d/vm-modules.conf && \
+    echo "kvm_intel" >> /etc/modules-load.d/vm-modules.conf && \
+    echo "vhost_net" >> /etc/modules-load.d/vm-modules.conf && \
+    echo "tap" >> /etc/modules-load.d/vm-modules.conf && \
+    echo "tun" >> /etc/modules-load.d/vm-modules.conf
+
+# Set up firewall rules for VM networking (basic ruleset)
+RUN firewall-offline-cmd --zone=public --add-masquerade && \
+    firewall-offline-cmd --zone=public --add-service=dhcp && \
+    firewall-offline-cmd --zone=public --add-port=50051/tcp
+
+# Image metadata
+LABEL name="qarax-vmm-host" \
+      version="${QARAX_VERSION}" \
+      cloud-hypervisor-version="${CLOUD_HYPERVISOR_VERSION}" \
+      description="bootc image for qarax Virtual Machine Manager hosts" \
+      maintainer="qarax team" \
+      usage="bootc switch quay.io/yourorg/qarax-vmm-host:latest && systemctl reboot"
+
+# Health check (optional - for monitoring)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD systemctl is-active qarax-node || exit 1

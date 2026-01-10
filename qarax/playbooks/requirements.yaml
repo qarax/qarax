@@ -1,5 +1,0 @@
-collections:
-  # Install a collection from Ansible Galaxy.
-  - name: ansible.posix
-    version: 1.3.0
-

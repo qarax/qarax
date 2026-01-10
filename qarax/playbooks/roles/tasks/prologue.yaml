@@ -1,8 +1,0 @@
-- name: Set authorized key taken from file
-  vars:
-    ssh_key_location: "{{ lookup('env','SSH_PUB_KEY') }}"
-  ansible.posix.authorized_key:
-    user: root
-    state: present
-    key: "{{ lookup('file', ssh_key_location) }}"
-

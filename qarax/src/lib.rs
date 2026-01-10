@@ -1,4 +1,3 @@
-pub mod ansible;
 pub mod configuration;
 pub mod database;
 pub mod errors;

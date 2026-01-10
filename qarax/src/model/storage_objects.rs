@@ -82,7 +82,10 @@ FROM storage_objects
     .fetch_all(pool)
     .await?;
 
-    let storage_objects: Vec<StorageObject> = storage_objects.into_iter().map(|so: StorageObjectRow| so.into()).collect();
+    let storage_objects: Vec<StorageObject> = storage_objects
+        .into_iter()
+        .map(|so: StorageObjectRow| so.into())
+        .collect();
     Ok(storage_objects)
 }
 
@@ -127,7 +130,10 @@ WHERE storage_pool_id = $1
     .fetch_all(pool)
     .await?;
 
-    let storage_objects: Vec<StorageObject> = storage_objects.into_iter().map(|so: StorageObjectRow| so.into()).collect();
+    let storage_objects: Vec<StorageObject> = storage_objects
+        .into_iter()
+        .map(|so: StorageObjectRow| so.into())
+        .collect();
     Ok(storage_objects)
 }
 
@@ -153,6 +159,9 @@ WHERE object_type = $1
     .fetch_all(pool)
     .await?;
 
-    let storage_objects: Vec<StorageObject> = storage_objects.into_iter().map(|so: StorageObjectRow| so.into()).collect();
+    let storage_objects: Vec<StorageObject> = storage_objects
+        .into_iter()
+        .map(|so: StorageObjectRow| so.into())
+        .collect();
     Ok(storage_objects)
 }

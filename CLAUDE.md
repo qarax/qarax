@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-qarax is a management platform for orchestrating virtual machines using Cloud Hypervisor and Firecracker. The system consists of two main components:
+qarax is a management platform for orchestrating virtual machines using Cloud Hypervisor. The system consists of two main components:
 
 - **qarax** (control plane): REST API server built with Axum that manages VM and host lifecycle
 - **qarax-node** (data plane): gRPC service that runs on hypervisor hosts and manages VM execution
@@ -129,7 +129,12 @@ The project uses Protocol Buffers for gRPC communication between qarax and qarax
 
 ### Host Provisioning
 
-Hosts are provisioned using Ansible playbooks when added to the system. The `ansible.rs` module runs playbooks from `playbooks/roles/setup_host/playbook.yml` with parameters like Firecracker version (`FC_VERSION` from env).
+Hosts are provisioned using bootc (bootable containers). VMM hosts boot from container images that include qarax-node, Cloud Hypervisor, and all required dependencies. This provides immutable infrastructure with atomic updates and rollback capability.
+
+- **Development mode**: Direct binary deployment via SCP for fast iteration
+- **Production mode**: bootc image deployment for consistency and version control
+
+See `deployments/` directory for Containerfile and configuration.
 
 ### SQLX Offline Mode
 
@@ -144,6 +149,6 @@ Several custom ENUM types are defined in migrations and mapped to Rust enums usi
 - `host_status`: Host lifecycle states
 - `vm_status`: VM states (UP, DOWN, UNKNOWN)
 - `network_mode`: Static, DHCP, or None
-- `hypervisor`: CLOUD_HV or FIRECRACKER
+- `hypervisor`: CLOUD_HV
 
 When working with these types, the Rust enums use derive macros for serialization and SQL mapping.

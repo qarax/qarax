@@ -1,0 +1,44 @@
+[Unit]
+Description=Qarax Node - Virtual Machine Manager
+Documentation=https://github.com/qarax/qarax
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/qarax-node --port 50051 --host 0.0.0.0
+Restart=always
+RestartSec=5
+TimeoutStartSec=0
+TimeoutStopSec=30
+
+# Working directory for qarax-node
+WorkingDirectory=/var/lib/qarax
+
+# Environment
+Environment="RUST_LOG=info"
+Environment="RUST_BACKTRACE=1"
+
+# Security hardening
+NoNewPrivileges=false
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/qarax
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=qarax-node
+
+# Capabilities needed for VM management
+# CAP_NET_ADMIN: Configure network interfaces for VMs
+# CAP_SYS_ADMIN: Mount filesystems, manage namespaces
+AmbientCapabilities=CAP_NET_ADMIN CAP_SYS_ADMIN
+
+[Install]
+WantedBy=multi-user.target

@@ -55,8 +55,6 @@ impl From<VmRow> for Vm {
 #[strum(serialize_all = "snake_case")]
 pub enum Hypervisor {
     CloudHv,
-    Firecracker,
-    Qemu,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone, Eq, PartialEq, Type, EnumString, Display)]
