@@ -1,0 +1,160 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nSELECT id,\n        name,\n        status as \"status: _\",\n        host_id as \"host_id?\",\n        hypervisor as \"hypervisor: _\",\n        boot_source_id as \"boot_source_id?\",\n        description as \"description?\",\n        boot_vcpus,\n        max_vcpus,\n        cpu_topology as \"cpu_topology: _\",\n        kvm_hyperv as \"kvm_hyperv!\",\n        memory_size,\n        memory_hotplug_size as \"memory_hotplug_size?\",\n        memory_mergeable as \"memory_mergeable!\",\n        memory_shared as \"memory_shared!\",\n        memory_hugepages as \"memory_hugepages!\",\n        memory_hugepage_size as \"memory_hugepage_size?\",\n        memory_prefault as \"memory_prefault!\",\n        memory_thp as \"memory_thp!\",\n        config as \"config: _\"\nFROM vms\nWHERE id = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "status: _",
+        "type_info": {
+          "Custom": {
+            "name": "vm_status",
+            "kind": {
+              "Enum": [
+                "UNKNOWN",
+                "CREATED",
+                "RUNNING",
+                "PAUSED",
+                "SHUTDOWN"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "host_id?",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 4,
+        "name": "hypervisor: _",
+        "type_info": {
+          "Custom": {
+            "name": "hypervisor",
+            "kind": {
+              "Enum": [
+                "CLOUD_HV",
+                "FIRECRACKER",
+                "QEMU"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "boot_source_id?",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 6,
+        "name": "description?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "boot_vcpus",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 8,
+        "name": "max_vcpus",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 9,
+        "name": "cpu_topology: _",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 10,
+        "name": "kvm_hyperv!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 11,
+        "name": "memory_size",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 12,
+        "name": "memory_hotplug_size?",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 13,
+        "name": "memory_mergeable!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 14,
+        "name": "memory_shared!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 15,
+        "name": "memory_hugepages!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 16,
+        "name": "memory_hugepage_size?",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 17,
+        "name": "memory_prefault!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 18,
+        "name": "memory_thp!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 19,
+        "name": "config: _",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "fdd28dae71073eba5f80e535d8e59f01aad8acc6de9720af538b37e59b6c4cf5"
+}

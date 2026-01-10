@@ -4,17 +4,41 @@ use strum_macros::{Display, EnumString};
 use uuid::Uuid;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct CpuTopology {
+    pub threads_per_core: Option<i32>,
+    pub cores_per_die: Option<i32>,
+    pub dies_per_package: Option<i32>,
+    pub packages: Option<i32>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Vm {
     pub id: Uuid,
     pub name: String,
     pub host_id: Option<Uuid>,
     pub status: VmStatus,
-    pub vcpu: i32,
-    pub memory: i32,
     pub hypervisor: Hypervisor,
-    pub config: serde_json::Value,
     pub boot_source_id: Option<Uuid>,
     pub description: Option<String>,
+
+    // CPU configuration
+    pub boot_vcpus: i32,
+    pub max_vcpus: i32,
+    pub cpu_topology: Option<serde_json::Value>,
+    pub kvm_hyperv: bool,
+
+    // Memory configuration (in bytes)
+    pub memory_size: i64,
+    pub memory_hotplug_size: Option<i64>,
+    pub memory_mergeable: bool,
+    pub memory_shared: bool,
+    pub memory_hugepages: bool,
+    pub memory_hugepage_size: Option<i64>,
+    pub memory_prefault: bool,
+    pub memory_thp: bool,
+
+    // Legacy config field for flexibility
+    pub config: serde_json::Value,
 }
 
 #[derive(sqlx::FromRow)]
@@ -23,12 +47,27 @@ pub struct VmRow {
     pub name: String,
     pub host_id: Option<Uuid>,
     pub status: VmStatus,
-    pub vcpu: i32,
-    pub memory: i32,
     pub hypervisor: Hypervisor,
-    pub config: Json<serde_json::Value>,
     pub boot_source_id: Option<Uuid>,
     pub description: Option<String>,
+
+    // CPU configuration
+    pub boot_vcpus: i32,
+    pub max_vcpus: i32,
+    pub cpu_topology: Option<Json<serde_json::Value>>,
+    pub kvm_hyperv: bool,
+
+    // Memory configuration
+    pub memory_size: i64,
+    pub memory_hotplug_size: Option<i64>,
+    pub memory_mergeable: bool,
+    pub memory_shared: bool,
+    pub memory_hugepages: bool,
+    pub memory_hugepage_size: Option<i64>,
+    pub memory_prefault: bool,
+    pub memory_thp: bool,
+
+    pub config: Json<serde_json::Value>,
 }
 
 impl From<VmRow> for Vm {
@@ -38,12 +77,25 @@ impl From<VmRow> for Vm {
             name: row.name,
             status: row.status,
             host_id: row.host_id,
-            vcpu: row.vcpu,
-            memory: row.memory,
             hypervisor: row.hypervisor,
-            config: row.config.0,
             boot_source_id: row.boot_source_id,
             description: row.description,
+
+            boot_vcpus: row.boot_vcpus,
+            max_vcpus: row.max_vcpus,
+            cpu_topology: row.cpu_topology.map(|t| t.0),
+            kvm_hyperv: row.kvm_hyperv,
+
+            memory_size: row.memory_size,
+            memory_hotplug_size: row.memory_hotplug_size,
+            memory_mergeable: row.memory_mergeable,
+            memory_shared: row.memory_shared,
+            memory_hugepages: row.memory_hugepages,
+            memory_hugepage_size: row.memory_hugepage_size,
+            memory_prefault: row.memory_prefault,
+            memory_thp: row.memory_thp,
+
+            config: row.config.0,
         }
     }
 }
@@ -63,23 +115,39 @@ pub enum Hypervisor {
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum VmStatus {
-    Up,
-    Down,
     Unknown,
+    Created,
+    Running,
+    Paused,
+    Shutdown,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct NewVm {
     pub name: String,
-    pub vcpu: i32,
-    pub memory: i32,
     pub hypervisor: Hypervisor,
 
-    #[serde(default)]
-    pub config: serde_json::Value,
+    // CPU
+    pub boot_vcpus: i32,
+    pub max_vcpus: i32,
+    pub cpu_topology: Option<serde_json::Value>,
+    pub kvm_hyperv: Option<bool>,
+
+    // Memory
+    pub memory_size: i64,
+    pub memory_hotplug_size: Option<i64>,
+    pub memory_mergeable: Option<bool>,
+    pub memory_shared: Option<bool>,
+    pub memory_hugepages: Option<bool>,
+    pub memory_hugepage_size: Option<i64>,
+    pub memory_prefault: Option<bool>,
+    pub memory_thp: Option<bool>,
 
     pub boot_source_id: Option<Uuid>,
     pub description: Option<String>,
+
+    #[serde(default)]
+    pub config: serde_json::Value,
 }
 
 pub async fn list(pool: &PgPool) -> Result<Vec<Vm>, sqlx::Error> {
@@ -90,12 +158,22 @@ SELECT id,
         name,
         status as "status: _",
         host_id as "host_id?",
-        vcpu,
-        memory,
         hypervisor as "hypervisor: _",
-        config as "config: _",
         boot_source_id as "boot_source_id?",
-        description as "description?"
+        description as "description?",
+        boot_vcpus,
+        max_vcpus,
+        cpu_topology as "cpu_topology: _",
+        kvm_hyperv as "kvm_hyperv!",
+        memory_size,
+        memory_hotplug_size as "memory_hotplug_size?",
+        memory_mergeable as "memory_mergeable!",
+        memory_shared as "memory_shared!",
+        memory_hugepages as "memory_hugepages!",
+        memory_hugepage_size as "memory_hugepage_size?",
+        memory_prefault as "memory_prefault!",
+        memory_thp as "memory_thp!",
+        config as "config: _"
 FROM vms
         "#
     )
@@ -114,12 +192,22 @@ SELECT id,
         name,
         status as "status: _",
         host_id as "host_id?",
-        vcpu,
-        memory,
         hypervisor as "hypervisor: _",
-        config as "config: _",
         boot_source_id as "boot_source_id?",
-        description as "description?"
+        description as "description?",
+        boot_vcpus,
+        max_vcpus,
+        cpu_topology as "cpu_topology: _",
+        kvm_hyperv as "kvm_hyperv!",
+        memory_size,
+        memory_hotplug_size as "memory_hotplug_size?",
+        memory_mergeable as "memory_mergeable!",
+        memory_shared as "memory_shared!",
+        memory_hugepages as "memory_hugepages!",
+        memory_hugepage_size as "memory_hugepage_size?",
+        memory_prefault as "memory_prefault!",
+        memory_thp as "memory_thp!",
+        config as "config: _"
 FROM vms
 WHERE id = $1
         "#,

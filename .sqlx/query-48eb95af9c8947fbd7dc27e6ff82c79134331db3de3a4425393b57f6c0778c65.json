@@ -1,0 +1,116 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nSELECT id,\n        vm_id,\n        storage_object_id as \"storage_object_id?\",\n        disk_id,\n        device_path,\n        boot_order as \"boot_order?\",\n        read_only as \"read_only!\",\n        direct as \"direct!\",\n        vhost_user as \"vhost_user!\",\n        vhost_socket as \"vhost_socket?\",\n        num_queues as \"num_queues!\",\n        queue_size as \"queue_size!\",\n        rate_limiter as \"rate_limiter: _\",\n        rate_limit_group as \"rate_limit_group?\",\n        pci_segment as \"pci_segment!\",\n        serial_number as \"serial_number?\",\n        config as \"config: _\"\nFROM vm_disks\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "vm_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "storage_object_id?",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "disk_id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "device_path",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "boot_order?",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "read_only!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 7,
+        "name": "direct!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 8,
+        "name": "vhost_user!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 9,
+        "name": "vhost_socket?",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 10,
+        "name": "num_queues!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 11,
+        "name": "queue_size!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 12,
+        "name": "rate_limiter: _",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 13,
+        "name": "rate_limit_group?",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 14,
+        "name": "pci_segment!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 15,
+        "name": "serial_number?",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 16,
+        "name": "config: _",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "48eb95af9c8947fbd7dc27e6ff82c79134331db3de3a4425393b57f6c0778c65"
+}

@@ -1,0 +1,72 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nSELECT id,\n        vm_id,\n        console_type,\n        mode as \"mode: _\",\n        file_path as \"file_path?\",\n        socket_path as \"socket_path?\",\n        iommu as \"iommu!\"\nFROM vm_consoles\nWHERE id = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "vm_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "console_type",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "mode: _",
+        "type_info": {
+          "Custom": {
+            "name": "console_mode",
+            "kind": {
+              "Enum": [
+                "OFF",
+                "PTY",
+                "TTY",
+                "FILE",
+                "SOCKET",
+                "NULL"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "file_path?",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "socket_path?",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 6,
+        "name": "iommu!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "833c3c7ecc84e12dae3df31af56642cf41996ff04d41045690b9aeb3caa00436"
+}

@@ -1,0 +1,153 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nSELECT id,\n        vm_id,\n        network_id,\n        device_id as \"device_id!\",\n        tap_name as \"tap_name?\",\n        mac_address::text as \"mac_address!\",\n        host_mac::text as \"host_mac?\",\n        ip_address::text as \"ip_address!\",\n        mtu as \"mtu!\",\n        interface_type as \"interface_type: _\",\n        vhost_user as \"vhost_user!\",\n        vhost_socket as \"vhost_socket?\",\n        vhost_mode as \"vhost_mode?\",\n        num_queues as \"num_queues!\",\n        queue_size as \"queue_size!\",\n        rate_limiter as \"rate_limiter: _\",\n        offload_tso as \"offload_tso!\",\n        offload_ufo as \"offload_ufo!\",\n        offload_csum as \"offload_csum!\",\n        pci_segment as \"pci_segment!\",\n        iommu as \"iommu!\"\nFROM network_interfaces\nWHERE vm_id = $1\nORDER BY device_id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "vm_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "network_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "device_id!",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "tap_name?",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "mac_address!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "host_mac?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "ip_address!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "mtu!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 9,
+        "name": "interface_type: _",
+        "type_info": {
+          "Custom": {
+            "name": "interface_type",
+            "kind": {
+              "Enum": [
+                "macvtap",
+                "tap",
+                "vhost_user"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "vhost_user!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 11,
+        "name": "vhost_socket?",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 12,
+        "name": "vhost_mode?",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 13,
+        "name": "num_queues!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 14,
+        "name": "queue_size!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 15,
+        "name": "rate_limiter: _",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 16,
+        "name": "offload_tso!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 17,
+        "name": "offload_ufo!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 18,
+        "name": "offload_csum!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 19,
+        "name": "pci_segment!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 20,
+        "name": "iommu!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      null,
+      null,
+      null,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "418f3faf06f579437ff948ebab925c6117a1cf451b48b9edb43a9c5daa8a04c1"
+}

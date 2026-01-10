@@ -3,47 +3,260 @@ package node;
 
 import "google/protobuf/empty.proto";
 
-message VmID { string id = 1; }
-message VmList { repeated VmConfig vms = 1; }
+// ============================================================================
+// Core VM Configuration
+// ============================================================================
+
+message VmID {
+  string id = 1;
+}
+
+message VmList {
+  repeated VmState vms = 1;
+}
 
 message VmConfig {
-  string vmID = 1;
-  int32 memory = 2;
-  int32 vcpus = 3;
-  string kernel = 4;
-  string kernelParams = 5;
-  repeated Drive drives = 6;
+  string vm_id = 1;
+
+  // CPU configuration
+  optional CpusConfig cpus = 2;
+
+  // Memory configuration
+  optional MemoryConfig memory = 3;
+
+  // Boot/Payload configuration
+  PayloadConfig payload = 4;
+
+  // Storage configuration
+  repeated DiskConfig disks = 5;
+
+  // Network configuration
+  repeated NetConfig networks = 6;
+
+  // Device configuration
+  optional RngConfig rng = 7;
+  optional ConsoleConfig serial = 8;
+  optional ConsoleConfig console = 9;
+
+  // Rate limiting groups (shared across devices)
+  repeated RateLimitGroupConfig rate_limit_groups = 10;
 }
 
 message VmState {
   VmConfig config = 1;
   VmStatus status = 2;
+  optional int64 memory_actual_size = 3;
 }
 
-message Drive {
+// ============================================================================
+// CPU Configuration
+// ============================================================================
+
+message CpusConfig {
+  int32 boot_vcpus = 1;    // Number of VCPUs available at boot
+  int32 max_vcpus = 2;     // Maximum number of VCPUs (for future hotplug)
+
+  optional CpuTopology topology = 3;
+  optional bool kvm_hyperv = 4;
+  optional int32 max_phys_bits = 5;
+}
+
+message CpuTopology {
+  optional int32 threads_per_core = 1;
+  optional int32 cores_per_die = 2;
+  optional int32 dies_per_package = 3;
+  optional int32 packages = 4;
+}
+
+// ============================================================================
+// Memory Configuration
+// ============================================================================
+
+message MemoryConfig {
+  int64 size = 1;                      // Base memory size in bytes
+  optional int64 hotplug_size = 2;     // Maximum hotplug memory size
+  optional bool mergeable = 3;         // KSM support
+  optional bool shared = 4;            // Shared memory for vhost-user
+  optional bool hugepages = 5;         // Use hugepages
+  optional int64 hugepage_size = 6;    // Hugepage size in bytes
+  optional bool prefault = 7;          // Prefault memory
+  optional bool thp = 8;               // Transparent hugepages
+}
+
+// ============================================================================
+// Payload/Boot Configuration
+// ============================================================================
+
+message PayloadConfig {
+  optional string kernel = 1;      // Path to kernel image
+  optional string cmdline = 2;     // Kernel command line
+  optional string initramfs = 3;   // Path to initramfs
+  optional string firmware = 4;    // Path to firmware (UEFI)
+}
+
+// ============================================================================
+// Disk Configuration
+// ============================================================================
+
+message DiskConfig {
+  string id = 1;                       // Unique disk identifier
+  optional string path = 2;            // Path on host (not for vhost-user)
+  optional bool readonly = 3;
+  optional bool direct = 4;            // O_DIRECT flag
+
+  // vhost-user configuration
+  optional bool vhost_user = 5;
+  optional string vhost_socket = 6;
+
+  // Performance tuning
+  optional int32 num_queues = 7;
+  optional int32 queue_size = 8;
+  optional RateLimiterConfig rate_limiter = 9;
+  optional string rate_limit_group = 10;
+
+  // Device metadata
+  optional int32 pci_segment = 11;
+  optional string serial = 12;         // Disk serial number
+}
+
+// ============================================================================
+// Network Configuration (Priority)
+// ============================================================================
+
+message NetConfig {
+  string id = 1;                       // Unique network interface identifier
+
+  // TAP interface configuration
+  optional string tap = 2;             // Pre-created TAP device name
+
+  // IP configuration
+  optional string ip = 3;              // IPv4 or IPv6 address
+  optional string mask = 4;            // Network mask
+
+  // MAC addresses
+  optional string mac = 5;             // Guest MAC address
+  optional string host_mac = 6;        // Host-side MAC address
+
+  // Network parameters
+  optional int32 mtu = 7;
+
+  // vhost-user configuration
+  optional bool vhost_user = 8;
+  optional string vhost_socket = 9;
+  optional VhostMode vhost_mode = 10;
+
+  // Performance tuning
+  optional int32 num_queues = 11;      // Number of virtio queues
+  optional int32 queue_size = 12;      // Size of each queue
+  optional RateLimiterConfig rate_limiter = 13;
+
+  // Offload features
+  optional bool offload_tso = 14;      // TCP Segmentation Offload
+  optional bool offload_ufo = 15;      // UDP Fragmentation Offload
+  optional bool offload_csum = 16;     // Checksum offload
+
+  // PCI configuration
+  optional int32 pci_segment = 17;
+  optional bool iommu = 18;
+}
+
+enum VhostMode {
+  VHOST_MODE_CLIENT = 0;
+  VHOST_MODE_SERVER = 1;
+}
+
+// ============================================================================
+// Rate Limiting Configuration
+// ============================================================================
+
+message RateLimiterConfig {
+  optional TokenBucket bandwidth = 1;  // Bandwidth limiting (bytes/s)
+  optional TokenBucket ops = 2;        // Operations limiting (ops/s)
+}
+
+message TokenBucket {
+  int64 size = 1;                      // Maximum bucket size
+  int64 refill_time = 2;               // Refill interval in milliseconds
+  optional int64 one_time_burst = 3;   // Initial burst size
+}
+
+message RateLimitGroupConfig {
   string id = 1;
-  string pathOnHost = 2;
-  bool readOnly = 3;
-  bool isRoot = 4;
-  optional IoEngine ioEngine = 5;
-  optional string partuuid = 6;
-
-  // TODO: add rate limiter
+  RateLimiterConfig config = 2;
 }
 
-enum IoEngine {
-  SYNC = 0;
-  ASYNC = 1;
+// ============================================================================
+// Device Configuration
+// ============================================================================
+
+message ConsoleConfig {
+  ConsoleMode mode = 1;
+  optional string file = 2;    // For File mode
+  optional string socket = 3;  // For Socket mode
+  optional bool iommu = 4;
 }
+
+enum ConsoleMode {
+  CONSOLE_MODE_OFF = 0;
+  CONSOLE_MODE_PTY = 1;
+  CONSOLE_MODE_TTY = 2;
+  CONSOLE_MODE_FILE = 3;
+  CONSOLE_MODE_SOCKET = 4;
+  CONSOLE_MODE_NULL = 5;
+}
+
+message RngConfig {
+  string src = 1;              // Path to entropy source (e.g., /dev/urandom)
+  optional bool iommu = 2;
+}
+
+// ============================================================================
+// VM Status and Lifecycle
+// ============================================================================
 
 enum VmStatus {
-  STOPPED = 0;
-  RUNNING = 1;
+  VM_STATUS_UNKNOWN = 0;     // Unknown state
+  VM_STATUS_CREATED = 1;     // VM created but not started
+  VM_STATUS_RUNNING = 2;     // VM is running
+  VM_STATUS_PAUSED = 3;      // VM is paused
+  VM_STATUS_SHUTDOWN = 4;    // VM has shut down
 }
 
+// ============================================================================
+// gRPC Service Definition
+// ============================================================================
+
 service VmService {
-  rpc StartVM(VmConfig) returns (VmConfig) {}
+  // VM lifecycle operations
+  rpc CreateVM(VmConfig) returns (VmState) {}
+  rpc StartVM(VmID) returns (google.protobuf.Empty) {}
   rpc StopVM(VmID) returns (google.protobuf.Empty) {}
-  rpc ListVms(google.protobuf.Empty) returns (VmList) {}
+  rpc PauseVM(VmID) returns (google.protobuf.Empty) {}
+  rpc ResumeVM(VmID) returns (google.protobuf.Empty) {}
+  rpc DeleteVM(VmID) returns (google.protobuf.Empty) {}
+
+  // VM information
   rpc GetVmInfo(VmID) returns (VmState) {}
+  rpc ListVms(google.protobuf.Empty) returns (VmList) {}
+
+  // Hot-attach operations (for future use)
+  rpc AddNetworkDevice(AddNetworkDeviceRequest) returns (google.protobuf.Empty) {}
+  rpc RemoveNetworkDevice(RemoveDeviceRequest) returns (google.protobuf.Empty) {}
+  rpc AddDiskDevice(AddDiskDeviceRequest) returns (google.protobuf.Empty) {}
+  rpc RemoveDiskDevice(RemoveDeviceRequest) returns (google.protobuf.Empty) {}
+}
+
+message AddNetworkDeviceRequest {
+  string vm_id = 1;
+  NetConfig config = 2;
+}
+
+message AddDiskDeviceRequest {
+  string vm_id = 1;
+  DiskConfig config = 2;
+}
+
+message RemoveDeviceRequest {
+  string vm_id = 1;
+  string device_id = 2;
 }

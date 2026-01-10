@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nSELECT id,\n        name,\n        vm_id as \"vm_id?\",\n        config as \"config: _\"\nFROM rate_limit_groups\nWHERE vm_id = $1 AND name = $2\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "vm_id?",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "config: _",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "bb1fb59aa5010b2908331bb5b94084d44a4c916f6fb3eae001245e4544d0cd78"
+}
