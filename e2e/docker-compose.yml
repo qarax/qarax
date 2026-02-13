@@ -42,8 +42,8 @@ services:
     privileged: true
     devices:
       - /dev/kvm:/dev/kvm
-    volumes:
-      - qarax_node_data:/var/lib/qarax
+    # Note: Don't volume mount /var/lib/qarax as it contains built-in test images
+    # The vms directory is used at runtime for VM sockets/logs
     ports:
       - "50051:50051"
     healthcheck:
@@ -54,4 +54,3 @@ services:
 
 volumes:
   postgres_data:
-  qarax_node_data:

@@ -1,9 +1,9 @@
 # Dockerfile for qarax-node container (E2E testing)
-# Runs qarax-node with Cloud Hypervisor for nested VM support
+# Runs qarax-node with Cloud Hypervisor for VM management
 
 FROM fedora:41
 
-ARG CLOUD_HYPERVISOR_VERSION=v38.0
+ARG CLOUD_HYPERVISOR_VERSION=v44.0
 
 # Install dependencies
 RUN dnf install -y \
@@ -14,6 +14,10 @@ RUN dnf install -y \
     nftables \
     nmap-ncat \
     curl \
+    xz \
+    cpio \
+    gzip \
+    busybox \
     && dnf clean all
 
 # Install Cloud Hypervisor
@@ -32,6 +36,29 @@ RUN mkdir -p /var/lib/qarax/vms \
     /var/lib/qarax/images \
     /var/lib/qarax/disks \
     /etc/qarax-node
+
+# Download test kernel from Cloud Hypervisor test artifacts
+# This is a kernel built specifically for CH testing
+RUN curl -fsSL -o /tmp/vmlinux.tar.xz \
+    "https://github.com/cloud-hypervisor/rust-hypervisor-firmware/releases/download/0.4.5/linux-6.1.6-rust-hypervisor-firmware-x86_64.tar.xz" && \
+    tar -xJf /tmp/vmlinux.tar.xz -C /tmp && \
+    mv /tmp/linux-6.1.6-rust-hypervisor-firmware-x86_64/vmlinux-6.1.6 /var/lib/qarax/images/vmlinux && \
+    rm -rf /tmp/vmlinux.tar.xz /tmp/linux-6.1.6-rust-hypervisor-firmware-x86_64 && \
+    chmod 644 /var/lib/qarax/images/vmlinux && \
+    ls -la /var/lib/qarax/images/
+
+# Copy and build test initramfs
+COPY e2e/init-test.sh /tmp/init-test.sh
+RUN mkdir -p /tmp/initramfs/{bin,dev,proc,sys} && \
+    cp /usr/sbin/busybox /tmp/initramfs/bin/ && \
+    cd /tmp/initramfs/bin && \
+    for cmd in sh cat echo mount ls sleep poweroff; do ln -s busybox $cmd; done && \
+    cp /tmp/init-test.sh /tmp/initramfs/init && \
+    chmod +x /tmp/initramfs/init && \
+    cd /tmp/initramfs && \
+    find . | cpio -o -H newc 2>/dev/null | gzip > /var/lib/qarax/images/test-initramfs.gz && \
+    rm -rf /tmp/initramfs /tmp/init-test.sh && \
+    ls -la /var/lib/qarax/images/
 
 EXPOSE 50051
 

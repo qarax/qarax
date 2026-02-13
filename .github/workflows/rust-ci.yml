@@ -14,21 +14,160 @@ jobs:
     name: Rustfmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions-rs/toolchain@v1
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
         with:
-          profile: minimal
-          toolchain: nightly
-          override: true
-      - run: rustup component add rustfmt
-      - uses: actions-rs/cargo@v1
-        with:
-          command: fmt
-          args: --all -- --check
-  build-and-test:
-    name: Build and Test
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  clippy:
+    name: Clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - name: Set up Docker
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+      - name: Install musl tools
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - run: cargo clippy --workspace -- -D warnings
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+      - name: Install musl tools
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Build
+        run: cargo build --workspace --release
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries
+          path: |
+            target/x86_64-unknown-linux-musl/release/qarax
+            target/x86_64-unknown-linux-musl/release/qarax-node
+          retention-days: 1
+
+  test:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+      - name: Install musl tools
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Run tests
+        run: cargo test --workspace
+        env:
+          SQLX_OFFLINE: true
+
+  e2e:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    needs: build
+    # Run on push to master, or on PRs with 'run-e2e' label
+    if: github.event_name == 'push' || contains(github.event.pull_request.labels.*.name, 'run-e2e')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: binaries
+          path: target/x86_64-unknown-linux-musl/release/
+
+      - name: Make binaries executable
+        run: chmod +x target/x86_64-unknown-linux-musl/release/*
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Check KVM availability
+        run: |
+          if [ -e /dev/kvm ]; then
+            echo "KVM is available"
+            ls -la /dev/kvm
+          else
+            echo "KVM is NOT available - E2E tests will be skipped"
+            exit 1
+          fi
+
+      - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Run E2E tests
+        working-directory: e2e
+        run: |
+          # Build and start services
+          docker compose up -d --build
+
+          # Wait for services to be healthy
+          echo "Waiting for services..."
+          timeout=120
+          elapsed=0
+          while [ $elapsed -lt $timeout ]; do
+            healthy_count=$(docker compose ps 2>/dev/null | grep -c "(healthy)" || echo "0")
+            if [ "$healthy_count" -ge "3" ]; then
+              echo "All services are healthy!"
+              break
+            fi
+            if docker compose ps 2>/dev/null | grep -q "Exit"; then
+              echo "A service has failed!"
+              docker compose ps
+              docker compose logs
+              exit 1
+            fi
+            sleep 5
+            elapsed=$((elapsed + 5))
+          done
+
+          if [ $elapsed -ge $timeout ]; then
+            echo "Timeout waiting for services"
+            docker compose ps
+            docker compose logs
+            exit 1
+          fi
+
+          # Install Python dependencies and run tests
+          uv sync --frozen
+          uv run pytest test_vm_lifecycle.py -v
+
+      - name: Show logs on failure
+        if: failure()
+        working-directory: e2e
+        run: |
+          echo "=== Docker Compose Status ==="
+          docker compose ps
+          echo ""
+          echo "=== qarax logs ==="
+          docker compose logs qarax --tail=100
+          echo ""
+          echo "=== qarax-node logs ==="
+          docker compose logs qarax-node --tail=100
+          echo ""
+          echo "=== postgres logs ==="
+          docker compose logs postgres --tail=50
+
+      - name: Cleanup
+        if: always()
+        working-directory: e2e
+        run: docker compose down -v

@@ -11,6 +11,20 @@ These tests verify the complete VM lifecycle by running:
 
 All services run in containers with KVM passthrough for real VM operations.
 
+## What Gets Tested
+
+The E2E tests create **real virtual machines** using Cloud Hypervisor:
+
+1. **qarax-node** spawns actual Cloud Hypervisor processes
+2. Each VM boots a minimal test kernel with initramfs
+3. Full lifecycle is verified: create → boot → pause → resume → shutdown → delete
+4. Multiple VMs can run concurrently
+
+The test environment includes:
+- **Test kernel**: Linux 6.1.6 built for Cloud Hypervisor
+- **Test initramfs**: Minimal BusyBox-based initramfs that boots and halts
+- **Cloud Hypervisor v44.0**: VMM for running microVMs
+
 ## Prerequisites
 
 - **Docker/Podman Compose**: For running services
@@ -118,6 +132,7 @@ E2E Tests (Python + pytest)
 | `test_vm_full_lifecycle` | Create → Start → Pause → Resume → Stop → Delete |
 | `test_vm_delete` | Create and delete VM |
 | `test_multiple_vms` | Create/manage multiple VMs |
+| `test_vm_start_stop_cycle` | Start/stop VM multiple times |
 
 ## Troubleshooting
 

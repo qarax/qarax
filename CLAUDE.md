@@ -13,10 +13,11 @@ qarax is a management platform for orchestrating virtual machines using Cloud Hy
 
 ### Workspace Structure
 
-This is a Cargo workspace with three crates:
+This is a Cargo workspace with the following crates:
 - `qarax/`: Control plane - HTTP API server with database-backed state management
 - `qarax-node/`: Data plane - gRPC service for VM operations on hypervisor hosts
 - `common/`: Shared telemetry utilities using tracing
+- `cloud-hypervisor-sdk/`: Local copy of the Cloud Hypervisor Rust SDK for API communication
 
 ### qarax (Control Plane)
 
@@ -38,11 +39,14 @@ Key patterns:
 ### qarax-node (Data Plane)
 
 Main components:
-- **services/vm/**: VM lifecycle management
+- **services/vm/**: VM lifecycle management using Cloud Hypervisor SDK
+- **cloud_hypervisor/**: Manager for Cloud Hypervisor processes and API communication
 - **rpc/**: gRPC service definitions generated from `proto/node.proto`
 
 Key patterns:
 - Uses tonic for gRPC server/client
+- Uses the Cloud Hypervisor SDK for VM management via Unix socket API
+- Spawns and manages Cloud Hypervisor processes directly (one CH instance per VM)
 - CLI args parsing with clap
 - Designed to run on hypervisor hosts and communicate with qarax control plane
 
@@ -79,7 +83,7 @@ Note: Project uses musl target (see `.cargo/config.toml`)
 ### Testing
 
 ```bash
-# Run all tests
+# Run all unit tests
 cargo test
 
 # Run tests for specific package
@@ -90,6 +94,9 @@ cargo test test_name
 
 # Run test by name pattern
 cargo test pattern
+
+# Run E2E tests (requires Docker with KVM support)
+cd e2e && ./run_e2e_tests.sh
 ```
 
 ### Code Quality
@@ -120,8 +127,13 @@ Migrations run automatically when qarax starts. The migrations are in `migration
 # Run qarax control plane (requires PostgreSQL)
 cargo run -p qarax
 
-# Run qarax-node with custom port
+# Run qarax-node with custom port and paths
 cargo run -p qarax-node -- --port 50051
+
+# qarax-node CLI options:
+#   --port <PORT>                    Port to listen on (default: 50051)
+#   --runtime-dir <PATH>             Directory for VM sockets/logs (default: /var/lib/qarax/vms)
+#   --cloud-hypervisor-binary <PATH> Path to cloud-hypervisor binary (default: /usr/local/bin/cloud-hypervisor)
 ```
 
 qarax reads configuration from `configuration/base.yaml` merged with environment-specific files (`local.yaml` or `production.yaml`). Default server port is 8000.
@@ -197,6 +209,65 @@ When adding a new endpoint, follow these steps:
 4. **Regenerate the spec**: Run `make build` or `make openapi`
 
 5. **Commit the updated spec**: Include `qarax/openapi.yaml` in your commit
+
+## Cloud Hypervisor SDK Integration
+
+qarax-node uses a local copy of the Cloud Hypervisor Rust SDK (`cloud-hypervisor-sdk/`) to communicate with Cloud Hypervisor instances via their Unix socket HTTP API.
+
+### How It Works
+
+1. **Process Management**: qarax-node spawns one `cloud-hypervisor` process per VM, each with its own API socket at `/var/lib/qarax/vms/{vm_id}.sock`
+
+2. **SDK Usage**: The SDK provides:
+   - Model types matching Cloud Hypervisor's API schema (`VmConfig`, `CpusConfig`, `MemoryConfig`, etc.)
+   - `Machine::connect()` for connecting to existing CH instances
+   - `VM` methods for boot, shutdown, and get_info
+   - `TokioIo` adapter for Unix socket communication
+
+3. **Raw API Calls**: For operations not in the SDK (pause, resume, device hotplug), the manager sends raw HTTP requests over Unix sockets
+
+### Key Files
+
+- `qarax-node/src/cloud_hypervisor/mod.rs` - Module exports
+- `qarax-node/src/cloud_hypervisor/manager.rs` - VmManager that spawns CH processes and manages VM lifecycle
+- `qarax-node/src/services/vm/mod.rs` - gRPC service implementation that delegates to VmManager
+
+### Configuration Conversion
+
+Proto types from `node.proto` are converted to SDK model types in `manager.rs`:
+- `ProtoVmConfig` → `cloud_hypervisor_sdk::models::VmConfig`
+- `ProtoCpusConfig` → `CpusConfig`
+- `ProtoMemoryConfig` → `MemoryConfig`
+- etc.
+
+## E2E Testing
+
+The `e2e/` directory contains end-to-end tests that spin up real VMs using Cloud Hypervisor.
+
+### Test Infrastructure
+
+- **docker-compose.yml**: Orchestrates qarax, qarax-node, and PostgreSQL containers
+- **Dockerfile.qarax-node**: Builds the qarax-node container with Cloud Hypervisor and test boot artifacts
+- **test_vm_lifecycle.py**: Python pytest tests for VM operations
+
+### Test Boot Artifacts
+
+The E2E tests use minimal boot artifacts for fast VM startup:
+
+- **Kernel**: Linux 6.1.6 from Cloud Hypervisor test artifacts (`/var/lib/qarax/images/vmlinux`)
+- **Initramfs**: Minimal BusyBox-based initramfs (`/var/lib/qarax/images/test-initramfs.gz`)
+- **init-test.sh**: The init script that runs inside the VM - mounts filesystems, prints diagnostics, waits 5 seconds, then shuts down
+
+### Running E2E Tests
+
+```bash
+cd e2e
+./run_e2e_tests.sh
+```
+
+Requirements:
+- Docker with KVM support (`/dev/kvm` passthrough)
+- Pre-built release binaries (`cargo build --release`)
 
 ## Important Implementation Details
 

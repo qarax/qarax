@@ -1,26 +1,43 @@
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tonic::{Request, Response, Status};
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 
+use crate::cloud_hypervisor::VmManager;
 use crate::rpc::node::{
     AddDiskDeviceRequest, AddNetworkDeviceRequest, RemoveDeviceRequest, VmConfig, VmId, VmList,
-    VmState, VmStatus, vm_service_server::VmService,
+    VmState, vm_service_server::VmService,
 };
 
-/// NOOP implementation of VmService for testing
-/// This implementation stores VM state in memory but doesn't actually create VMs
-#[derive(Debug, Default, Clone)]
+/// Implementation of VmService using Cloud Hypervisor
+#[derive(Clone)]
 pub struct VmServiceImpl {
-    // In-memory storage of VM states
-    vms: Arc<Mutex<HashMap<String, VmState>>>,
+    manager: Arc<VmManager>,
 }
 
 impl VmServiceImpl {
+    /// Create a new VmServiceImpl with default paths
     pub fn new() -> Self {
-        Self {
-            vms: Arc::new(Mutex::new(HashMap::new())),
-        }
+        Self::with_paths("/var/lib/qarax/vms", "/usr/local/bin/cloud-hypervisor")
+    }
+
+    /// Create a new VmServiceImpl with custom paths
+    pub fn with_paths(
+        runtime_dir: impl Into<std::path::PathBuf>,
+        ch_binary: impl Into<std::path::PathBuf>,
+    ) -> Self {
+        let manager = Arc::new(VmManager::new(runtime_dir, ch_binary));
+        Self { manager }
+    }
+
+    /// Create from an existing VmManager
+    pub fn from_manager(manager: Arc<VmManager>) -> Self {
+        Self { manager }
+    }
+}
+
+impl Default for VmServiceImpl {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -33,132 +50,117 @@ impl VmService for VmServiceImpl {
         info!("Creating VM: {}", vm_id);
         debug!("VM config: {:?}", config);
 
-        // Create VM state
-        let state = VmState {
-            config: Some(config),
-            status: VmStatus::Created.into(),
-            memory_actual_size: None,
-        };
-
-        // Store in memory
-        {
-            let mut vms = self.vms.lock().unwrap();
-            vms.insert(vm_id.clone(), state.clone());
+        match self.manager.create_vm(config).await {
+            Ok(state) => {
+                info!("VM {} created successfully", vm_id);
+                Ok(Response::new(state))
+            }
+            Err(e) => {
+                error!("Failed to create VM {}: {}", vm_id, e);
+                Err(map_manager_error(e))
+            }
         }
-
-        info!("VM {} created successfully (NOOP)", vm_id);
-        Ok(Response::new(state))
     }
 
     async fn start_vm(&self, request: Request<VmId>) -> Result<Response<()>, Status> {
         let vm_id = request.into_inner().id;
         info!("Starting VM: {}", vm_id);
 
-        // Update status
-        {
-            let mut vms = self.vms.lock().unwrap();
-            if let Some(state) = vms.get_mut(&vm_id) {
-                state.status = VmStatus::Running.into();
-                info!("VM {} started successfully (NOOP)", vm_id);
-            } else {
-                return Err(Status::not_found(format!("VM {} not found", vm_id)));
+        match self.manager.start_vm(&vm_id).await {
+            Ok(()) => {
+                info!("VM {} started successfully", vm_id);
+                Ok(Response::new(()))
+            }
+            Err(e) => {
+                error!("Failed to start VM {}: {}", vm_id, e);
+                Err(map_manager_error(e))
             }
         }
-
-        Ok(Response::new(()))
     }
 
     async fn stop_vm(&self, request: Request<VmId>) -> Result<Response<()>, Status> {
         let vm_id = request.into_inner().id;
         info!("Stopping VM: {}", vm_id);
 
-        // Update status
-        {
-            let mut vms = self.vms.lock().unwrap();
-            if let Some(state) = vms.get_mut(&vm_id) {
-                state.status = VmStatus::Shutdown.into();
-                info!("VM {} stopped successfully (NOOP)", vm_id);
-            } else {
-                return Err(Status::not_found(format!("VM {} not found", vm_id)));
+        match self.manager.stop_vm(&vm_id).await {
+            Ok(()) => {
+                info!("VM {} stopped successfully", vm_id);
+                Ok(Response::new(()))
+            }
+            Err(e) => {
+                error!("Failed to stop VM {}: {}", vm_id, e);
+                Err(map_manager_error(e))
             }
         }
-
-        Ok(Response::new(()))
     }
 
     async fn pause_vm(&self, request: Request<VmId>) -> Result<Response<()>, Status> {
         let vm_id = request.into_inner().id;
         info!("Pausing VM: {}", vm_id);
 
-        // Update status
-        {
-            let mut vms = self.vms.lock().unwrap();
-            if let Some(state) = vms.get_mut(&vm_id) {
-                state.status = VmStatus::Paused.into();
-                info!("VM {} paused successfully (NOOP)", vm_id);
-            } else {
-                return Err(Status::not_found(format!("VM {} not found", vm_id)));
+        match self.manager.pause_vm(&vm_id).await {
+            Ok(()) => {
+                info!("VM {} paused successfully", vm_id);
+                Ok(Response::new(()))
+            }
+            Err(e) => {
+                error!("Failed to pause VM {}: {}", vm_id, e);
+                Err(map_manager_error(e))
             }
         }
-
-        Ok(Response::new(()))
     }
 
     async fn resume_vm(&self, request: Request<VmId>) -> Result<Response<()>, Status> {
         let vm_id = request.into_inner().id;
         info!("Resuming VM: {}", vm_id);
 
-        // Update status
-        {
-            let mut vms = self.vms.lock().unwrap();
-            if let Some(state) = vms.get_mut(&vm_id) {
-                state.status = VmStatus::Running.into();
-                info!("VM {} resumed successfully (NOOP)", vm_id);
-            } else {
-                return Err(Status::not_found(format!("VM {} not found", vm_id)));
+        match self.manager.resume_vm(&vm_id).await {
+            Ok(()) => {
+                info!("VM {} resumed successfully", vm_id);
+                Ok(Response::new(()))
+            }
+            Err(e) => {
+                error!("Failed to resume VM {}: {}", vm_id, e);
+                Err(map_manager_error(e))
             }
         }
-
-        Ok(Response::new(()))
     }
 
     async fn delete_vm(&self, request: Request<VmId>) -> Result<Response<()>, Status> {
         let vm_id = request.into_inner().id;
         info!("Deleting VM: {}", vm_id);
 
-        // Remove from memory
-        {
-            let mut vms = self.vms.lock().unwrap();
-            if vms.remove(&vm_id).is_some() {
-                info!("VM {} deleted successfully (NOOP)", vm_id);
-            } else {
-                return Err(Status::not_found(format!("VM {} not found", vm_id)));
+        match self.manager.delete_vm(&vm_id).await {
+            Ok(()) => {
+                info!("VM {} deleted successfully", vm_id);
+                Ok(Response::new(()))
+            }
+            Err(e) => {
+                error!("Failed to delete VM {}: {}", vm_id, e);
+                Err(map_manager_error(e))
             }
         }
-
-        Ok(Response::new(()))
     }
 
     async fn get_vm_info(&self, request: Request<VmId>) -> Result<Response<VmState>, Status> {
         let vm_id = request.into_inner().id;
         info!("Getting VM info: {}", vm_id);
 
-        let vms = self.vms.lock().unwrap();
-        if let Some(state) = vms.get(&vm_id) {
-            Ok(Response::new(state.clone()))
-        } else {
-            Err(Status::not_found(format!("VM {} not found", vm_id)))
+        match self.manager.get_vm_info(&vm_id).await {
+            Ok(state) => Ok(Response::new(state)),
+            Err(e) => {
+                error!("Failed to get VM info {}: {}", vm_id, e);
+                Err(map_manager_error(e))
+            }
         }
     }
 
     async fn list_vms(&self, _request: Request<()>) -> Result<Response<VmList>, Status> {
         info!("Listing VMs");
 
-        let vms = self.vms.lock().unwrap();
-        let vm_list: Vec<VmState> = vms.values().cloned().collect();
-
-        info!("Found {} VMs", vm_list.len());
-        Ok(Response::new(VmList { vms: vm_list }))
+        let vms = self.manager.list_vms().await;
+        info!("Found {} VMs", vms.len());
+        Ok(Response::new(VmList { vms }))
     }
 
     async fn add_network_device(
@@ -167,8 +169,21 @@ impl VmService for VmServiceImpl {
     ) -> Result<Response<()>, Status> {
         let req = request.into_inner();
         info!("Adding network device to VM: {}", req.vm_id);
-        info!("Network device added successfully (NOOP)");
-        Ok(Response::new(()))
+
+        let config = req
+            .config
+            .ok_or_else(|| Status::invalid_argument("Missing network config"))?;
+
+        match self.manager.add_network_device(&req.vm_id, &config).await {
+            Ok(()) => {
+                info!("Network device added to VM {}", req.vm_id);
+                Ok(Response::new(()))
+            }
+            Err(e) => {
+                error!("Failed to add network device to VM {}: {}", req.vm_id, e);
+                Err(map_manager_error(e))
+            }
+        }
     }
 
     async fn remove_network_device(
@@ -176,9 +191,31 @@ impl VmService for VmServiceImpl {
         request: Request<RemoveDeviceRequest>,
     ) -> Result<Response<()>, Status> {
         let req = request.into_inner();
-        info!("Removing network device from VM: {}", req.vm_id);
-        info!("Network device removed successfully (NOOP)");
-        Ok(Response::new(()))
+        info!(
+            "Removing network device {} from VM: {}",
+            req.device_id, req.vm_id
+        );
+
+        match self
+            .manager
+            .remove_network_device(&req.vm_id, &req.device_id)
+            .await
+        {
+            Ok(()) => {
+                info!(
+                    "Network device {} removed from VM {}",
+                    req.device_id, req.vm_id
+                );
+                Ok(Response::new(()))
+            }
+            Err(e) => {
+                error!(
+                    "Failed to remove network device {} from VM {}: {}",
+                    req.device_id, req.vm_id, e
+                );
+                Err(map_manager_error(e))
+            }
+        }
     }
 
     async fn add_disk_device(
@@ -187,8 +224,21 @@ impl VmService for VmServiceImpl {
     ) -> Result<Response<()>, Status> {
         let req = request.into_inner();
         info!("Adding disk device to VM: {}", req.vm_id);
-        info!("Disk device added successfully (NOOP)");
-        Ok(Response::new(()))
+
+        let config = req
+            .config
+            .ok_or_else(|| Status::invalid_argument("Missing disk config"))?;
+
+        match self.manager.add_disk_device(&req.vm_id, &config).await {
+            Ok(()) => {
+                info!("Disk device added to VM {}", req.vm_id);
+                Ok(Response::new(()))
+            }
+            Err(e) => {
+                error!("Failed to add disk device to VM {}: {}", req.vm_id, e);
+                Err(map_manager_error(e))
+            }
+        }
     }
 
     async fn remove_disk_device(
@@ -196,8 +246,47 @@ impl VmService for VmServiceImpl {
         request: Request<RemoveDeviceRequest>,
     ) -> Result<Response<()>, Status> {
         let req = request.into_inner();
-        info!("Removing disk device from VM: {}", req.vm_id);
-        info!("Disk device removed successfully (NOOP)");
-        Ok(Response::new(()))
+        info!(
+            "Removing disk device {} from VM: {}",
+            req.device_id, req.vm_id
+        );
+
+        match self
+            .manager
+            .remove_disk_device(&req.vm_id, &req.device_id)
+            .await
+        {
+            Ok(()) => {
+                info!(
+                    "Disk device {} removed from VM {}",
+                    req.device_id, req.vm_id
+                );
+                Ok(Response::new(()))
+            }
+            Err(e) => {
+                error!(
+                    "Failed to remove disk device {} from VM {}: {}",
+                    req.device_id, req.vm_id, e
+                );
+                Err(map_manager_error(e))
+            }
+        }
+    }
+}
+
+fn map_manager_error(e: crate::cloud_hypervisor::VmManagerError) -> Status {
+    use crate::cloud_hypervisor::VmManagerError;
+
+    match e {
+        VmManagerError::VmNotFound(id) => Status::not_found(format!("VM {} not found", id)),
+        VmManagerError::VmAlreadyExists(id) => {
+            Status::already_exists(format!("VM {} already exists", id))
+        }
+        VmManagerError::InvalidConfig(msg) => Status::invalid_argument(msg),
+        VmManagerError::SpawnError(e) => Status::internal(format!("Failed to spawn CH: {}", e)),
+        VmManagerError::SdkError(e) => {
+            Status::internal(format!("Cloud Hypervisor SDK error: {}", e))
+        }
+        VmManagerError::ProcessError(msg) => Status::internal(msg),
     }
 }
