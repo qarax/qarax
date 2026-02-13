@@ -6,3 +6,6 @@ database:
   username: "postgres"
   password: "password"
   database_name: "qarax"
+qarax_node:
+  host: "localhost"
+  port: 50051

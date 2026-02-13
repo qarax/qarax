@@ -19,7 +19,9 @@ pub struct Host {
     pub password: Vec<u8>,
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone, Eq, PartialEq, Type, EnumString, Display, ToSchema)]
+#[derive(
+    Deserialize, Serialize, Debug, Clone, Eq, PartialEq, Type, EnumString, Display, ToSchema,
+)]
 #[sqlx(rename_all = "SCREAMING_SNAKE_CASE")]
 #[sqlx(type_name = "host_status")]
 #[serde(rename_all = "snake_case")]

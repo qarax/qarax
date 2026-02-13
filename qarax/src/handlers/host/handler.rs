@@ -6,7 +6,6 @@ use crate::{
 use axum::{Extension, Json};
 use http::StatusCode;
 use tracing::instrument;
-use uuid::Uuid;
 
 #[utoipa::path(
     get,
@@ -42,11 +41,8 @@ pub async fn list(Extension(env): Extension<App>) -> Result<ApiResponse<Vec<Host
 pub async fn add(
     Extension(env): Extension<App>,
     Json(host): Json<NewHost>,
-) -> Result<ApiResponse<Uuid>> {
+) -> Result<(StatusCode, String)> {
     host.validate_unique_name(env.pool(), &host.name).await?;
     let id = hosts::add(env.pool(), &host).await?;
-    Ok(ApiResponse {
-        data: id,
-        code: StatusCode::CREATED,
-    })
+    Ok((StatusCode::CREATED, id.to_string()))
 }

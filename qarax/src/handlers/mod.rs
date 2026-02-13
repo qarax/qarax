@@ -3,11 +3,10 @@ use axum::{
     Extension, Json, Router,
     body::Body,
     response::{self, IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
 };
 use http::{Request, StatusCode, header::HeaderName};
 use serde::Serialize;
-use serde_json::json;
 use serde_with::DisplayFromStr;
 use tower::ServiceBuilder;
 use tower_http::{
@@ -30,6 +29,12 @@ pub type Result<T, E = Error> = ::std::result::Result<T, E>;
         host::handler::add,
         vm::handler::list,
         vm::handler::get,
+        vm::handler::create,
+        vm::handler::start,
+        vm::handler::stop,
+        vm::handler::pause,
+        vm::handler::resume,
+        vm::handler::delete,
     ),
     components(
         schemas(
@@ -90,7 +95,16 @@ fn hosts() -> Router {
 }
 
 fn vms() -> Router {
-    Router::new().route("/vms", get(vm::handler::list))
+    Router::new()
+        .route("/vms", get(vm::handler::list).post(vm::handler::create))
+        .route(
+            "/vms/:vm_id",
+            get(vm::handler::get).delete(vm::handler::delete),
+        )
+        .route("/vms/:vm_id/start", post(vm::handler::start))
+        .route("/vms/:vm_id/stop", post(vm::handler::stop))
+        .route("/vms/:vm_id/pause", post(vm::handler::pause))
+        .route("/vms/:vm_id/resume", post(vm::handler::resume))
 }
 
 pub struct ApiResponse<T> {
@@ -103,10 +117,7 @@ where
     T: Send + Sync + Serialize,
 {
     fn into_response(self) -> Response {
-        let mut response = response::Json(json!({
-            "response": self.data,
-        }))
-        .into_response();
+        let mut response = response::Json(self.data).into_response();
 
         *response.status_mut() = self.code;
         response
@@ -148,7 +159,7 @@ impl Error {
         use Error::*;
 
         match self {
-            Sqlx(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Sqlx(_) | InternalServerError => StatusCode::INTERNAL_SERVER_ERROR,
             InvalidEntity(_) | UnprocessableEntity(_) => StatusCode::UNPROCESSABLE_ENTITY,
             Conflict(_) => StatusCode::CONFLICT,
         }

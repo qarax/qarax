@@ -1,0 +1,57 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: qarax
+      POSTGRES_PASSWORD: qarax
+      POSTGRES_DB: qarax
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U qarax"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  qarax:
+    build:
+      context: ..
+      dockerfile: e2e/Dockerfile.qarax
+    environment:
+      DATABASE_URL: postgres://qarax:qarax@postgres:5432/qarax
+      APP_ENVIRONMENT: local
+      QARAX_NODE_HOST: qarax-node
+      QARAX_NODE_PORT: 50051
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qarax-node:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  qarax-node:
+    build:
+      context: ..
+      dockerfile: e2e/Dockerfile.qarax-node
+    privileged: true
+    devices:
+      - /dev/kvm:/dev/kvm
+    volumes:
+      - qarax_node_data:/var/lib/qarax
+    ports:
+      - "50051:50051"
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "50051"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres_data:
+  qarax_node_data:

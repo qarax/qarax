@@ -13,4 +13,7 @@ pub enum Error {
 
     #[error("{0}")]
     Conflict(String),
+
+    #[error("internal server error")]
+    InternalServerError,
 }

@@ -23,7 +23,9 @@ async fn main() -> std::io::Result<()> {
     let connection_pool = PgPool::connect_lazy_with(db_options);
     tracing::info!("Starting server on {}", address);
     let listener = TcpListener::bind(address).await?;
-    match run(listener, connection_pool).await {
+    let qarax_node_address = configuration.qarax_node.address();
+    tracing::info!("qarax-node address: {}", qarax_node_address);
+    match run(listener, connection_pool, qarax_node_address).await {
         Ok(server) => {
             server.await.unwrap();
         }

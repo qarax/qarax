@@ -101,7 +101,9 @@ impl From<VmRow> for Vm {
     }
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone, Eq, PartialEq, Type, EnumString, Display, ToSchema)]
+#[derive(
+    Deserialize, Serialize, Debug, Clone, Eq, PartialEq, Type, EnumString, Display, ToSchema,
+)]
 #[sqlx(rename_all = "SCREAMING_SNAKE_CASE")]
 #[sqlx(type_name = "hypervisor")]
 #[serde(rename_all = "snake_case")]
@@ -110,7 +112,9 @@ pub enum Hypervisor {
     CloudHv,
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone, Eq, PartialEq, Type, EnumString, Display, ToSchema)]
+#[derive(
+    Deserialize, Serialize, Debug, Clone, Eq, PartialEq, Type, EnumString, Display, ToSchema,
+)]
 #[sqlx(rename_all = "SCREAMING_SNAKE_CASE")]
 #[sqlx(type_name = "vm_status")]
 #[serde(rename_all = "snake_case")]
@@ -218,4 +222,75 @@ WHERE id = $1
     .await?;
 
     Ok(vm.into())
+}
+
+pub async fn create(pool: &PgPool, vm: &NewVm) -> Result<Uuid, sqlx::Error> {
+    let id = Uuid::new_v4();
+    let cpu_topology = vm.cpu_topology.as_ref().map(|t| Json(t.clone()));
+    let config = Json(&vm.config);
+
+    sqlx::query(
+        r#"
+INSERT INTO vms (
+    id, name, status, hypervisor,
+    boot_vcpus, max_vcpus, cpu_topology, kvm_hyperv,
+    memory_size, memory_hotplug_size, memory_mergeable, memory_shared,
+    memory_hugepages, memory_hugepage_size, memory_prefault, memory_thp,
+    boot_source_id, description, config
+)
+VALUES (
+    $1, $2, $3, $4,
+    $5, $6, $7, $8,
+    $9, $10, $11, $12,
+    $13, $14, $15, $16,
+    $17, $18, $19
+)
+        "#,
+    )
+    .bind(id)
+    .bind(&vm.name)
+    .bind(VmStatus::Created)
+    .bind(vm.hypervisor.clone())
+    .bind(vm.boot_vcpus)
+    .bind(vm.max_vcpus)
+    .bind(cpu_topology)
+    .bind(vm.kvm_hyperv.unwrap_or(false))
+    .bind(vm.memory_size)
+    .bind(vm.memory_hotplug_size)
+    .bind(vm.memory_mergeable.unwrap_or(false))
+    .bind(vm.memory_shared.unwrap_or(false))
+    .bind(vm.memory_hugepages.unwrap_or(false))
+    .bind(vm.memory_hugepage_size)
+    .bind(vm.memory_prefault.unwrap_or(false))
+    .bind(vm.memory_thp.unwrap_or(false))
+    .bind(vm.boot_source_id)
+    .bind(&vm.description)
+    .bind(config)
+    .execute(pool)
+    .await?;
+
+    Ok(id)
+}
+
+pub async fn update_status(
+    pool: &PgPool,
+    vm_id: Uuid,
+    status: VmStatus,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE vms SET status = $1 WHERE id = $2")
+        .bind(status)
+        .bind(vm_id)
+        .execute(pool)
+        .await?;
+
+    Ok(())
+}
+
+pub async fn delete(pool: &PgPool, vm_id: Uuid) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM vms WHERE id = $1")
+        .bind(vm_id)
+        .execute(pool)
+        .await?;
+
+    Ok(())
 }

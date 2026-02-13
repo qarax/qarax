@@ -1,0 +1,39 @@
+[project]
+name = "qarax-e2e-tests"
+version = "0.1.0"
+description = "End-to-end tests for qarax VM management platform"
+requires-python = ">=3.11"
+dependencies = [
+    "pytest>=8.3.4",
+    "pytest-asyncio>=0.25.2",
+    "httpx>=0.28.1",
+    "python-dateutil>=2.9.0",
+    "attrs>=25.4.0",
+    "qarax-api-client",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest-xdist>=3.5.0",
+    "pytest-timeout>=2.2.0",
+]
+
+[tool.uv.sources]
+qarax-api-client = { path = "../python-sdk/qarax-api-client", editable = true }
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["."]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-v",
+    "--tb=short",
+    "--strict-markers",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+]

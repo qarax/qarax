@@ -62,7 +62,12 @@ async fn spawn_app() -> TestApp {
     tracing::info!("Using database {}", configuration.database.name);
     let connection_pool = configure_database(&configuration.database).await;
 
-    let server = run(listener, connection_pool.clone()).await;
+    let server = run(
+        listener,
+        connection_pool.clone(),
+        configuration.qarax_node.address(),
+    )
+    .await;
     tokio::spawn(async move {
         let _ = server.unwrap().await;
     });

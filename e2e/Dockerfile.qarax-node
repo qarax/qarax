@@ -1,0 +1,38 @@
+# Dockerfile for qarax-node container (E2E testing)
+# Runs qarax-node with Cloud Hypervisor for nested VM support
+
+FROM fedora:41
+
+ARG CLOUD_HYPERVISOR_VERSION=v38.0
+
+# Install dependencies
+RUN dnf install -y \
+    qemu-img \
+    iproute-tc \
+    socat \
+    iptables \
+    nftables \
+    nmap-ncat \
+    curl \
+    && dnf clean all
+
+# Install Cloud Hypervisor
+RUN curl -fsSL \
+    "https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/${CLOUD_HYPERVISOR_VERSION}/cloud-hypervisor" \
+    -o /usr/local/bin/cloud-hypervisor && \
+    chmod +x /usr/local/bin/cloud-hypervisor && \
+    cloud-hypervisor --version
+
+# Copy qarax-node binary
+COPY target/x86_64-unknown-linux-musl/release/qarax-node /usr/local/bin/qarax-node
+RUN chmod +x /usr/local/bin/qarax-node
+
+# Create directories for VM data
+RUN mkdir -p /var/lib/qarax/vms \
+    /var/lib/qarax/images \
+    /var/lib/qarax/disks \
+    /etc/qarax-node
+
+EXPOSE 50051
+
+CMD ["/usr/local/bin/qarax-node", "--port", "50051"]

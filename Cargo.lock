@@ -2072,6 +2072,7 @@ dependencies = [
  "hyper 1.8.1",
  "macaddr",
  "once_cell",
+ "prost",
  "reqwest",
  "secrecy",
  "serde",
@@ -2083,6 +2084,7 @@ dependencies = [
  "strum_macros",
  "thiserror 1.0.69",
  "tokio",
+ "tonic",
  "tonic-build",
  "tower 0.4.13",
  "tower-http",
@@ -2110,6 +2112,7 @@ dependencies = [
  "tonic-build",
  "tonic-health",
  "tracing",
+ "tracing-subscriber",
  "uuid",
 ]
 

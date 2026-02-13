@@ -1,0 +1,32 @@
+# Build stage
+FROM rust:1.92-alpine AS builder
+
+# Install musl development tools
+RUN apk add --no-cache musl-dev openssl-dev openssl-libs-static perl make curl protobuf-dev protoc
+
+WORKDIR /app
+
+# Copy the entire workspace
+COPY . .
+
+# Build qarax in release mode
+RUN cargo build --release -p qarax
+
+# Runtime stage
+FROM alpine:latest
+
+# Install runtime dependencies
+RUN apk add --no-cache libgcc curl
+
+WORKDIR /app
+
+# Copy the binary from builder (into qarax subdirectory to match CARGO_MANIFEST_DIR)
+RUN mkdir -p /app/qarax
+COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/qarax /app/qarax/qarax
+
+# Copy configuration directory
+COPY configuration /app/configuration
+
+EXPOSE 8000
+
+CMD ["/app/qarax/qarax"]

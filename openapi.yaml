@@ -61,6 +61,27 @@ paths:
                   $ref: '#/components/schemas/Vm'
         '500':
           description: Internal server error
+    post:
+      tags:
+      - vms
+      operationId: create
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewVm'
+        required: true
+      responses:
+        '201':
+          description: VM created successfully
+          content:
+            text/plain:
+              schema:
+                type: string
+        '422':
+          description: Invalid input
+        '500':
+          description: Internal server error
   /vms/{vm_id}:
     get:
       tags:
@@ -81,6 +102,105 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Vm'
+        '404':
+          description: VM not found
+        '500':
+          description: Internal server error
+    delete:
+      tags:
+      - vms
+      operationId: delete
+      parameters:
+      - name: vm_id
+        in: path
+        description: VM unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '204':
+          description: VM deleted successfully
+        '404':
+          description: VM not found
+        '500':
+          description: Internal server error
+  /vms/{vm_id}/pause:
+    post:
+      tags:
+      - vms
+      operationId: pause
+      parameters:
+      - name: vm_id
+        in: path
+        description: VM unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: VM paused successfully
+        '404':
+          description: VM not found
+        '500':
+          description: Internal server error
+  /vms/{vm_id}/resume:
+    post:
+      tags:
+      - vms
+      operationId: resume
+      parameters:
+      - name: vm_id
+        in: path
+        description: VM unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: VM resumed successfully
+        '404':
+          description: VM not found
+        '500':
+          description: Internal server error
+  /vms/{vm_id}/start:
+    post:
+      tags:
+      - vms
+      operationId: start
+      parameters:
+      - name: vm_id
+        in: path
+        description: VM unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: VM started successfully
+        '404':
+          description: VM not found
+        '500':
+          description: Internal server error
+  /vms/{vm_id}/stop:
+    post:
+      tags:
+      - vms
+      operationId: stop
+      parameters:
+      - name: vm_id
+        in: path
+        description: VM unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: VM stopped successfully
         '404':
           description: VM not found
         '500':
@@ -148,39 +268,85 @@ components:
       type: object
       required:
       - name
-      - vcpu
-      - memory
       - hypervisor
+      - boot_vcpus
+      - max_vcpus
+      - memory_size
       properties:
         boot_source_id:
           type:
           - string
           - 'null'
           format: uuid
+        boot_vcpus:
+          type: integer
+          format: int32
         config: {}
+        cpu_topology: {}
         description:
           type:
           - string
           - 'null'
         hypervisor:
           $ref: '#/components/schemas/Hypervisor'
-        memory:
+        kvm_hyperv:
+          type:
+          - boolean
+          - 'null'
+        max_vcpus:
           type: integer
           format: int32
+        memory_hotplug_size:
+          type:
+          - integer
+          - 'null'
+          format: int64
+        memory_hugepage_size:
+          type:
+          - integer
+          - 'null'
+          format: int64
+        memory_hugepages:
+          type:
+          - boolean
+          - 'null'
+        memory_mergeable:
+          type:
+          - boolean
+          - 'null'
+        memory_prefault:
+          type:
+          - boolean
+          - 'null'
+        memory_shared:
+          type:
+          - boolean
+          - 'null'
+        memory_size:
+          type: integer
+          format: int64
+        memory_thp:
+          type:
+          - boolean
+          - 'null'
         name:
           type: string
-        vcpu:
-          type: integer
-          format: int32
     Vm:
       type: object
       required:
       - id
       - name
       - status
-      - vcpu
-      - memory
       - hypervisor
+      - boot_vcpus
+      - max_vcpus
+      - kvm_hyperv
+      - memory_size
+      - memory_mergeable
+      - memory_shared
+      - memory_hugepages
+      - memory_prefault
+      - memory_thp
       - config
       properties:
         boot_source_id:
@@ -188,7 +354,11 @@ components:
           - string
           - 'null'
           format: uuid
+        boot_vcpus:
+          type: integer
+          format: int32
         config: {}
+        cpu_topology: {}
         description:
           type:
           - string
@@ -203,22 +373,46 @@ components:
         id:
           type: string
           format: uuid
-        memory:
+        kvm_hyperv:
+          type: boolean
+        max_vcpus:
           type: integer
           format: int32
+        memory_hotplug_size:
+          type:
+          - integer
+          - 'null'
+          format: int64
+        memory_hugepage_size:
+          type:
+          - integer
+          - 'null'
+          format: int64
+        memory_hugepages:
+          type: boolean
+        memory_mergeable:
+          type: boolean
+        memory_prefault:
+          type: boolean
+        memory_shared:
+          type: boolean
+        memory_size:
+          type: integer
+          format: int64
+        memory_thp:
+          type: boolean
         name:
           type: string
         status:
           $ref: '#/components/schemas/VmStatus'
-        vcpu:
-          type: integer
-          format: int32
     VmStatus:
       type: string
       enum:
-      - up
-      - down
       - unknown
+      - created
+      - running
+      - paused
+      - shutdown
 tags:
 - name: hosts
   description: Host management endpoints

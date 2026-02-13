@@ -10,7 +10,7 @@
 # Deploy to host:
 #   ssh root@vmm-host "bootc switch quay.io/yourorg/qarax-vmm-host:latest && systemctl reboot"
 
-FROM quay.io/centos-bootc/centos-bootc:stream9
+FROM quay.io/centos-bootc/centos-bootc:stream10
 
 # Build arguments for version pinning
 ARG CLOUD_HYPERVISOR_VERSION=v38.0
@@ -25,11 +25,9 @@ RUN dnf install -y \
     socat \
     iptables \
     nftables \
-    bridge-utils \
     # Storage tools
     lvm2 \
     # Monitoring and debugging
-    htop \
     strace \
     tcpdump \
     # System utilities
@@ -48,8 +46,12 @@ RUN curl -fsSL \
 
 # Copy qarax-node binary (must be built before image build)
 # Build with: cargo build --release -p qarax-node
-COPY target/release/qarax-node /usr/local/bin/qarax-node
+COPY target/x86_64-unknown-linux-musl/release/qarax-node /usr/local/bin/qarax-node
 RUN chmod +x /usr/local/bin/qarax-node
+
+# Set root password for console access (password: qarax)
+# For production, use SSH keys instead
+RUN echo "root:qarax" | chpasswd
 
 # Setup qarax-node systemd service
 COPY deployments/qarax-node.service /etc/systemd/system/qarax-node.service
@@ -78,10 +80,7 @@ RUN echo "kvm" >> /etc/modules-load.d/vm-modules.conf && \
     echo "tap" >> /etc/modules-load.d/vm-modules.conf && \
     echo "tun" >> /etc/modules-load.d/vm-modules.conf
 
-# Set up firewall rules for VM networking (basic ruleset)
-RUN firewall-offline-cmd --zone=public --add-masquerade && \
-    firewall-offline-cmd --zone=public --add-service=dhcp && \
-    firewall-offline-cmd --zone=public --add-port=50051/tcp
+# Note: Firewall configuration should be done after boot via systemd service or ansible
 
 # Image metadata
 LABEL name="qarax-vmm-host" \
