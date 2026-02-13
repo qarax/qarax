@@ -94,6 +94,15 @@ pub fn get_configuration() -> Result<Settings, config::ConfigError> {
         // Override qarax_node from environment variable if set
         .set_override_option("qarax_node.host", std::env::var("QARAX_NODE_HOST").ok())?
         .set_override_option("qarax_node.port", std::env::var("QARAX_NODE_PORT").ok())?
+        // Override database settings from environment variables if set
+        .set_override_option("database.host", std::env::var("DATABASE_HOST").ok())?
+        .set_override_option("database.port", std::env::var("DATABASE_PORT").ok())?
+        .set_override_option("database.username", std::env::var("DATABASE_USERNAME").ok())?
+        .set_override_option("database.password", std::env::var("DATABASE_PASSWORD").ok())?
+        .set_override_option(
+            "database.database_name",
+            std::env::var("DATABASE_NAME").ok(),
+        )?
         .build()?;
     settings.try_deserialize::<Settings>()
 }

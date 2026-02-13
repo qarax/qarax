@@ -1,11 +1,12 @@
 application:
   port: 8000
 database:
-  host: "0.0.0.0"
+  host: "localhost"
   port: 5432
   username: "postgres"
   password: "password"
   database_name: "qarax"
+  max_connections: 10
 qarax_node:
   host: "localhost"
   port: 50051

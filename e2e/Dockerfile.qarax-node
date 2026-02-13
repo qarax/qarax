@@ -3,9 +3,9 @@
 
 FROM fedora:41
 
-ARG CLOUD_HYPERVISOR_VERSION=v44.0
+ARG CLOUD_HYPERVISOR_VERSION=v50.0
 
-# Install dependencies
+# Install dependencies including kernel for vmlinux extraction
 RUN dnf install -y \
     qemu-img \
     iproute-tc \
@@ -18,6 +18,7 @@ RUN dnf install -y \
     cpio \
     gzip \
     busybox \
+    kernel-core \
     && dnf clean all
 
 # Install Cloud Hypervisor
@@ -37,13 +38,10 @@ RUN mkdir -p /var/lib/qarax/vms \
     /var/lib/qarax/disks \
     /etc/qarax-node
 
-# Download test kernel from Cloud Hypervisor test artifacts
-# This is a kernel built specifically for CH testing
-RUN curl -fsSL -o /tmp/vmlinux.tar.xz \
-    "https://github.com/cloud-hypervisor/rust-hypervisor-firmware/releases/download/0.4.5/linux-6.1.6-rust-hypervisor-firmware-x86_64.tar.xz" && \
-    tar -xJf /tmp/vmlinux.tar.xz -C /tmp && \
-    mv /tmp/linux-6.1.6-rust-hypervisor-firmware-x86_64/vmlinux-6.1.6 /var/lib/qarax/images/vmlinux && \
-    rm -rf /tmp/vmlinux.tar.xz /tmp/linux-6.1.6-rust-hypervisor-firmware-x86_64 && \
+# Extract vmlinux from installed kernel
+# The kernel-core package provides /lib/modules/*/vmlinuz which we can use
+RUN KERNEL_VERSION=$(ls /lib/modules/ | head -1) && \
+    cp /lib/modules/${KERNEL_VERSION}/vmlinuz /var/lib/qarax/images/vmlinux && \
     chmod 644 /var/lib/qarax/images/vmlinux && \
     ls -la /var/lib/qarax/images/
 
