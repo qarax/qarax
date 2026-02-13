@@ -70,7 +70,7 @@ impl NodeClient {
             payload: Some(PayloadConfig {
                 kernel: Some("/var/lib/qarax/images/vmlinux".to_string()),
                 cmdline: Some("console=ttyS0 reboot=k panic=1 pci=off".to_string()),
-                initramfs: None,
+                initramfs: Some("/var/lib/qarax/images/test-initramfs.gz".to_string()),
                 firmware: None,
             }),
             disks: vec![],

@@ -25,7 +25,7 @@ uuid = { version = "1.6.1", features = ["v4"] }
 openssl = { version = "0.10.60", features = ["vendored"] }
 
 # Cloud Hypervisor SDK
-cloud-hypervisor-sdk = { path = "../cloud-hypervisor-sdk" }
+cloud-hypervisor-sdk = { git = "https://github.com/qarax/cloud-hypervisor-sdk.git" }
 
 # HTTP client dependencies (same as SDK uses)
 bytes = "1.5.0"

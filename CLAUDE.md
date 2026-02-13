@@ -17,7 +17,7 @@ This is a Cargo workspace with the following crates:
 - `qarax/`: Control plane - HTTP API server with database-backed state management
 - `qarax-node/`: Data plane - gRPC service for VM operations on hypervisor hosts
 - `common/`: Shared telemetry utilities using tracing
-- `cloud-hypervisor-sdk/`: Local copy of the Cloud Hypervisor Rust SDK for API communication
+- `cloud-hypervisor-sdk`: Cloud Hypervisor Rust SDK (git dependency from github.com/qarax/cloud-hypervisor-sdk)
 
 ### qarax (Control Plane)
 
@@ -212,7 +212,7 @@ When adding a new endpoint, follow these steps:
 
 ## Cloud Hypervisor SDK Integration
 
-qarax-node uses a local copy of the Cloud Hypervisor Rust SDK (`cloud-hypervisor-sdk/`) to communicate with Cloud Hypervisor instances via their Unix socket HTTP API.
+qarax-node uses the Cloud Hypervisor Rust SDK (from `github.com/qarax/cloud-hypervisor-sdk`) to communicate with Cloud Hypervisor instances via their Unix socket HTTP API.
 
 ### How It Works
 
