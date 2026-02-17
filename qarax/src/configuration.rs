@@ -21,11 +21,19 @@ impl QaraxNodeSettings {
     }
 }
 
+#[derive(serde::Deserialize, Debug, Clone)]
+pub struct VmDefaultsSettings {
+    pub kernel: String,
+    pub initramfs: Option<String>,
+    pub cmdline: String,
+}
+
 #[derive(serde::Deserialize, Debug)]
 pub struct Settings {
     pub database: DatabaseSettings,
     pub application: ApplicationSettings,
     pub qarax_node: QaraxNodeSettings,
+    pub vm_defaults: VmDefaultsSettings,
 }
 
 #[derive(serde::Deserialize, Debug)]
@@ -103,6 +111,10 @@ pub fn get_configuration() -> Result<Settings, config::ConfigError> {
             "database.database_name",
             std::env::var("DATABASE_NAME").ok(),
         )?
+        // Override vm_defaults from environment variables if set
+        .set_override_option("vm_defaults.kernel", std::env::var("VM_KERNEL").ok())?
+        .set_override_option("vm_defaults.initramfs", std::env::var("VM_INITRAMFS").ok())?
+        .set_override_option("vm_defaults.cmdline", std::env::var("VM_CMDLINE").ok())?
         .build()?;
     settings.try_deserialize::<Settings>()
 }

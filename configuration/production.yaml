@@ -2,3 +2,9 @@ application:
   host: 0.0.0.0
 database:
   max_connections: 200
+# Override vm_defaults for production with actual bootable images
+# Replace these paths with your production kernel/initramfs
+vm_defaults:
+  kernel: "/var/lib/qarax/images/vmlinux-production"
+  initramfs: "/var/lib/qarax/images/initramfs-production.gz"
+  cmdline: "console=ttyS0 console=hvc0 root=/dev/vda1"

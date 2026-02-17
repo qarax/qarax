@@ -5,6 +5,8 @@ services:
       POSTGRES_USER: qarax
       POSTGRES_PASSWORD: qarax
       POSTGRES_DB: qarax
+    ports:
+      - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U qarax"]
       interval: 5s
@@ -22,6 +24,11 @@ services:
       APP_ENVIRONMENT: local
       QARAX_NODE_HOST: qarax-node
       QARAX_NODE_PORT: 50051
+      # VM defaults - can be overridden from environment
+      VM_KERNEL: ${VM_KERNEL:-}
+      VM_INITRAMFS: ${VM_INITRAMFS:-}
+      VM_CMDLINE: ${VM_CMDLINE:-}
+      VM_ROOTFS: ${PRODUCTION_ROOTFS:-}
     ports:
       - "8000:8000"
     depends_on:
@@ -42,8 +49,12 @@ services:
     privileged: true
     devices:
       - /dev/kvm:/dev/kvm
-    # Note: Don't volume mount /var/lib/qarax as it contains built-in test images
-    # The vms directory is used at runtime for VM sockets/logs
+      - /dev/net/tun:/dev/net/tun  # Required for VM network interfaces (virtio-net/tap)
+    volumes:
+      # Mount local images if they exist (for --with-vm mode)
+      # Default location: ./local-test-images (created by run_local.sh --with-vm)
+      # Note: rw is needed because rootfs.img needs to be writable by VMs
+      - ${PRODUCTION_IMAGES_DIR:-/tmp/qarax-no-production-images}:/var/lib/qarax/production-images:rw
     ports:
       - "50051:50051"
     healthcheck:

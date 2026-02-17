@@ -29,6 +29,57 @@ cargo build
 
 The project includes auto-generated OpenAPI 3.1 documentation. Access it at http://localhost:8000/swagger-ui when the server is running.
 
+## Run locally (Docker stack)
+
+To run the full stack (qarax + qarax-node + PostgreSQL) in Docker for local testing:
+
+```bash
+./hack/run_local.sh
+```
+
+Requires Docker, Docker Compose, KVM (`/dev/kvm`), and a Rust toolchain. The script builds qarax-node, starts all services, and prints the API and Swagger UI URLs. Stop with `cd e2e && docker compose down -v`.
+
+## VM Boot Configuration
+
+qarax uses configurable default boot artifacts for VMs. Configure these in your environment's YAML file:
+
+```yaml
+vm_defaults:
+  kernel: "/var/lib/qarax/images/vmlinux"
+  initramfs: "/var/lib/qarax/images/initramfs.gz"
+  cmdline: "console=ttyS0 console=hvc0 root=/dev/vda1"
+```
+
+### Using Test Artifacts (E2E/Local Development)
+
+For E2E tests and local development, the default configuration uses test artifacts that boot and shut down after 5 seconds. These are useful for verifying VM creation but not for running persistent VMs.
+
+### Using Production Images
+
+For production VMs that stay running, replace the test artifacts with proper bootable images:
+
+1. **Option 1: Cloud Images** (Recommended)
+   ```bash
+   # Download a cloud image (e.g., Ubuntu)
+   wget https://cloud-images.ubuntu.com/minimal/releases/jammy/release/ubuntu-22.04-minimal-cloudimg-amd64.img
+
+   # Extract kernel and initrd from the image
+   virt-get-kernel ubuntu-22.04-minimal-cloudimg-amd64.img
+
+   # Update configuration to point to these files
+   ```
+
+2. **Option 2: Custom Build**
+   Build your own kernel and initramfs with the tools and init system you need.
+
+Update your `configuration/production.yaml`:
+```yaml
+vm_defaults:
+  kernel: "/var/lib/qarax/images/vmlinux-production"
+  initramfs: "/var/lib/qarax/images/initramfs-production.gz"
+  cmdline: "console=ttyS0 console=hvc0 root=/dev/vda1 init=/sbin/init"
+```
+
 ## Host Provisioning
 
 qarax uses bootc (bootable containers) to deploy VMM (Virtual Machine Manager) hosts. The bootc image includes qarax-node, Cloud Hypervisor, and all necessary dependencies.

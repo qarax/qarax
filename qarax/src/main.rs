@@ -24,8 +24,15 @@ async fn main() -> std::io::Result<()> {
     tracing::info!("Starting server on {}", address);
     let listener = TcpListener::bind(address).await?;
     let qarax_node_address = configuration.qarax_node.address();
+    let vm_defaults = configuration.vm_defaults.clone();
     tracing::info!("qarax-node address: {}", qarax_node_address);
-    match run(listener, connection_pool, qarax_node_address).await {
+    tracing::info!(
+        "VM defaults: kernel={}, initramfs={:?}, cmdline={}",
+        vm_defaults.kernel,
+        vm_defaults.initramfs,
+        vm_defaults.cmdline
+    );
+    match run(listener, connection_pool, qarax_node_address, vm_defaults).await {
         Ok(server) => {
             server.await.unwrap();
         }

@@ -6,6 +6,86 @@ info:
     name: ''
   version: 0.1.0
 paths:
+  /boot-sources:
+    get:
+      tags:
+      - boot-sources
+      operationId: list
+      responses:
+        '200':
+          description: List all boot sources
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/BootSource'
+        '500':
+          description: Internal server error
+    post:
+      tags:
+      - boot-sources
+      operationId: create
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewBootSource'
+        required: true
+      responses:
+        '201':
+          description: Boot source created successfully
+          content:
+            text/plain:
+              schema:
+                type: string
+        '422':
+          description: Invalid input
+        '500':
+          description: Internal server error
+  /boot-sources/{boot_source_id}:
+    get:
+      tags:
+      - boot-sources
+      operationId: get
+      parameters:
+      - name: boot_source_id
+        in: path
+        description: Boot source unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Boot source found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BootSource'
+        '404':
+          description: Boot source not found
+        '500':
+          description: Internal server error
+    delete:
+      tags:
+      - boot-sources
+      operationId: delete
+      parameters:
+      - name: boot_source_id
+        in: path
+        description: Boot source unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '204':
+          description: Boot source deleted successfully
+        '404':
+          description: Boot source not found
+        '500':
+          description: Internal server error
   /hosts:
     get:
       tags:
@@ -43,6 +123,192 @@ paths:
           description: Host with name already exists
         '422':
           description: Invalid input
+        '500':
+          description: Internal server error
+  /hosts/{host_id}:
+    patch:
+      tags:
+      - hosts
+      operationId: update
+      parameters:
+      - name: host_id
+        in: path
+        description: Host unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateHostRequest'
+        required: true
+      responses:
+        '200':
+          description: Host updated successfully
+        '404':
+          description: Host not found
+        '500':
+          description: Internal server error
+  /storage-objects:
+    get:
+      tags:
+      - storage-objects
+      operationId: list
+      responses:
+        '200':
+          description: List all storage objects
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/StorageObject'
+        '500':
+          description: Internal server error
+    post:
+      tags:
+      - storage-objects
+      operationId: create
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewStorageObject'
+        required: true
+      responses:
+        '201':
+          description: Storage object created successfully
+          content:
+            text/plain:
+              schema:
+                type: string
+        '422':
+          description: Invalid input
+        '500':
+          description: Internal server error
+  /storage-objects/{object_id}:
+    get:
+      tags:
+      - storage-objects
+      operationId: get
+      parameters:
+      - name: object_id
+        in: path
+        description: Storage object unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Storage object found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorageObject'
+        '404':
+          description: Storage object not found
+        '500':
+          description: Internal server error
+    delete:
+      tags:
+      - storage-objects
+      operationId: delete
+      parameters:
+      - name: object_id
+        in: path
+        description: Storage object unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '204':
+          description: Storage object deleted successfully
+        '404':
+          description: Storage object not found
+        '500':
+          description: Internal server error
+  /storage-pools:
+    get:
+      tags:
+      - storage-pools
+      operationId: list
+      responses:
+        '200':
+          description: List all storage pools
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/StoragePool'
+        '500':
+          description: Internal server error
+    post:
+      tags:
+      - storage-pools
+      operationId: create
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewStoragePool'
+        required: true
+      responses:
+        '201':
+          description: Storage pool created successfully
+          content:
+            text/plain:
+              schema:
+                type: string
+        '422':
+          description: Invalid input
+        '500':
+          description: Internal server error
+  /storage-pools/{pool_id}:
+    get:
+      tags:
+      - storage-pools
+      operationId: get
+      parameters:
+      - name: pool_id
+        in: path
+        description: Storage pool unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Storage pool found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StoragePool'
+        '404':
+          description: Storage pool not found
+        '500':
+          description: Internal server error
+    delete:
+      tags:
+      - storage-pools
+      operationId: delete
+      parameters:
+      - name: pool_id
+        in: path
+        description: Storage pool unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '204':
+          description: Storage pool deleted successfully
+        '404':
+          description: Storage pool not found
         '500':
           description: Internal server error
   /vms:
@@ -207,6 +473,34 @@ paths:
           description: Internal server error
 components:
   schemas:
+    BootSource:
+      type: object
+      required:
+      - id
+      - name
+      - kernel_image_id
+      properties:
+        description:
+          type:
+          - string
+          - 'null'
+        id:
+          type: string
+          format: uuid
+        initrd_image_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        kernel_image_id:
+          type: string
+          format: uuid
+        kernel_params:
+          type:
+          - string
+          - 'null'
+        name:
+          type: string
     Host:
       type: object
       required:
@@ -244,6 +538,30 @@ components:
       type: string
       enum:
       - cloud_hv
+    NewBootSource:
+      type: object
+      required:
+      - name
+      - kernel_image_id
+      properties:
+        description:
+          type:
+          - string
+          - 'null'
+        initrd_image_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        kernel_image_id:
+          type: string
+          format: uuid
+        kernel_params:
+          type:
+          - string
+          - 'null'
+        name:
+          type: string
     NewHost:
       type: object
       required:
@@ -264,6 +582,51 @@ components:
         port:
           type: integer
           format: int32
+    NewStorageObject:
+      type: object
+      required:
+      - name
+      - storage_pool_id
+      - object_type
+      - size_bytes
+      properties:
+        config: {}
+        name:
+          type: string
+        object_type:
+          $ref: '#/components/schemas/StorageObjectType'
+        parent_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        size_bytes:
+          type: integer
+          format: int64
+        storage_pool_id:
+          type: string
+          format: uuid
+    NewStoragePool:
+      type: object
+      required:
+      - name
+      - pool_type
+      properties:
+        capacity_bytes:
+          type:
+          - integer
+          - 'null'
+          format: int64
+        config: {}
+        host_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        name:
+          type: string
+        pool_type:
+          $ref: '#/components/schemas/StoragePoolType'
     NewVm:
       type: object
       required:
@@ -331,6 +694,140 @@ components:
           - 'null'
         name:
           type: string
+        networks:
+          type:
+          - array
+          - 'null'
+          items:
+            $ref: '#/components/schemas/NewVmNetwork'
+          description: Optional network interfaces to attach at create time (passed to qarax-node).
+    NewVmNetwork:
+      type: object
+      description: Minimal network config for create-VM request. Passed to qarax-node; id is required.
+      required:
+      - id
+      properties:
+        id:
+          type: string
+          description: Unique device id (e.g. "net0")
+        ip:
+          type:
+          - string
+          - 'null'
+          description: IPv4 or IPv6 address (optional)
+        mac:
+          type:
+          - string
+          - 'null'
+          description: Guest MAC address (optional)
+        mask:
+          type:
+          - string
+          - 'null'
+          description: Network mask (optional)
+        mtu:
+          type:
+          - integer
+          - 'null'
+          format: int32
+          description: MTU (optional)
+        tap:
+          type:
+          - string
+          - 'null'
+          description: Pre-created TAP device name (optional)
+    StorageObject:
+      type: object
+      required:
+      - id
+      - name
+      - storage_pool_id
+      - object_type
+      - size_bytes
+      - config
+      properties:
+        config: {}
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        object_type:
+          $ref: '#/components/schemas/StorageObjectType'
+        parent_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        size_bytes:
+          type: integer
+          format: int64
+        storage_pool_id:
+          type: string
+          format: uuid
+    StorageObjectType:
+      type: string
+      enum:
+      - disk
+      - kernel
+      - initrd
+      - iso
+      - snapshot
+    StoragePool:
+      type: object
+      required:
+      - id
+      - name
+      - pool_type
+      - status
+      - config
+      properties:
+        allocated_bytes:
+          type:
+          - integer
+          - 'null'
+          format: int64
+        capacity_bytes:
+          type:
+          - integer
+          - 'null'
+          format: int64
+        config: {}
+        host_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        pool_type:
+          $ref: '#/components/schemas/StoragePoolType'
+        status:
+          $ref: '#/components/schemas/StoragePoolStatus'
+    StoragePoolStatus:
+      type: string
+      enum:
+      - active
+      - inactive
+      - error
+    StoragePoolType:
+      type: string
+      enum:
+      - local
+      - nfs
+      - ceph
+      - lvm
+      - zfs
+    UpdateHostRequest:
+      type: object
+      required:
+      - status
+      properties:
+        status:
+          $ref: '#/components/schemas/HostStatus'
     Vm:
       type: object
       required:
@@ -418,3 +915,9 @@ tags:
   description: Host management endpoints
 - name: vms
   description: Virtual machine management endpoints
+- name: storage-objects
+  description: Storage object management endpoints
+- name: storage-pools
+  description: Storage pool management endpoints
+- name: boot-sources
+  description: Boot source management endpoints

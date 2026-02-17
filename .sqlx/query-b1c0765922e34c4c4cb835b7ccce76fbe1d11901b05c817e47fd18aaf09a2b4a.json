@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nINSERT INTO boot_sources (id, name, description, kernel_image_id, kernel_params, initrd_image_id)\nVALUES ($1, $2, $3, $4, $5, $6)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Varchar",
+        "Text",
+        "Uuid",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b1c0765922e34c4c4cb835b7ccce76fbe1d11901b05c817e47fd18aaf09a2b4a"
+}

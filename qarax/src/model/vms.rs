@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use sqlx::{PgPool, Type, types::Json};
+use sqlx::{PgPool, Postgres, Transaction, Type, types::Json};
 use strum_macros::{Display, EnumString};
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -127,6 +127,23 @@ pub enum VmStatus {
     Shutdown,
 }
 
+/// Minimal network config for create-VM request. Passed to qarax-node; id is required.
+#[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
+pub struct NewVmNetwork {
+    /// Unique device id (e.g. "net0")
+    pub id: String,
+    /// Guest MAC address (optional)
+    pub mac: Option<String>,
+    /// Pre-created TAP device name (optional)
+    pub tap: Option<String>,
+    /// IPv4 or IPv6 address (optional)
+    pub ip: Option<String>,
+    /// Network mask (optional)
+    pub mask: Option<String>,
+    /// MTU (optional)
+    pub mtu: Option<i32>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
 pub struct NewVm {
     pub name: String,
@@ -150,6 +167,10 @@ pub struct NewVm {
 
     pub boot_source_id: Option<Uuid>,
     pub description: Option<String>,
+
+    /// Optional network interfaces to attach at create time (passed to qarax-node).
+    #[serde(default)]
+    pub networks: Option<Vec<NewVmNetwork>>,
 
     #[serde(default)]
     pub config: serde_json::Value,
@@ -225,6 +246,17 @@ WHERE id = $1
 }
 
 pub async fn create(pool: &PgPool, vm: &NewVm) -> Result<Uuid, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let id = create_tx(&mut tx, vm).await?;
+    tx.commit().await?;
+    Ok(id)
+}
+
+/// Creates a VM row inside the given transaction. Used by the handler to roll back on node failure.
+pub async fn create_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    vm: &NewVm,
+) -> Result<Uuid, sqlx::Error> {
     let id = Uuid::new_v4();
     let cpu_topology = vm.cpu_topology.as_ref().map(|t| Json(t.clone()));
     let config = Json(&vm.config);
@@ -266,7 +298,7 @@ VALUES (
     .bind(vm.boot_source_id)
     .bind(&vm.description)
     .bind(config)
-    .execute(pool)
+    .execute(tx.as_mut())
     .await?;
 
     Ok(id)
@@ -279,6 +311,16 @@ pub async fn update_status(
 ) -> Result<(), sqlx::Error> {
     sqlx::query("UPDATE vms SET status = $1 WHERE id = $2")
         .bind(status)
+        .bind(vm_id)
+        .execute(pool)
+        .await?;
+
+    Ok(())
+}
+
+pub async fn update_host_id(pool: &PgPool, vm_id: Uuid, host_id: Uuid) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE vms SET host_id = $1 WHERE id = $2")
+        .bind(host_id)
         .bind(vm_id)
         .execute(pool)
         .await?;

@@ -10,9 +10,18 @@ echo "=========================================="
 echo "  qarax test VM booted successfully!"
 echo "=========================================="
 echo ""
-echo "Kernel: $(uname -r)"
-echo "CPU: $(grep -c processor /proc/cpuinfo) vCPUs"
-echo "Memory: $(grep MemTotal /proc/meminfo)"
+# Use only /proc and shell (no uname/grep/cut - minimal BusyBox may not have them)
+read -r ver_line < /proc/version 2>/dev/null || ver_line=""
+set -- $ver_line 2>/dev/null
+echo "Kernel: ${3:-unknown}"
+cpu_count=0
+while read -r line; do
+  case "$line" in processor*) cpu_count=$((cpu_count+1)) ;; esac
+done < /proc/cpuinfo
+echo "CPU: ${cpu_count} vCPUs"
+while read -r line; do
+  case "$line" in MemTotal*) echo "Memory: $line"; break ;; esac
+done < /proc/meminfo
 echo ""
 
 # Keep running for a moment so tests can verify state

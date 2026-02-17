@@ -1,0 +1,11 @@
+# Avoid sending 10GB+ target/ to Docker (qarax image builds from source).
+# Keep only the qarax-node binary so e2e/Dockerfile.qarax-node can COPY it.
+.git
+.gitignore
+*.md
+target/*
+!target/x86_64-unknown-linux-musl
+target/x86_64-unknown-linux-musl/*
+!target/x86_64-unknown-linux-musl/release
+target/x86_64-unknown-linux-musl/release/*
+!target/x86_64-unknown-linux-musl/release/qarax-node

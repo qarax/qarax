@@ -1,9 +1,10 @@
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Type, types::Json};
 use strum_macros::{Display, EnumString};
+use utoipa::ToSchema;
 use uuid::Uuid;
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
 pub struct StorageObject {
     pub id: Uuid,
     pub name: String,
@@ -39,7 +40,9 @@ impl From<StorageObjectRow> for StorageObject {
     }
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone, Eq, PartialEq, Type, EnumString, Display)]
+#[derive(
+    Deserialize, Serialize, Debug, Clone, Eq, PartialEq, Type, EnumString, Display, ToSchema,
+)]
 #[sqlx(rename_all = "SCREAMING_SNAKE_CASE")]
 #[sqlx(type_name = "storage_object_type")]
 #[serde(rename_all = "snake_case")]
@@ -52,7 +55,7 @@ pub enum StorageObjectType {
     Snapshot,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
 pub struct NewStorageObject {
     pub name: String,
     pub storage_pool_id: Uuid,
@@ -164,4 +167,50 @@ WHERE object_type = $1
         .map(|so: StorageObjectRow| so.into())
         .collect();
     Ok(storage_objects)
+}
+
+pub async fn create(pool: &PgPool, new_object: NewStorageObject) -> Result<Uuid, sqlx::Error> {
+    let id = Uuid::new_v4();
+
+    sqlx::query!(
+        r#"
+INSERT INTO storage_objects (id, name, storage_pool_id, object_type, size_bytes, config, parent_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+        "#,
+        id,
+        new_object.name,
+        new_object.storage_pool_id,
+        new_object.object_type as StorageObjectType,
+        new_object.size_bytes,
+        new_object.config,
+        new_object.parent_id
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(id)
+}
+
+pub async fn delete(pool: &PgPool, object_id: Uuid) -> Result<(), sqlx::Error> {
+    sqlx::query!(
+        r#"
+DELETE FROM storage_objects
+WHERE id = $1
+        "#,
+        object_id
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+/// Extract the path from a storage object's config JSONB field.
+/// Expected format: {"path": "/var/lib/qarax/images/vmlinux"}
+pub fn get_path_from_config(config: &serde_json::Value) -> Option<String> {
+    config
+        .as_object()?
+        .get("path")?
+        .as_str()
+        .map(|s| s.to_string())
 }

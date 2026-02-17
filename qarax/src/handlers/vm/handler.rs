@@ -5,11 +5,26 @@ use uuid::Uuid;
 
 use crate::{
     App,
-    grpc_client::NodeClient,
-    model::vms::{self, NewVm, Vm, VmStatus},
+    grpc_client::{CreateVmRequest, NodeClient, net_configs_from_api},
+    model::{
+        boot_sources, hosts,
+        vms::{self, NewVm, Vm, VmStatus},
+    },
 };
 
 use super::{ApiResponse, Result};
+
+/// Returns the host id for the configured qarax-node (address:port) if a host is registered.
+async fn node_host_id(env: &App) -> Result<Option<Uuid>, crate::errors::Error> {
+    let (address, port_str) = env
+        .qarax_node_address()
+        .split_once(':')
+        .unwrap_or(("", "0"));
+    let port: i32 = port_str.parse().unwrap_or(0);
+    hosts::id_by_address_and_port(env.pool(), address, port)
+        .await
+        .map_err(crate::errors::Error::Sqlx)
+}
 
 #[utoipa::path(
     get,
@@ -70,19 +85,66 @@ pub async fn create(
     Extension(env): Extension<App>,
     Json(vm): Json<NewVm>,
 ) -> Result<(StatusCode, String)> {
-    // Create VM record in database
-    let id = vms::create(env.pool(), &vm).await?;
+    let mut tx = env.pool().begin().await?;
+    let id = vms::create_tx(&mut tx, &vm).await?;
 
-    // Call qarax-node to create the VM
-    // TODO: Get node address from host table based on scheduling
+    // Resolve boot source or use defaults
+    let (kernel, initramfs, cmdline) = if let Some(boot_source_id) = vm.boot_source_id {
+        // Resolve boot source
+        let resolved = boot_sources::resolve(env.pool(), boot_source_id)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to resolve boot_source_id {}: {}", boot_source_id, e);
+                crate::errors::Error::UnprocessableEntity(format!(
+                    "Invalid boot_source_id: {}",
+                    boot_source_id
+                ))
+            })?;
+
+        (
+            resolved.kernel_path,
+            resolved.initramfs_path,
+            resolved.kernel_params,
+        )
+    } else {
+        // Fall back to vm_defaults
+        let vm_defaults = env.vm_defaults();
+        (
+            vm_defaults.kernel.clone(),
+            vm_defaults.initramfs.clone(),
+            vm_defaults.cmdline.clone(),
+        )
+    };
+
+    // Call qarax-node to create the VM; on failure we return before commit so the insert is rolled back
+    let networks = net_configs_from_api(vm.networks.as_deref().unwrap_or(&[]));
     let node_client = NodeClient::from_address(env.qarax_node_address());
-    node_client
-        .create_vm(id, vm.boot_vcpus, vm.max_vcpus, vm.memory_size)
+    if let Err(e) = node_client
+        .create_vm(CreateVmRequest {
+            vm_id: id,
+            boot_vcpus: vm.boot_vcpus,
+            max_vcpus: vm.max_vcpus,
+            memory_size: vm.memory_size,
+            networks,
+            kernel,
+            initramfs,
+            cmdline,
+        })
         .await
-        .map_err(|e| {
-            tracing::error!("Failed to create VM on qarax-node: {}", e);
-            crate::errors::Error::InternalServerError
-        })?;
+    {
+        tracing::error!("Failed to create VM on qarax-node: {}", e);
+        return Err(crate::errors::Error::UnprocessableEntity(format!(
+            "qarax-node: {}",
+            e
+        )));
+    }
+
+    tx.commit().await?;
+
+    // Set host_id if a host is registered for the node we used
+    if let Some(host_id) = node_host_id(&env).await? {
+        let _ = vms::update_host_id(env.pool(), id, host_id).await;
+    }
 
     Ok((StatusCode::CREATED, id.to_string()))
 }
@@ -114,6 +176,11 @@ pub async fn start(
 
     // Update status in database
     vms::update_status(env.pool(), vm_id, VmStatus::Running).await?;
+
+    // Set host_id if still unset and a host is registered for the node we used
+    if let Some(host_id) = node_host_id(&env).await? {
+        let _ = vms::update_host_id(env.pool(), vm_id, host_id).await;
+    }
 
     Ok(ApiResponse {
         data: (),

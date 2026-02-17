@@ -1,11 +1,12 @@
 use super::*;
 use crate::{
     App,
-    model::hosts::{self, Host, NewHost},
+    model::hosts::{self, Host, NewHost, UpdateHostRequest},
 };
-use axum::{Extension, Json};
+use axum::{Extension, Json, extract::Path};
 use http::StatusCode;
 use tracing::instrument;
+use uuid::Uuid;
 
 #[utoipa::path(
     get,
@@ -45,4 +46,31 @@ pub async fn add(
     host.validate_unique_name(env.pool(), &host.name).await?;
     let id = hosts::add(env.pool(), &host).await?;
     Ok((StatusCode::CREATED, id.to_string()))
+}
+
+#[utoipa::path(
+    patch,
+    path = "/hosts/{host_id}",
+    params(
+        ("host_id" = uuid::Uuid, Path, description = "Host unique identifier")
+    ),
+    request_body = UpdateHostRequest,
+    responses(
+        (status = 200, description = "Host updated successfully"),
+        (status = 404, description = "Host not found"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "hosts"
+)]
+#[instrument(skip(env))]
+pub async fn update(
+    Extension(env): Extension<App>,
+    Path(host_id): Path<Uuid>,
+    Json(body): Json<UpdateHostRequest>,
+) -> Result<ApiResponse<()>> {
+    hosts::update_status(env.pool(), host_id, body.status).await?;
+    Ok(ApiResponse {
+        data: (),
+        code: StatusCode::OK,
+    })
 }

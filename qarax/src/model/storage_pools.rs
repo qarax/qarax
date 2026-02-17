@@ -1,9 +1,10 @@
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Type, types::Json};
 use strum_macros::{Display, EnumString};
+use utoipa::ToSchema;
 use uuid::Uuid;
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
 pub struct StoragePool {
     pub id: Uuid,
     pub name: String,
@@ -42,7 +43,9 @@ impl From<StoragePoolRow> for StoragePool {
     }
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone, Eq, PartialEq, Type, EnumString, Display)]
+#[derive(
+    Deserialize, Serialize, Debug, Clone, Eq, PartialEq, Type, EnumString, Display, ToSchema,
+)]
 #[sqlx(rename_all = "SCREAMING_SNAKE_CASE")]
 #[sqlx(type_name = "storage_pool_type")]
 #[serde(rename_all = "snake_case")]
@@ -55,7 +58,9 @@ pub enum StoragePoolType {
     Zfs,
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone, Eq, PartialEq, Type, EnumString, Display)]
+#[derive(
+    Deserialize, Serialize, Debug, Clone, Eq, PartialEq, Type, EnumString, Display, ToSchema,
+)]
 #[sqlx(rename_all = "SCREAMING_SNAKE_CASE")]
 #[sqlx(type_name = "storage_pool_status")]
 #[serde(rename_all = "snake_case")]
@@ -66,7 +71,7 @@ pub enum StoragePoolStatus {
     Error,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
 pub struct NewStoragePool {
     pub name: String,
     pub pool_type: StoragePoolType,
@@ -124,4 +129,41 @@ WHERE id = $1
     .await?;
 
     Ok(storage_pool.into())
+}
+
+pub async fn create(pool: &PgPool, new_pool: NewStoragePool) -> Result<Uuid, sqlx::Error> {
+    let id = Uuid::new_v4();
+    let status = StoragePoolStatus::Active;
+
+    sqlx::query!(
+        r#"
+INSERT INTO storage_pools (id, name, pool_type, status, host_id, config, capacity_bytes)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+        "#,
+        id,
+        new_pool.name,
+        new_pool.pool_type as StoragePoolType,
+        status as StoragePoolStatus,
+        new_pool.host_id,
+        new_pool.config,
+        new_pool.capacity_bytes
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(id)
+}
+
+pub async fn delete(pool: &PgPool, pool_id: Uuid) -> Result<(), sqlx::Error> {
+    sqlx::query!(
+        r#"
+DELETE FROM storage_pools
+WHERE id = $1
+        "#,
+        pool_id
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(())
 }

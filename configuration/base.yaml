@@ -10,3 +10,7 @@ database:
 qarax_node:
   host: "localhost"
   port: 50051
+vm_defaults:
+  kernel: "/var/lib/qarax/images/vmlinux"
+  initramfs: "/var/lib/qarax/images/test-initramfs.gz"
+  cmdline: "console=ttyS0 reboot=k panic=1 pci=off"

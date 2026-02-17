@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use sqlx::{PgPool, Type, types::Uuid};
+use sqlx::{PgPool, Row, Type, types::Uuid};
 use strum_macros::{Display, EnumString};
 use utoipa::ToSchema;
 use validator::{Validate, ValidationError, ValidationErrors};
@@ -33,6 +33,11 @@ pub enum HostStatus {
     InstallationFailed,
     Initializing,
     Up,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
+pub struct UpdateHostRequest {
+    pub status: HostStatus,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Validate, ToSchema)]
@@ -105,6 +110,30 @@ pub async fn add(pool: &PgPool, host: &NewHost) -> Result<Uuid, sqlx::Error> {
     .id;
 
     Ok(id)
+}
+
+pub async fn update_status(pool: &PgPool, id: Uuid, status: HostStatus) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE hosts SET status = $1 WHERE id = $2")
+        .bind(status)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Returns the host id for a host with the given address and port, if any.
+pub async fn id_by_address_and_port(
+    pool: &PgPool,
+    address: &str,
+    port: i32,
+) -> Result<Option<Uuid>, sqlx::Error> {
+    let row = sqlx::query("SELECT id FROM hosts WHERE address = $1 AND port = $2")
+        .bind(address)
+        .bind(port)
+        .fetch_optional(pool)
+        .await?;
+
+    Ok(row.map(|r| r.get::<Uuid, _>("id")))
 }
 
 // TODO: figure out how to not fetch the entire host. Maybe with SELECT exists()?
