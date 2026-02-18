@@ -111,10 +111,20 @@ pub fn get_configuration() -> Result<Settings, config::ConfigError> {
             "database.database_name",
             std::env::var("DATABASE_NAME").ok(),
         )?
-        // Override vm_defaults from environment variables if set
-        .set_override_option("vm_defaults.kernel", std::env::var("VM_KERNEL").ok())?
-        .set_override_option("vm_defaults.initramfs", std::env::var("VM_INITRAMFS").ok())?
-        .set_override_option("vm_defaults.cmdline", std::env::var("VM_CMDLINE").ok())?
+        // Override vm_defaults from environment variables if set and non-empty
+        // (empty string means "not set" — fall back to yaml defaults)
+        .set_override_option(
+            "vm_defaults.kernel",
+            std::env::var("VM_KERNEL").ok().filter(|s| !s.is_empty()),
+        )?
+        .set_override_option(
+            "vm_defaults.initramfs",
+            std::env::var("VM_INITRAMFS").ok().filter(|s| !s.is_empty()),
+        )?
+        .set_override_option(
+            "vm_defaults.cmdline",
+            std::env::var("VM_CMDLINE").ok().filter(|s| !s.is_empty()),
+        )?
         .build()?;
     settings.try_deserialize::<Settings>()
 }
