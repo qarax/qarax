@@ -298,6 +298,21 @@ pub struct VmDisk {
     pub config: serde_json::Value,
 }
 
+// ─── Snapshots ────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Snapshot {
+    pub id: Uuid,
+    pub vm_id: Uuid,
+    pub status: String,
+    pub snapshot_url: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RestoreRequest {
+    pub snapshot_id: Uuid,
+}
+
 // ─── Storage pool import ──────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize)]

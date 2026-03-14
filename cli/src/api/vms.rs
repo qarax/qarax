@@ -5,7 +5,8 @@ use uuid::Uuid;
 use crate::client::Client;
 
 use super::models::{
-    AttachDiskRequest, CreateVmResponse, CreateVmResult, NewVm, Vm, VmDisk, VmStartResponse,
+    AttachDiskRequest, CreateVmResponse, CreateVmResult, NewVm, RestoreRequest, Snapshot, Vm,
+    VmDisk, VmStartResponse,
 };
 
 pub async fn list(client: &Client) -> anyhow::Result<Vec<Vm>> {
@@ -71,4 +72,18 @@ pub async fn attach_disk(
     req: &AttachDiskRequest,
 ) -> anyhow::Result<VmDisk> {
     client.post(&format!("/vms/{vm_id}/disks"), req).await
+}
+
+pub async fn create_snapshot(client: &Client, vm_id: Uuid) -> anyhow::Result<Snapshot> {
+    client
+        .post_empty_json(&format!("/vms/{vm_id}/snapshots"))
+        .await
+}
+
+pub async fn list_snapshots(client: &Client, vm_id: Uuid) -> anyhow::Result<Vec<Snapshot>> {
+    client.get(&format!("/vms/{vm_id}/snapshots")).await
+}
+
+pub async fn restore(client: &Client, vm_id: Uuid, req: &RestoreRequest) -> anyhow::Result<Vm> {
+    client.post(&format!("/vms/{vm_id}/restore"), req).await
 }

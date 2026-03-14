@@ -5,8 +5,7 @@
 set -e
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-cd "${REPO_ROOT}/e2e"
 
 echo "Stopping and removing local stack (postgres, qarax, qarax-node) and volumes..."
-docker compose down -v
+bash "${REPO_ROOT}/hack/run-local.sh" --cleanup
 echo "Done."

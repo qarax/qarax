@@ -6,7 +6,7 @@ use uuid::Uuid;
 use crate::{
     api::{
         self,
-        models::{AttachDiskRequest, CreateVmResult, NewVm, NewVmNetwork},
+        models::{AttachDiskRequest, CreateVmResult, NewVm, NewVmNetwork, RestoreRequest},
     },
     client::Client,
     console,
@@ -114,6 +114,45 @@ enum VmCommand {
         #[arg(long)]
         boot_order: Option<i32>,
     },
+    /// Manage VM snapshots
+    Snapshot {
+        #[command(subcommand)]
+        command: SnapshotCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum SnapshotCommand {
+    /// Create a snapshot of a running VM
+    Create {
+        /// VM name or ID
+        vm: String,
+    },
+    /// List snapshots for a VM
+    List {
+        /// VM name or ID
+        vm: String,
+    },
+    /// Restore a VM from a snapshot
+    Restore {
+        /// VM name or ID
+        vm: String,
+        /// Snapshot ID to restore from
+        #[arg(long)]
+        snapshot: Uuid,
+    },
+}
+
+#[derive(Tabled)]
+struct SnapshotRow {
+    #[tabled(rename = "ID")]
+    id: String,
+    #[tabled(rename = "VM ID")]
+    vm_id: String,
+    #[tabled(rename = "Status")]
+    status: String,
+    #[tabled(rename = "URL")]
+    snapshot_url: String,
 }
 
 #[derive(Tabled)]
@@ -336,6 +375,53 @@ pub async fn run(args: VmArgs, client: &Client, json: bool) -> anyhow::Result<()
                 );
             }
         }
+
+        VmCommand::Snapshot { command } => match command {
+            SnapshotCommand::Create { vm } => {
+                let id = resolve_vm_id(client, &vm).await?;
+                let snapshot = api::vms::create_snapshot(client, id).await?;
+                if json {
+                    print_json(&snapshot)?;
+                } else {
+                    println!("Snapshot: {}", snapshot.id);
+                    println!("Status:   {}", snapshot.status);
+                    println!("URL:      {}", snapshot.snapshot_url);
+                }
+            }
+
+            SnapshotCommand::List { vm } => {
+                let id = resolve_vm_id(client, &vm).await?;
+                let snapshots = api::vms::list_snapshots(client, id).await?;
+                if json {
+                    print_json(&snapshots)?;
+                } else {
+                    let rows: Vec<SnapshotRow> = snapshots
+                        .iter()
+                        .map(|s| SnapshotRow {
+                            id: s.id.to_string(),
+                            vm_id: s.vm_id.to_string(),
+                            status: s.status.clone(),
+                            snapshot_url: s.snapshot_url.clone(),
+                        })
+                        .collect();
+                    println!("{}", Table::new(rows));
+                }
+            }
+
+            SnapshotCommand::Restore { vm, snapshot } => {
+                let id = resolve_vm_id(client, &vm).await?;
+                let req = RestoreRequest {
+                    snapshot_id: snapshot,
+                };
+                let restored = api::vms::restore(client, id, &req).await?;
+                if json {
+                    print_json(&restored)?;
+                } else {
+                    println!("Restored VM: {}", restored.name);
+                    println!("Status:      {}", restored.status);
+                }
+            }
+        },
     }
 
     Ok(())

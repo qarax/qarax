@@ -59,13 +59,72 @@ kill_processes_by_exact_name() {
 	done <<<"$pids"
 }
 
-# The NFS server container runs kernel-level nfsd threads that Docker cannot
-# kill via SIGTERM or SIGKILL while they hold active kernel state. Wait for the
-# container to exit on its own (it receives SIGKILL and exits shortly after),
-# then remove it so docker compose can recreate it cleanly.
+kill_container_scope_processes() {
+	local cid="$1"
+	local scope="/sys/fs/cgroup/system.slice/docker-${cid}.scope/cgroup.procs"
+	[[ -f "$scope" ]] || return 0
+
+	python3 - "$scope" <<'PY'
+import os
+import signal
+import sys
+
+scope = sys.argv[1]
+
+with open(scope, encoding="utf-8") as f:
+    for line in f:
+        line = line.strip()
+        if not line:
+            continue
+
+        pid = int(line)
+        if pid in {os.getpid(), os.getppid()}:
+            continue
+
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except PermissionError:
+            pass
+PY
+}
+
+lookup_nfs_container_id() {
+	docker ps -a --filter "name=e2e-nfs-server-1" --format "{{.ID}}" 2>/dev/null | head -1
+}
+
+graceful_stop_nfs_container() {
+	local cid
+	cid=$(lookup_nfs_container_id)
+	[[ -z "$cid" ]] && return 0
+
+	local status
+	status=$(docker inspect --format "{{.State.Status}}" "$cid" 2>/dev/null || echo "")
+	[[ "$status" != "running" ]] && return 0
+
+	echo -e "${YELLOW}Stopping NFS container cleanly...${NC}"
+	docker exec "$cid" /bin/sh -c '
+		exportfs -au 2>/dev/null || true
+		exportfs -f 2>/dev/null || true
+		rpc.nfsd 0 2>/dev/null || true
+		umount /proc/fs/nfsd 2>/dev/null || true
+		kill -TERM 1
+	' >/dev/null 2>&1 || true
+
+	local attempt
+	for attempt in $(seq 1 10); do
+		status=$(docker inspect --format "{{.State.Status}}" "$cid" 2>/dev/null || echo "")
+		[[ -z "$status" ]] && return 0
+		[[ "$status" != "running" ]] && return 0
+		sleep 1
+	done
+}
+
+# Fallback for previously wedged containers that did not shut down nfsd cleanly.
 force_remove_nfs_container() {
 	local cid
-	cid=$(docker ps -a --filter "name=e2e-nfs-server-1" --format "{{.ID}}" 2>/dev/null | head -1)
+	cid=$(lookup_nfs_container_id)
 	[[ -z "$cid" ]] && return 0
 
 	local status
@@ -79,24 +138,60 @@ force_remove_nfs_container() {
 	# making docker stop/rm impossible. Kill them directly on the host first.
 	kill_processes_by_exact_name nfsd
 	kill_processes_by_exact_name nfsd4
+	kill_container_scope_processes "$cid"
 
 	local attempt
-	for attempt in 1 2 3; do
-		docker kill --signal=SIGKILL "$cid" 2>/dev/null || true
+	local status
+	for attempt in $(seq 1 15); do
+		status=$(docker inspect --format "{{.State.Status}}" "$cid" 2>/dev/null || echo "")
+		[[ -z "$status" ]] && return 0
+
+		if [[ "$status" == "running" ]] || [[ "$status" == "restarting" ]]; then
+			docker kill --signal=SIGKILL "$cid" 2>/dev/null || true
+		fi
+
 		docker rm -f "$cid" 2>/dev/null || true
 
 		if ! docker inspect "$cid" >/dev/null 2>&1; then
 			return 0
 		fi
 
-		sleep "$attempt"
+		sleep 1
 	done
+}
+
+force_remove_compose_containers() {
+	local ids
+	ids=$(list_compose_container_ids)
+	[[ -z "$ids" ]] && return 0
+
+	echo -e "${YELLOW}Force-removing lingering Compose containers...${NC}"
+
+	local cid
+	local status
+	while IFS= read -r cid; do
+		[[ -n "$cid" ]] || continue
+		status=$(docker inspect --format "{{.State.Status}}" "$cid" 2>/dev/null || echo "")
+		[[ -z "$status" ]] && continue
+
+		if [[ "$status" == "running" ]] || [[ "$status" == "restarting" ]]; then
+			docker kill --signal=SIGKILL "$cid" 2>/dev/null || true
+		fi
+
+		docker rm -f "$cid" 2>/dev/null || true
+	done <<<"$ids"
 }
 
 list_compose_containers() {
 	docker ps -a \
 		--filter "label=com.docker.compose.project=e2e" \
 		--format "{{.Names}} {{.Status}}" 2>/dev/null || true
+}
+
+list_compose_container_ids() {
+	docker ps -a \
+		--filter "label=com.docker.compose.project=e2e" \
+		--format "{{.ID}}" 2>/dev/null || true
 }
 
 list_compose_networks() {
@@ -111,14 +206,65 @@ list_compose_volumes() {
 		--format "{{.Name}}" 2>/dev/null || true
 }
 
+purge_local_host_records() {
+	local postgres_container
+	postgres_container="$(
+		docker ps \
+			--filter "label=com.docker.compose.project=e2e" \
+			--filter "label=com.docker.compose.service=postgres" \
+			--format "{{.Names}}" 2>/dev/null | head -1
+	)"
+	[[ -z "$postgres_container" ]] && return 0
+
+	echo -e "${YELLOW}Clearing local host records from Postgres...${NC}"
+	docker exec "$postgres_container" psql -U qarax -d qarax -v ON_ERROR_STOP=1 -c "
+BEGIN;
+UPDATE vms SET host_id = NULL;
+DELETE FROM hosts;
+COMMIT;
+" >/dev/null
+}
+
+lookup_host_id_by_address() {
+	local api_url="$1"
+	local address="$2"
+
+	curl -fsS "${api_url}/hosts" | python3 -c "
+import json, sys
+address = sys.argv[1]
+for host in json.load(sys.stdin):
+    if host.get('address') == address:
+        print(host['id'])
+        break
+" "$address"
+}
+
+mark_host_down_by_address() {
+	local api_url="$1"
+	local address="$2"
+	local host_id
+
+	host_id="$(lookup_host_id_by_address "$api_url" "$address" || true)"
+	[[ -z "$host_id" ]] && return 0
+
+	curl -fsS -X PATCH "${api_url}/hosts/${host_id}" \
+		-H "Content-Type: application/json" \
+		-d '{"status":"down"}' >/dev/null
+	echo -e "${YELLOW}Marked stale host ${address} DOWN (id: ${host_id}).${NC}"
+}
+
 cleanup_stack() {
 	local down_failed=0
+
+	purge_local_host_records
+	graceful_stop_nfs_container
 
 	if ! docker compose down -v; then
 		down_failed=1
 	fi
 
 	force_remove_nfs_container
+	force_remove_compose_containers
 
 	local remaining
 	remaining=$(list_compose_containers)
@@ -269,31 +415,29 @@ if [[ ! -e /dev/net/tun ]]; then
 	echo ""
 fi
 
-# Build qarax-node binary for the node container (same as E2E)
-# Use cross on macOS (system linker doesn't support musl cross-compile); cargo on Linux
+# Build the release binaries that local Docker/VM flows package and run.
+# We invoke the build step on every run so startup always uses fresh artifacts;
+# Cargo/Cross will be a fast no-op when nothing changed.
+# Use cross on macOS (system linker doesn't support musl cross-compile); cargo on Linux.
 MUSL_TARGET="x86_64-unknown-linux-musl"
 NODE_BINARY="${REPO_ROOT}/target/${MUSL_TARGET}/release/qarax-node"
 QARAX_BINARY="${REPO_ROOT}/target/${MUSL_TARGET}/release/qarax-server"
 INIT_BINARY="${REPO_ROOT}/target/${MUSL_TARGET}/release/qarax-init"
 if [[ -z "${SKIP_BUILD}" ]]; then
-	if [[ -n "${REBUILD}" ]] || [[ ! -f "${NODE_BINARY}" ]] || [[ ! -f "${QARAX_BINARY}" ]] || [[ ! -f "${INIT_BINARY}" ]]; then
-		echo -e "${YELLOW}Building qarax, qarax-node, and qarax-init (release, musl)...${NC}"
-		if [[ "$(uname -s)" == "Darwin" ]]; then
-			if ! command -v cross &>/dev/null; then
-				echo -e "${RED}Cross-compilation from macOS requires 'cross'. Install with: cargo install cross${NC}"
-				exit 1
-			fi
-			cross build --target "${MUSL_TARGET}" --release -p qarax -p qarax-node -p qarax-init
-		else
-			# If running under sudo, build as the original user so target/ stays user-owned.
-			if [[ -n "${SUDO_USER:-}" ]]; then
-				sudo -u "$SUDO_USER" cargo build --release -p qarax -p qarax-node -p qarax-init
-			else
-				cargo build --release -p qarax -p qarax-node -p qarax-init
-			fi
+	echo -e "${YELLOW}Building qarax, qarax-node, and qarax-init (release, musl)...${NC}"
+	if [[ "$(uname -s)" == "Darwin" ]]; then
+		if ! command -v cross &>/dev/null; then
+			echo -e "${RED}Cross-compilation from macOS requires 'cross'. Install with: cargo install cross${NC}"
+			exit 1
 		fi
+		cross build --target "${MUSL_TARGET}" --release -p qarax -p qarax-node -p qarax-init
 	else
-		echo -e "${GREEN}Using existing binaries${NC}"
+		# If running under sudo, build as the original user so target/ stays user-owned.
+		if [[ -n "${SUDO_USER:-}" ]]; then
+			sudo -u "$SUDO_USER" cargo build --release -p qarax -p qarax-node -p qarax-init
+		else
+			cargo build --release -p qarax -p qarax-node -p qarax-init
+		fi
 	fi
 else
 	if [[ ! -f "${NODE_BINARY}" ]] || [[ ! -f "${QARAX_BINARY}" ]] || [[ ! -f "${INIT_BINARY}" ]]; then
@@ -451,8 +595,10 @@ fi
 if [[ $VM_MODE -eq 1 ]]; then
 	echo ""
 	echo -e "${YELLOW}Launching libvirt VM as qarax-node host...${NC}"
-	API_URL="${API_URL:-http://localhost:8000}" \
+	LOCAL_API_URL="${API_URL:-http://localhost:8000}"
+	API_URL="${LOCAL_API_URL}" \
 		bash "${REPO_ROOT}/hack/test-host-deploy-libvirt.sh" --keep-vm
+	mark_host_down_by_address "${LOCAL_API_URL}" "qarax-node"
 
 	echo ""
 	echo -e "${YELLOW}Creating overlaybd storage pool...${NC}"

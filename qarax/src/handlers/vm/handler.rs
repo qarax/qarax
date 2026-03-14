@@ -701,10 +701,21 @@ pub async fn stop(
 ) -> Result<ApiResponse<()>> {
     let host = host_for_vm(&env, vm_id).await?;
     let node_client = NodeClient::new(&host.address, host.port as u16);
-    node_client.stop_vm(vm_id).await.map_err(|e| {
-        tracing::error!("Failed to stop VM on qarax-node: {}", e);
-        crate::errors::Error::InternalServerError
-    })?;
+    match node_client.stop_vm(vm_id).await {
+        Ok(()) => {}
+        Err(e)
+            if e.downcast_ref::<crate::errors::Error>()
+                .map(|e| matches!(e, crate::errors::Error::NotFound))
+                .unwrap_or(false) =>
+        {
+            // VM process already gone on the node — treat as already stopped
+            tracing::warn!(vm_id = %vm_id, "VM not found on node during stop, treating as already stopped");
+        }
+        Err(e) => {
+            tracing::error!("Failed to stop VM on qarax-node: {}", e);
+            return Err(crate::errors::Error::InternalServerError);
+        }
+    }
 
     vms::update_status(env.pool(), vm_id, VmStatus::Shutdown).await?;
 
@@ -1595,6 +1606,16 @@ pub async fn attach_disk(
     }
 
     let existing = vm_disks::list_by_vm(env.pool(), vm_id).await?;
+    if existing
+        .iter()
+        .any(|d| d.storage_object_id == Some(req.storage_object_id))
+    {
+        return Err(crate::errors::Error::Conflict(format!(
+            "Storage object {} is already attached to this VM",
+            req.storage_object_id
+        )));
+    }
+
     let logical_name = match req.logical_name.clone() {
         Some(name) => name,
         None => next_disk_id(&existing),

@@ -187,6 +187,49 @@ impl VmManager {
         self.runtime_dir.join(format!("{}.json", vm_id))
     }
 
+    async fn load_persisted_vm_config(
+        &self,
+        vm_id: &str,
+    ) -> Result<Option<ProtoVmConfig>, VmManagerError> {
+        let config_path = self.config_path(vm_id);
+        if !config_path.exists() {
+            return Ok(None);
+        }
+
+        let config_bytes = tokio::fs::read(&config_path)
+            .await
+            .map_err(VmManagerError::SpawnError)?;
+
+        let config = ProtoVmConfig::decode(config_bytes.as_slice()).map_err(|e| {
+            VmManagerError::InvalidConfig(format!(
+                "Failed to decode persisted config for VM {}: {}",
+                vm_id, e
+            ))
+        })?;
+
+        Ok(Some(config))
+    }
+
+    async fn ensure_vm_registered(&self, vm_id: &str) -> Result<(), VmManagerError> {
+        {
+            let vms = self.vms.lock().await;
+            if vms.contains_key(vm_id) {
+                return Ok(());
+            }
+        }
+
+        let Some(config) = self.load_persisted_vm_config(vm_id).await? else {
+            return Err(VmManagerError::VmNotFound(vm_id.to_string()));
+        };
+
+        info!(
+            "VM {} missing from manager state; recreating from persisted config",
+            vm_id
+        );
+        self.create_vm(config).await?;
+        Ok(())
+    }
+
     /// Scan for surviving Cloud Hypervisor processes and reconnect to them.
     /// Called on startup to recover VMs that survived a qarax-node restart.
     pub async fn recover_vms(&self) {
@@ -721,6 +764,8 @@ impl VmManager {
     pub async fn start_vm(&self, vm_id: &str) -> Result<(), VmManagerError> {
         info!("Starting VM: {}", vm_id);
 
+        self.ensure_vm_registered(vm_id).await?;
+
         let (socket_path, proto_config) = {
             let mut vms = self.vms.lock().await;
             let instance = vms
@@ -763,13 +808,35 @@ impl VmManager {
     pub async fn stop_vm(&self, vm_id: &str) -> Result<(), VmManagerError> {
         info!("Stopping VM: {}", vm_id);
 
-        let mut vms = self.vms.lock().await;
-        let instance = vms
-            .get_mut(vm_id)
-            .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
+        let socket_path = {
+            let vms = self.vms.lock().await;
+            let instance = vms
+                .get(vm_id)
+                .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
+            instance.socket_path.clone()
+        };
 
-        instance.vm.shutdown().await?;
-        instance.status = VmStatus::Shutdown;
+        // Best-effort: if CH is already gone (socket missing, connection refused),
+        // log a warning and continue — the VM is effectively stopped.
+        match self
+            .send_api_request(&socket_path, "PUT", "/api/v1/vm.shutdown", None)
+            .await
+        {
+            Ok(_) => {}
+            Err(e) => {
+                warn!(
+                    "VM {} CH shutdown request failed (treating as already stopped): {}",
+                    vm_id, e
+                );
+            }
+        }
+
+        {
+            let mut vms = self.vms.lock().await;
+            if let Some(instance) = vms.get_mut(vm_id) {
+                instance.status = VmStatus::Shutdown;
+            }
+        }
 
         info!("VM {} stopped successfully", vm_id);
         Ok(())
@@ -855,6 +922,27 @@ impl VmManager {
     pub async fn restore_vm(&self, vm_id: &str, source_url: &str) -> Result<(), VmManagerError> {
         info!("Restoring VM {} from {}", vm_id, source_url);
 
+        let config_path = self.config_path(vm_id);
+        let proto_config = match tokio::fs::read(&config_path).await {
+            Ok(config_bytes) => ProtoVmConfig::decode(config_bytes.as_slice()).map_err(|e| {
+                VmManagerError::InvalidConfig(format!(
+                    "Failed to decode persisted config for restored VM {}: {}",
+                    vm_id, e
+                ))
+            })?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => ProtoVmConfig {
+                vm_id: vm_id.to_string(),
+                serial: Some(ProtoConsoleConfig {
+                    mode: ProtoConsoleMode::Pty as i32,
+                    file: None,
+                    socket: None,
+                    iommu: None,
+                }),
+                ..Default::default()
+            },
+            Err(e) => return Err(VmManagerError::SpawnError(e)),
+        };
+
         // Clean up any existing CH process for this vm_id.
         {
             let mut vms = self.vms.lock().await;
@@ -911,6 +999,7 @@ impl VmManager {
         }
 
         // Call vm.restore — Cloud Hypervisor reads all config from the snapshot.
+        // After vm.restore, CH leaves the VM in paused state; vm.resume is required.
         let body = format!(r#"{{"source_url":"{}","prefault":false}}"#, source_url);
         if let Err(e) = self
             .send_api_request(&socket_path, "PUT", "/api/v1/vm.restore", Some(&body))
@@ -921,7 +1010,18 @@ impl VmManager {
             return Err(e);
         }
 
-        // Register the restored instance with a minimal proto config.
+        if let Err(e) = self
+            .send_api_request(&socket_path, "PUT", "/api/v1/vm.resume", None)
+            .await
+        {
+            let _ = tokio::fs::remove_file(&socket_path).await;
+            return Err(e);
+        }
+
+        let (serial_pty, console_pty) = self.query_pty_paths(&socket_path, &proto_config).await;
+
+        // Register the restored instance with the persisted proto config so
+        // console/PTY metadata remains available after snapshot restore.
         let vm_uuid = Uuid::parse_str(vm_id)
             .map_err(|e| VmManagerError::InvalidConfig(format!("Invalid VM ID: {}", e)))?;
 
@@ -939,18 +1039,15 @@ impl VmManager {
             .map_err(VmManagerError::SdkError)?;
 
         let instance = VmInstance {
-            proto_config: ProtoVmConfig {
-                vm_id: vm_id.to_string(),
-                ..Default::default()
-            },
+            proto_config,
             process: Some(process),
             vm,
             socket_path: socket_path.clone(),
             status: VmStatus::Running,
             tap_devices: vec![],
             passt_processes: vec![],
-            serial_pty_path: None,
-            console_pty_path: None,
+            serial_pty_path: serial_pty,
+            console_pty_path: console_pty,
             has_overlaybd: false,
         };
 
@@ -1671,57 +1768,21 @@ impl VmManager {
     /// VMs), queries Cloud Hypervisor's vm.info API to obtain it on demand and
     /// caches the result in the instance for subsequent calls.
     pub async fn get_serial_pty_path(&self, vm_id: &str) -> Result<Option<String>, VmManagerError> {
-        // Fast path: return cached value if available
-        {
+        // Fast path: return cached value if available.
+        let (socket_path, proto_config) = {
             let vms = self.vms.lock().await;
             let instance = vms
                 .get(vm_id)
                 .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
-
-            // Serial not in PTY mode — nothing to do
-            if !instance
-                .proto_config
-                .serial
-                .as_ref()
-                .map(|s| s.mode == 1)
-                .unwrap_or(false)
-            {
-                return Ok(None);
-            }
 
             if let Some(path) = &instance.serial_pty_path {
                 return Ok(Some(path.clone()));
             }
 
-            // Cache miss: need to query the API.  Drop the lock before doing async I/O.
-        }
-
-        // Query CH API for the PTY path
-        let socket_path = {
-            let vms = self.vms.lock().await;
-            let instance = vms
-                .get(vm_id)
-                .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
-            instance.socket_path.clone()
+            (instance.socket_path.clone(), instance.proto_config.clone())
         };
 
-        let pty_path = match self
-            .send_api_request(&socket_path, "GET", "/api/v1/vm.info", None)
-            .await
-        {
-            Ok(body) => serde_json::from_str::<serde_json::Value>(&body)
-                .ok()
-                .and_then(|info| {
-                    info["config"]["serial"]["file"]
-                        .as_str()
-                        .filter(|s| !s.is_empty())
-                        .map(|s| s.to_string())
-                }),
-            Err(e) => {
-                debug!("Failed to query vm.info for serial PTY path: {}", e);
-                None
-            }
-        };
+        let (pty_path, _) = self.query_pty_paths(&socket_path, &proto_config).await;
 
         // Cache the result so subsequent calls don't re-query the API
         if let Some(path) = &pty_path {
@@ -1729,6 +1790,20 @@ impl VmManager {
             let mut vms = self.vms.lock().await;
             if let Some(instance) = vms.get_mut(vm_id) {
                 instance.serial_pty_path = Some(path.clone());
+                if !instance
+                    .proto_config
+                    .serial
+                    .as_ref()
+                    .map(|serial| serial.mode == ProtoConsoleMode::Pty as i32)
+                    .unwrap_or(false)
+                {
+                    instance.proto_config.serial = Some(ProtoConsoleConfig {
+                        mode: ProtoConsoleMode::Pty as i32,
+                        file: None,
+                        socket: None,
+                        iommu: None,
+                    });
+                }
             }
         }
 

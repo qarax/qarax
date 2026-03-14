@@ -1,8 +1,13 @@
-# Compose overlay for VM mode: removes the qarax-node container service.
+# Compose overlay for VM mode: removes the qarax-node container service and
+# switches qarax to host networking so it can reach the libvirt VM (192.168.122.0/24).
 # Used by run-local.sh --vm so that qarax-node runs in a libvirt VM instead.
 # Usage: docker compose -f docker-compose.yml -f docker-compose.vm-mode.yml up -d ...
 services:
   qarax:
+    network_mode: host
+    environment:
+      # With host networking, postgres is reachable via localhost
+      DATABASE_HOST: 127.0.0.1
     depends_on:
       postgres:
         condition: service_healthy

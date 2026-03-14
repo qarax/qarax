@@ -12,6 +12,9 @@ Restart=always
 RestartSec=5
 TimeoutStartSec=0
 TimeoutStopSec=30
+KillMode=process
+Delegate=yes
+TasksMax=infinity
 
 # Working directory for qarax-node
 WorkingDirectory=/var/lib/qarax
