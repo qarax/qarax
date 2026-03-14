@@ -19,13 +19,17 @@ use crate::configuration::VmDefaultsSettings;
 pub struct App {
     pool: Arc<PgPool>,
     vm_defaults: VmDefaultsSettings,
+    snapshot_dir: String,
 }
 
 impl App {
     pub fn new(pool: PgPool, vm_defaults: VmDefaultsSettings) -> Self {
+        let snapshot_dir = std::env::var("SNAPSHOT_DIR")
+            .unwrap_or_else(|_| "/var/lib/qarax/snapshots".to_string());
         Self {
             pool: Arc::new(pool),
             vm_defaults,
+            snapshot_dir,
         }
     }
 
@@ -39,5 +43,9 @@ impl App {
 
     pub fn vm_defaults(&self) -> &VmDefaultsSettings {
         &self.vm_defaults
+    }
+
+    pub fn snapshot_dir(&self) -> &str {
+        &self.snapshot_dir
     }
 }

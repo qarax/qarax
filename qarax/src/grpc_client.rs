@@ -20,7 +20,7 @@ use node::{
     ConsoleLogResponse, CopyFileRequest, CpusConfig, DetachNetworkRequest,
     DetachStoragePoolRequest, DiskConfig, DownloadFileRequest, FsConfig, ImportOverlayBdRequest,
     ImportOverlayBdResponse, MemoryConfig, NetConfig, NodeInfo, OciImageRequest, OciImageResponse,
-    PayloadConfig, StoragePoolKind, VmConfig, VmCounters, VmId, VmState,
+    PayloadConfig, SnapshotVmRequest, StoragePoolKind, VmConfig, VmCounters, VmId, VmState,
     file_transfer_service_client::FileTransferServiceClient, vm_service_client::VmServiceClient,
 };
 
@@ -330,6 +330,22 @@ impl NodeClient {
             .context("Failed to resume VM on qarax-node")?;
 
         debug!("VM {} resumed successfully", vm_id);
+        Ok(())
+    }
+
+    /// Snapshot a VM on the qarax-node
+    #[instrument(skip(self))]
+    pub async fn snapshot_vm(&self, vm_id: Uuid, snapshot_url: &str) -> Result<()> {
+        let mut client = VmServiceClient::connect(self.address.clone())
+            .await
+            .context("Failed to connect to qarax-node")?;
+        client
+            .snapshot_vm(SnapshotVmRequest {
+                vm_id: vm_id.to_string(),
+                snapshot_url: snapshot_url.to_string(),
+            })
+            .await
+            .context("Failed to snapshot VM on qarax-node")?;
         Ok(())
     }
 

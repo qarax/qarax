@@ -19,7 +19,9 @@ use crate::{
         boot_sources, hosts,
         hosts::Host,
         jobs::{self, JobType, NewJob},
-        network_interfaces, networks, storage_objects, storage_pools,
+        network_interfaces, networks, snapshots,
+        snapshots::{NewSnapshot, Snapshot, SnapshotStatus},
+        storage_objects, storage_pools,
         storage_pools::OverlayBdPoolConfig,
         vm_disks::{self, NewVmDisk},
         vm_filesystems::{self, NewVmFilesystem},
@@ -775,6 +777,110 @@ pub async fn resume(
     Ok(ApiResponse {
         data: (),
         code: StatusCode::OK,
+    })
+}
+
+#[utoipa::path(
+    get,
+    path = "/vms/{vm_id}/snapshots",
+    params(
+        ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier")
+    ),
+    responses(
+        (status = 200, description = "List snapshots for a VM", body = Vec<Snapshot>),
+        (status = 404, description = "VM not found"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "vms"
+)]
+#[instrument(skip(env))]
+pub async fn list_snapshots(
+    Extension(env): Extension<App>,
+    Path(vm_id): Path<Uuid>,
+) -> Result<ApiResponse<Vec<Snapshot>>> {
+    // Verify VM exists
+    vms::get(env.pool(), vm_id).await?;
+
+    let list = snapshots::list_for_vm(env.pool(), vm_id)
+        .await
+        .map_err(crate::errors::Error::Sqlx)?;
+
+    Ok(ApiResponse {
+        data: list,
+        code: StatusCode::OK,
+    })
+}
+
+#[utoipa::path(
+    post,
+    path = "/vms/{vm_id}/snapshots",
+    params(
+        ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier")
+    ),
+    responses(
+        (status = 201, description = "Snapshot created", body = Snapshot),
+        (status = 404, description = "VM not found"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "vms"
+)]
+#[instrument(skip(env))]
+pub async fn create_snapshot(
+    Extension(env): Extension<App>,
+    Path(vm_id): Path<Uuid>,
+) -> Result<ApiResponse<Snapshot>> {
+    let host = host_for_vm(&env, vm_id).await?;
+
+    let snapshot_id = Uuid::new_v4();
+    let snapshot_url = format!("file://{}/{}/{}", env.snapshot_dir(), vm_id, snapshot_id);
+
+    let id = snapshots::create(
+        env.pool(),
+        &NewSnapshot {
+            vm_id,
+            snapshot_url: snapshot_url.clone(),
+        },
+    )
+    .await
+    .map_err(crate::errors::Error::Sqlx)?;
+
+    let node_client = NodeClient::new(&host.address, host.port as u16);
+
+    // Pause the VM before snapshotting
+    if let Err(e) = node_client.pause_vm(vm_id).await {
+        error!("Failed to pause VM before snapshot: {}", e);
+        let _ = snapshots::update_status(env.pool(), id, SnapshotStatus::Failed).await;
+        return Err(crate::errors::Error::InternalServerError);
+    }
+
+    // Take the snapshot
+    let snap_result = node_client.snapshot_vm(vm_id, &snapshot_url).await;
+
+    // Always attempt to resume
+    if let Err(e) = node_client.resume_vm(vm_id).await {
+        error!("Failed to resume VM after snapshot: {}", e);
+    }
+
+    match snap_result {
+        Ok(()) => {
+            snapshots::update_status(env.pool(), id, SnapshotStatus::Ready)
+                .await
+                .map_err(crate::errors::Error::Sqlx)?;
+        }
+        Err(e) => {
+            error!("Failed to snapshot VM: {}", e);
+            let _ = snapshots::update_status(env.pool(), id, SnapshotStatus::Failed).await;
+            return Err(crate::errors::Error::InternalServerError);
+        }
+    }
+
+    let snapshot = snapshots::get(env.pool(), id)
+        .await
+        .map_err(crate::errors::Error::Sqlx)?;
+
+    Ok(ApiResponse {
+        data: snapshot,
+        code: StatusCode::CREATED,
     })
 }
 

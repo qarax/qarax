@@ -954,6 +954,55 @@ paths:
           description: VM not found
         '500':
           description: Internal server error
+  /vms/{vm_id}/snapshots:
+    get:
+      tags:
+      - vms
+      operationId: list_snapshots
+      parameters:
+      - name: vm_id
+        in: path
+        description: VM unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: List snapshots for a VM
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Snapshot'
+        '404':
+          description: VM not found
+        '500':
+          description: Internal server error
+    post:
+      tags:
+      - vms
+      operationId: create_snapshot
+      parameters:
+      - name: vm_id
+        in: path
+        description: VM unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '201':
+          description: Snapshot created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Snapshot'
+        '404':
+          description: VM not found
+        '500':
+          description: Internal server error
   /vms/{vm_id}/start:
     post:
       tags:
@@ -1803,6 +1852,34 @@ components:
           oneOf:
           - type: 'null'
           - $ref: '#/components/schemas/TokenBucket'
+    Snapshot:
+      type: object
+      required:
+      - id
+      - vm_id
+      - status
+      - snapshot_url
+      - created_at
+      properties:
+        created_at:
+          type: string
+          format: date-time
+        id:
+          type: string
+          format: uuid
+        snapshot_url:
+          type: string
+        status:
+          $ref: '#/components/schemas/SnapshotStatus'
+        vm_id:
+          type: string
+          format: uuid
+    SnapshotStatus:
+      type: string
+      enum:
+      - creating
+      - ready
+      - failed
     StorageObject:
       type: object
       required:

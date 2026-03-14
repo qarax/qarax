@@ -821,6 +821,32 @@ impl VmManager {
         Ok(())
     }
 
+    /// Snapshot a VM
+    pub async fn snapshot_vm(&self, vm_id: &str, snapshot_url: &str) -> Result<(), VmManagerError> {
+        info!("Snapshotting VM: {}", vm_id);
+        let vms = self.vms.lock().await;
+        let instance = vms
+            .get(vm_id)
+            .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
+        let socket_path = instance.socket_path.clone();
+        drop(vms);
+
+        // Cloud Hypervisor requires the destination to be an existing directory.
+        let dest_path = snapshot_url.strip_prefix("file://").unwrap_or(snapshot_url);
+        tokio::fs::create_dir_all(dest_path).await.map_err(|e| {
+            VmManagerError::ProcessError(format!(
+                "Failed to create snapshot directory {}: {}",
+                dest_path, e
+            ))
+        })?;
+
+        let body = format!(r#"{{"destination_url":"{}"}}"#, snapshot_url);
+        self.send_api_request(&socket_path, "PUT", "/api/v1/vm.snapshot", Some(&body))
+            .await?;
+        info!("VM {} snapshotted successfully to {}", vm_id, snapshot_url);
+        Ok(())
+    }
+
     /// Delete a VM
     pub async fn delete_vm(&self, vm_id: &str) -> Result<(), VmManagerError> {
         info!("Deleting VM: {}", vm_id);

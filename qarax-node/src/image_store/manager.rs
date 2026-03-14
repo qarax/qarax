@@ -269,8 +269,6 @@ impl ImageStoreManager {
         info!("OverlayFS mounted at {}", merged_dir.display());
 
         // Inject the qarax-init binary and its config into the overlay upper dir.
-        // This replaces the shell-script approach: the static binary works even
-        // in scratch/distroless images and correctly sets ENV from the OCI config.
         if let Some(parent) = rootfs_dir.parent() {
             let config_file = parent.join("config.json");
             if config_file.exists()
