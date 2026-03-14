@@ -934,6 +934,38 @@ paths:
           description: VM not found
         '500':
           description: Internal server error
+  /vms/{vm_id}/restore:
+    post:
+      tags:
+      - vms
+      operationId: restore
+      parameters:
+      - name: vm_id
+        in: path
+        description: VM unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RestoreRequest'
+        required: true
+      responses:
+        '200':
+          description: VM restored from snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Vm'
+        '404':
+          description: VM or snapshot not found
+        '422':
+          description: VM not in a restoreable state or snapshot not ready
+        '500':
+          description: Internal server error
   /vms/{vm_id}/resume:
     post:
       tags:
@@ -1852,6 +1884,14 @@ components:
           oneOf:
           - type: 'null'
           - $ref: '#/components/schemas/TokenBucket'
+    RestoreRequest:
+      type: object
+      required:
+      - snapshot_id
+      properties:
+        snapshot_id:
+          type: string
+          format: uuid
     Snapshot:
       type: object
       required:

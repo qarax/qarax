@@ -29,6 +29,7 @@ from .new_vm import NewVm
 from .new_vm_filesystem import NewVmFilesystem
 from .new_vm_network import NewVmNetwork
 from .rate_limiter_config import RateLimiterConfig
+from .restore_request import RestoreRequest
 from .snapshot import Snapshot
 from .snapshot_status import SnapshotStatus
 from .storage_object import StorageObject
@@ -81,6 +82,7 @@ __all__ = (
     "NewVmFilesystem",
     "NewVmNetwork",
     "RateLimiterConfig",
+    "RestoreRequest",
     "Snapshot",
     "SnapshotStatus",
     "StorageObject",

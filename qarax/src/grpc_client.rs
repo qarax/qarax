@@ -20,8 +20,9 @@ use node::{
     ConsoleLogResponse, CopyFileRequest, CpusConfig, DetachNetworkRequest,
     DetachStoragePoolRequest, DiskConfig, DownloadFileRequest, FsConfig, ImportOverlayBdRequest,
     ImportOverlayBdResponse, MemoryConfig, NetConfig, NodeInfo, OciImageRequest, OciImageResponse,
-    PayloadConfig, SnapshotVmRequest, StoragePoolKind, VmConfig, VmCounters, VmId, VmState,
-    file_transfer_service_client::FileTransferServiceClient, vm_service_client::VmServiceClient,
+    PayloadConfig, RestoreVmRequest, SnapshotVmRequest, StoragePoolKind, VmConfig, VmCounters,
+    VmId, VmState, file_transfer_service_client::FileTransferServiceClient,
+    vm_service_client::VmServiceClient,
 };
 
 /// Client for communicating with qarax-node via gRPC
@@ -346,6 +347,22 @@ impl NodeClient {
             })
             .await
             .context("Failed to snapshot VM on qarax-node")?;
+        Ok(())
+    }
+
+    /// Restore a VM on the qarax-node from a snapshot
+    #[instrument(skip(self))]
+    pub async fn restore_vm(&self, vm_id: Uuid, source_url: &str) -> Result<()> {
+        let mut client = VmServiceClient::connect(self.address.clone())
+            .await
+            .context("Failed to connect to qarax-node")?;
+        client
+            .restore_vm(RestoreVmRequest {
+                vm_id: vm_id.to_string(),
+                source_url: source_url.to_string(),
+            })
+            .await
+            .context("Failed to restore VM on qarax-node")?;
         Ok(())
     }
 

@@ -16,14 +16,26 @@ import pytest
 from qarax_api_client import Client
 from qarax_api_client.api.vms import (
     create as create_vm,
+)
+from qarax_api_client.api.vms import (
     create_snapshot,
-    delete as delete_vm,
-    get as get_vm,
     list_snapshots,
+    restore,
+)
+from qarax_api_client.api.vms import (
+    delete as delete_vm,
+)
+from qarax_api_client.api.vms import (
+    get as get_vm,
+)
+from qarax_api_client.api.vms import (
     start as start_vm,
+)
+from qarax_api_client.api.vms import (
     stop as stop_vm,
 )
 from qarax_api_client.models import Hypervisor, NewVm, VmStatus
+from qarax_api_client.models.restore_request import RestoreRequest
 from qarax_api_client.models.snapshot_status import SnapshotStatus
 
 QARAX_URL = os.getenv("QARAX_URL", "http://localhost:8000")
@@ -35,15 +47,21 @@ def client():
     return Client(base_url=QARAX_URL)
 
 
-async def wait_for_status(client, vm_id: str, expected_status: VmStatus, timeout: int = VM_OPERATION_TIMEOUT):
+async def wait_for_status(
+    client,
+    vm_id: uuid.UUID,
+    expected_status: VmStatus,
+    timeout: int = VM_OPERATION_TIMEOUT,
+):
     import asyncio
+
     start = time.time()
     while time.time() - start < timeout:
-        vm = await get_vm.asyncio(client=client, vm_id=uuid.UUID(vm_id))
+        vm = await get_vm.asyncio(client=client, vm_id=vm_id)
         if vm.status == expected_status:
             return vm
         await asyncio.sleep(0.5)
-    vm = await get_vm.asyncio(client=client, vm_id=uuid.UUID(vm_id))
+    vm = await get_vm.asyncio(client=client, vm_id=vm_id)
     raise TimeoutError(
         f"VM {vm_id} did not reach {expected_status} within {timeout}s. Current: {vm.status}"
     )
@@ -108,7 +126,7 @@ async def test_snapshot_full_lifecycle(client):
         try:
             # Start the VM and wait for RUNNING
             await start_vm.asyncio_detailed(client=c, vm_id=vm_id)
-            await wait_for_status(c, str(vm_id), VmStatus.RUNNING)
+            await wait_for_status(c, vm_id, VmStatus.RUNNING)
 
             # Create a snapshot
             snapshot = await create_snapshot.asyncio(client=c, vm_id=vm_id)
@@ -131,6 +149,53 @@ async def test_snapshot_full_lifecycle(client):
             )
 
             # Stop the VM
+            await stop_vm.asyncio_detailed(client=c, vm_id=vm_id)
+
+        finally:
+            await delete_vm.asyncio_detailed(client=c, vm_id=vm_id)
+
+
+@pytest.mark.asyncio
+async def test_snapshot_restore(client):
+    """
+    Restore a VM from a snapshot:
+    create VM → start → snapshot → stop → restore → verify RUNNING → stop → delete.
+    """
+    async with client as c:
+        new_vm = NewVm(
+            name="e2e-snap-restore",
+            hypervisor=Hypervisor.CLOUD_HV,
+            boot_vcpus=1,
+            max_vcpus=1,
+            memory_size=256 * 1024 * 1024,
+        )
+        result = await create_vm.asyncio(client=c, body=new_vm)
+        vm_id = uuid.UUID(str(result).strip('"'))
+
+        try:
+            # Start the VM and wait for RUNNING
+            await start_vm.asyncio_detailed(client=c, vm_id=vm_id)
+            await wait_for_status(c, vm_id, VmStatus.RUNNING)
+
+            # Create a snapshot
+            snapshot = await create_snapshot.asyncio(client=c, vm_id=vm_id)
+            assert snapshot is not None, "Expected snapshot object, got None"
+            assert snapshot.status == SnapshotStatus.READY
+
+            # Stop the VM
+            await stop_vm.asyncio_detailed(client=c, vm_id=vm_id)
+            await wait_for_status(c, vm_id, VmStatus.SHUTDOWN)
+
+            # Restore from snapshot
+            restored_vm = await restore.asyncio(
+                client=c, vm_id=vm_id, body=RestoreRequest(snapshot_id=snapshot.id)
+            )
+            assert restored_vm is not None, "Expected VM object from restore, got None"
+            assert restored_vm.status == VmStatus.RUNNING, (
+                f"Expected RUNNING after restore, got: {restored_vm.status}"
+            )
+
+            # Stop before cleanup
             await stop_vm.asyncio_detailed(client=c, vm_id=vm_id)
 
         finally:

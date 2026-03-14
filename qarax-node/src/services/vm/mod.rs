@@ -13,8 +13,8 @@ use crate::rpc::node::{
     ConsoleLogResponse, ConsoleOutput, ConsolePtyPathResponse, DetachNetworkRequest,
     DetachNetworkResponse, DetachStoragePoolRequest, DeviceCounters, ImportOverlayBdRequest,
     ImportOverlayBdResponse, NodeInfo, OciImageRequest, OciImageResponse, RemoveDeviceRequest,
-    SnapshotVmRequest, StoragePoolKind, VmConfig, VmCounters, VmId, VmList, VmState,
-    vm_service_server::VmService,
+    RestoreVmRequest, SnapshotVmRequest, StoragePoolKind, VmConfig, VmCounters, VmId, VmList,
+    VmState, vm_service_server::VmService,
 };
 
 /// Implementation of VmService using Cloud Hypervisor
@@ -147,6 +147,21 @@ impl VmService for VmServiceImpl {
             }
             Err(e) => {
                 error!("Failed to snapshot VM {}: {}", req.vm_id, e);
+                Err(map_manager_error(e))
+            }
+        }
+    }
+
+    async fn restore_vm(&self, request: Request<RestoreVmRequest>) -> Result<Response<()>, Status> {
+        let req = request.into_inner();
+        info!("Restoring VM: {}", req.vm_id);
+        match self.manager.restore_vm(&req.vm_id, &req.source_url).await {
+            Ok(()) => {
+                info!("VM {} restored successfully", req.vm_id);
+                Ok(Response::new(()))
+            }
+            Err(e) => {
+                error!("Failed to restore VM {}: {}", req.vm_id, e);
                 Err(map_manager_error(e))
             }
         }

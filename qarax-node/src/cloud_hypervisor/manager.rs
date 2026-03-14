@@ -847,6 +847,122 @@ impl VmManager {
         Ok(())
     }
 
+    /// Restore a VM from a snapshot.
+    ///
+    /// Spawns a fresh Cloud Hypervisor process for the given vm_id, then calls
+    /// `PUT /api/v1/vm.restore` (without a preceding `vm.create`). Cloud Hypervisor
+    /// reads all VM config from the snapshot, so no VmConfig is needed here.
+    pub async fn restore_vm(&self, vm_id: &str, source_url: &str) -> Result<(), VmManagerError> {
+        info!("Restoring VM {} from {}", vm_id, source_url);
+
+        // Clean up any existing CH process for this vm_id.
+        {
+            let mut vms = self.vms.lock().await;
+            if let Some(mut instance) = vms.remove(vm_id) {
+                if let Some(mut process) = instance.process.take() {
+                    let _ = process.kill().await;
+                }
+                if instance.socket_path.exists() {
+                    let _ = tokio::fs::remove_file(&instance.socket_path).await;
+                }
+            }
+        }
+
+        // Ensure runtime directory exists.
+        tokio::fs::create_dir_all(&self.runtime_dir)
+            .await
+            .map_err(VmManagerError::SpawnError)?;
+
+        let socket_path = self.socket_path(vm_id);
+        let log_path = self.log_path(vm_id);
+
+        if socket_path.exists() {
+            let _ = tokio::fs::remove_file(&socket_path).await;
+        }
+
+        let log_file = std::fs::File::create(&log_path).map_err(VmManagerError::SpawnError)?;
+
+        let process = Command::new(&self.ch_binary)
+            .arg("--api-socket")
+            .arg(&socket_path)
+            .stdout(log_file.try_clone().map_err(VmManagerError::SpawnError)?)
+            .stderr(log_file)
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(VmManagerError::SpawnError)?;
+
+        info!(
+            "Cloud Hypervisor process for restore started with PID: {:?}",
+            process.id()
+        );
+
+        // Wait for socket to be ready.
+        let max_retries = 50;
+        let mut retries = 0;
+        loop {
+            match UnixStream::connect(&socket_path).await {
+                Ok(_) => break,
+                Err(_) if retries < max_retries => {
+                    retries += 1;
+                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                }
+                Err(e) => return Err(VmManagerError::SpawnError(e)),
+            }
+        }
+
+        // Call vm.restore — Cloud Hypervisor reads all config from the snapshot.
+        let body = format!(r#"{{"source_url":"{}","prefault":false}}"#, source_url);
+        if let Err(e) = self
+            .send_api_request(&socket_path, "PUT", "/api/v1/vm.restore", Some(&body))
+            .await
+        {
+            // Kill the CH process if restore fails.
+            let _ = tokio::fs::remove_file(&socket_path).await;
+            return Err(e);
+        }
+
+        // Register the restored instance with a minimal proto config.
+        let vm_uuid = Uuid::parse_str(vm_id)
+            .map_err(|e| VmManagerError::InvalidConfig(format!("Invalid VM ID: {}", e)))?;
+
+        let socket_path_static: &'static PathBuf = Box::leak(Box::new(socket_path.clone()));
+        let ch_binary_static: &'static PathBuf = Box::leak(Box::new(self.ch_binary.clone()));
+
+        let machine_config = MachineConfig {
+            vm_id: vm_uuid,
+            socket_path: Cow::Borrowed(socket_path_static.as_path()),
+            exec_path: Cow::Borrowed(ch_binary_static.as_path()),
+        };
+
+        let vm = Machine::connect(machine_config)
+            .await
+            .map_err(VmManagerError::SdkError)?;
+
+        let instance = VmInstance {
+            proto_config: ProtoVmConfig {
+                vm_id: vm_id.to_string(),
+                ..Default::default()
+            },
+            process: Some(process),
+            vm,
+            socket_path: socket_path.clone(),
+            status: VmStatus::Running,
+            tap_devices: vec![],
+            passt_processes: vec![],
+            serial_pty_path: None,
+            console_pty_path: None,
+            has_overlaybd: false,
+        };
+
+        {
+            let mut vms = self.vms.lock().await;
+            vms.insert(vm_id.to_string(), instance);
+        }
+
+        info!("VM {} restored successfully from {}", vm_id, source_url);
+        Ok(())
+    }
+
     /// Delete a VM
     pub async fn delete_vm(&self, vm_id: &str) -> Result<(), VmManagerError> {
         info!("Deleting VM: {}", vm_id);

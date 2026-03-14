@@ -884,6 +884,83 @@ pub async fn create_snapshot(
     })
 }
 
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct RestoreRequest {
+    pub snapshot_id: Uuid,
+}
+
+#[utoipa::path(
+    post,
+    path = "/vms/{vm_id}/restore",
+    params(
+        ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier")
+    ),
+    request_body = RestoreRequest,
+    responses(
+        (status = 200, description = "VM restored from snapshot", body = Vm),
+        (status = 404, description = "VM or snapshot not found"),
+        (status = 422, description = "VM not in a restoreable state or snapshot not ready"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "vms"
+)]
+#[instrument(skip(env))]
+pub async fn restore(
+    Extension(env): Extension<App>,
+    Path(vm_id): Path<Uuid>,
+    Json(body): Json<RestoreRequest>,
+) -> Result<ApiResponse<Vm>> {
+    let vm = vms::get(env.pool(), vm_id).await?;
+
+    match vm.status {
+        VmStatus::Running | VmStatus::Paused | VmStatus::Pending => {
+            return Err(crate::errors::Error::UnprocessableEntity(
+                "VM must be stopped before restoring".into(),
+            ));
+        }
+        VmStatus::Shutdown | VmStatus::Created | VmStatus::Unknown => {}
+    }
+
+    let snapshot = snapshots::get(env.pool(), body.snapshot_id)
+        .await
+        .map_err(|e| match e {
+            sqlx::Error::RowNotFound => crate::errors::Error::NotFound,
+            _ => crate::errors::Error::Sqlx(e),
+        })?;
+
+    if snapshot.vm_id != vm_id {
+        return Err(crate::errors::Error::NotFound);
+    }
+
+    if snapshot.status != SnapshotStatus::Ready {
+        return Err(crate::errors::Error::UnprocessableEntity(
+            "snapshot is not in ready state".into(),
+        ));
+    }
+
+    let host = host_for_vm(&env, vm_id).await?;
+    let node_client = NodeClient::new(&host.address, host.port as u16);
+
+    vms::update_status(env.pool(), vm_id, VmStatus::Pending).await?;
+
+    // The node handles the full restore flow: kills any existing CH process,
+    // spawns a fresh one, and calls vm.restore directly (no vm.create needed).
+    if let Err(e) = node_client.restore_vm(vm_id, &snapshot.snapshot_url).await {
+        let msg = format!("restore_vm failed: {:#}", e);
+        tracing::error!(vm_id = %vm_id, error = %msg);
+        let _ = vms::update_status(env.pool(), vm_id, VmStatus::Unknown).await;
+        return Err(crate::errors::Error::InternalServerError);
+    }
+
+    vms::update_status(env.pool(), vm_id, VmStatus::Running).await?;
+
+    let updated_vm = vms::get(env.pool(), vm_id).await?;
+    Ok(ApiResponse {
+        data: updated_vm,
+        code: StatusCode::OK,
+    })
+}
+
 #[utoipa::path(
     get,
     path = "/vms/{vm_id}/metrics",

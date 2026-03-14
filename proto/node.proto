@@ -304,6 +304,11 @@ message SnapshotVmRequest {
   string snapshot_url = 2;
 }
 
+message RestoreVmRequest {
+  string vm_id      = 1;
+  string source_url = 2;
+}
+
 service VmService {
   // Node information
   rpc GetNodeInfo(google.protobuf.Empty) returns (NodeInfo) {}
@@ -315,6 +320,7 @@ service VmService {
   rpc PauseVM(VmID) returns (google.protobuf.Empty) {}
   rpc ResumeVM(VmID) returns (google.protobuf.Empty) {}
   rpc SnapshotVM(SnapshotVmRequest) returns (google.protobuf.Empty) {}
+  rpc RestoreVM(RestoreVmRequest) returns (google.protobuf.Empty) {}
   rpc DeleteVM(VmID) returns (google.protobuf.Empty) {}
 
   // VM information
