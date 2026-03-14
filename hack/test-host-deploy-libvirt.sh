@@ -34,8 +34,8 @@ NODE_PORT="${NODE_PORT:-50051}"
 
 # Bridge IP of the libvirt default network — reachable from the VM
 LIBVIRT_BRIDGE_IP="${LIBVIRT_BRIDGE_IP:-192.168.122.1}"
-# Local registry port (matches the e2e compose stack)
-LOCAL_REGISTRY_PORT="${LOCAL_REGISTRY_PORT:-5000}"
+# Local registry port (matches the e2e compose stack: registry exposed on host port 5001)
+LOCAL_REGISTRY_PORT="${LOCAL_REGISTRY_PORT:-5001}"
 LOCAL_REGISTRY="${LIBVIRT_BRIDGE_IP}:${LOCAL_REGISTRY_PORT}"
 
 # Default deploy image: push the locally-built test image to the local registry
@@ -116,9 +116,12 @@ ensure_stack() {
 	fi
 
 	# Apply host-network overlay so the qarax container can reach the libvirt VM bridge.
+	# Only force-recreate the services that the overlay actually changes (postgres, qarax).
+	# Recreating nfs-server is avoided because its kernel nfsd threads cannot be stopped
+	# by Docker once the container is running.
 	echo "Applying host-network overlay for libvirt connectivity..."
 	docker compose -f "${COMPOSE_FILE}" -f "${LIBVIRT_OVERLAY}" \
-		up -d --force-recreate --no-build
+		up -d --force-recreate --no-build postgres qarax
 	wait_for_http "${API_URL}/" 60
 }
 
@@ -198,7 +201,7 @@ RUN mkdir -p /etc/ssh/sshd_config.d && \
 RUN mkdir -p /etc/containers/registries.conf.d && \
     printf '%s\n' \
       '[[registry]]' \
-      'location = "192.168.122.1:5000"' \
+      'location = "192.168.122.1:5001"' \
       'insecure = true' \
       > /etc/containers/registries.conf.d/01-local-test.conf
 

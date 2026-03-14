@@ -856,8 +856,11 @@ pub async fn create_snapshot(
     // Take the snapshot
     let snap_result = node_client.snapshot_vm(vm_id, &snapshot_url).await;
 
-    // Always attempt to resume
-    if let Err(e) = node_client.resume_vm(vm_id).await {
+    // Always attempt to resume, but capture the result — a failed resume means
+    // the VM is stuck Paused and the client must be informed even if the
+    // snapshot data itself is valid.
+    let resume_result = node_client.resume_vm(vm_id).await;
+    if let Err(e) = &resume_result {
         error!("Failed to resume VM after snapshot: {}", e);
     }
 
@@ -866,6 +869,12 @@ pub async fn create_snapshot(
             snapshots::update_status(env.pool(), id, SnapshotStatus::Ready)
                 .await
                 .map_err(crate::errors::Error::Sqlx)?;
+
+            // Snapshot succeeded but VM is stuck Paused — return an error so
+            // the client knows manual intervention is needed.
+            if resume_result.is_err() {
+                return Err(crate::errors::Error::InternalServerError);
+            }
         }
         Err(e) => {
             error!("Failed to snapshot VM: {}", e);
@@ -1459,8 +1468,9 @@ async fn build_create_vm_request(env: &App, vm: &Vm) -> Result<CreateVmRequest> 
         (
             vec![],
             // net.ifnames=0: keep eth0 naming (prevents udev renaming to ens*/enp*)
+            // init=/.qarax-init: use our injected init binary instead of the OCI image's /sbin/init
             Some(format!(
-                "console=ttyS0 root=/dev/vda rw net.ifnames=0 biosdevname=0{}",
+                "console=ttyS0 root=/dev/vda rw net.ifnames=0 biosdevname=0 init=/.qarax-init{}",
                 ip_params
             )),
             false,

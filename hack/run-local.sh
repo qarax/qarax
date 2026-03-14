@@ -35,6 +35,32 @@ set -e
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
+# The NFS server container runs kernel-level nfsd threads that Docker cannot
+# kill via SIGTERM or SIGKILL while they hold active kernel state. Wait for the
+# container to exit on its own (it receives SIGKILL and exits shortly after),
+# then remove it so docker compose can recreate it cleanly.
+force_remove_nfs_container() {
+	local cid
+	cid=$(docker ps -a --filter "name=e2e-nfs-server-1" --format "{{.ID}}" 2>/dev/null | head -1)
+	[[ -z "$cid" ]] && return 0
+
+	local status
+	status=$(docker inspect --format "{{.State.Status}}" "$cid" 2>/dev/null || echo "")
+	[[ -z "$status" ]] && return 0
+
+	echo -e "${YELLOW}Removing NFS container (killing host-side nfsd kernel threads)...${NC}"
+
+	# nfsd spawns kernel threads on the HOST that survive SIGKILL sent to the
+	# container's init process. These threads hold the container's cgroup open,
+	# making docker stop/rm impossible. Kill them directly on the host first.
+	pkill -9 -x nfsd 2>/dev/null || true
+	pkill -9 -x nfsd4 2>/dev/null || true
+	sleep 1
+
+	docker kill --signal=SIGKILL "$cid" 2>/dev/null || true
+	docker rm -f "$cid" 2>/dev/null || true
+}
+
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
@@ -56,6 +82,7 @@ for arg in "$@"; do
 		echo "===== Qarax local cleanup ====="
 		cd "${REPO_ROOT}/e2e"
 		echo -e "${YELLOW}Stopping and removing stack (postgres, qarax, qarax-node) and volumes...${NC}"
+		force_remove_nfs_container
 		docker compose down -v
 		# Clean up local test images if they exist
 		if [[ -d "${REPO_ROOT}/e2e/local-test-images" ]]; then
@@ -234,6 +261,7 @@ if [[ -n "${REBUILD}" ]]; then
 	# shellcheck disable=SC2086
 	docker compose $VM_MODE_OVERLAY build --no-cache
 fi
+force_remove_nfs_container
 # shellcheck disable=SC2086
 docker compose $VM_MODE_OVERLAY up -d --build
 if [[ $VM_MODE -eq 1 ]]; then
@@ -302,7 +330,7 @@ if [[ $VM_MODE -eq 1 ]]; then
 		--skip-vm \
 		--skip-host \
 		--kernel-path /dev/null \
-		--overlaybd-registry-url "http://${LIBVIRT_BRIDGE_IP}:5000")
+		--overlaybd-registry-url "http://${LIBVIRT_BRIDGE_IP}:5001")
 	eval "$setup_output"
 	echo -e "${GREEN}Storage pool created: ${OVERLAYBD_POOL_ID}${NC}"
 
