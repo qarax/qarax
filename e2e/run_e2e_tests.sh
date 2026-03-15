@@ -24,17 +24,17 @@ cleanup() {
         echo -e "${GREEN}Services kept running (KEEP=1)${NC}"
         echo ""
         echo "Useful commands:"
-        echo "  docker-compose logs -f           # Follow logs"
-        echo "  docker-compose logs qarax-node   # qarax-node logs"
-        echo "  docker-compose exec qarax-node sh  # Shell into qarax-node"
-        echo "  docker-compose down -v           # Stop and remove everything"
+        echo "  docker compose logs -f           # Follow logs"
+        echo "  docker compose logs qarax-node   # qarax-node logs"
+        echo "  docker compose exec qarax-node sh  # Shell into qarax-node"
+        echo "  docker compose down -v           # Stop and remove everything"
         echo ""
         echo "Test endpoint:"
         echo "  curl http://localhost:8000/vms"
         echo ""
     else
         echo -e "${YELLOW}Cleaning up...${NC}"
-        docker-compose down -v
+        docker compose down -v
     fi
 }
 
@@ -73,9 +73,9 @@ fi
 # Build and start services
 echo -e "${YELLOW}Starting services...${NC}"
 if [ -n "$REBUILD" ]; then
-    docker-compose build --no-cache
+    docker compose build --no-cache
 fi
-docker-compose up -d --build
+docker compose up -d --build
 
 # Wait for services to be healthy
 echo -e "${YELLOW}Waiting for services to be healthy...${NC}"
@@ -83,7 +83,7 @@ timeout=90
 elapsed=0
 while [ $elapsed -lt $timeout ]; do
     # Check if all services are healthy
-    healthy_count=$(docker-compose ps 2>/dev/null | grep -c "(healthy)" || echo "0")
+    healthy_count=$(docker compose ps 2>/dev/null | grep -c "(healthy)" || echo "0")
     total_services=6  # nfs-server, registry, postgres, qarax, qarax-node, qarax-node-2
 
     if [ "$healthy_count" -ge "$total_services" ]; then
@@ -93,11 +93,11 @@ while [ $elapsed -lt $timeout ]; do
     fi
 
     # Check for failed services
-    if docker-compose ps 2>/dev/null | grep -q "Exit"; then
+    if docker compose ps 2>/dev/null | grep -q "Exit"; then
         echo ""
         echo -e "${RED}A service has failed!${NC}"
-        docker-compose ps
-        docker-compose logs
+        docker compose ps
+        docker compose logs
         exit 1
     fi
 
@@ -109,15 +109,15 @@ done
 if [ $elapsed -ge $timeout ]; then
     echo ""
     echo -e "${RED}Timeout waiting for services to be healthy${NC}"
-    docker-compose ps
-    docker-compose logs
+    docker compose ps
+    docker compose logs
     exit 1
 fi
 
 # Show service status
 echo ""
 echo -e "${YELLOW}Service status:${NC}"
-docker-compose ps
+docker compose ps
 echo ""
 
 bash setup_host.sh http://localhost:8000 qarax-node 50051 e2e-node-1
@@ -139,7 +139,7 @@ else
     echo -e "${RED}Tests failed!${NC}"
     echo ""
     echo -e "${YELLOW}Service logs:${NC}"
-    docker-compose logs --tail=50
+    docker compose logs --tail=50
     echo ""
 
     if [ -z "$KEEP" ]; then
