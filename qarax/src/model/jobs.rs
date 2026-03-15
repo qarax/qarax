@@ -32,6 +32,7 @@ pub struct Job {
 pub enum JobType {
     ImagePull,
     VmStart,
+    VmMigrate,
 }
 
 #[derive(

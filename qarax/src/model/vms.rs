@@ -150,6 +150,7 @@ pub enum VmStatus {
     Running,
     Paused,
     Shutdown,
+    Migrating,
 }
 
 /// Network interface config for create-VM request. Passed to qarax-node; id is required.

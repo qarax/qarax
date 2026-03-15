@@ -50,6 +50,8 @@ from .vm_filesystem import VmFilesystem
 from .vm_metrics import VmMetrics
 from .vm_metrics_counters import VmMetricsCounters
 from .vm_metrics_counters_additional_property import VmMetricsCountersAdditionalProperty
+from .vm_migrate_request import VmMigrateRequest
+from .vm_migrate_response import VmMigrateResponse
 from .vm_start_response import VmStartResponse
 from .vm_status import VmStatus
 
@@ -104,6 +106,8 @@ __all__ = (
     "VmMetrics",
     "VmMetricsCounters",
     "VmMetricsCountersAdditionalProperty",
+    "VmMigrateRequest",
+    "VmMigrateResponse",
     "VmStartResponse",
     "VmStatus",
 )

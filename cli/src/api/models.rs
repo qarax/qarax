@@ -66,6 +66,16 @@ pub struct VmStartResponse {
     pub job_id: Uuid,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct VmMigrateRequest {
+    pub target_host_id: Uuid,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct VmMigrateResponse {
+    pub job_id: Uuid,
+}
+
 // ─── Hosts ───────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize)]

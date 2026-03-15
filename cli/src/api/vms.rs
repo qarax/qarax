@@ -6,7 +6,7 @@ use crate::client::Client;
 
 use super::models::{
     AttachDiskRequest, CreateSnapshotRequest, CreateVmResponse, CreateVmResult, NewVm,
-    RestoreRequest, Snapshot, Vm, VmDisk, VmStartResponse,
+    RestoreRequest, Snapshot, Vm, VmDisk, VmMigrateRequest, VmMigrateResponse, VmStartResponse,
 };
 
 pub async fn list(client: &Client) -> anyhow::Result<Vec<Vm>> {
@@ -88,4 +88,12 @@ pub async fn list_snapshots(client: &Client, vm_id: Uuid) -> anyhow::Result<Vec<
 
 pub async fn restore(client: &Client, vm_id: Uuid, req: &RestoreRequest) -> anyhow::Result<Vm> {
     client.post(&format!("/vms/{vm_id}/restore"), req).await
+}
+
+pub async fn migrate(
+    client: &Client,
+    vm_id: Uuid,
+    req: &VmMigrateRequest,
+) -> anyhow::Result<VmMigrateResponse> {
+    client.post(&format!("/vms/{vm_id}/migrate"), req).await
 }

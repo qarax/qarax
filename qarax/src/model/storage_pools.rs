@@ -67,6 +67,18 @@ pub enum StoragePoolType {
     OverlayBd,
 }
 
+impl StoragePoolType {
+    /// Whether VMs using this pool type can be live-migrated.
+    ///
+    /// NFS pools are accessible from multiple hosts at the same path, so the
+    /// disk data is inherently shared and no transfer is needed during
+    /// migration.  Local and OverlayBD pools are node-local and cannot be
+    /// migrated without copying data, which is not currently supported.
+    pub fn supports_live_migration(&self) -> bool {
+        matches!(self, StoragePoolType::Nfs)
+    }
+}
+
 #[derive(
     Deserialize, Serialize, Debug, Clone, Eq, PartialEq, Type, EnumString, Display, ToSchema,
 )]

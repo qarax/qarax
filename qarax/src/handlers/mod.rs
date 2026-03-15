@@ -46,6 +46,7 @@ pub type Result<T, E = Error> = ::std::result::Result<T, E>;
         vm::handler::list_snapshots,
         vm::handler::create_snapshot,
         vm::handler::restore,
+        vm::handler::migrate,
         vm::handler::delete,
         vm::handler::metrics,
         vm::handler::console_log,
@@ -122,6 +123,8 @@ pub type Result<T, E = Error> = ::std::result::Result<T, E>;
             crate::handlers::vm::handler::VmStartResponse,
             crate::handlers::vm::handler::AttachDiskRequest,
             crate::handlers::vm::handler::RestoreRequest,
+            crate::handlers::vm::handler::VmMigrateRequest,
+            crate::handlers::vm::handler::VmMigrateResponse,
             crate::handlers::storage_pool::handler::ImportToPoolRequest,
             crate::handlers::storage_pool::handler::ImportToPoolResponse,
             crate::model::networks::Network,
@@ -217,6 +220,7 @@ fn vms() -> Router {
             get(vm::handler::list_snapshots).post(vm::handler::create_snapshot),
         )
         .route("/vms/{vm_id}/restore", post(vm::handler::restore))
+        .route("/vms/{vm_id}/migrate", post(vm::handler::migrate))
 }
 
 fn storage_objects() -> Router {

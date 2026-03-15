@@ -21,9 +21,9 @@ use node::{
     ConsoleLogResponse, CopyFileRequest, CpusConfig, DetachNetworkRequest,
     DetachStoragePoolRequest, DiskConfig, DownloadFileRequest, FsConfig, ImportOverlayBdRequest,
     ImportOverlayBdResponse, MemoryConfig, NetConfig, NodeInfo, OciImageRequest, OciImageResponse,
-    PayloadConfig, RestoreVmRequest, SnapshotVmRequest, StoragePoolKind, VmConfig, VmCounters,
-    VmId, VmState, file_transfer_service_client::FileTransferServiceClient,
-    vm_service_client::VmServiceClient,
+    PayloadConfig, ReceiveMigrationRequest, RestoreVmRequest, SendMigrationRequest,
+    SnapshotVmRequest, StoragePoolKind, VmConfig, VmCounters, VmId, VmState,
+    file_transfer_service_client::FileTransferServiceClient, vm_service_client::VmServiceClient,
 };
 
 /// Client for communicating with qarax-node via gRPC
@@ -873,6 +873,60 @@ impl NodeClient {
         });
 
         Ok((input_tx, output_rx))
+    }
+
+    /// Prepare the destination node to receive a live migration.
+    ///
+    /// Returns the `receiver_url` that Cloud Hypervisor is listening on
+    /// (e.g. `"tcp://0.0.0.0:49152"`).  Callers must replace `0.0.0.0` with
+    /// the destination host's real IP before passing it to `send_migration`.
+    #[instrument(skip(self, config))]
+    pub async fn receive_migration(
+        &self,
+        vm_id: Uuid,
+        config: VmConfig,
+        migration_port: u16,
+    ) -> Result<String> {
+        let mut client = self
+            .connect_vm_service()
+            .await
+            .context("Failed to connect to destination qarax-node")?;
+
+        let response = client
+            .receive_migration(ReceiveMigrationRequest {
+                vm_id: vm_id.to_string(),
+                config: Some(config),
+                migration_port: migration_port as i32,
+            })
+            .await
+            .context("receive_migration RPC failed")?;
+
+        Ok(response.into_inner().receiver_url)
+    }
+
+    /// Initiate an outbound live migration on the source node.
+    ///
+    /// `destination_url` must point to the real IP and port returned by
+    /// `receive_migration` (e.g. `"tcp://192.168.1.20:49152"`).
+    ///
+    /// This call blocks until Cloud Hypervisor finishes transferring all dirty
+    /// pages and the VM is running on the destination.
+    #[instrument(skip(self))]
+    pub async fn send_migration(&self, vm_id: Uuid, destination_url: &str) -> Result<()> {
+        let mut client = self
+            .connect_vm_service()
+            .await
+            .context("Failed to connect to source qarax-node")?;
+
+        client
+            .send_migration(SendMigrationRequest {
+                vm_id: vm_id.to_string(),
+                destination_url: destination_url.to_string(),
+            })
+            .await
+            .context("send_migration RPC failed")?;
+
+        Ok(())
     }
 }
 

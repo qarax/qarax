@@ -309,6 +309,29 @@ message RestoreVmRequest {
   string source_url = 2;
 }
 
+// ReceiveMigrationRequest is sent to the *destination* node to prepare it for
+// an incoming live migration.  The destination spawns a Cloud Hypervisor
+// process, sets up the required TAP devices using the supplied VmConfig, then
+// calls vm.receive-migration.  The caller must pass the returned receiver_url
+// to the source node's SendMigration RPC.
+message ReceiveMigrationRequest {
+  string vm_id       = 1;
+  VmConfig config    = 2;
+  int32 migration_port = 3; // TCP port to listen on; 0 means auto-assign
+}
+
+message ReceiveMigrationResponse {
+  string receiver_url = 1; // e.g. "tcp://0.0.0.0:49152"
+}
+
+// SendMigrationRequest is sent to the *source* node to initiate an outbound
+// live migration.  destination_url is the receiver_url returned by
+// ReceiveMigration (with 0.0.0.0 replaced by the real destination IP).
+message SendMigrationRequest {
+  string vm_id            = 1;
+  string destination_url  = 2; // e.g. "tcp://192.168.1.20:49152"
+}
+
 service VmService {
   // Node information
   rpc GetNodeInfo(google.protobuf.Empty) returns (NodeInfo) {}
@@ -322,6 +345,10 @@ service VmService {
   rpc SnapshotVM(SnapshotVmRequest) returns (google.protobuf.Empty) {}
   rpc RestoreVM(RestoreVmRequest) returns (google.protobuf.Empty) {}
   rpc DeleteVM(VmID) returns (google.protobuf.Empty) {}
+
+  // Live migration
+  rpc ReceiveMigration(ReceiveMigrationRequest) returns (ReceiveMigrationResponse) {}
+  rpc SendMigration(SendMigrationRequest) returns (google.protobuf.Empty) {}
 
   // VM information
   rpc GetVmInfo(VmID) returns (VmState) {}

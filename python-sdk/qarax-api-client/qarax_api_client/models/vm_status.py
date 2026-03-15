@@ -3,6 +3,7 @@ from enum import Enum
 
 class VmStatus(str, Enum):
     CREATED = "created"
+    MIGRATING = "migrating"
     PAUSED = "paused"
     PENDING = "pending"
     RUNNING = "running"

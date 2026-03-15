@@ -602,6 +602,11 @@ pub async fn start(
                 "VM is pending job completion; wait for the job to finish".into(),
             ));
         }
+        VmStatus::Migrating => {
+            return Err(crate::errors::Error::UnprocessableEntity(
+                "VM is being migrated; wait for migration to finish".into(),
+            ));
+        }
         VmStatus::Created | VmStatus::Shutdown | VmStatus::Unknown => {
             // Valid states to start from
         }
@@ -950,7 +955,7 @@ pub async fn restore(
                 "VM must be stopped before restoring".into(),
             ));
         }
-        VmStatus::Shutdown | VmStatus::Created | VmStatus::Unknown => {}
+        VmStatus::Shutdown | VmStatus::Created | VmStatus::Unknown | VmStatus::Migrating => {}
     }
 
     let snapshot = snapshots::get(env.pool(), body.snapshot_id)
@@ -1665,6 +1670,237 @@ pub async fn attach_disk(
     Ok(ApiResponse {
         data: disk,
         code: StatusCode::CREATED,
+    }
+    .into_response())
+}
+
+/// Request body for `POST /vms/{vm_id}/migrate`.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct VmMigrateRequest {
+    /// UUID of the destination host to migrate the VM to.
+    pub target_host_id: Uuid,
+}
+
+/// Response body for `POST /vms/{vm_id}/migrate`.
+#[derive(Serialize, ToSchema)]
+pub struct VmMigrateResponse {
+    pub job_id: Uuid,
+}
+
+#[utoipa::path(
+    post,
+    path = "/vms/{vm_id}/migrate",
+    params(
+        ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier")
+    ),
+    request_body = VmMigrateRequest,
+    responses(
+        (status = 202, description = "Migration accepted", body = VmMigrateResponse),
+        (status = 404, description = "VM or host not found"),
+        (status = 422, description = "VM not in a migratable state"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "vms"
+)]
+#[instrument(skip(env))]
+pub async fn migrate(
+    Extension(env): Extension<App>,
+    Path(vm_id): Path<Uuid>,
+    Json(req): Json<VmMigrateRequest>,
+) -> Result<axum::response::Response> {
+    let vm = vms::get(env.pool(), vm_id).await?;
+
+    match vm.status {
+        VmStatus::Running | VmStatus::Paused => {}
+        _ => {
+            return Err(crate::errors::Error::UnprocessableEntity(format!(
+                "VM must be running or paused to migrate (current status: {})",
+                vm.status
+            )));
+        }
+    }
+
+    let source_host = host_for_vm(&env, vm_id).await?;
+    let target_host = hosts::get_by_id(env.pool(), req.target_host_id)
+        .await?
+        .ok_or(crate::errors::Error::NotFound)?;
+
+    if source_host.id == target_host.id {
+        return Err(crate::errors::Error::UnprocessableEntity(
+            "Source and destination hosts are the same".into(),
+        ));
+    }
+
+    // Live migration requires all disks to be on NFS storage pools so that
+    // both hosts can access the same data without copying.  Local and
+    // OverlayBD-backed disks are not supported for migration.
+    let db_disks = vm_disks::list_by_vm(env.pool(), vm_id).await?;
+    let so_ids: Vec<Uuid> = db_disks
+        .iter()
+        .filter_map(|d| d.storage_object_id)
+        .collect();
+    if !so_ids.is_empty() {
+        let objects = storage_objects::get_batch(env.pool(), &so_ids).await?;
+        let pool_ids: Vec<Uuid> = objects
+            .iter()
+            .map(|o| o.storage_pool_id)
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+        let pools = storage_pools::get_batch(env.pool(), &pool_ids).await?;
+        for pool in &pools {
+            if !pool.pool_type.supports_live_migration() {
+                return Err(crate::errors::Error::UnprocessableEntity(format!(
+                    "live migration is not supported for pool '{}' (type: {:?})",
+                    pool.name, pool.pool_type
+                )));
+            }
+            let dest_has_pool =
+                storage_pools::host_has_pool(env.pool(), target_host.id, pool.id).await?;
+            if !dest_has_pool {
+                return Err(crate::errors::Error::UnprocessableEntity(format!(
+                    "destination host {} does not have NFS pool '{}' attached",
+                    target_host.id, pool.name
+                )));
+            }
+        }
+    }
+
+    // Build the VmConfig that the destination node needs to set up infrastructure.
+    let create_req = build_create_vm_request(&env, &vm).await?;
+
+    vms::update_status(env.pool(), vm_id, VmStatus::Migrating).await?;
+
+    let job = jobs::create(
+        env.pool(),
+        NewJob {
+            job_type: JobType::VmMigrate,
+            description: Some(format!(
+                "Migrating VM {} from host {} to {}",
+                vm.name, source_host.id, target_host.id
+            )),
+            resource_id: Some(vm_id),
+            resource_type: Some("vm".to_string()),
+        },
+    )
+    .await?;
+    let job_id = job.id;
+    let db_pool = env.pool_arc();
+
+    tokio::spawn(async move {
+        tracing::info!(vm_id = %vm_id, job_id = %job_id, "Starting async VM migration");
+
+        if let Err(e) = jobs::mark_running(&db_pool, job_id).await {
+            tracing::error!(job_id = %job_id, error = %e, "Failed to mark job as running");
+            return;
+        }
+
+        let source_client = NodeClient::new(&source_host.address, source_host.port as u16);
+        let dest_client = NodeClient::new(&target_host.address, target_host.port as u16);
+
+        // Build the VmConfig proto for the destination node.  We reuse the
+        // same fields built for create_vm, but rebuild the bridge references
+        // for the destination host.
+        let vm_config = crate::grpc_client::node::VmConfig {
+            vm_id: vm_id.to_string(),
+            cpus: Some(crate::grpc_client::node::CpusConfig {
+                boot_vcpus: create_req.boot_vcpus,
+                max_vcpus: create_req.max_vcpus,
+                topology: None,
+                kvm_hyperv: None,
+                max_phys_bits: None,
+            }),
+            memory: Some(crate::grpc_client::node::MemoryConfig {
+                size: create_req.memory_size,
+                hotplug_size: None,
+                mergeable: None,
+                shared: if create_req.memory_shared {
+                    Some(true)
+                } else {
+                    None
+                },
+                hugepages: None,
+                hugepage_size: None,
+                prefault: None,
+                thp: None,
+            }),
+            payload: Some(crate::grpc_client::node::PayloadConfig {
+                kernel: create_req.kernel.filter(|s| !s.is_empty()),
+                cmdline: create_req.cmdline.filter(|s| !s.is_empty()),
+                initramfs: create_req.initramfs.filter(|s| !s.trim().is_empty()),
+                firmware: create_req.firmware.filter(|s| !s.is_empty()),
+            }),
+            disks: create_req.disks,
+            networks: create_req.networks,
+            rng: None,
+            serial: Some(crate::grpc_client::node::ConsoleConfig {
+                mode: 1, // CONSOLE_MODE_PTY
+                file: None,
+                socket: None,
+                iommu: None,
+            }),
+            console: None,
+            rate_limit_groups: vec![],
+            fs: create_req.fs_configs,
+        };
+
+        // Step 1: Prepare the destination node.
+        let receiver_url = match dest_client.receive_migration(vm_id, vm_config, 0).await {
+            Ok(url) => url,
+            Err(e) => {
+                let msg = format!("receive_migration failed: {:#}", e);
+                tracing::error!(vm_id = %vm_id, job_id = %job_id, error = %msg);
+                let _ = jobs::mark_failed(&db_pool, job_id, &msg).await;
+                let _ = vms::update_status(&db_pool, vm_id, VmStatus::Running).await;
+                return;
+            }
+        };
+
+        let _ = jobs::update_progress(&db_pool, job_id, 25).await;
+
+        // Replace 0.0.0.0 with the destination host's real IP so the source
+        // CH can connect to it.
+        let actual_receiver_url = receiver_url.replace("0.0.0.0", &target_host.address);
+
+        // Step 2: Initiate the migration on the source node.
+        if let Err(e) = source_client
+            .send_migration(vm_id, &actual_receiver_url)
+            .await
+        {
+            let msg = format!("send_migration failed: {:#}", e);
+            tracing::error!(vm_id = %vm_id, job_id = %job_id, error = %msg);
+            let _ = jobs::mark_failed(&db_pool, job_id, &msg).await;
+            let _ = vms::update_status(&db_pool, vm_id, VmStatus::Running).await;
+            return;
+        }
+
+        let _ = jobs::update_progress(&db_pool, job_id, 75).await;
+
+        // Step 3: Update the DB to point to the destination host.
+        if let Err(e) = vms::update_host_id(&db_pool, vm_id, target_host.id).await {
+            tracing::error!(vm_id = %vm_id, job_id = %job_id, error = %e, "Failed to update host_id after migration");
+        }
+        let _ = vms::update_status(&db_pool, vm_id, VmStatus::Running).await;
+
+        // Step 4: Clean up source node resources (TAP devices, persisted config).
+        // delete_vm on the source is best-effort — the CH process has already
+        // exited after migration, so shutdown/kill will fail gracefully.
+        if let Err(e) = source_client.delete_vm(vm_id).await {
+            tracing::warn!(
+                vm_id = %vm_id,
+                error = %e,
+                "Source cleanup (delete_vm) failed after migration — manual cleanup may be needed"
+            );
+        }
+
+        let _ = jobs::mark_completed(&db_pool, job_id, None).await;
+        tracing::info!(vm_id = %vm_id, job_id = %job_id, "VM migration completed successfully");
+    });
+
+    use axum::response::IntoResponse as _;
+    Ok(ApiResponse {
+        data: VmMigrateResponse { job_id },
+        code: StatusCode::ACCEPTED,
     }
     .into_response())
 }

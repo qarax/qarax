@@ -63,6 +63,9 @@ pub enum VmManagerError {
 
     #[error("OverlayBD error: {0}")]
     OverlayBdError(#[from] crate::overlaybd::OverlayBdError),
+
+    #[error("Migration error: {0}")]
+    MigrationError(String),
 }
 
 /// Represents a running VM instance
@@ -1057,6 +1060,252 @@ impl VmManager {
         }
 
         info!("VM {} restored successfully from {}", vm_id, source_url);
+        Ok(())
+    }
+
+    /// Prepare this node to receive a live migration for the given VM.
+    ///
+    /// Steps:
+    /// 1. Create TAP devices for all networks in the supplied config.
+    /// 2. Spawn a Cloud Hypervisor process.
+    /// 3. Call `vm.receive-migration` on that process.
+    /// 4. Register a placeholder VmInstance so the VM is tracked.
+    ///
+    /// Returns the `receiver_url` that the source node must pass to
+    /// `vm.send-migration` (e.g. `"tcp://0.0.0.0:49152"`).
+    pub async fn receive_migration(
+        &self,
+        vm_id: &str,
+        config: ProtoVmConfig,
+        migration_port: u16,
+    ) -> Result<String, VmManagerError> {
+        info!(
+            "Preparing to receive migration for VM {} on port {}",
+            vm_id, migration_port
+        );
+
+        {
+            let vms = self.vms.lock().await;
+            if vms.contains_key(vm_id) {
+                return Err(VmManagerError::VmAlreadyExists(vm_id.to_string()));
+            }
+        }
+
+        // Pick a free TCP port if the caller passed 0.
+        let port = if migration_port == 0 {
+            std::net::TcpListener::bind("0.0.0.0:0")
+                .map_err(|e| {
+                    VmManagerError::MigrationError(format!("Failed to bind ephemeral port: {}", e))
+                })?
+                .local_addr()
+                .map_err(|e| {
+                    VmManagerError::MigrationError(format!("Failed to get ephemeral port: {}", e))
+                })?
+                .port()
+        } else {
+            migration_port
+        };
+
+        // Create TAP devices for the incoming VM's networks.
+        let mut tap_devices: Vec<String> = Vec::new();
+        let mut mutable_config = config.clone();
+        for (i, net) in mutable_config.networks.iter_mut().enumerate() {
+            if !net.vhost_user.unwrap_or(false) && net.tap.is_none() {
+                let tap_name = Self::tap_name_for_net(vm_id, i);
+                if let Err(e) = Self::create_tap_device(&tap_name).await {
+                    for tap in &tap_devices {
+                        Self::delete_tap_device(tap).await;
+                    }
+                    return Err(e);
+                }
+                // Attach to bridge if specified.
+                if let Some(bridge_name) = &net.bridge
+                    && let Err(e) =
+                        crate::networking::bridge::attach_to_bridge(&tap_name, bridge_name).await
+                {
+                    for tap in &tap_devices {
+                        Self::delete_tap_device(tap).await;
+                    }
+                    return Err(VmManagerError::TapError(format!(
+                        "Failed to attach TAP {} to bridge {}: {}",
+                        tap_name, bridge_name, e
+                    )));
+                }
+                net.tap = Some(tap_name.clone());
+                tap_devices.push(tap_name);
+            }
+        }
+
+        // Ensure runtime directory exists.
+        tokio::fs::create_dir_all(&self.runtime_dir)
+            .await
+            .map_err(VmManagerError::SpawnError)?;
+
+        let socket_path = self.socket_path(vm_id);
+        let log_path = self.log_path(vm_id);
+
+        if socket_path.exists() {
+            let _ = tokio::fs::remove_file(&socket_path).await;
+        }
+
+        let log_file = std::fs::File::create(&log_path).map_err(|e| {
+            for tap in &tap_devices {
+                // best-effort sync cleanup before returning error
+                let _ = std::process::Command::new("ip")
+                    .args(["link", "delete", tap])
+                    .status();
+            }
+            VmManagerError::SpawnError(e)
+        })?;
+
+        let process = Command::new(&self.ch_binary)
+            .arg("--api-socket")
+            .arg(&socket_path)
+            .stdout(log_file.try_clone().map_err(VmManagerError::SpawnError)?)
+            .stderr(log_file)
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(VmManagerError::SpawnError)?;
+
+        info!(
+            "Cloud Hypervisor receive-migration process started with PID: {:?}",
+            process.id()
+        );
+
+        // Wait for the API socket to become available.
+        let max_retries = 50;
+        let mut retries = 0;
+        loop {
+            match UnixStream::connect(&socket_path).await {
+                Ok(_) => break,
+                Err(_) if retries < max_retries => {
+                    retries += 1;
+                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                }
+                Err(e) => {
+                    for tap in &tap_devices {
+                        Self::delete_tap_device(tap).await;
+                    }
+                    return Err(VmManagerError::SpawnError(e));
+                }
+            }
+        }
+
+        let receiver_url = format!("tcp://0.0.0.0:{}", port);
+        let body = format!(r#"{{"receiver_url":"{}"}}"#, receiver_url);
+
+        if let Err(e) = self
+            .send_api_request(
+                &socket_path,
+                "PUT",
+                "/api/v1/vm.receive-migration",
+                Some(&body),
+            )
+            .await
+        {
+            for tap in &tap_devices {
+                Self::delete_tap_device(tap).await;
+            }
+            let _ = tokio::fs::remove_file(&socket_path).await;
+            return Err(VmManagerError::MigrationError(format!(
+                "vm.receive-migration failed: {}",
+                e
+            )));
+        }
+
+        // Persist the config for recovery.
+        let config_bytes = mutable_config.encode_to_vec();
+        if let Err(e) = tokio::fs::write(self.config_path(vm_id), config_bytes).await {
+            warn!("Failed to persist config for incoming VM {}: {}", vm_id, e);
+        }
+
+        let vm_uuid = Uuid::parse_str(vm_id)
+            .map_err(|e| VmManagerError::InvalidConfig(format!("Invalid VM ID: {}", e)))?;
+
+        let socket_path_static: &'static PathBuf = Box::leak(Box::new(socket_path.clone()));
+        let ch_binary_static: &'static PathBuf = Box::leak(Box::new(self.ch_binary.clone()));
+
+        let machine_config = MachineConfig {
+            vm_id: vm_uuid,
+            socket_path: Cow::Borrowed(socket_path_static.as_path()),
+            exec_path: Cow::Borrowed(ch_binary_static.as_path()),
+        };
+
+        let vm = Machine::connect(machine_config)
+            .await
+            .map_err(VmManagerError::SdkError)?;
+
+        let instance = VmInstance {
+            proto_config: mutable_config,
+            process: Some(process),
+            vm,
+            socket_path,
+            status: VmStatus::Created,
+            tap_devices,
+            passt_processes: Vec::new(),
+            serial_pty_path: None,
+            console_pty_path: None,
+            has_overlaybd: false,
+        };
+
+        {
+            let mut vms = self.vms.lock().await;
+            vms.insert(vm_id.to_string(), instance);
+        }
+
+        info!(
+            "VM {} ready to receive migration on {}",
+            vm_id, receiver_url
+        );
+        Ok(receiver_url)
+    }
+
+    /// Send a live migration from this node to the destination.
+    ///
+    /// Calls `vm.send-migration` on the source Cloud Hypervisor process.
+    /// This call blocks until Cloud Hypervisor completes the migration.
+    /// On success the source VM process has exited; the VmInstance is removed
+    /// from the manager (TAP cleanup is left to the caller via `delete_vm` or
+    /// an explicit cleanup step).
+    pub async fn send_migration(
+        &self,
+        vm_id: &str,
+        destination_url: &str,
+    ) -> Result<(), VmManagerError> {
+        info!("Sending migration for VM {} to {}", vm_id, destination_url);
+
+        let socket_path = {
+            let vms = self.vms.lock().await;
+            let instance = vms
+                .get(vm_id)
+                .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
+            instance.socket_path.clone()
+        };
+
+        let body = format!(r#"{{"destination_url":"{}"}}"#, destination_url);
+        self.send_api_request(
+            &socket_path,
+            "PUT",
+            "/api/v1/vm.send-migration",
+            Some(&body),
+        )
+        .await
+        .map_err(|e| VmManagerError::MigrationError(format!("vm.send-migration failed: {}", e)))?;
+
+        // Mark the source instance as Shutdown.  We keep it in the map so
+        // the control plane can call delete_vm() to clean up TAP devices and
+        // other host resources after confirming migration success.
+        {
+            let mut vms = self.vms.lock().await;
+            if let Some(instance) = vms.get_mut(vm_id) {
+                instance.status = VmStatus::Shutdown;
+            }
+        }
+
+        info!(
+            "VM {} migrated out successfully to {}",
+            vm_id, destination_url
+        );
         Ok(())
     }
 

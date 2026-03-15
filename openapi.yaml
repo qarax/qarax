@@ -914,6 +914,38 @@ paths:
           description: VM not found
         '500':
           description: Internal server error
+  /vms/{vm_id}/migrate:
+    post:
+      tags:
+      - vms
+      operationId: migrate
+      parameters:
+      - name: vm_id
+        in: path
+        description: VM unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VmMigrateRequest'
+        required: true
+      responses:
+        '202':
+          description: Migration accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VmMigrateResponse'
+        '404':
+          description: VM or host not found
+        '422':
+          description: VM not in a migratable state
+        '500':
+          description: Internal server error
   /vms/{vm_id}/pause:
     post:
       tags:
@@ -1418,6 +1450,7 @@ components:
       enum:
       - image_pull
       - vm_start
+      - vm_migrate
     Network:
       type: object
       required:
@@ -2331,6 +2364,25 @@ components:
         vm_id:
           type: string
           format: uuid
+    VmMigrateRequest:
+      type: object
+      description: Request body for `POST /vms/{vm_id}/migrate`.
+      required:
+      - target_host_id
+      properties:
+        target_host_id:
+          type: string
+          format: uuid
+          description: UUID of the destination host to migrate the VM to.
+    VmMigrateResponse:
+      type: object
+      description: Response body for `POST /vms/{vm_id}/migrate`.
+      required:
+      - job_id
+      properties:
+        job_id:
+          type: string
+          format: uuid
     VmStartResponse:
       type: object
       required:
@@ -2348,6 +2400,7 @@ components:
       - running
       - paused
       - shutdown
+      - migrating
 tags:
 - name: hosts
   description: Host management endpoints

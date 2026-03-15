@@ -8,7 +8,7 @@ use crate::{
         self,
         models::{
             AttachDiskRequest, CreateSnapshotRequest, CreateVmResult, NewVm, NewVmNetwork,
-            RestoreRequest,
+            RestoreRequest, VmMigrateRequest,
         },
     },
     client::Client,
@@ -16,8 +16,8 @@ use crate::{
 };
 
 use super::{
-    OutputFormat, format_bytes, print_output, resolve_boot_source_id, resolve_network_id,
-    resolve_object_id, resolve_vm_id,
+    OutputFormat, format_bytes, print_output, resolve_boot_source_id, resolve_host_id,
+    resolve_network_id, resolve_object_id, resolve_vm_id,
 };
 
 #[derive(Args)]
@@ -116,6 +116,14 @@ enum VmCommand {
         /// Boot order priority (lower = higher priority; default: 0)
         #[arg(long)]
         boot_order: Option<i32>,
+    },
+    /// Live-migrate a running VM to another host (NFS-backed storage only)
+    Migrate {
+        /// VM name or ID
+        vm: String,
+        /// Destination host name or ID
+        #[arg(long)]
+        host: String,
     },
     /// Manage VM snapshots
     Snapshot {
@@ -382,6 +390,22 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
                     "Attached disk {} (object={}, name={}) to VM {}",
                     disk.id, object_id, disk.logical_name, vm_id
                 );
+            }
+        }
+
+        VmCommand::Migrate { vm, host } => {
+            let vm_id = resolve_vm_id(client, &vm).await?;
+            let host_id = resolve_host_id(client, &host).await?;
+            let req = VmMigrateRequest {
+                target_host_id: host_id,
+            };
+            let resp = api::vms::migrate(client, vm_id, &req).await?;
+            if !matches!(output, OutputFormat::Table) {
+                print_output(&resp, output)?;
+            } else {
+                println!("Migrating VM: {vm}");
+                println!("Job:          {}", resp.job_id);
+                poll_job(client, resp.job_id).await?;
             }
         }
 

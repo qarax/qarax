@@ -12,9 +12,10 @@ use crate::rpc::node::{
     AttachNetworkResponse, AttachStoragePoolRequest, AttachStoragePoolResponse, ConsoleInput,
     ConsoleLogResponse, ConsoleOutput, ConsolePtyPathResponse, DetachNetworkRequest,
     DetachNetworkResponse, DetachStoragePoolRequest, DeviceCounters, ImportOverlayBdRequest,
-    ImportOverlayBdResponse, NodeInfo, OciImageRequest, OciImageResponse, RemoveDeviceRequest,
-    RestoreVmRequest, SnapshotVmRequest, StoragePoolKind, VmConfig, VmCounters, VmId, VmList,
-    VmState, vm_service_server::VmService,
+    ImportOverlayBdResponse, NodeInfo, OciImageRequest, OciImageResponse, ReceiveMigrationRequest,
+    ReceiveMigrationResponse, RemoveDeviceRequest, RestoreVmRequest, SendMigrationRequest,
+    SnapshotVmRequest, StoragePoolKind, VmConfig, VmCounters, VmId, VmList, VmState,
+    vm_service_server::VmService,
 };
 
 /// Implementation of VmService using Cloud Hypervisor
@@ -897,6 +898,64 @@ impl VmService for VmServiceImpl {
         Ok(Response::new(()))
     }
 
+    async fn receive_migration(
+        &self,
+        request: Request<ReceiveMigrationRequest>,
+    ) -> Result<Response<ReceiveMigrationResponse>, Status> {
+        let req = request.into_inner();
+        let vm_id = req.vm_id.clone();
+        info!("Receiving migration for VM: {}", vm_id);
+
+        let config = req
+            .config
+            .ok_or_else(|| Status::invalid_argument("Missing VM config for receive_migration"))?;
+        let port = req.migration_port as u16;
+
+        match self.manager.receive_migration(&vm_id, config, port).await {
+            Ok(receiver_url) => {
+                info!(
+                    "VM {} ready to receive migration at {}",
+                    vm_id, receiver_url
+                );
+                Ok(Response::new(ReceiveMigrationResponse { receiver_url }))
+            }
+            Err(e) => {
+                error!(
+                    "Failed to prepare receive migration for VM {}: {}",
+                    vm_id, e
+                );
+                Err(map_manager_error(e))
+            }
+        }
+    }
+
+    async fn send_migration(
+        &self,
+        request: Request<SendMigrationRequest>,
+    ) -> Result<Response<()>, Status> {
+        let req = request.into_inner();
+        let vm_id = req.vm_id.clone();
+        info!(
+            "Sending migration for VM {} to {}",
+            vm_id, req.destination_url
+        );
+
+        match self
+            .manager
+            .send_migration(&vm_id, &req.destination_url)
+            .await
+        {
+            Ok(()) => {
+                info!("VM {} migrated out successfully", vm_id);
+                Ok(Response::new(()))
+            }
+            Err(e) => {
+                error!("Failed to send migration for VM {}: {}", vm_id, e);
+                Err(map_manager_error(e))
+            }
+        }
+    }
+
     type AttachConsoleStream =
         Pin<Box<dyn Stream<Item = Result<ConsoleOutput, Status>> + Send + 'static>>;
 }
@@ -1087,5 +1146,8 @@ fn map_manager_error(e: crate::cloud_hypervisor::VmManagerError) -> Status {
         VmManagerError::ProcessError(msg) => Status::internal(msg),
         VmManagerError::TapError(msg) => Status::internal(format!("TAP device error: {}", msg)),
         VmManagerError::OverlayBdError(e) => Status::internal(format!("OverlayBD error: {}", e)),
+        VmManagerError::MigrationError(msg) => {
+            Status::internal(format!("Migration error: {}", msg))
+        }
     }
 }
