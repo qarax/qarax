@@ -10,7 +10,7 @@ use thiserror::Error;
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 use tokio::time::{Duration, sleep};
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use bytes::Bytes;
@@ -290,13 +290,10 @@ impl VmManager {
             };
 
             let socket_path = path.clone();
-            let socket_path_static: &'static PathBuf = Box::leak(Box::new(socket_path.clone()));
-            let ch_binary_static: &'static PathBuf = Box::leak(Box::new(self.ch_binary.clone()));
-
             let machine_config = MachineConfig {
                 vm_id: vm_uuid,
-                socket_path: Cow::Borrowed(socket_path_static.as_path()),
-                exec_path: Cow::Borrowed(ch_binary_static.as_path()),
+                socket_path: Cow::Owned(socket_path.clone()),
+                exec_path: Cow::Owned(self.ch_binary.clone()),
             };
 
             let mut vm = match Machine::connect(machine_config).await {
@@ -689,9 +686,9 @@ impl VmManager {
         info!("Creating VM with CH config: {}", json_config);
 
         // Send create request via raw API
-        if let Err(e) = self
-            .send_api_request(&socket_path, "PUT", "/api/v1/vm.create", Some(&json_config))
-            .await
+        if let Err(e) =
+            Self::send_api_request(&socket_path, "PUT", "/api/v1/vm.create", Some(&json_config))
+                .await
         {
             for tap in &tap_devices {
                 Self::delete_tap_device(tap).await;
@@ -719,13 +716,10 @@ impl VmManager {
             .map_err(|e| VmManagerError::InvalidConfig(format!("Invalid VM ID: {}", e)))?;
 
         // Connect to the CH instance via SDK
-        let socket_path_static: &'static PathBuf = Box::leak(Box::new(socket_path.clone()));
-        let ch_binary_static: &'static PathBuf = Box::leak(Box::new(self.ch_binary.clone()));
-
         let machine_config = MachineConfig {
             vm_id: vm_uuid,
-            socket_path: Cow::Borrowed(socket_path_static.as_path()),
-            exec_path: Cow::Borrowed(ch_binary_static.as_path()),
+            socket_path: Cow::Owned(socket_path.clone()),
+            exec_path: Cow::Owned(self.ch_binary.clone()),
         };
 
         let vm = match Machine::connect(machine_config).await {
@@ -779,8 +773,7 @@ impl VmManager {
         };
 
         // Use raw API for boot so we get the full error response body
-        self.send_api_request(&socket_path, "PUT", "/api/v1/vm.boot", None)
-            .await?;
+        Self::send_api_request(&socket_path, "PUT", "/api/v1/vm.boot", None).await?;
 
         {
             let mut vms = self.vms.lock().await;
@@ -821,10 +814,7 @@ impl VmManager {
 
         // Best-effort: if CH is already gone (socket missing, connection refused),
         // log a warning and continue — the VM is effectively stopped.
-        match self
-            .send_api_request(&socket_path, "PUT", "/api/v1/vm.shutdown", None)
-            .await
-        {
+        match Self::send_api_request(&socket_path, "PUT", "/api/v1/vm.shutdown", None).await {
             Ok(_) => {}
             Err(e) => {
                 warn!(
@@ -854,8 +844,7 @@ impl VmManager {
             .get(vm_id)
             .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
 
-        self.send_api_request(&instance.socket_path, "PUT", "/api/v1/vm.pause", None)
-            .await?;
+        Self::send_api_request(&instance.socket_path, "PUT", "/api/v1/vm.pause", None).await?;
 
         drop(vms);
 
@@ -877,8 +866,7 @@ impl VmManager {
             .get(vm_id)
             .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
 
-        self.send_api_request(&instance.socket_path, "PUT", "/api/v1/vm.resume", None)
-            .await?;
+        Self::send_api_request(&instance.socket_path, "PUT", "/api/v1/vm.resume", None).await?;
 
         drop(vms);
 
@@ -911,8 +899,7 @@ impl VmManager {
         })?;
 
         let body = format!(r#"{{"destination_url":"{}"}}"#, snapshot_url);
-        self.send_api_request(&socket_path, "PUT", "/api/v1/vm.snapshot", Some(&body))
-            .await?;
+        Self::send_api_request(&socket_path, "PUT", "/api/v1/vm.snapshot", Some(&body)).await?;
         info!("VM {} snapshotted successfully to {}", vm_id, snapshot_url);
         Ok(())
     }
@@ -1004,18 +991,15 @@ impl VmManager {
         // Call vm.restore — Cloud Hypervisor reads all config from the snapshot.
         // After vm.restore, CH leaves the VM in paused state; vm.resume is required.
         let body = format!(r#"{{"source_url":"{}","prefault":false}}"#, source_url);
-        if let Err(e) = self
-            .send_api_request(&socket_path, "PUT", "/api/v1/vm.restore", Some(&body))
-            .await
+        if let Err(e) =
+            Self::send_api_request(&socket_path, "PUT", "/api/v1/vm.restore", Some(&body)).await
         {
             // Kill the CH process if restore fails.
             let _ = tokio::fs::remove_file(&socket_path).await;
             return Err(e);
         }
 
-        if let Err(e) = self
-            .send_api_request(&socket_path, "PUT", "/api/v1/vm.resume", None)
-            .await
+        if let Err(e) = Self::send_api_request(&socket_path, "PUT", "/api/v1/vm.resume", None).await
         {
             let _ = tokio::fs::remove_file(&socket_path).await;
             return Err(e);
@@ -1028,13 +1012,10 @@ impl VmManager {
         let vm_uuid = Uuid::parse_str(vm_id)
             .map_err(|e| VmManagerError::InvalidConfig(format!("Invalid VM ID: {}", e)))?;
 
-        let socket_path_static: &'static PathBuf = Box::leak(Box::new(socket_path.clone()));
-        let ch_binary_static: &'static PathBuf = Box::leak(Box::new(self.ch_binary.clone()));
-
         let machine_config = MachineConfig {
             vm_id: vm_uuid,
-            socket_path: Cow::Borrowed(socket_path_static.as_path()),
-            exec_path: Cow::Borrowed(ch_binary_static.as_path()),
+            socket_path: Cow::Owned(socket_path.clone()),
+            exec_path: Cow::Owned(self.ch_binary.clone()),
         };
 
         let vm = Machine::connect(machine_config)
@@ -1072,7 +1053,7 @@ impl VmManager {
     /// 4. Register a placeholder VmInstance so the VM is tracked.
     ///
     /// Returns the `receiver_url` that the source node must pass to
-    /// `vm.send-migration` (e.g. `"tcp://0.0.0.0:49152"`).
+    /// `vm.send-migration` (e.g. `"tcp:0.0.0.0:49152"`).
     pub async fn receive_migration(
         &self,
         vm_id: &str,
@@ -1093,7 +1074,8 @@ impl VmManager {
 
         // Pick a free TCP port if the caller passed 0.
         let port = if migration_port == 0 {
-            std::net::TcpListener::bind("0.0.0.0:0")
+            tokio::net::TcpListener::bind("0.0.0.0:0")
+                .await
                 .map_err(|e| {
                     VmManagerError::MigrationError(format!("Failed to bind ephemeral port: {}", e))
                 })?
@@ -1148,12 +1130,21 @@ impl VmManager {
             let _ = tokio::fs::remove_file(&socket_path).await;
         }
 
-        let log_file = std::fs::File::create(&log_path).map_err(|e| {
+        let log_file = tokio::fs::File::create(&log_path)
+            .await
+            .map_err(|e| {
+                for tap in &tap_devices {
+                    // best-effort cleanup: spawn is non-blocking
+                    let _ = Command::new("ip").args(["link", "delete", tap]).spawn();
+                }
+                VmManagerError::SpawnError(e)
+            })?
+            .into_std()
+            .await;
+
+        let stderr_file = log_file.try_clone().map_err(|e| {
             for tap in &tap_devices {
-                // best-effort sync cleanup before returning error
-                let _ = std::process::Command::new("ip")
-                    .args(["link", "delete", tap])
-                    .status();
+                let _ = Command::new("ip").args(["link", "delete", tap]).spawn();
             }
             VmManagerError::SpawnError(e)
         })?;
@@ -1161,8 +1152,8 @@ impl VmManager {
         let process = Command::new(&self.ch_binary)
             .arg("--api-socket")
             .arg(&socket_path)
-            .stdout(log_file.try_clone().map_err(VmManagerError::SpawnError)?)
-            .stderr(log_file)
+            .stdout(std::process::Stdio::from(log_file))
+            .stderr(std::process::Stdio::from(stderr_file))
             .kill_on_drop(true)
             .spawn()
             .map_err(VmManagerError::SpawnError)?;
@@ -1191,27 +1182,7 @@ impl VmManager {
             }
         }
 
-        let receiver_url = format!("tcp://0.0.0.0:{}", port);
-        let body = format!(r#"{{"receiver_url":"{}"}}"#, receiver_url);
-
-        if let Err(e) = self
-            .send_api_request(
-                &socket_path,
-                "PUT",
-                "/api/v1/vm.receive-migration",
-                Some(&body),
-            )
-            .await
-        {
-            for tap in &tap_devices {
-                Self::delete_tap_device(tap).await;
-            }
-            let _ = tokio::fs::remove_file(&socket_path).await;
-            return Err(VmManagerError::MigrationError(format!(
-                "vm.receive-migration failed: {}",
-                e
-            )));
-        }
+        let receiver_url = format!("tcp:0.0.0.0:{}", port);
 
         // Persist the config for recovery.
         let config_bytes = mutable_config.encode_to_vec();
@@ -1222,13 +1193,10 @@ impl VmManager {
         let vm_uuid = Uuid::parse_str(vm_id)
             .map_err(|e| VmManagerError::InvalidConfig(format!("Invalid VM ID: {}", e)))?;
 
-        let socket_path_static: &'static PathBuf = Box::leak(Box::new(socket_path.clone()));
-        let ch_binary_static: &'static PathBuf = Box::leak(Box::new(self.ch_binary.clone()));
-
         let machine_config = MachineConfig {
             vm_id: vm_uuid,
-            socket_path: Cow::Borrowed(socket_path_static.as_path()),
-            exec_path: Cow::Borrowed(ch_binary_static.as_path()),
+            socket_path: Cow::Owned(socket_path.clone()),
+            exec_path: Cow::Owned(self.ch_binary.clone()),
         };
 
         let vm = Machine::connect(machine_config)
@@ -1239,7 +1207,7 @@ impl VmManager {
             proto_config: mutable_config,
             process: Some(process),
             vm,
-            socket_path,
+            socket_path: socket_path.clone(),
             status: VmStatus::Created,
             tap_devices,
             passt_processes: Vec::new(),
@@ -1252,6 +1220,29 @@ impl VmManager {
             let mut vms = self.vms.lock().await;
             vms.insert(vm_id.to_string(), instance);
         }
+
+        // vm.receive-migration blocks until the sender completes the full transfer.
+        // Spawn it as a background task so we can return the receiver URL immediately;
+        // the control plane will call send_migration on the source concurrently.
+        let body = format!(r#"{{"receiver_url":"{}"}}"#, receiver_url);
+        let socket_path_bg = socket_path.clone();
+        let vm_id_bg = vm_id.to_string();
+        tokio::spawn(async move {
+            match Self::send_api_request(
+                &socket_path_bg,
+                "PUT",
+                "/api/v1/vm.receive-migration",
+                Some(&body),
+            )
+            .await
+            {
+                Ok(_) => info!("VM {} receive-migration completed", vm_id_bg),
+                Err(e) => error!(
+                    "VM {} receive-migration background task failed: {}",
+                    vm_id_bg, e
+                ),
+            }
+        });
 
         info!(
             "VM {} ready to receive migration on {}",
@@ -1283,7 +1274,7 @@ impl VmManager {
         };
 
         let body = format!(r#"{{"destination_url":"{}"}}"#, destination_url);
-        self.send_api_request(
+        Self::send_api_request(
             &socket_path,
             "PUT",
             "/api/v1/vm.send-migration",
@@ -1404,16 +1395,14 @@ impl VmManager {
             instance.socket_path.clone()
         };
 
-        let body = match self
-            .send_api_request(&socket_path, "GET", "/api/v1/vm.counters", None)
-            .await
-        {
-            Ok(b) => b,
-            Err(e) => {
-                debug!("VM {} counters not available: {}", vm_id, e);
-                return Ok(HashMap::new());
-            }
-        };
+        let body =
+            match Self::send_api_request(&socket_path, "GET", "/api/v1/vm.counters", None).await {
+                Ok(b) => b,
+                Err(e) => {
+                    debug!("VM {} counters not available: {}", vm_id, e);
+                    return Ok(HashMap::new());
+                }
+            };
 
         if body.is_empty() {
             return Ok(HashMap::new());
@@ -1445,7 +1434,7 @@ impl VmManager {
         let body = serde_json::to_string(&sdk_config)
             .map_err(|e| VmManagerError::InvalidConfig(e.to_string()))?;
 
-        self.send_api_request(
+        Self::send_api_request(
             &instance.socket_path,
             "PUT",
             "/api/v1/vm.add-net",
@@ -1468,7 +1457,7 @@ impl VmManager {
             .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
 
         let body = serde_json::json!({ "id": device_id }).to_string();
-        self.send_api_request(
+        Self::send_api_request(
             &instance.socket_path,
             "PUT",
             "/api/v1/vm.remove-device",
@@ -1494,7 +1483,7 @@ impl VmManager {
         let body = serde_json::to_string(&sdk_config)
             .map_err(|e| VmManagerError::InvalidConfig(e.to_string()))?;
 
-        self.send_api_request(
+        Self::send_api_request(
             &instance.socket_path,
             "PUT",
             "/api/v1/vm.add-disk",
@@ -1517,7 +1506,7 @@ impl VmManager {
             .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
 
         let body = serde_json::json!({ "id": device_id }).to_string();
-        self.send_api_request(
+        Self::send_api_request(
             &instance.socket_path,
             "PUT",
             "/api/v1/vm.remove-device",
@@ -1530,7 +1519,6 @@ impl VmManager {
 
     /// Send a raw API request to Cloud Hypervisor
     async fn send_api_request(
-        &self,
         socket_path: &PathBuf,
         method: &str,
         path: &str,
@@ -1831,7 +1819,7 @@ impl VmManager {
         let body = serde_json::to_string(&sdk_config)
             .map_err(|e| VmManagerError::InvalidConfig(e.to_string()))?;
 
-        self.send_api_request(
+        Self::send_api_request(
             &instance.socket_path,
             "PUT",
             "/api/v1/vm.add-fs",
@@ -1854,7 +1842,7 @@ impl VmManager {
             .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
 
         let body = serde_json::json!({ "id": device_id }).to_string();
-        self.send_api_request(
+        Self::send_api_request(
             &instance.socket_path,
             "PUT",
             "/api/v1/vm.remove-device",
@@ -1965,10 +1953,7 @@ impl VmManager {
             return (None, None);
         }
 
-        let body = match self
-            .send_api_request(socket_path, "GET", "/api/v1/vm.info", None)
-            .await
-        {
+        let body = match Self::send_api_request(socket_path, "GET", "/api/v1/vm.info", None).await {
             Ok(b) => b,
             Err(e) => {
                 debug!("Failed to query vm.info for PTY paths: {}", e);

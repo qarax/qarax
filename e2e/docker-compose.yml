@@ -42,6 +42,36 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
+  qarax-node-2:
+    build:
+      context: ..
+      dockerfile: e2e/Dockerfile.qarax-node
+    privileged: true
+    devices:
+      - /dev/kvm:/dev/kvm
+      - /dev/net/tun:/dev/net/tun
+    volumes:
+      - ${PRODUCTION_IMAGES_DIR:-/tmp/qarax-no-production-images}:/var/lib/qarax/production-images:rw
+      - qarax_vms_2:/var/lib/qarax/vms
+      - qarax_overlaybd_2:/var/lib/qarax/overlaybd
+      - /lib/modules:/lib/modules:ro
+      - /sys/kernel/config:/sys/kernel/config
+    environment:
+      OVERLAYBD_REGISTRY_URL: http://registry:5000
+      INSECURE_REGISTRIES: registry:5000
+    ports:
+      - "50052:50051"
+    depends_on:
+      registry:
+        condition: service_healthy
+      nfs-server:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD", "nc", "-z", "localhost", "50051" ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   qarax:
     build:
       context: ..
@@ -62,6 +92,8 @@ services:
       postgres:
         condition: service_healthy
       qarax-node:
+        condition: service_healthy
+      qarax-node-2:
         condition: service_healthy
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8000/" ]
@@ -111,4 +143,6 @@ volumes:
   registry_data:
   qarax_vms:
   qarax_overlaybd:
+  qarax_vms_2:
+  qarax_overlaybd_2:
   nfs_export:

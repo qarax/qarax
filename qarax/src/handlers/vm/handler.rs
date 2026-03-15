@@ -1769,6 +1769,8 @@ pub async fn migrate(
     // Build the VmConfig that the destination node needs to set up infrastructure.
     let create_req = build_create_vm_request(&env, &vm).await?;
 
+    let original_status = vm.status.clone();
+
     vms::update_status(env.pool(), vm_id, VmStatus::Migrating).await?;
 
     let job = jobs::create(
@@ -1851,7 +1853,7 @@ pub async fn migrate(
                 let msg = format!("receive_migration failed: {:#}", e);
                 tracing::error!(vm_id = %vm_id, job_id = %job_id, error = %msg);
                 let _ = jobs::mark_failed(&db_pool, job_id, &msg).await;
-                let _ = vms::update_status(&db_pool, vm_id, VmStatus::Running).await;
+                let _ = vms::update_status(&db_pool, vm_id, original_status.clone()).await;
                 return;
             }
         };
@@ -1870,7 +1872,7 @@ pub async fn migrate(
             let msg = format!("send_migration failed: {:#}", e);
             tracing::error!(vm_id = %vm_id, job_id = %job_id, error = %msg);
             let _ = jobs::mark_failed(&db_pool, job_id, &msg).await;
-            let _ = vms::update_status(&db_pool, vm_id, VmStatus::Running).await;
+            let _ = vms::update_status(&db_pool, vm_id, original_status).await;
             return;
         }
 
@@ -1880,7 +1882,7 @@ pub async fn migrate(
         if let Err(e) = vms::update_host_id(&db_pool, vm_id, target_host.id).await {
             tracing::error!(vm_id = %vm_id, job_id = %job_id, error = %e, "Failed to update host_id after migration");
         }
-        let _ = vms::update_status(&db_pool, vm_id, VmStatus::Running).await;
+        let _ = vms::update_status(&db_pool, vm_id, original_status).await;
 
         // Step 4: Clean up source node resources (TAP devices, persisted config).
         // delete_vm on the source is best-effort — the CH process has already
