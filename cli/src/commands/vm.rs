@@ -1,12 +1,15 @@
 use anyhow::anyhow;
 use clap::{Args, Subcommand};
-use tabled::{Table, Tabled};
+use tabled::{Table, Tabled, settings::Style};
 use uuid::Uuid;
 
 use crate::{
     api::{
         self,
-        models::{AttachDiskRequest, CreateVmResult, NewVm, NewVmNetwork, RestoreRequest},
+        models::{
+            AttachDiskRequest, CreateSnapshotRequest, CreateVmResult, NewVm, NewVmNetwork,
+            RestoreRequest,
+        },
     },
     client::Client,
     console,
@@ -127,6 +130,9 @@ enum SnapshotCommand {
     Create {
         /// VM name or ID
         vm: String,
+        /// Optional name for the snapshot (auto-generated if omitted)
+        #[arg(long)]
+        name: Option<String>,
     },
     /// List snapshots for a VM
     List {
@@ -147,12 +153,12 @@ enum SnapshotCommand {
 struct SnapshotRow {
     #[tabled(rename = "ID")]
     id: String,
-    #[tabled(rename = "VM ID")]
-    vm_id: String,
+    #[tabled(rename = "Name")]
+    name: String,
     #[tabled(rename = "Status")]
     status: String,
-    #[tabled(rename = "URL")]
-    snapshot_url: String,
+    #[tabled(rename = "Created")]
+    created_at: String,
 }
 
 #[derive(Tabled)]
@@ -195,7 +201,7 @@ pub async fn run(args: VmArgs, client: &Client, json: bool) -> anyhow::Result<()
                         image_ref: vm.image_ref.clone().unwrap_or_else(|| "-".to_string()),
                     })
                     .collect();
-                println!("{}", Table::new(rows));
+                println!("{}", Table::new(rows).with(Style::psql()));
             }
         }
 
@@ -377,15 +383,17 @@ pub async fn run(args: VmArgs, client: &Client, json: bool) -> anyhow::Result<()
         }
 
         VmCommand::Snapshot { command } => match command {
-            SnapshotCommand::Create { vm } => {
+            SnapshotCommand::Create { vm, name } => {
                 let id = resolve_vm_id(client, &vm).await?;
-                let snapshot = api::vms::create_snapshot(client, id).await?;
+                let req = CreateSnapshotRequest { name };
+                let snapshot = api::vms::create_snapshot(client, id, &req).await?;
                 if json {
                     print_json(&snapshot)?;
                 } else {
                     println!("Snapshot: {}", snapshot.id);
+                    println!("Name:     {}", snapshot.name);
                     println!("Status:   {}", snapshot.status);
-                    println!("URL:      {}", snapshot.snapshot_url);
+                    println!("Created:  {}", snapshot.created_at);
                 }
             }
 
@@ -399,12 +407,12 @@ pub async fn run(args: VmArgs, client: &Client, json: bool) -> anyhow::Result<()
                         .iter()
                         .map(|s| SnapshotRow {
                             id: s.id.to_string(),
-                            vm_id: s.vm_id.to_string(),
+                            name: s.name.clone(),
                             status: s.status.clone(),
-                            snapshot_url: s.snapshot_url.clone(),
+                            created_at: s.created_at.clone(),
                         })
                         .collect();
-                    println!("{}", Table::new(rows));
+                    println!("{}", Table::new(rows).with(Style::psql()));
                 }
             }
 

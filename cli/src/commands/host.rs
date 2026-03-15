@@ -1,5 +1,5 @@
 use clap::{Args, Subcommand};
-use tabled::{Table, Tabled};
+use tabled::{Table, Tabled, settings::Style};
 
 use crate::{
     api::{
@@ -130,7 +130,7 @@ pub async fn run(args: HostArgs, client: &Client, json: bool) -> anyhow::Result<
                             .unwrap_or_else(|| "-".to_string()),
                     })
                     .collect();
-                println!("{}", Table::new(rows));
+                println!("{}", Table::new(rows).with(Style::psql()));
             }
         }
 

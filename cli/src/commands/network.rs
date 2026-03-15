@@ -1,5 +1,5 @@
 use clap::{Args, Subcommand};
-use tabled::{Table, Tabled};
+use tabled::{Table, Tabled, settings::Style};
 
 use crate::{
     api::{self, models::NewNetwork},
@@ -123,7 +123,7 @@ pub async fn run(args: NetworkArgs, client: &Client, json: bool) -> anyhow::Resu
                         status: n.status.clone(),
                     })
                     .collect();
-                println!("{}", Table::new(rows));
+                println!("{}", Table::new(rows).with(Style::psql()));
             }
         }
 
@@ -228,7 +228,7 @@ pub async fn run(args: NetworkArgs, client: &Client, json: bool) -> anyhow::Resu
                         allocated_at: a.allocated_at.clone(),
                     })
                     .collect();
-                println!("{}", Table::new(rows));
+                println!("{}", Table::new(rows).with(Style::psql()));
             }
         }
     }

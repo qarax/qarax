@@ -1,5 +1,5 @@
 use clap::{Args, Subcommand};
-use tabled::{Table, Tabled};
+use tabled::{Table, Tabled, settings::Style};
 use uuid::Uuid;
 
 use crate::{
@@ -83,7 +83,7 @@ pub async fn run(args: TransferArgs, client: &Client, json: bool) -> anyhow::Res
                         transferred: format_bytes(t.transferred_bytes),
                     })
                     .collect();
-                println!("{}", Table::new(rows));
+                println!("{}", Table::new(rows).with(Style::psql()));
             }
         }
 

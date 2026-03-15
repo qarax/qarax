@@ -822,12 +822,19 @@ pub async fn list_snapshots(
     })
 }
 
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct CreateSnapshotRequest {
+    /// Human-readable name for the snapshot (auto-generated if omitted).
+    pub name: Option<String>,
+}
+
 #[utoipa::path(
     post,
     path = "/vms/{vm_id}/snapshots",
     params(
         ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier")
     ),
+    request_body = CreateSnapshotRequest,
     responses(
         (status = 201, description = "Snapshot created", body = Snapshot),
         (status = 404, description = "VM not found"),
@@ -839,16 +846,21 @@ pub async fn list_snapshots(
 pub async fn create_snapshot(
     Extension(env): Extension<App>,
     Path(vm_id): Path<Uuid>,
+    Json(body): Json<CreateSnapshotRequest>,
 ) -> Result<ApiResponse<Snapshot>> {
     let host = host_for_vm(&env, vm_id).await?;
 
     let snapshot_id = Uuid::new_v4();
     let snapshot_url = format!("file://{}/{}/{}", env.snapshot_dir(), vm_id, snapshot_id);
+    let name = body
+        .name
+        .unwrap_or_else(|| format!("snapshot-{}", &snapshot_id.to_string()[..8]));
 
     let id = snapshots::create(
         env.pool(),
         &NewSnapshot {
             vm_id,
+            name,
             snapshot_url: snapshot_url.clone(),
         },
     )

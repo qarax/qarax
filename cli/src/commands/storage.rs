@@ -1,5 +1,5 @@
 use clap::{Args, Subcommand};
-use tabled::{Table, Tabled};
+use tabled::{Table, Tabled, settings::Style};
 use uuid::Uuid;
 
 use crate::{
@@ -117,7 +117,7 @@ pub async fn run_pool(args: StoragePoolArgs, client: &Client, json: bool) -> any
                             .unwrap_or_else(|| "-".to_string()),
                     })
                     .collect();
-                println!("{}", Table::new(rows));
+                println!("{}", Table::new(rows).with(Style::psql()));
             }
         }
 
@@ -320,7 +320,7 @@ pub async fn run_object(
                         size: format_bytes(o.size_bytes),
                     })
                     .collect();
-                println!("{}", Table::new(rows));
+                println!("{}", Table::new(rows).with(Style::psql()));
             }
         }
 

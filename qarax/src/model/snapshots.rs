@@ -22,6 +22,7 @@ pub enum SnapshotStatus {
 pub struct Snapshot {
     pub id: Uuid,
     pub vm_id: Uuid,
+    pub name: String,
     pub status: SnapshotStatus,
     pub snapshot_url: String,
     pub created_at: DateTime<Utc>,
@@ -29,6 +30,7 @@ pub struct Snapshot {
 
 pub struct NewSnapshot {
     pub vm_id: Uuid,
+    pub name: String,
     pub snapshot_url: String,
 }
 
@@ -36,12 +38,13 @@ pub async fn create(pool: &PgPool, new: &NewSnapshot) -> Result<Uuid, sqlx::Erro
     let id = Uuid::new_v4();
     sqlx::query(
         r#"
-INSERT INTO vm_snapshots (id, vm_id, snapshot_url)
-VALUES ($1, $2, $3)
+INSERT INTO vm_snapshots (id, vm_id, name, snapshot_url)
+VALUES ($1, $2, $3, $4)
         "#,
     )
     .bind(id)
     .bind(new.vm_id)
+    .bind(&new.name)
     .bind(&new.snapshot_url)
     .execute(pool)
     .await?;
@@ -52,7 +55,7 @@ VALUES ($1, $2, $3)
 pub async fn get(pool: &PgPool, snapshot_id: Uuid) -> Result<Snapshot, sqlx::Error> {
     let snapshot = sqlx::query_as::<_, Snapshot>(
         r#"
-SELECT id, vm_id, status, snapshot_url, created_at
+SELECT id, vm_id, name, status, snapshot_url, created_at
 FROM vm_snapshots
 WHERE id = $1
         "#,
@@ -67,7 +70,7 @@ WHERE id = $1
 pub async fn list_for_vm(pool: &PgPool, vm_id: Uuid) -> Result<Vec<Snapshot>, sqlx::Error> {
     let snapshots = sqlx::query_as::<_, Snapshot>(
         r#"
-SELECT id, vm_id, status, snapshot_url, created_at
+SELECT id, vm_id, name, status, snapshot_url, created_at
 FROM vm_snapshots
 WHERE vm_id = $1
 ORDER BY created_at ASC

@@ -1024,6 +1024,12 @@ paths:
         schema:
           type: string
           format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSnapshotRequest'
+        required: true
       responses:
         '201':
           description: Snapshot created
@@ -1151,6 +1157,14 @@ components:
           - 'null'
         name:
           type: string
+    CreateSnapshotRequest:
+      type: object
+      properties:
+        name:
+          type:
+          - string
+          - 'null'
+          description: Human-readable name for the snapshot (auto-generated if omitted).
     CreateVmResponse:
       type: object
       required:
@@ -1897,6 +1911,7 @@ components:
       required:
       - id
       - vm_id
+      - name
       - status
       - snapshot_url
       - created_at
@@ -1907,6 +1922,8 @@ components:
         id:
           type: string
           format: uuid
+        name:
+          type: string
         snapshot_url:
           type: string
         status:

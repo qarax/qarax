@@ -19,6 +19,7 @@ class Snapshot:
     Attributes:
         created_at (datetime.datetime):
         id (UUID):
+        name (str):
         snapshot_url (str):
         status (SnapshotStatus):
         vm_id (UUID):
@@ -26,6 +27,7 @@ class Snapshot:
 
     created_at: datetime.datetime
     id: UUID
+    name: str
     snapshot_url: str
     status: SnapshotStatus
     vm_id: UUID
@@ -35,6 +37,8 @@ class Snapshot:
         created_at = self.created_at.isoformat()
 
         id = str(self.id)
+
+        name = self.name
 
         snapshot_url = self.snapshot_url
 
@@ -48,6 +52,7 @@ class Snapshot:
             {
                 "created_at": created_at,
                 "id": id,
+                "name": name,
                 "snapshot_url": snapshot_url,
                 "status": status,
                 "vm_id": vm_id,
@@ -63,6 +68,8 @@ class Snapshot:
 
         id = UUID(d.pop("id"))
 
+        name = d.pop("name")
+
         snapshot_url = d.pop("snapshot_url")
 
         status = SnapshotStatus(d.pop("status"))
@@ -72,6 +79,7 @@ class Snapshot:
         snapshot = cls(
             created_at=created_at,
             id=id,
+            name=name,
             snapshot_url=snapshot_url,
             status=status,
             vm_id=vm_id,

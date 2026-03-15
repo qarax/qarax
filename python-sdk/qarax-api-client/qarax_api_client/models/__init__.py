@@ -4,6 +4,7 @@ from .attach_disk_request import AttachDiskRequest
 from .attach_host_request import AttachHostRequest
 from .boot_mode import BootMode
 from .boot_source import BootSource
+from .create_snapshot_request import CreateSnapshotRequest
 from .create_vm_response import CreateVmResponse
 from .deploy_host_request import DeployHostRequest
 from .host import Host
@@ -57,6 +58,7 @@ __all__ = (
     "AttachHostRequest",
     "BootMode",
     "BootSource",
+    "CreateSnapshotRequest",
     "CreateVmResponse",
     "DeployHostRequest",
     "Host",
