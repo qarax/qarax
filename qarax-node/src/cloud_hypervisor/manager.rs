@@ -611,13 +611,18 @@ impl VmManager {
             socket_path.display()
         );
 
-        let log_file = std::fs::File::create(&log_path).map_err(VmManagerError::SpawnError)?;
+        let log_file = tokio::fs::File::create(&log_path)
+            .await
+            .map_err(VmManagerError::SpawnError)?
+            .into_std()
+            .await;
+        let stderr_file = log_file.try_clone().map_err(VmManagerError::SpawnError)?;
 
         let process = match Command::new(&self.ch_binary)
             .arg("--api-socket")
             .arg(&socket_path)
-            .stdout(log_file.try_clone().map_err(VmManagerError::SpawnError)?)
-            .stderr(log_file)
+            .stdout(std::process::Stdio::from(log_file))
+            .stderr(std::process::Stdio::from(stderr_file))
             .kill_on_drop(true)
             .spawn()
         {
@@ -958,13 +963,18 @@ impl VmManager {
             let _ = tokio::fs::remove_file(&socket_path).await;
         }
 
-        let log_file = std::fs::File::create(&log_path).map_err(VmManagerError::SpawnError)?;
+        let log_file = tokio::fs::File::create(&log_path)
+            .await
+            .map_err(VmManagerError::SpawnError)?
+            .into_std()
+            .await;
+        let stderr_file = log_file.try_clone().map_err(VmManagerError::SpawnError)?;
 
         let process = Command::new(&self.ch_binary)
             .arg("--api-socket")
             .arg(&socket_path)
-            .stdout(log_file.try_clone().map_err(VmManagerError::SpawnError)?)
-            .stderr(log_file)
+            .stdout(std::process::Stdio::from(log_file))
+            .stderr(std::process::Stdio::from(stderr_file))
             .kill_on_drop(true)
             .spawn()
             .map_err(VmManagerError::SpawnError)?;

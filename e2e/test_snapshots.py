@@ -37,6 +37,7 @@ from qarax_api_client.api.vms import (
 from qarax_api_client.models import Hypervisor, NewVm, VmStatus
 from qarax_api_client.models.restore_request import RestoreRequest
 from qarax_api_client.models.snapshot_status import SnapshotStatus
+from qarax_api_client.models.create_snapshot_request import CreateSnapshotRequest
 
 QARAX_URL = os.getenv("QARAX_URL", "http://localhost:8000")
 VM_OPERATION_TIMEOUT = 60
@@ -102,7 +103,7 @@ async def test_create_snapshot_unknown_vm_returns_404(client):
     """Creating a snapshot for an unknown VM returns 404."""
     async with client as c:
         unknown_id = uuid.uuid4()
-        resp = await create_snapshot.asyncio_detailed(client=c, vm_id=unknown_id)
+        resp = await create_snapshot.asyncio_detailed(client=c, vm_id=unknown_id, body=CreateSnapshotRequest())
         assert resp.status_code == 404, f"Expected 404, got {resp.status_code}"
 
 
@@ -129,7 +130,7 @@ async def test_snapshot_full_lifecycle(client):
             await wait_for_status(c, vm_id, VmStatus.RUNNING)
 
             # Create a snapshot
-            snapshot = await create_snapshot.asyncio(client=c, vm_id=vm_id)
+            snapshot = await create_snapshot.asyncio(client=c, vm_id=vm_id, body=CreateSnapshotRequest())
             assert snapshot is not None, "Expected snapshot object, got None"
             assert snapshot.vm_id == vm_id
             assert snapshot.status == SnapshotStatus.READY
@@ -178,7 +179,7 @@ async def test_snapshot_restore(client):
             await wait_for_status(c, vm_id, VmStatus.RUNNING)
 
             # Create a snapshot
-            snapshot = await create_snapshot.asyncio(client=c, vm_id=vm_id)
+            snapshot = await create_snapshot.asyncio(client=c, vm_id=vm_id, body=CreateSnapshotRequest())
             assert snapshot is not None, "Expected snapshot object, got None"
             assert snapshot.status == SnapshotStatus.READY
 

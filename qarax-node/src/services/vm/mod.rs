@@ -430,7 +430,7 @@ impl VmService for VmServiceImpl {
             .image_store_manager()
             .ok_or_else(|| Status::unimplemented("virtiofsd not configured on this node"))?;
 
-        match store.get_image_status(&image_ref) {
+        match store.get_image_status(&image_ref).await {
             Some(info) => Ok(Response::new(OciImageResponse {
                 image_ref: info.image_ref,
                 digest: info.digest,
@@ -533,7 +533,8 @@ impl VmService for VmServiceImpl {
         };
 
         // Get kernel version
-        let kernel_version = std::fs::read_to_string("/proc/version")
+        let kernel_version = tokio::fs::read_to_string("/proc/version")
+            .await
             .unwrap_or_else(|_| "unknown".to_string())
             .split_whitespace()
             .nth(2)
@@ -543,9 +544,9 @@ impl VmService for VmServiceImpl {
         // Resource info
         let total_cpus = num_cpus::get() as i32;
 
-        let (total_memory_bytes, available_memory_bytes) = parse_meminfo();
+        let (total_memory_bytes, available_memory_bytes) = parse_meminfo().await;
 
-        let load_average_1m = parse_loadavg();
+        let load_average_1m = parse_loadavg().await;
 
         let (disk_total_bytes, disk_available_bytes) = disk_usage(self.manager.runtime_dir());
 
@@ -617,13 +618,19 @@ impl VmService for VmServiceImpl {
         // waiting for VM output, the write task cannot acquire the handle and
         // deadlocks — the user's keystrokes never reach the VM.  Two separate
         // fds solve this: reads and writes run independently.
-        let pty_read_std = std::fs::OpenOptions::new()
-            .read(true)
-            .open(&pty_path)
-            .map_err(|e| {
-                error!("Failed to open PTY {} for reading: {}", pty_path, e);
-                Status::internal(format!("Failed to open PTY {}: {}", pty_path, e))
-            })?;
+        let pty_path_read = pty_path.clone();
+        let pty_read_std = tokio::task::spawn_blocking(move || {
+            std::fs::OpenOptions::new().read(true).open(&pty_path_read)
+        })
+        .await
+        .map_err(|e| {
+            error!("spawn_blocking join error: {}", e);
+            Status::internal(format!("Failed to open PTY: {}", e))
+        })?
+        .map_err(|e| {
+            error!("Failed to open PTY {} for reading: {}", pty_path, e);
+            Status::internal(format!("Failed to open PTY {}: {}", pty_path, e))
+        })?;
 
         // Put the PTY slave into raw mode (termios is device-wide, so one
         // tcsetattr call covers both fds).
@@ -641,13 +648,21 @@ impl VmService for VmServiceImpl {
             }
         }
 
-        let pty_write_std = std::fs::OpenOptions::new()
-            .write(true)
-            .open(&pty_path)
-            .map_err(|e| {
-                error!("Failed to open PTY {} for writing: {}", pty_path, e);
-                Status::internal(format!("Failed to open PTY: {}", e))
-            })?;
+        let pty_path_write = pty_path.clone();
+        let pty_write_std = tokio::task::spawn_blocking(move || {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&pty_path_write)
+        })
+        .await
+        .map_err(|e| {
+            error!("spawn_blocking join error: {}", e);
+            Status::internal(format!("Failed to open PTY: {}", e))
+        })?
+        .map_err(|e| {
+            error!("Failed to open PTY {} for writing: {}", pty_path, e);
+            Status::internal(format!("Failed to open PTY: {}", e))
+        })?;
 
         let pty_reader = tokio::fs::File::from(pty_read_std);
         let mut pty_writer = tokio::fs::File::from(pty_write_std);
@@ -1084,8 +1099,8 @@ async fn check_overlaybd_registry(config_json: &str) -> AnyhowResult<String> {
 }
 
 /// Parse /proc/meminfo to get total and available memory in bytes.
-fn parse_meminfo() -> (i64, i64) {
-    let content = match std::fs::read_to_string("/proc/meminfo") {
+async fn parse_meminfo() -> (i64, i64) {
+    let content = match tokio::fs::read_to_string("/proc/meminfo").await {
         Ok(c) => c,
         Err(_) => return (0, 0),
     };
@@ -1111,8 +1126,9 @@ fn parse_meminfo_kb(s: &str) -> i64 {
 }
 
 /// Parse 1-minute load average from /proc/loadavg.
-fn parse_loadavg() -> f64 {
-    std::fs::read_to_string("/proc/loadavg")
+async fn parse_loadavg() -> f64 {
+    tokio::fs::read_to_string("/proc/loadavg")
+        .await
         .ok()
         .and_then(|s| s.split_whitespace().next().and_then(|v| v.parse().ok()))
         .unwrap_or(0.0)

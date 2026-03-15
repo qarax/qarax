@@ -84,7 +84,7 @@ elapsed=0
 while [ $elapsed -lt $timeout ]; do
     # Check if all services are healthy
     healthy_count=$(docker-compose ps 2>/dev/null | grep -c "(healthy)" || echo "0")
-    total_services=5  # nfs-server, registry, postgres, qarax, qarax-node
+    total_services=6  # nfs-server, registry, postgres, qarax, qarax-node, qarax-node-2
 
     if [ "$healthy_count" -ge "$total_services" ]; then
         echo ""
@@ -120,7 +120,8 @@ echo -e "${YELLOW}Service status:${NC}"
 docker-compose ps
 echo ""
 
-bash setup_host.sh
+bash setup_host.sh http://localhost:8000 qarax-node 50051 e2e-node-1
+bash setup_host.sh http://localhost:8000 qarax-node-2 50051 e2e-node-2
 echo ""
 
 # Setup Python environment with uv

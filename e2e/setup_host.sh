@@ -3,13 +3,14 @@
 # Required for VM scheduling (the control plane picks a host in UP state).
 #
 # In VM mode, pass the VM IP explicitly as QARAX_NODE_HOST or as the second arg.
-# Usage: ./setup_host.sh [QARAX_URL] [QARAX_NODE_HOST] [QARAX_NODE_PORT]
+# Usage: ./setup_host.sh [QARAX_URL] [QARAX_NODE_HOST] [QARAX_NODE_PORT] [HOST_NAME]
 
 set -e
 
 QARAX_URL="${1:-http://localhost:8000}"
 QARAX_NODE_HOST="${2:-qarax-node}"
 QARAX_NODE_PORT="${3:-50051}"
+HOST_NAME="${4:-e2e-node}"
 
 lookup_hosts() {
   curl -fsS "${QARAX_URL}/hosts"
@@ -34,7 +35,7 @@ if [ -z "$host_id" ]; then
     -f \
     -sS \
     -H "Content-Type: application/json" \
-    -d "{\"name\":\"e2e-node\",\"address\":\"${QARAX_NODE_HOST}\",\"port\":${QARAX_NODE_PORT},\"host_user\":\"root\",\"password\":\"\"}" \
+    -d "{\"name\":\"${HOST_NAME}\",\"address\":\"${QARAX_NODE_HOST}\",\"port\":${QARAX_NODE_PORT},\"host_user\":\"root\",\"password\":\"\"}" \
     -o /dev/null || true
 fi
 

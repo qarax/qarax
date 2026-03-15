@@ -102,10 +102,11 @@ impl ImageStoreManager {
 
         // Return cached result if rootfs is already populated
         if rootfs_dir.exists() {
-            let entry_count = std::fs::read_dir(&rootfs_dir)
-                .map(|rd| rd.count())
-                .unwrap_or(0);
-            if entry_count > 0 {
+            let has_entries = match tokio::fs::read_dir(&rootfs_dir).await {
+                Ok(mut rd) => rd.next_entry().await.ok().flatten().is_some(),
+                Err(_) => false,
+            };
+            if has_entries {
                 let digest = tokio::fs::read_to_string(&digest_file)
                     .await
                     .unwrap_or_default()
@@ -199,13 +200,19 @@ impl ImageStoreManager {
             let mut buf: Vec<u8> = Vec::new();
             client.pull_blob(&reference, layer, &mut buf).await?;
 
-            let cursor = Cursor::new(buf);
-            if is_gzip {
-                let decoder = GzDecoder::new(cursor);
-                tar::Archive::new(decoder).unpack(&rootfs_dir)?;
-            } else {
-                tar::Archive::new(cursor).unpack(&rootfs_dir)?;
-            }
+            let unpack_dir = rootfs_dir.clone();
+            tokio::task::spawn_blocking(move || {
+                let cursor = Cursor::new(buf);
+                if is_gzip {
+                    let decoder = GzDecoder::new(cursor);
+                    tar::Archive::new(decoder).unpack(&unpack_dir)
+                } else {
+                    tar::Archive::new(cursor).unpack(&unpack_dir)
+                }
+            })
+            .await
+            .map_err(|e| ImageStoreError::Io(std::io::Error::other(e)))?
+            .map_err(ImageStoreError::Io)?;
         }
 
         tokio::fs::write(&digest_file, digest.as_bytes()).await?;
@@ -371,7 +378,7 @@ impl ImageStoreManager {
         }
     }
 
-    pub fn get_image_status(&self, image_ref: &str) -> Option<ImageInfo> {
+    pub async fn get_image_status(&self, image_ref: &str) -> Option<ImageInfo> {
         let safe_name = Self::safe_name(image_ref);
         let image_dir = self.cache_dir.join(&safe_name);
         let rootfs_dir = image_dir.join("rootfs");
@@ -380,21 +387,23 @@ impl ImageStoreManager {
             return None;
         }
 
-        let entry_count = std::fs::read_dir(&rootfs_dir)
-            .map(|rd| rd.count())
-            .unwrap_or(0);
-        if entry_count == 0 {
+        let has_entries = match tokio::fs::read_dir(&rootfs_dir).await {
+            Ok(mut rd) => rd.next_entry().await.ok().flatten().is_some(),
+            Err(_) => false,
+        };
+        if !has_entries {
             return None;
         }
 
-        let digest = std::fs::read_to_string(image_dir.join("digest.txt"))
+        let digest = tokio::fs::read_to_string(image_dir.join("digest.txt"))
+            .await
             .unwrap_or_default()
             .trim()
             .to_string();
 
         let config_file = image_dir.join("config.json");
         let (env, entrypoint, cmd) = if config_file.exists() {
-            if let Ok(config_str) = std::fs::read_to_string(&config_file) {
+            if let Ok(config_str) = tokio::fs::read_to_string(&config_file).await {
                 if let Ok(config) = serde_json::from_str::<OciImageConfigDetails>(&config_str) {
                     (config.env, config.entrypoint, config.cmd)
                 } else {
