@@ -12,49 +12,40 @@ QARAX_NODE_HOST="${2:-qarax-node}"
 QARAX_NODE_PORT="${3:-50051}"
 HOST_NAME="${4:-e2e-node}"
 
-lookup_hosts() {
-  curl -fsS "${QARAX_URL}/hosts"
+MUSL_TARGET="x86_64-unknown-linux-musl"
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+find_qarax_bin() {
+	if command -v qarax &>/dev/null; then
+		echo "qarax"
+	elif [[ -x "$REPO_ROOT/target/$MUSL_TARGET/release/qarax" ]]; then
+		echo "$REPO_ROOT/target/$MUSL_TARGET/release/qarax"
+	elif [[ -x "$REPO_ROOT/target/$MUSL_TARGET/debug/qarax" ]]; then
+		echo "$REPO_ROOT/target/$MUSL_TARGET/debug/qarax"
+	else
+		echo ""
+	fi
 }
+
+QARAX_BIN="$(find_qarax_bin)"
+if [[ -z "$QARAX_BIN" ]]; then
+	echo "ERROR: qarax CLI binary not found. Build it with: cargo build -p cli" >&2
+	exit 1
+fi
+
+QARAX="$QARAX_BIN --server $QARAX_URL"
 
 echo "Registering host (${QARAX_NODE_HOST}:${QARAX_NODE_PORT})..."
 
-# Attempt registration; ignore errors since the host may already exist with a
-# different name (the address column has a UNIQUE constraint).
-host_id=""
-host_id="$(lookup_hosts | python3 -c "
-import sys, json
-address = sys.argv[1]
-for h in json.load(sys.stdin):
-    if h.get('address') == address:
-        print(h['id'])
-        break
-" "${QARAX_NODE_HOST}")"
+# Attempt registration; ignore errors since the host may already exist
+# (the address column has a UNIQUE constraint).
+$QARAX host add \
+	--name "$HOST_NAME" \
+	--address "$QARAX_NODE_HOST" \
+	--port "$QARAX_NODE_PORT" \
+	--user root \
+	--password "" 2>/dev/null || true
 
-if [ -z "$host_id" ]; then
-  curl -s -X POST "${QARAX_URL}/hosts" \
-    -f \
-    -sS \
-    -H "Content-Type: application/json" \
-    -d "{\"name\":\"${HOST_NAME}\",\"address\":\"${QARAX_NODE_HOST}\",\"port\":${QARAX_NODE_PORT},\"host_user\":\"root\",\"password\":\"\"}" \
-    -o /dev/null || true
-fi
+$QARAX host init "$HOST_NAME"
 
-# Find the host by address (name may differ from previous runs)
-host_id=$(lookup_hosts | python3 -c "
-import sys, json
-address = sys.argv[1]
-for h in json.load(sys.stdin):
-    if h.get('address') == address:
-        print(h['id'])
-        break
-" "${QARAX_NODE_HOST}")
-
-if [ -z "$host_id" ]; then
-  echo "ERROR: Could not find a host with address '${QARAX_NODE_HOST}'" >&2
-  lookup_hosts >&2
-  exit 1
-fi
-
-curl -fsS -X POST "${QARAX_URL}/hosts/${host_id}/init" -o /dev/null
-
-echo "Host initialized and set to UP (id: ${host_id})"
+echo "Host initialized and set to UP (name: ${HOST_NAME})"
