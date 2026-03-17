@@ -248,3 +248,47 @@ pub async fn delete_by_vm(pool: &PgPool, vm_id: Uuid) -> Result<(), sqlx::Error>
         .await?;
     Ok(())
 }
+
+pub async fn delete(pool: &PgPool, disk_id: Uuid) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM vm_disks WHERE id = $1")
+        .bind(disk_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn get_by_logical_name(
+    pool: &PgPool,
+    vm_id: Uuid,
+    logical_name: &str,
+) -> Result<Option<VmDisk>, sqlx::Error> {
+    let row: Option<VmDiskRow> = sqlx::query_as!(
+        VmDiskRow,
+        r#"
+SELECT id,
+        vm_id,
+        storage_object_id as "storage_object_id?",
+        logical_name,
+        device_path,
+        boot_order as "boot_order?",
+        read_only as "read_only!",
+        direct as "direct!",
+        vhost_user as "vhost_user!",
+        vhost_socket as "vhost_socket?",
+        num_queues as "num_queues!",
+        queue_size as "queue_size!",
+        rate_limiter as "rate_limiter: _",
+        rate_limit_group as "rate_limit_group?",
+        pci_segment as "pci_segment!",
+        serial_number as "serial_number?",
+        config as "config: _"
+FROM vm_disks
+WHERE vm_id = $1 AND logical_name = $2
+        "#,
+        vm_id,
+        logical_name
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|r| r.into()))
+}

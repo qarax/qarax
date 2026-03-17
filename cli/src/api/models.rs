@@ -308,6 +308,42 @@ pub struct VmDisk {
     pub config: serde_json::Value,
 }
 
+// ─── Network interfaces ────────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct NetworkInterface {
+    pub id: Uuid,
+    pub vm_id: Uuid,
+    pub network_id: Option<Uuid>,
+    pub device_id: String,
+    pub tap_name: Option<String>,
+    pub mac_address: Option<String>,
+    pub ip_address: Option<String>,
+    pub mtu: i32,
+    pub interface_type: String,
+    pub num_queues: i32,
+    pub queue_size: i32,
+    pub offload_tso: bool,
+    pub offload_ufo: bool,
+    pub offload_csum: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct HotplugNicRequest {
+    /// Unique device ID for the new NIC (e.g. "net1"). Auto-generated if empty.
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub network_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ip: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mac: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tap: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mtu: Option<i32>,
+}
+
 // ─── Snapshots ────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -7,8 +7,8 @@ use crate::{
     api::{
         self,
         models::{
-            AttachDiskRequest, CreateSnapshotRequest, CreateVmResult, NewVm, NewVmNetwork,
-            RestoreRequest, VmMigrateRequest,
+            AttachDiskRequest, CreateSnapshotRequest, CreateVmResult, HotplugNicRequest, NewVm,
+            NewVmNetwork, RestoreRequest, VmMigrateRequest,
         },
     },
     client::Client,
@@ -116,6 +116,45 @@ enum VmCommand {
         /// Boot order priority (lower = higher priority; default: 0)
         #[arg(long)]
         boot_order: Option<i32>,
+    },
+    /// Remove a disk from a VM (hotunplugs if VM is running)
+    RemoveDisk {
+        /// VM name or ID
+        vm: String,
+        /// Disk logical name to remove (e.g. "disk0")
+        #[arg(long)]
+        device_id: String,
+    },
+    /// Add a NIC to a VM (hotplugs if VM is running)
+    AddNic {
+        /// VM name or ID
+        vm: String,
+        /// Device ID for the new NIC (e.g. "net1"); auto-generated if omitted
+        #[arg(long, default_value = "")]
+        device_id: String,
+        /// Network name or ID for managed IP allocation
+        #[arg(long)]
+        network: Option<String>,
+        /// Static IP address (requires --network)
+        #[arg(long, requires = "network")]
+        ip: Option<String>,
+        /// Guest MAC address
+        #[arg(long)]
+        mac: Option<String>,
+        /// Pre-created TAP device name
+        #[arg(long)]
+        tap: Option<String>,
+        /// MTU override
+        #[arg(long)]
+        mtu: Option<i32>,
+    },
+    /// Remove a NIC from a VM (hotunplugs if VM is running)
+    RemoveNic {
+        /// VM name or ID
+        vm: String,
+        /// NIC device ID to remove (e.g. "net0")
+        #[arg(long)]
+        device_id: String,
     },
     /// Live-migrate a running VM to another host (NFS-backed storage only)
     Migrate {
@@ -394,6 +433,51 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
                     disk.id, object_id, disk.logical_name, vm_id
                 );
             }
+        }
+
+        VmCommand::RemoveDisk { vm, device_id } => {
+            let vm_id = resolve_vm_id(client, &vm).await?;
+            api::vms::remove_disk(client, vm_id, &device_id).await?;
+            println!("Removed disk {device_id} from VM {vm}");
+        }
+
+        VmCommand::AddNic {
+            vm,
+            device_id,
+            network,
+            ip,
+            mac,
+            tap,
+            mtu,
+        } => {
+            let vm_id = resolve_vm_id(client, &vm).await?;
+            let network_id = match network {
+                Some(ref s) => Some(resolve_network_id(client, s).await?),
+                None => None,
+            };
+            let req = HotplugNicRequest {
+                id: device_id,
+                network_id,
+                ip,
+                mac,
+                tap,
+                mtu,
+            };
+            let nic = api::vms::add_nic(client, vm_id, &req).await?;
+            if !matches!(output, OutputFormat::Table) {
+                print_output(&nic, output)?;
+            } else {
+                println!("Added NIC {} to VM {vm}", nic.device_id);
+                if let Some(ip) = &nic.ip_address {
+                    println!("IP: {ip}");
+                }
+            }
+        }
+
+        VmCommand::RemoveNic { vm, device_id } => {
+            let vm_id = resolve_vm_id(client, &vm).await?;
+            api::vms::remove_nic(client, vm_id, &device_id).await?;
+            println!("Removed NIC {device_id} from VM {vm}");
         }
 
         VmCommand::Migrate { vm, host } => {

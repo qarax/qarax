@@ -17,13 +17,14 @@ pub mod node {
 }
 
 use node::{
-    AttachNetworkRequest, AttachStoragePoolRequest, ConsoleConfig, ConsoleInput,
-    ConsoleLogResponse, CopyFileRequest, CpusConfig, DetachNetworkRequest,
-    DetachStoragePoolRequest, DiskConfig, DownloadFileRequest, FsConfig, ImportOverlayBdRequest,
-    ImportOverlayBdResponse, MemoryConfig, NetConfig, NodeInfo, OciImageRequest, OciImageResponse,
-    PayloadConfig, ReceiveMigrationRequest, RestoreVmRequest, SendMigrationRequest,
-    SnapshotVmRequest, StoragePoolKind, VmConfig, VmCounters, VmId, VmState,
-    file_transfer_service_client::FileTransferServiceClient, vm_service_client::VmServiceClient,
+    AddDiskDeviceRequest, AddNetworkDeviceRequest, AttachNetworkRequest, AttachStoragePoolRequest,
+    ConsoleConfig, ConsoleInput, ConsoleLogResponse, CopyFileRequest, CpusConfig,
+    DetachNetworkRequest, DetachStoragePoolRequest, DiskConfig, DownloadFileRequest, FsConfig,
+    ImportOverlayBdRequest, ImportOverlayBdResponse, MemoryConfig, NetConfig, NodeInfo,
+    OciImageRequest, OciImageResponse, PayloadConfig, ReceiveMigrationRequest, RemoveDeviceRequest,
+    RestoreVmRequest, SendMigrationRequest, SnapshotVmRequest, StoragePoolKind, VmConfig,
+    VmCounters, VmId, VmState, file_transfer_service_client::FileTransferServiceClient,
+    vm_service_client::VmServiceClient,
 };
 
 /// Client for communicating with qarax-node via gRPC
@@ -873,6 +874,78 @@ impl NodeClient {
         });
 
         Ok((input_tx, output_rx))
+    }
+
+    /// Hotplug a disk device into a running VM
+    #[instrument(skip(self))]
+    pub async fn add_disk_device(&self, vm_id: Uuid, config: DiskConfig) -> Result<()> {
+        debug!(
+            "Hotplugging disk {} to VM {} on node {}",
+            config.id, vm_id, self.address
+        );
+        let mut client = self.connect_vm_service().await?;
+        client
+            .add_disk_device(AddDiskDeviceRequest {
+                vm_id: vm_id.to_string(),
+                config: Some(config),
+            })
+            .await
+            .context("Failed to hotplug disk device on qarax-node")?;
+        Ok(())
+    }
+
+    /// Hotunplug a disk device from a running VM
+    #[instrument(skip(self))]
+    pub async fn remove_disk_device(&self, vm_id: Uuid, device_id: &str) -> Result<()> {
+        debug!(
+            "Hotunplugging disk {} from VM {} on node {}",
+            device_id, vm_id, self.address
+        );
+        let mut client = self.connect_vm_service().await?;
+        client
+            .remove_disk_device(RemoveDeviceRequest {
+                vm_id: vm_id.to_string(),
+                device_id: device_id.to_string(),
+            })
+            .await
+            .context("Failed to hotunplug disk device on qarax-node")?;
+        Ok(())
+    }
+
+    /// Hotplug a network device into a running VM
+    #[instrument(skip(self))]
+    pub async fn add_network_device(&self, vm_id: Uuid, config: NetConfig) -> Result<()> {
+        debug!(
+            "Hotplugging NIC {} to VM {} on node {}",
+            config.id, vm_id, self.address
+        );
+        let mut client = self.connect_vm_service().await?;
+        client
+            .add_network_device(AddNetworkDeviceRequest {
+                vm_id: vm_id.to_string(),
+                config: Some(config),
+            })
+            .await
+            .context("Failed to hotplug network device on qarax-node")?;
+        Ok(())
+    }
+
+    /// Hotunplug a network device from a running VM
+    #[instrument(skip(self))]
+    pub async fn remove_network_device(&self, vm_id: Uuid, device_id: &str) -> Result<()> {
+        debug!(
+            "Hotunplugging NIC {} from VM {} on node {}",
+            device_id, vm_id, self.address
+        );
+        let mut client = self.connect_vm_service().await?;
+        client
+            .remove_network_device(RemoveDeviceRequest {
+                vm_id: vm_id.to_string(),
+                device_id: device_id.to_string(),
+            })
+            .await
+            .context("Failed to hotunplug network device on qarax-node")?;
+        Ok(())
     }
 
     /// Prepare the destination node to receive a live migration.

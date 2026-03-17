@@ -13,19 +13,20 @@ use crate::{
     App,
     grpc_client::{
         CreateVmRequest, NodeClient, net_configs_from_db,
-        node::{DiskConfig, FsConfig, VhostMode},
+        node::{DiskConfig, FsConfig, NetConfig, VhostMode},
     },
     model::{
         boot_sources, hosts,
         hosts::Host,
         jobs::{self, JobType, NewJob},
-        network_interfaces, networks, snapshots,
+        network_interfaces::{self, NetworkInterface},
+        networks, snapshots,
         snapshots::{NewSnapshot, Snapshot, SnapshotStatus},
         storage_objects::{self, NewStorageObject, StorageObjectType},
         storage_pools::{self, OverlayBdPoolConfig},
         vm_disks::{self, NewVmDisk},
         vm_filesystems::{self, NewVmFilesystem},
-        vms::{self, BootMode, NewVm, Vm, VmStatus},
+        vms::{self, BootMode, NewVm, NewVmNetwork, Vm, VmStatus},
     },
 };
 
@@ -1322,29 +1323,29 @@ async fn handle_console_websocket(ws: WebSocket, vm_id: Uuid, host: crate::model
     info!("WebSocket console session ended for VM: {}", vm_id);
 }
 
+fn subnet_mask_from_cidr(subnet: &str) -> Option<String> {
+    let prefix = subnet
+        .split_once('/')
+        .and_then(|(_, p)| p.parse::<u32>().ok())?;
+    if prefix > 32 {
+        return None;
+    }
+    let mask = if prefix == 0 {
+        0
+    } else {
+        u32::MAX << (32 - prefix)
+    };
+    Some(format!(
+        "{}.{}.{}.{}",
+        (mask >> 24) & 0xFF,
+        (mask >> 16) & 0xFF,
+        (mask >> 8) & 0xFF,
+        mask & 0xFF
+    ))
+}
+
 /// Build a `CreateVmRequest` from DB state — called at `vm start` for lazily-provisioned VMs.
 async fn build_create_vm_request(env: &App, vm: &Vm) -> Result<CreateVmRequest> {
-    fn subnet_mask_from_cidr(subnet: &str) -> Option<String> {
-        let prefix = subnet
-            .split_once('/')
-            .and_then(|(_, p)| p.parse::<u32>().ok())?;
-        if prefix > 32 {
-            return None;
-        }
-        let mask = if prefix == 0 {
-            0
-        } else {
-            u32::MAX << (32 - prefix)
-        };
-        Some(format!(
-            "{}.{}.{}.{}",
-            (mask >> 24) & 0xFF,
-            (mask >> 16) & 0xFF,
-            (mask >> 8) & 0xFF,
-            mask & 0xFF
-        ))
-    }
-
     let vm_id = vm.id;
 
     // Resolve boot payload based on boot_mode
@@ -1504,51 +1505,17 @@ async fn build_create_vm_request(env: &App, vm: &Vm) -> Result<CreateVmRequest> 
                         .and_then(|v| v.as_str())
                         .unwrap_or_default()
                         .to_string();
-
-                    resolved_disks.push(DiskConfig {
-                        id: disk.logical_name.clone(),
-                        path: None,
-                        readonly: Some(disk.read_only),
-                        direct: if disk.direct { Some(true) } else { None },
-                        vhost_user: if disk.vhost_user { Some(true) } else { None },
-                        vhost_socket: disk.vhost_socket.clone(),
-                        num_queues: Some(disk.num_queues),
-                        queue_size: Some(disk.queue_size),
-                        rate_limiter: None,
-                        rate_limit_group: disk.rate_limit_group.clone(),
-                        pci_segment: if disk.pci_segment != 0 {
-                            Some(disk.pci_segment)
-                        } else {
-                            None
-                        },
-                        serial: disk.serial_number.clone(),
-                        oci_image_ref: Some(image_ref),
-                        registry_url: Some(registry_url),
-                    });
+                    resolved_disks.push(disk_to_disk_config(
+                        disk,
+                        None,
+                        Some(image_ref),
+                        Some(registry_url),
+                    ));
                     has_overlaybd_boot = true;
                 }
                 storage_pools::StoragePoolType::Local | storage_pools::StoragePoolType::Nfs => {
                     let path = storage_objects::get_path_from_config(&obj.config);
-                    resolved_disks.push(DiskConfig {
-                        id: disk.logical_name.clone(),
-                        path,
-                        readonly: Some(disk.read_only),
-                        direct: if disk.direct { Some(true) } else { None },
-                        vhost_user: if disk.vhost_user { Some(true) } else { None },
-                        vhost_socket: disk.vhost_socket.clone(),
-                        num_queues: Some(disk.num_queues),
-                        queue_size: Some(disk.queue_size),
-                        rate_limiter: None,
-                        rate_limit_group: disk.rate_limit_group.clone(),
-                        pci_segment: if disk.pci_segment != 0 {
-                            Some(disk.pci_segment)
-                        } else {
-                            None
-                        },
-                        serial: disk.serial_number.clone(),
-                        oci_image_ref: None,
-                        registry_url: None,
-                    });
+                    resolved_disks.push(disk_to_disk_config(disk, path, None, None));
                 }
             }
         }
@@ -1639,6 +1606,9 @@ pub struct AttachDiskRequest {
 }
 
 /// Attach a storage object to a VM as a disk.
+/// For VMs in `Created` state the disk is only recorded in the database and will be
+/// passed to Cloud Hypervisor when the VM starts.  For VMs already in `Running` state
+/// the disk is recorded **and** immediately hotplugged into the running VM.
 #[utoipa::path(
     post,
     path = "/vms/{vm_id}/disks",
@@ -1647,9 +1617,9 @@ pub struct AttachDiskRequest {
     ),
     request_body = AttachDiskRequest,
     responses(
-        (status = 201, description = "Disk attached", body = crate::model::vm_disks::VmDisk),
+        (status = 201, description = "Disk attached (and hotplugged if VM is running)", body = crate::model::vm_disks::VmDisk),
         (status = 404, description = "VM or storage object not found"),
-        (status = 422, description = "VM not in Created state"),
+        (status = 422, description = "VM not in Created or Running state"),
         (status = 500, description = "Internal server error")
     ),
     tag = "vms"
@@ -1663,10 +1633,13 @@ pub async fn attach_disk(
     use axum::response::IntoResponse as _;
 
     let vm = vms::get(env.pool(), vm_id).await?;
-    if vm.status != VmStatus::Created {
-        return Err(crate::errors::Error::UnprocessableEntity(
-            "Disks can only be linked while the VM is in Created state".into(),
-        ));
+    match vm.status {
+        VmStatus::Created | VmStatus::Running => {}
+        _ => {
+            return Err(crate::errors::Error::UnprocessableEntity(
+                "Disks can only be attached to VMs in Created or Running state".into(),
+            ));
+        }
     }
 
     // Verify the storage object exists and check local pool affinity
@@ -1732,11 +1705,369 @@ pub async fn attach_disk(
     let id = vm_disks::create(env.pool(), &disk_record).await?;
     let disk = vm_disks::get(env.pool(), id).await?;
 
+    // If the VM is running, hotplug the disk immediately via gRPC
+    if vm.status == VmStatus::Running {
+        let host = host_for_vm(&env, vm_id).await?;
+        let disk_config = disk_config_for_hotplug(&disk, &obj, &pool);
+        if let Err(e) = NodeClient::new(&host.address, host.port as u16)
+            .add_disk_device(vm_id, disk_config)
+            .await
+        {
+            error!("Failed to hotplug disk to running VM {}: {}", vm_id, e);
+            if let Err(delete_err) = vm_disks::delete(env.pool(), disk.id).await {
+                error!(
+                    "Failed to clean up vm_disk record {} after hotplug failure: {}",
+                    disk.id, delete_err
+                );
+            }
+            return Err(crate::errors::Error::InternalServerError);
+        }
+    }
+
     Ok(ApiResponse {
         data: disk,
         code: StatusCode::CREATED,
     }
     .into_response())
+}
+
+/// Build a `DiskConfig` proto from a `VmDisk` + resolved storage object/pool (no DB calls).
+fn disk_config_for_hotplug(
+    disk: &vm_disks::VmDisk,
+    obj: &storage_objects::StorageObject,
+    pool: &storage_pools::StoragePool,
+) -> DiskConfig {
+    match pool.pool_type {
+        storage_pools::StoragePoolType::OverlayBd => {
+            let image_ref = obj
+                .config
+                .get("image_ref")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let registry_url = obj
+                .config
+                .get("registry_url")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            disk_to_disk_config(disk, None, Some(image_ref), Some(registry_url))
+        }
+        storage_pools::StoragePoolType::Local | storage_pools::StoragePoolType::Nfs => {
+            let path = storage_objects::get_path_from_config(&obj.config);
+            disk_to_disk_config(disk, path, None, None)
+        }
+    }
+}
+
+/// Build a `DiskConfig` proto from a `VmDisk` plus pre-resolved path/image info.
+fn disk_to_disk_config(
+    disk: &vm_disks::VmDisk,
+    path: Option<String>,
+    oci_image_ref: Option<String>,
+    registry_url: Option<String>,
+) -> DiskConfig {
+    DiskConfig {
+        id: disk.logical_name.clone(),
+        path,
+        readonly: Some(disk.read_only),
+        direct: disk.direct.then_some(true),
+        vhost_user: disk.vhost_user.then_some(true),
+        vhost_socket: disk.vhost_socket.clone(),
+        num_queues: Some(disk.num_queues),
+        queue_size: Some(disk.queue_size),
+        rate_limiter: None,
+        rate_limit_group: disk.rate_limit_group.clone(),
+        pci_segment: (disk.pci_segment != 0).then_some(disk.pci_segment),
+        serial: disk.serial_number.clone(),
+        oci_image_ref,
+        registry_url,
+    }
+}
+
+/// Build a `NetConfig` proto message from a `NetworkInterface` record, resolving
+/// network-type-specific settings (passt, bridge, mask) for a specific host.
+async fn net_config_for_hotplug(
+    env: &App,
+    nic: &NetworkInterface,
+    host_id: Uuid,
+) -> Result<NetConfig> {
+    let mut net_config = net_configs_from_db(std::slice::from_ref(nic))
+        .into_iter()
+        .next()
+        .expect("net_configs_from_db always returns one entry per input");
+
+    if let Some(net_id) = nic.network_id {
+        let (network_result, bridge_result) = tokio::join!(
+            networks::get(env.pool(), net_id),
+            networks::get_host_bridge(env.pool(), host_id, net_id),
+        );
+        if let Ok(network) = network_result {
+            if network.network_type.as_deref() == Some("passt") {
+                net_config.vhost_user = Some(true);
+                net_config.vhost_socket = Some("passt".to_string());
+                net_config.vhost_mode = Some(VhostMode::Client as i32);
+                net_config.tap = None;
+                net_config.bridge = None;
+                net_config.ip = None;
+                net_config.mask = None;
+            } else if net_config.ip.is_some() && net_config.mask.is_none() {
+                net_config.mask = subnet_mask_from_cidr(&network.subnet);
+            }
+        }
+        if let Ok(Some(bridge)) = bridge_result {
+            net_config.bridge = Some(bridge);
+        }
+    }
+
+    Ok(net_config)
+}
+
+/// Auto-generate the next available NIC device ID (net0, net1, …).
+fn next_net_id(existing: &[NetworkInterface]) -> String {
+    let used: std::collections::HashSet<&str> =
+        existing.iter().map(|n| n.device_id.as_str()).collect();
+    for i in 0u32.. {
+        let id = format!("net{i}");
+        if !used.contains(id.as_str()) {
+            return id;
+        }
+    }
+    unreachable!()
+}
+
+#[utoipa::path(
+    delete,
+    path = "/vms/{vm_id}/disks/{device_id}",
+    params(
+        ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier"),
+        ("device_id" = String, Path, description = "Disk logical name (e.g. \"disk0\")")
+    ),
+    responses(
+        (status = 204, description = "Disk removed (and hotunplugged if VM was running)"),
+        (status = 404, description = "VM or disk not found"),
+        (status = 422, description = "VM not in Created or Running state"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "vms"
+)]
+#[instrument(skip(env))]
+pub async fn remove_disk(
+    Extension(env): Extension<App>,
+    Path((vm_id, device_id)): Path<(Uuid, String)>,
+) -> Result<ApiResponse<()>> {
+    let vm = vms::get(env.pool(), vm_id).await?;
+    match vm.status {
+        VmStatus::Created | VmStatus::Running => {}
+        _ => {
+            return Err(crate::errors::Error::UnprocessableEntity(
+                "Disks can only be removed from VMs in Created or Running state".into(),
+            ));
+        }
+    }
+
+    let disk = vm_disks::get_by_logical_name(env.pool(), vm_id, &device_id)
+        .await
+        .map_err(crate::errors::Error::Sqlx)?
+        .ok_or(crate::errors::Error::NotFound)?;
+
+    if vm.status == VmStatus::Running {
+        let host = host_for_vm(&env, vm_id).await?;
+        NodeClient::new(&host.address, host.port as u16)
+            .remove_disk_device(vm_id, &device_id)
+            .await
+            .map_err(|e| {
+                error!(
+                    "Failed to hotunplug disk {} from VM {}: {}",
+                    device_id, vm_id, e
+                );
+                crate::errors::Error::InternalServerError
+            })?;
+    }
+
+    vm_disks::delete(env.pool(), disk.id)
+        .await
+        .map_err(crate::errors::Error::Sqlx)?;
+
+    Ok(ApiResponse {
+        data: (),
+        code: StatusCode::NO_CONTENT,
+    })
+}
+
+#[utoipa::path(
+    post,
+    path = "/vms/{vm_id}/nics",
+    params(
+        ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier")
+    ),
+    request_body = NewVmNetwork,
+    responses(
+        (status = 201, description = "NIC added (and hotplugged if VM is running)", body = NetworkInterface),
+        (status = 404, description = "VM not found"),
+        (status = 409, description = "Device ID already in use"),
+        (status = 422, description = "VM not in Created or Running state"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "vms"
+)]
+#[instrument(skip(env))]
+pub async fn add_nic(
+    Extension(env): Extension<App>,
+    Path(vm_id): Path<Uuid>,
+    Json(mut req): Json<NewVmNetwork>,
+) -> Result<axum::response::Response> {
+    use axum::response::IntoResponse as _;
+
+    let vm = vms::get(env.pool(), vm_id).await?;
+    match vm.status {
+        VmStatus::Created | VmStatus::Running => {}
+        _ => {
+            return Err(crate::errors::Error::UnprocessableEntity(
+                "NICs can only be added to VMs in Created or Running state".into(),
+            ));
+        }
+    }
+
+    let existing = network_interfaces::list_by_vm(env.pool(), vm_id)
+        .await
+        .map_err(crate::errors::Error::Sqlx)?;
+
+    // Auto-generate device ID if not provided or empty
+    if req.id.is_empty() {
+        req.id = next_net_id(&existing);
+    }
+
+    if existing.iter().any(|n| n.device_id == req.id) {
+        return Err(crate::errors::Error::Conflict(format!(
+            "NIC device ID '{}' is already in use on this VM",
+            req.id
+        )));
+    }
+
+    // IP allocation for managed networking
+    let req = if let Some(network_id) = req.network_id {
+        if req.ip.is_none() {
+            let ip = networks::next_available_ip(env.pool(), network_id)
+                .await
+                .map_err(crate::errors::Error::Sqlx)?
+                .ok_or_else(|| {
+                    crate::errors::Error::UnprocessableEntity("No available IPs in network".into())
+                })?;
+            networks::allocate_ip(env.pool(), network_id, &ip, Some(vm_id))
+                .await
+                .map_err(crate::errors::Error::Sqlx)?;
+            NewVmNetwork {
+                ip: Some(ip),
+                ..req
+            }
+        } else {
+            networks::allocate_ip(
+                env.pool(),
+                network_id,
+                req.ip.as_deref().unwrap(),
+                Some(vm_id),
+            )
+            .await
+            .map_err(crate::errors::Error::Sqlx)?;
+            req
+        }
+    } else {
+        req
+    };
+
+    let mut tx = env.pool().begin().await?;
+    let nic_id = network_interfaces::create(&mut tx, vm_id, &req)
+        .await
+        .map_err(crate::errors::Error::Sqlx)?;
+    tx.commit().await?;
+
+    let nic = network_interfaces::get(env.pool(), nic_id)
+        .await
+        .map_err(crate::errors::Error::Sqlx)?;
+
+    if vm.status == VmStatus::Running {
+        let host = host_for_vm(&env, vm_id).await?;
+        let net_config = net_config_for_hotplug(&env, &nic, host.id).await?;
+        if let Err(e) = NodeClient::new(&host.address, host.port as u16)
+            .add_network_device(vm_id, net_config)
+            .await
+        {
+            error!("Failed to hotplug NIC to running VM {}: {}", vm_id, e);
+            if let Err(delete_err) = network_interfaces::delete(env.pool(), nic.id).await {
+                error!(
+                    "Failed to clean up network_interface record {} after hotplug failure: {}",
+                    nic.id, delete_err
+                );
+            }
+            return Err(crate::errors::Error::InternalServerError);
+        }
+    }
+
+    Ok(ApiResponse {
+        data: nic,
+        code: StatusCode::CREATED,
+    }
+    .into_response())
+}
+
+#[utoipa::path(
+    delete,
+    path = "/vms/{vm_id}/nics/{device_id}",
+    params(
+        ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier"),
+        ("device_id" = String, Path, description = "NIC device ID (e.g. \"net0\")")
+    ),
+    responses(
+        (status = 204, description = "NIC removed (and hotunplugged if VM was running)"),
+        (status = 404, description = "VM or NIC not found"),
+        (status = 422, description = "VM not in Created or Running state"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "vms"
+)]
+#[instrument(skip(env))]
+pub async fn remove_nic(
+    Extension(env): Extension<App>,
+    Path((vm_id, device_id)): Path<(Uuid, String)>,
+) -> Result<ApiResponse<()>> {
+    let vm = vms::get(env.pool(), vm_id).await?;
+    match vm.status {
+        VmStatus::Created | VmStatus::Running => {}
+        _ => {
+            return Err(crate::errors::Error::UnprocessableEntity(
+                "NICs can only be removed from VMs in Created or Running state".into(),
+            ));
+        }
+    }
+
+    let nic = network_interfaces::get_by_device_id(env.pool(), vm_id, &device_id)
+        .await
+        .map_err(crate::errors::Error::Sqlx)?
+        .ok_or(crate::errors::Error::NotFound)?;
+
+    if vm.status == VmStatus::Running {
+        let host = host_for_vm(&env, vm_id).await?;
+        NodeClient::new(&host.address, host.port as u16)
+            .remove_network_device(vm_id, &device_id)
+            .await
+            .map_err(|e| {
+                error!(
+                    "Failed to hotunplug NIC {} from VM {}: {}",
+                    device_id, vm_id, e
+                );
+                crate::errors::Error::InternalServerError
+            })?;
+    }
+
+    network_interfaces::delete(env.pool(), nic.id)
+        .await
+        .map_err(crate::errors::Error::Sqlx)?;
+
+    Ok(ApiResponse {
+        data: (),
+        code: StatusCode::NO_CONTENT,
+    })
 }
 
 /// Request body for `POST /vms/{vm_id}/migrate`.

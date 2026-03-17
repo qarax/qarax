@@ -274,3 +274,51 @@ INSERT INTO network_interfaces (
 
     Ok(id)
 }
+
+pub async fn delete(pool: &PgPool, interface_id: Uuid) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM network_interfaces WHERE id = $1")
+        .bind(interface_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn get_by_device_id(
+    pool: &PgPool,
+    vm_id: Uuid,
+    device_id: &str,
+) -> Result<Option<NetworkInterface>, sqlx::Error> {
+    let row: Option<NetworkInterfaceRow> = sqlx::query_as!(
+        NetworkInterfaceRow,
+        r#"
+SELECT id,
+        vm_id,
+        network_id as "network_id?",
+        device_id as "device_id!",
+        tap_name as "tap_name?",
+        mac_address::text as "mac_address?",
+        host_mac::text as "host_mac?",
+        ip_address::text as "ip_address?",
+        mtu as "mtu!",
+        interface_type as "interface_type: _",
+        vhost_user as "vhost_user!",
+        vhost_socket as "vhost_socket?",
+        vhost_mode as "vhost_mode?",
+        num_queues as "num_queues!",
+        queue_size as "queue_size!",
+        rate_limiter as "rate_limiter: _",
+        offload_tso as "offload_tso!",
+        offload_ufo as "offload_ufo!",
+        offload_csum as "offload_csum!",
+        pci_segment as "pci_segment!",
+        iommu as "iommu!"
+FROM network_interfaces
+WHERE vm_id = $1 AND device_id = $2
+        "#,
+        vm_id,
+        device_id
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|r| r.into()))
+}

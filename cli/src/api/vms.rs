@@ -5,8 +5,9 @@ use uuid::Uuid;
 use crate::client::Client;
 
 use super::models::{
-    AttachDiskRequest, CreateSnapshotRequest, CreateVmResponse, CreateVmResult, NewVm,
-    RestoreRequest, Snapshot, Vm, VmDisk, VmMigrateRequest, VmMigrateResponse, VmStartResponse,
+    AttachDiskRequest, CreateSnapshotRequest, CreateVmResponse, CreateVmResult, HotplugNicRequest,
+    NetworkInterface, NewVm, RestoreRequest, Snapshot, Vm, VmDisk, VmMigrateRequest,
+    VmMigrateResponse, VmStartResponse,
 };
 
 pub async fn list(client: &Client) -> anyhow::Result<Vec<Vm>> {
@@ -72,6 +73,26 @@ pub async fn attach_disk(
     req: &AttachDiskRequest,
 ) -> anyhow::Result<VmDisk> {
     client.post(&format!("/vms/{vm_id}/disks"), req).await
+}
+
+pub async fn remove_disk(client: &Client, vm_id: Uuid, device_id: &str) -> anyhow::Result<()> {
+    client
+        .delete(&format!("/vms/{vm_id}/disks/{device_id}"))
+        .await
+}
+
+pub async fn add_nic(
+    client: &Client,
+    vm_id: Uuid,
+    req: &HotplugNicRequest,
+) -> anyhow::Result<NetworkInterface> {
+    client.post(&format!("/vms/{vm_id}/nics"), req).await
+}
+
+pub async fn remove_nic(client: &Client, vm_id: Uuid, device_id: &str) -> anyhow::Result<()> {
+    client
+        .delete(&format!("/vms/{vm_id}/nics/{device_id}"))
+        .await
 }
 
 pub async fn create_snapshot(

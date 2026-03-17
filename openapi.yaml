@@ -861,7 +861,11 @@ paths:
     post:
       tags:
       - vms
-      summary: Attach a storage object to a VM as a disk.
+      summary: |-
+        Attach a storage object to a VM as a disk.
+        For VMs in `Created` state the disk is only recorded in the database and will be
+        passed to Cloud Hypervisor when the VM starts.  For VMs already in `Running` state
+        the disk is recorded **and** immediately hotplugged into the running VM.
       operationId: attach_disk
       parameters:
       - name: vm_id
@@ -879,7 +883,7 @@ paths:
         required: true
       responses:
         '201':
-          description: Disk attached
+          description: Disk attached (and hotplugged if VM is running)
           content:
             application/json:
               schema:
@@ -887,7 +891,35 @@ paths:
         '404':
           description: VM or storage object not found
         '422':
-          description: VM not in Created state
+          description: VM not in Created or Running state
+        '500':
+          description: Internal server error
+  /vms/{vm_id}/disks/{device_id}:
+    delete:
+      tags:
+      - vms
+      operationId: remove_disk
+      parameters:
+      - name: vm_id
+        in: path
+        description: VM unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: device_id
+        in: path
+        description: Disk logical name (e.g. "disk0")
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: Disk removed (and hotunplugged if VM was running)
+        '404':
+          description: VM or disk not found
+        '422':
+          description: VM not in Created or Running state
         '500':
           description: Internal server error
   /vms/{vm_id}/metrics:
@@ -944,6 +976,68 @@ paths:
           description: VM or host not found
         '422':
           description: VM not in a migratable state
+        '500':
+          description: Internal server error
+  /vms/{vm_id}/nics:
+    post:
+      tags:
+      - vms
+      operationId: add_nic
+      parameters:
+      - name: vm_id
+        in: path
+        description: VM unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewVmNetwork'
+        required: true
+      responses:
+        '201':
+          description: NIC added (and hotplugged if VM is running)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NetworkInterface'
+        '404':
+          description: VM not found
+        '409':
+          description: Device ID already in use
+        '422':
+          description: VM not in Created or Running state
+        '500':
+          description: Internal server error
+  /vms/{vm_id}/nics/{device_id}:
+    delete:
+      tags:
+      - vms
+      operationId: remove_nic
+      parameters:
+      - name: vm_id
+        in: path
+        description: VM unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: device_id
+        in: path
+        description: NIC device ID (e.g. "net0")
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: NIC removed (and hotunplugged if VM was running)
+        '404':
+          description: VM or NIC not found
+        '422':
+          description: VM not in Created or Running state
         '500':
           description: Internal server error
   /vms/{vm_id}/pause:
