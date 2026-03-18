@@ -26,7 +26,8 @@ use crate::{
         storage_pools::{self, OverlayBdPoolConfig},
         vm_disks::{self, NewVmDisk},
         vm_filesystems::{self, NewVmFilesystem},
-        vms::{self, BootMode, NewVm, NewVmNetwork, Vm, VmStatus},
+        vm_templates::{self, CreateVmTemplateFromVmRequest},
+        vms::{self, BootMode, NewVm, NewVmNetwork, ResolvedNewVm, Vm, VmStatus},
     },
 };
 
@@ -60,6 +61,59 @@ async fn pick_host(env: &App, requested_memory: i64) -> Result<Host> {
                 "no hosts in UP state with sufficient resources available for scheduling".into(),
             )
         })
+}
+
+async fn validate_root_disk_for_host(env: &App, host_id: Uuid, object_id: Uuid) -> Result<()> {
+    let object = storage_objects::get(env.pool(), object_id).await?;
+    match object.object_type {
+        StorageObjectType::Disk | StorageObjectType::Snapshot | StorageObjectType::OciImage => {}
+        _ => {
+            return Err(crate::errors::Error::UnprocessableEntity(
+                "root_disk_object_id must reference a disk-like storage object".into(),
+            ));
+        }
+    }
+
+    let pool = storage_pools::get(env.pool(), object.storage_pool_id).await?;
+    if pool.pool_type == storage_pools::StoragePoolType::Local
+        && !storage_pools::host_has_pool(env.pool(), host_id, pool.id).await?
+    {
+        return Err(crate::errors::Error::UnprocessableEntity(format!(
+            "selected host is not attached to the local storage pool backing root_disk_object_id {}",
+            object_id
+        )));
+    }
+
+    Ok(())
+}
+
+async fn create_root_disk_record(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    vm_id: Uuid,
+    root_disk_object_id: Uuid,
+) -> Result<()> {
+    let disk = NewVmDisk {
+        vm_id,
+        storage_object_id: Some(root_disk_object_id),
+        logical_name: "rootfs".to_string(),
+        device_path: "/dev/vda".to_string(),
+        boot_order: Some(0),
+        read_only: Some(false),
+        direct: None,
+        vhost_user: None,
+        vhost_socket: None,
+        num_queues: None,
+        queue_size: None,
+        rate_limiter: None,
+        rate_limit_group: None,
+        pci_segment: None,
+        serial_number: None,
+        config: serde_json::json!({}),
+    };
+    vm_disks::create_tx(tx, &disk)
+        .await
+        .map_err(crate::errors::Error::Sqlx)?;
+    Ok(())
 }
 
 /// Resolve the host that a VM is assigned to, for routing subsequent operations.
@@ -133,15 +187,25 @@ pub async fn create(
     Extension(env): Extension<App>,
     Json(vm): Json<NewVm>,
 ) -> Result<axum::response::Response> {
+    let vm = vms::resolve_create_request(env.pool(), vm).await?;
+
     // If an OCI image_ref is provided, use the async job path
     if vm.image_ref.is_some() {
         return create_with_image(env, vm).await;
+    }
+
+    let host = pick_host(&env, vm.memory_size).await?;
+    if let Some(root_disk_object_id) = vm.root_disk_object_id {
+        validate_root_disk_for_host(&env, host.id, root_disk_object_id).await?;
     }
 
     // Synchronous path (no image_ref): only write to DB, pick host, store networks.
     // The node is NOT contacted here. create_vm will be called lazily at vm start.
     let mut tx = env.pool().begin().await?;
     let id = vms::create_tx(&mut tx, &vm).await?;
+    if let Some(root_disk_object_id) = vm.root_disk_object_id {
+        create_root_disk_record(&mut tx, id, root_disk_object_id).await?;
+    }
 
     // Store network interfaces in DB (inside tx, so rolls back if any insert fails)
     for net in vm.networks.as_deref().unwrap_or(&[]) {
@@ -156,8 +220,7 @@ pub async fn create(
     // the IP is tracked and won't be re-allocated to another VM.
     register_static_ips(env.pool(), id, vm.networks.as_deref()).await?;
 
-    // Pick a host and record it
-    let host = pick_host(&env, vm.memory_size).await?;
+    // Record the chosen host
     let _ = vms::update_host_id(env.pool(), id, host.id).await;
 
     // If network_id is provided, allocate an IP and create a default network interface
@@ -211,7 +274,7 @@ pub async fn create(
 }
 
 /// Async path: pull OCI image and create VM in a background job, return 202 immediately.
-async fn create_with_image(env: App, vm: NewVm) -> Result<axum::response::Response> {
+async fn create_with_image(env: App, vm: ResolvedNewVm) -> Result<axum::response::Response> {
     let image_ref = vm
         .image_ref
         .clone()
@@ -219,6 +282,9 @@ async fn create_with_image(env: App, vm: NewVm) -> Result<axum::response::Respon
 
     // Pick host eagerly so we return 422 immediately if none are UP
     let host = pick_host(&env, vm.memory_size).await?;
+    if let Some(root_disk_object_id) = vm.root_disk_object_id {
+        validate_root_disk_for_host(&env, host.id, root_disk_object_id).await?;
+    }
 
     // Check if the selected host has an OverlayBD storage pool; if so, use that path.
     let overlaybd_pool = storage_pools::find_overlaybd_for_host(env.pool(), host.id)
@@ -280,6 +346,9 @@ async fn create_with_image(env: App, vm: NewVm) -> Result<axum::response::Respon
         network_interfaces::create(&mut tx, vm_id, net)
             .await
             .map_err(crate::errors::Error::Sqlx)?;
+    }
+    if let Some(root_disk_object_id) = vm.root_disk_object_id {
+        create_root_disk_record(&mut tx, vm_id, root_disk_object_id).await?;
     }
 
     tx.commit().await?;
@@ -2098,6 +2167,31 @@ pub struct VmMigrateRequest {
 #[derive(Serialize, ToSchema)]
 pub struct VmMigrateResponse {
     pub job_id: Uuid,
+}
+
+#[utoipa::path(
+    post,
+    path = "/vms/{vm_id}/template",
+    params(
+        ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier")
+    ),
+    request_body = CreateVmTemplateFromVmRequest,
+    responses(
+        (status = 201, description = "VM template created from VM", body = String),
+        (status = 404, description = "VM not found"),
+        (status = 409, description = "VM template with name already exists"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "vms"
+)]
+#[instrument(skip(env))]
+pub async fn create_template_from_vm(
+    Extension(env): Extension<App>,
+    Path(vm_id): Path<Uuid>,
+    Json(request): Json<CreateVmTemplateFromVmRequest>,
+) -> Result<(StatusCode, String)> {
+    let id = vm_templates::create_from_vm(env.pool(), vm_id, request).await?;
+    Ok((StatusCode::CREATED, id.to_string()))
 }
 
 #[utoipa::path(

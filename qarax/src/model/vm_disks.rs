@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
-use sqlx::{PgPool, types::Json};
+use sqlx::{PgPool, Postgres, Transaction, types::Json};
 use utoipa::ToSchema;
 use uuid::Uuid;
+
+type PgTransaction<'a> = Transaction<'a, Postgres>;
 
 #[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
 pub struct VmDisk {
@@ -207,6 +209,39 @@ ORDER BY boot_order NULLS LAST, device_path
 pub async fn create(pool: &PgPool, disk: &NewVmDisk) -> Result<Uuid, sqlx::Error> {
     let id = Uuid::new_v4();
 
+    create_with_id(pool, id, disk).await?;
+
+    Ok(id)
+}
+
+pub async fn create_tx(tx: &mut PgTransaction<'_>, disk: &NewVmDisk) -> Result<Uuid, sqlx::Error> {
+    let id = Uuid::new_v4();
+
+    create_tx_with_id(tx, id, disk).await?;
+
+    Ok(id)
+}
+
+async fn create_with_id(pool: &PgPool, id: Uuid, disk: &NewVmDisk) -> Result<(), sqlx::Error> {
+    insert_disk_query(id, disk).execute(pool).await?;
+
+    Ok(())
+}
+
+async fn create_tx_with_id(
+    tx: &mut PgTransaction<'_>,
+    id: Uuid,
+    disk: &NewVmDisk,
+) -> Result<(), sqlx::Error> {
+    insert_disk_query(id, disk).execute(tx.as_mut()).await?;
+
+    Ok(())
+}
+
+fn insert_disk_query<'a>(
+    id: Uuid,
+    disk: &'a NewVmDisk,
+) -> sqlx::query::Query<'a, sqlx::Postgres, sqlx::postgres::PgArguments> {
     sqlx::query(
         r#"
 INSERT INTO vm_disks (
@@ -235,10 +270,6 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $
     .bind(disk.pci_segment.unwrap_or(0))
     .bind(&disk.serial_number)
     .bind(sqlx::types::Json(&disk.config))
-    .execute(pool)
-    .await?;
-
-    Ok(id)
 }
 
 pub async fn delete_by_vm(pool: &PgPool, vm_id: Uuid) -> Result<(), sqlx::Error> {

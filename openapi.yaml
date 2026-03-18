@@ -207,6 +207,88 @@ paths:
           description: Host not found
         '500':
           description: Internal server error
+  /instance-types:
+    get:
+      tags:
+      - instance-types
+      operationId: list
+      responses:
+        '200':
+          description: List all instance types
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/InstanceType'
+        '500':
+          description: Internal server error
+    post:
+      tags:
+      - instance-types
+      operationId: create
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewInstanceType'
+        required: true
+      responses:
+        '201':
+          description: Instance type created successfully
+          content:
+            text/plain:
+              schema:
+                type: string
+        '409':
+          description: Instance type with name already exists
+        '422':
+          description: Invalid input
+        '500':
+          description: Internal server error
+  /instance-types/{instance_type_id}:
+    get:
+      tags:
+      - instance-types
+      operationId: get
+      parameters:
+      - name: instance_type_id
+        in: path
+        description: Instance type unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Instance type found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstanceType'
+        '404':
+          description: Instance type not found
+        '500':
+          description: Internal server error
+    delete:
+      tags:
+      - instance-types
+      operationId: delete
+      parameters:
+      - name: instance_type_id
+        in: path
+        description: Instance type unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '204':
+          description: Instance type deleted successfully
+        '404':
+          description: Instance type not found
+        '500':
+          description: Internal server error
   /jobs/{job_id}:
     get:
       tags:
@@ -724,6 +806,88 @@ paths:
           description: Transfer not found
         '500':
           description: Internal server error
+  /vm-templates:
+    get:
+      tags:
+      - vm-templates
+      operationId: list
+      responses:
+        '200':
+          description: List all VM templates
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/VmTemplate'
+        '500':
+          description: Internal server error
+    post:
+      tags:
+      - vm-templates
+      operationId: create
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewVmTemplate'
+        required: true
+      responses:
+        '201':
+          description: VM template created successfully
+          content:
+            text/plain:
+              schema:
+                type: string
+        '409':
+          description: VM template with name already exists
+        '422':
+          description: Invalid input
+        '500':
+          description: Internal server error
+  /vm-templates/{vm_template_id}:
+    get:
+      tags:
+      - vm-templates
+      operationId: get
+      parameters:
+      - name: vm_template_id
+        in: path
+        description: VM template unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: VM template found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VmTemplate'
+        '404':
+          description: VM template not found
+        '500':
+          description: Internal server error
+    delete:
+      tags:
+      - vm-templates
+      operationId: delete
+      parameters:
+      - name: vm_template_id
+        in: path
+        description: VM template unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '204':
+          description: VM template deleted successfully
+        '404':
+          description: VM template not found
+        '500':
+          description: Internal server error
   /vms:
     get:
       tags:
@@ -1213,6 +1377,38 @@ paths:
           description: VM not found
         '500':
           description: Internal server error
+  /vms/{vm_id}/template:
+    post:
+      tags:
+      - vms
+      operationId: create_template_from_vm
+      parameters:
+      - name: vm_id
+        in: path
+        description: VM unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateVmTemplateFromVmRequest'
+        required: true
+      responses:
+        '201':
+          description: VM template created from VM
+          content:
+            text/plain:
+              schema:
+                type: string
+        '404':
+          description: VM not found
+        '409':
+          description: VM template with name already exists
+        '500':
+          description: Internal server error
 components:
   schemas:
     AttachDiskRequest:
@@ -1319,6 +1515,17 @@ components:
         vm_id:
           type: string
           format: uuid
+    CreateVmTemplateFromVmRequest:
+      type: object
+      required:
+      - name
+      properties:
+        description:
+          type:
+          - string
+          - 'null'
+        name:
+          type: string
     DeployHostRequest:
       type: object
       required:
@@ -1463,6 +1670,70 @@ components:
         storage_object_id:
           type: string
           format: uuid
+    InstanceType:
+      type: object
+      required:
+      - id
+      - name
+      - boot_vcpus
+      - max_vcpus
+      - memory_size
+      - accelerator_config
+      properties:
+        accelerator_config: {}
+        boot_vcpus:
+          type: integer
+          format: int32
+        cpu_topology: {}
+        description:
+          type:
+          - string
+          - 'null'
+        id:
+          type: string
+          format: uuid
+        kvm_hyperv:
+          type:
+          - boolean
+          - 'null'
+        max_vcpus:
+          type: integer
+          format: int32
+        memory_hotplug_size:
+          type:
+          - integer
+          - 'null'
+          format: int64
+        memory_hugepage_size:
+          type:
+          - integer
+          - 'null'
+          format: int64
+        memory_hugepages:
+          type:
+          - boolean
+          - 'null'
+        memory_mergeable:
+          type:
+          - boolean
+          - 'null'
+        memory_prefault:
+          type:
+          - boolean
+          - 'null'
+        memory_shared:
+          type:
+          - boolean
+          - 'null'
+        memory_size:
+          type: integer
+          format: int64
+        memory_thp:
+          type:
+          - boolean
+          - 'null'
+        name:
+          type: string
     InterfaceType:
       type: string
       enum:
@@ -1718,6 +1989,65 @@ components:
         port:
           type: integer
           format: int32
+    NewInstanceType:
+      type: object
+      required:
+      - name
+      - boot_vcpus
+      - max_vcpus
+      - memory_size
+      properties:
+        accelerator_config: {}
+        boot_vcpus:
+          type: integer
+          format: int32
+        cpu_topology: {}
+        description:
+          type:
+          - string
+          - 'null'
+        kvm_hyperv:
+          type:
+          - boolean
+          - 'null'
+        max_vcpus:
+          type: integer
+          format: int32
+        memory_hotplug_size:
+          type:
+          - integer
+          - 'null'
+          format: int64
+        memory_hugepage_size:
+          type:
+          - integer
+          - 'null'
+          format: int64
+        memory_hugepages:
+          type:
+          - boolean
+          - 'null'
+        memory_mergeable:
+          type:
+          - boolean
+          - 'null'
+        memory_prefault:
+          type:
+          - boolean
+          - 'null'
+        memory_shared:
+          type:
+          - boolean
+          - 'null'
+        memory_size:
+          type: integer
+          format: int64
+        memory_thp:
+          type:
+          - boolean
+          - 'null'
+        name:
+          type: string
     NewNetwork:
       type: object
       required:
@@ -1799,10 +2129,6 @@ components:
       type: object
       required:
       - name
-      - hypervisor
-      - boot_vcpus
-      - max_vcpus
-      - memory_size
       properties:
         boot_mode:
           oneOf:
@@ -1814,7 +2140,9 @@ components:
           - 'null'
           format: uuid
         boot_vcpus:
-          type: integer
+          type:
+          - integer
+          - 'null'
           format: int32
         cloud_init_meta_data:
           type:
@@ -1842,7 +2170,9 @@ components:
           - string
           - 'null'
         hypervisor:
-          $ref: '#/components/schemas/Hypervisor'
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/Hypervisor'
         image_ref:
           type:
           - string
@@ -1851,12 +2181,19 @@ components:
             OCI image reference to use as root filesystem (e.g. "docker.io/library/ubuntu:22.04").
             When set, the handler will check whether the selected host has an OverlayBD storage pool.
             If so, the image is served via lazy block loading (virtio-blk); otherwise via virtiofs.
+        instance_type_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
         kvm_hyperv:
           type:
           - boolean
           - 'null'
         max_vcpus:
-          type: integer
+          type:
+          - integer
+          - 'null'
           format: int32
         memory_hotplug_size:
           type:
@@ -1885,7 +2222,9 @@ components:
           - boolean
           - 'null'
         memory_size:
-          type: integer
+          type:
+          - integer
+          - 'null'
           format: int64
         memory_thp:
           type:
@@ -1906,6 +2245,16 @@ components:
           items:
             $ref: '#/components/schemas/NewVmNetwork'
           description: Optional network interfaces to attach at create time (passed to qarax-node).
+        root_disk_object_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        vm_template_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
     NewVmFilesystem:
       type: object
       required:
@@ -2049,6 +2398,113 @@ components:
           - boolean
           - 'null'
           description: Enable vhost-user networking
+    NewVmTemplate:
+      type: object
+      required:
+      - name
+      properties:
+        boot_mode:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/BootMode'
+        boot_source_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        boot_vcpus:
+          type:
+          - integer
+          - 'null'
+          format: int32
+        cloud_init_meta_data:
+          type:
+          - string
+          - 'null'
+        cloud_init_network_config:
+          type:
+          - string
+          - 'null'
+        cloud_init_user_data:
+          type:
+          - string
+          - 'null'
+        config: {}
+        cpu_topology: {}
+        description:
+          type:
+          - string
+          - 'null'
+        hypervisor:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/Hypervisor'
+        image_ref:
+          type:
+          - string
+          - 'null'
+        kvm_hyperv:
+          type:
+          - boolean
+          - 'null'
+        max_vcpus:
+          type:
+          - integer
+          - 'null'
+          format: int32
+        memory_hotplug_size:
+          type:
+          - integer
+          - 'null'
+          format: int64
+        memory_hugepage_size:
+          type:
+          - integer
+          - 'null'
+          format: int64
+        memory_hugepages:
+          type:
+          - boolean
+          - 'null'
+        memory_mergeable:
+          type:
+          - boolean
+          - 'null'
+        memory_prefault:
+          type:
+          - boolean
+          - 'null'
+        memory_shared:
+          type:
+          - boolean
+          - 'null'
+        memory_size:
+          type:
+          - integer
+          - 'null'
+          format: int64
+        memory_thp:
+          type:
+          - boolean
+          - 'null'
+        name:
+          type: string
+        network_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        networks:
+          type:
+          - array
+          - 'null'
+          items:
+            $ref: '#/components/schemas/NewVmNetwork'
+        root_disk_object_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
     RateLimiterConfig:
       type: object
       properties:
@@ -2543,11 +2999,127 @@ components:
       - paused
       - shutdown
       - migrating
+    VmTemplate:
+      type: object
+      required:
+      - id
+      - name
+      - config
+      properties:
+        boot_mode:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/BootMode'
+        boot_source_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        boot_vcpus:
+          type:
+          - integer
+          - 'null'
+          format: int32
+        cloud_init_meta_data:
+          type:
+          - string
+          - 'null'
+        cloud_init_network_config:
+          type:
+          - string
+          - 'null'
+        cloud_init_user_data:
+          type:
+          - string
+          - 'null'
+        config: {}
+        cpu_topology: {}
+        description:
+          type:
+          - string
+          - 'null'
+        hypervisor:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/Hypervisor'
+        id:
+          type: string
+          format: uuid
+        image_ref:
+          type:
+          - string
+          - 'null'
+        kvm_hyperv:
+          type:
+          - boolean
+          - 'null'
+        max_vcpus:
+          type:
+          - integer
+          - 'null'
+          format: int32
+        memory_hotplug_size:
+          type:
+          - integer
+          - 'null'
+          format: int64
+        memory_hugepage_size:
+          type:
+          - integer
+          - 'null'
+          format: int64
+        memory_hugepages:
+          type:
+          - boolean
+          - 'null'
+        memory_mergeable:
+          type:
+          - boolean
+          - 'null'
+        memory_prefault:
+          type:
+          - boolean
+          - 'null'
+        memory_shared:
+          type:
+          - boolean
+          - 'null'
+        memory_size:
+          type:
+          - integer
+          - 'null'
+          format: int64
+        memory_thp:
+          type:
+          - boolean
+          - 'null'
+        name:
+          type: string
+        network_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        networks:
+          type:
+          - array
+          - 'null'
+          items:
+            $ref: '#/components/schemas/NewVmNetwork'
+        root_disk_object_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
 tags:
 - name: hosts
   description: Host management endpoints
+- name: instance-types
+  description: Instance type management endpoints
 - name: vms
   description: Virtual machine management endpoints
+- name: vm-templates
+  description: VM template management endpoints
 - name: storage-objects
   description: Storage object management endpoints
 - name: storage-pools

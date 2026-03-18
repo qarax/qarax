@@ -1,5 +1,6 @@
 pub mod boot_sources;
 pub mod hosts;
+pub mod instance_types;
 pub mod jobs;
 pub mod network_interfaces;
 pub mod networks;
@@ -13,4 +14,5 @@ pub mod vm_consoles;
 pub mod vm_disks;
 pub mod vm_filesystems;
 pub mod vm_rng;
+pub mod vm_templates;
 pub mod vms;

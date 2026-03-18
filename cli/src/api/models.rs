@@ -31,12 +31,22 @@ pub struct NewVmNetwork {
 #[derive(Debug, Serialize)]
 pub struct NewVm {
     pub name: String,
-    pub hypervisor: String,
-    pub boot_vcpus: i32,
-    pub max_vcpus: i32,
-    pub memory_size: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vm_template_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instance_type_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hypervisor: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub boot_vcpus: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_vcpus: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_size: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub boot_source_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root_disk_object_id: Option<Uuid>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub boot_mode: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -53,7 +63,80 @@ pub struct NewVm {
     pub cloud_init_meta_data: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cloud_init_network_config: Option<String>,
-    pub config: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct InstanceType {
+    pub id: Uuid,
+    pub name: String,
+    pub description: Option<String>,
+    pub boot_vcpus: i32,
+    pub max_vcpus: i32,
+    pub memory_size: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct NewInstanceType {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub boot_vcpus: i32,
+    pub max_vcpus: i32,
+    pub memory_size: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub accelerator_config: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct VmTemplate {
+    pub id: Uuid,
+    pub name: String,
+    pub description: Option<String>,
+    pub hypervisor: Option<String>,
+    pub boot_vcpus: Option<i32>,
+    pub max_vcpus: Option<i32>,
+    pub memory_size: Option<i64>,
+    pub boot_source_id: Option<Uuid>,
+    pub root_disk_object_id: Option<Uuid>,
+    pub boot_mode: Option<String>,
+    pub image_ref: Option<String>,
+    pub network_id: Option<Uuid>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct NewVmTemplate {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hypervisor: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub boot_vcpus: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_vcpus: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_size: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub boot_source_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root_disk_object_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub boot_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub network_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CreateVmTemplateFromVmRequest {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

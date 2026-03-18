@@ -168,6 +168,68 @@ curl -s -X POST http://localhost:8000/boot-sources \
 
 `initrd_image_id` and `kernel_params` are optional. If you omit `boot_source_id` when creating a VM, the server falls back to `vm_defaults` from the yaml config.
 
+### Step 3.5 — Optional: create instance types and VM templates
+
+Use **instance types** for reusable sizing presets and **VM templates** for reusable VM blueprints. In practice, templates are most useful when they define an `image_ref`, a `boot_source_id` plus `root_disk_object_id`, or are created from an existing VM.
+
+```bash
+# Instance type
+curl -s -X POST http://localhost:8000/instance-types \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "gpu-small",
+    "boot_vcpus": 4,
+    "max_vcpus": 8,
+    "memory_size": 1073741824
+  }'
+# Returns: <instance-type-uuid>
+
+# VM template with an OCI root image
+curl -s -X POST http://localhost:8000/vm-templates \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "ubuntu-ai-base",
+    "hypervisor": "cloud_hv",
+    "image_ref": "docker.io/library/ubuntu:22.04",
+    "config": {"profile": "ai"}
+  }'
+# Returns: <vm-template-uuid>
+
+# VM template with a storage-pool-backed root disk
+curl -s -X POST http://localhost:8000/vm-templates \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "ubuntu-disk-base",
+    "hypervisor": "cloud_hv",
+    "boot_mode": "firmware",
+    "boot_vcpus": 2,
+    "max_vcpus": 2,
+    "memory_size": 536870912,
+    "root_disk_object_id": "<storage-object-uuid>"
+  }'
+# Returns: <vm-template-uuid>
+```
+
+You can also create a template from an existing VM:
+
+```bash
+curl -s -X POST http://localhost:8000/vms/<vm-uuid>/template \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "ubuntu-from-vm"
+  }'
+# Returns: <vm-template-uuid>
+```
+
+This copies reusable VM-create fields such as compute, memory, boot settings, `image_ref`, `root_disk_object_id`, cloud-init data, and config. It intentionally does **not** copy host-specific runtime details like TAP device names or concrete allocated guest IPs.
+
+When creating a VM, field precedence is:
+
+1. Fields supplied directly in `POST /vms`
+2. The selected `instance_type_id` for sizing-related fields
+3. The selected `vm_template_id` for reusable VM defaults
+4. Server-side `vm_defaults` as the final fallback for boot artifacts
+
 ### Step 4 — Create the VM
 
 This call registers the VM in the database and calls qarax-node via gRPC to create the Cloud Hypervisor instance. Network interfaces are attached here.
@@ -189,6 +251,53 @@ curl -s -X POST http://localhost:8000/vms \
 ```
 
 `memory_size` is in bytes (536870912 = 512 MiB).
+
+**Using a template + instance type:**
+
+```bash
+curl -s -X POST http://localhost:8000/vms \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "my-ai-vm",
+    "vm_template_id": "<vm-template-uuid>",
+    "instance_type_id": "<instance-type-uuid>",
+    "boot_vcpus": 16,
+    "config": {"owner": "ml-team"}
+  }'
+```
+
+**Using a boot source plus a storage-backed root disk directly:**
+
+```bash
+curl -s -X POST http://localhost:8000/vms \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "ubuntu-disk-vm",
+    "hypervisor": "cloud_hv",
+    "boot_vcpus": 2,
+    "max_vcpus": 2,
+    "memory_size": 536870912,
+    "boot_source_id": "<boot-source-uuid>",
+    "root_disk_object_id": "<storage-object-uuid>"
+  }'
+```
+
+**Creating a template from a VM and reusing it:**
+
+```bash
+# Create the reusable template
+curl -s -X POST http://localhost:8000/vms/<existing-vm-uuid>/template \
+  -H 'Content-Type: application/json' \
+  -d '{"name": "golden-ubuntu"}'
+
+# Launch a new VM from it
+curl -s -X POST http://localhost:8000/vms \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "golden-ubuntu-copy",
+    "vm_template_id": "<vm-template-uuid>"
+  }'
+```
 
 **With a TAP network interface:**
 
@@ -221,13 +330,11 @@ Interface type is inferred from the fields: `vhost_user: true` → vhost-user, `
 
 Multiple interfaces are supported — add more objects to the `networks` array with distinct `id` values (`"net0"`, `"net1"`, etc.).
 
-**Attaching a rootfs disk:**
+**Root disk sources:**
 
-Disk attachment is currently configured via the `VM_ROOTFS` environment variable set on the qarax server process. Set it to the absolute path of the disk image on the host before starting qarax:
-
-```
-VM_ROOTFS=/var/lib/qarax/images/rootfs.img
-```
+- `image_ref` uses the OCI image workflow (OverlayBD on hosts that support it, otherwise virtiofs).
+- `root_disk_object_id` uses an existing storage object from a storage pool and persists it as the VM's boot disk in `vm_disks`.
+- `VM_ROOTFS` remains as a legacy server-side fallback, but first-class `root_disk_object_id` is preferred for normal API/CLI use.
 
 ### Step 5 — Start the VM
 

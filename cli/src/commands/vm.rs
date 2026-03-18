@@ -17,7 +17,8 @@ use crate::{
 
 use super::{
     OutputFormat, format_bytes, print_output, resolve_boot_source_id, resolve_host_id,
-    resolve_network_id, resolve_object_id, resolve_vm_id,
+    resolve_instance_type_id, resolve_network_id, resolve_object_id, resolve_vm_id,
+    resolve_vm_template_id,
 };
 
 #[derive(Args)]
@@ -27,6 +28,7 @@ pub struct VmArgs {
 }
 
 #[derive(Subcommand)]
+#[allow(clippy::large_enum_variant)]
 enum VmCommand {
     /// List all VMs
     List,
@@ -42,16 +44,28 @@ enum VmCommand {
         name: String,
         /// Number of vCPUs at boot
         #[arg(long)]
-        vcpus: i32,
+        vcpus: Option<i32>,
         /// Maximum vCPUs (defaults to --vcpus)
         #[arg(long)]
         max_vcpus: Option<i32>,
         /// Memory size in bytes
         #[arg(long)]
-        memory: i64,
+        memory: Option<i64>,
+        /// VM template name or ID
+        #[arg(long)]
+        template: Option<String>,
+        /// Instance type name or ID
+        #[arg(long)]
+        instance_type: Option<String>,
+        /// Hypervisor type
+        #[arg(long)]
+        hypervisor: Option<String>,
         /// Boot source name or ID
         #[arg(long)]
         boot_source: Option<String>,
+        /// Root disk storage object name or ID
+        #[arg(long)]
+        root_disk: Option<String>,
         /// Description
         #[arg(long)]
         description: Option<String>,
@@ -300,7 +314,11 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
             vcpus,
             max_vcpus,
             memory,
+            template,
+            instance_type,
+            hypervisor,
             boot_source,
+            root_disk,
             description,
             image_ref,
             boot_mode,
@@ -310,8 +328,22 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
             cloud_init_meta_data,
             cloud_init_network_config,
         } => {
+            let vm_template_id = match template {
+                Some(ref template) => Some(resolve_vm_template_id(client, template).await?),
+                None => None,
+            };
+            let instance_type_id = match instance_type {
+                Some(ref instance_type) => {
+                    Some(resolve_instance_type_id(client, instance_type).await?)
+                }
+                None => None,
+            };
             let boot_source_id = match boot_source {
                 Some(ref s) => Some(resolve_boot_source_id(client, s).await?),
+                None => None,
+            };
+            let root_disk_object_id = match root_disk {
+                Some(ref s) => Some(resolve_object_id(client, s).await?),
                 None => None,
             };
             let boot_mode_opt = if boot_mode == "kernel" {
@@ -347,14 +379,29 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
             let ci_user_data = read_file(cloud_init_user_data)?;
             let ci_meta_data = read_file(cloud_init_meta_data)?;
             let ci_network_config = read_file(cloud_init_network_config)?;
+            let hypervisor = hypervisor.or_else(|| {
+                if vm_template_id.is_none() {
+                    Some("cloud_hv".to_string())
+                } else {
+                    None
+                }
+            });
+            let max_vcpus = match (max_vcpus, vcpus) {
+                (Some(max_vcpus), _) => Some(max_vcpus),
+                (None, Some(vcpus)) => Some(vcpus),
+                (None, None) => None,
+            };
 
             let new_vm = NewVm {
                 name,
-                hypervisor: "cloud_hv".to_string(),
+                vm_template_id,
+                instance_type_id,
+                hypervisor,
                 boot_vcpus: vcpus,
-                max_vcpus: max_vcpus.unwrap_or(vcpus),
+                max_vcpus,
                 memory_size: memory,
                 boot_source_id,
+                root_disk_object_id,
                 boot_mode: boot_mode_opt,
                 description,
                 image_ref: image_ref.clone(),
@@ -363,7 +410,7 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
                 cloud_init_user_data: ci_user_data,
                 cloud_init_meta_data: ci_meta_data,
                 cloud_init_network_config: ci_network_config,
-                config: serde_json::json!({}),
+                config: Some(serde_json::json!({})),
             };
 
             let result = api::vms::create(client, &new_vm).await?;

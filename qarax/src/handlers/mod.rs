@@ -19,12 +19,14 @@ use validator::ValidationErrors;
 
 mod boot_source;
 mod host;
+mod instance_type;
 mod job;
 mod network;
 mod storage_object;
 mod storage_pool;
 mod transfer;
 mod vm;
+mod vm_template;
 
 pub type Result<T, E = Error> = ::std::result::Result<T, E>;
 
@@ -36,9 +38,14 @@ pub type Result<T, E = Error> = ::std::result::Result<T, E>;
         host::handler::update,
         host::handler::deploy,
         host::handler::init,
+        instance_type::handler::list,
+        instance_type::handler::get,
+        instance_type::handler::create,
+        instance_type::handler::delete,
         vm::handler::list,
         vm::handler::get,
         vm::handler::create,
+        vm::handler::create_template_from_vm,
         vm::handler::start,
         vm::handler::stop,
         vm::handler::pause,
@@ -70,6 +77,10 @@ pub type Result<T, E = Error> = ::std::result::Result<T, E>;
         boot_source::handler::get,
         boot_source::handler::create,
         boot_source::handler::delete,
+        vm_template::handler::list,
+        vm_template::handler::get,
+        vm_template::handler::create,
+        vm_template::handler::delete,
         transfer::handler::create,
         transfer::handler::list,
         transfer::handler::get,
@@ -89,11 +100,14 @@ pub type Result<T, E = Error> = ::std::result::Result<T, E>;
             crate::model::hosts::UpdateHostRequest,
             crate::model::hosts::DeployHostRequest,
             crate::model::hosts::HostStatus,
+            crate::model::instance_types::InstanceType,
+            crate::model::instance_types::NewInstanceType,
             crate::model::vms::Vm,
             crate::model::vms::NewVm,
             crate::model::vms::NewVmNetwork,
             crate::model::vms::VmStatus,
             crate::model::vms::Hypervisor,
+            crate::model::vm_templates::CreateVmTemplateFromVmRequest,
             crate::model::storage_objects::StorageObject,
             crate::model::storage_objects::NewStorageObject,
             crate::model::storage_objects::StorageObjectType,
@@ -104,6 +118,8 @@ pub type Result<T, E = Error> = ::std::result::Result<T, E>;
             crate::handlers::storage_pool::handler::AttachPoolHostRequest,
             crate::model::boot_sources::BootSource,
             crate::model::boot_sources::NewBootSource,
+            crate::model::vm_templates::VmTemplate,
+            crate::model::vm_templates::NewVmTemplate,
             crate::model::network_interfaces::NetworkInterface,
             crate::model::network_interfaces::RateLimiterConfig,
             crate::model::network_interfaces::TokenBucket,
@@ -139,7 +155,9 @@ pub type Result<T, E = Error> = ::std::result::Result<T, E>;
     ),
     tags(
         (name = "hosts", description = "Host management endpoints"),
+        (name = "instance-types", description = "Instance type management endpoints"),
         (name = "vms", description = "Virtual machine management endpoints"),
+        (name = "vm-templates", description = "VM template management endpoints"),
         (name = "storage-objects", description = "Storage object management endpoints"),
         (name = "storage-pools", description = "Storage pool management endpoints"),
         (name = "boot-sources", description = "Boot source management endpoints"),
@@ -160,7 +178,9 @@ pub fn app(env: App) -> Router {
     Router::new()
         .route("/", get(|| async { "hello" }))
         .merge(hosts())
+        .merge(instance_types())
         .merge(vms())
+        .merge(vm_templates())
         .merge(storage_objects())
         .merge(storage_pools())
         .merge(boot_sources())
@@ -208,6 +228,10 @@ fn vms() -> Router {
             get(vm::handler::get).delete(vm::handler::delete),
         )
         .route("/vms/{vm_id}/start", post(vm::handler::start))
+        .route(
+            "/vms/{vm_id}/template",
+            post(vm::handler::create_template_from_vm),
+        )
         .route("/vms/{vm_id}/stop", post(vm::handler::stop))
         .route("/vms/{vm_id}/pause", post(vm::handler::pause))
         .route("/vms/{vm_id}/resume", post(vm::handler::resume))
@@ -233,6 +257,30 @@ fn vms() -> Router {
         )
         .route("/vms/{vm_id}/restore", post(vm::handler::restore))
         .route("/vms/{vm_id}/migrate", post(vm::handler::migrate))
+}
+
+fn instance_types() -> Router {
+    Router::new()
+        .route(
+            "/instance-types",
+            get(instance_type::handler::list).post(instance_type::handler::create),
+        )
+        .route(
+            "/instance-types/{instance_type_id}",
+            get(instance_type::handler::get).delete(instance_type::handler::delete),
+        )
+}
+
+fn vm_templates() -> Router {
+    Router::new()
+        .route(
+            "/vm-templates",
+            get(vm_template::handler::list).post(vm_template::handler::create),
+        )
+        .route(
+            "/vm-templates/{vm_template_id}",
+            get(vm_template::handler::get).delete(vm_template::handler::delete),
+        )
 }
 
 fn storage_objects() -> Router {

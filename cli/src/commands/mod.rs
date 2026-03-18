@@ -1,11 +1,13 @@
 pub mod boot_source;
 pub mod configure;
 pub mod host;
+pub mod instance_type;
 pub mod job;
 pub mod network;
 pub mod storage;
 pub mod transfer;
 pub mod vm;
+pub mod vm_template;
 
 use uuid::Uuid;
 
@@ -94,6 +96,32 @@ pub async fn resolve_boot_source_id(client: &Client, name_or_id: &str) -> anyhow
         .find(|bs| bs.name == name_or_id)
         .map(|bs| bs.id)
         .ok_or_else(|| anyhow::anyhow!("no boot source named {:?}", name_or_id))
+}
+
+/// Resolve a VM template name or UUID string to a UUID.
+pub async fn resolve_vm_template_id(client: &Client, name_or_id: &str) -> anyhow::Result<Uuid> {
+    if let Ok(id) = Uuid::parse_str(name_or_id) {
+        return Ok(id);
+    }
+    let templates = api::vm_templates::list(client).await?;
+    templates
+        .into_iter()
+        .find(|template| template.name == name_or_id)
+        .map(|template| template.id)
+        .ok_or_else(|| anyhow::anyhow!("no VM template named {:?}", name_or_id))
+}
+
+/// Resolve an instance type name or UUID string to a UUID.
+pub async fn resolve_instance_type_id(client: &Client, name_or_id: &str) -> anyhow::Result<Uuid> {
+    if let Ok(id) = Uuid::parse_str(name_or_id) {
+        return Ok(id);
+    }
+    let instance_types = api::instance_types::list(client).await?;
+    instance_types
+        .into_iter()
+        .find(|instance_type| instance_type.name == name_or_id)
+        .map(|instance_type| instance_type.id)
+        .ok_or_else(|| anyhow::anyhow!("no instance type named {:?}", name_or_id))
 }
 
 /// Format a byte count as a human-readable string (GiB / MiB / KiB / B).

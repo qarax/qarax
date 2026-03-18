@@ -7,12 +7,14 @@ from .boot_mode import BootMode
 from .boot_source import BootSource
 from .create_snapshot_request import CreateSnapshotRequest
 from .create_vm_response import CreateVmResponse
+from .create_vm_template_from_vm_request import CreateVmTemplateFromVmRequest
 from .deploy_host_request import DeployHostRequest
 from .host import Host
 from .host_status import HostStatus
 from .hypervisor import Hypervisor
 from .import_to_pool_request import ImportToPoolRequest
 from .import_to_pool_response import ImportToPoolResponse
+from .instance_type import InstanceType
 from .interface_type import InterfaceType
 from .ip_allocation import IpAllocation
 from .job import Job
@@ -23,6 +25,7 @@ from .network_interface import NetworkInterface
 from .network_status import NetworkStatus
 from .new_boot_source import NewBootSource
 from .new_host import NewHost
+from .new_instance_type import NewInstanceType
 from .new_network import NewNetwork
 from .new_storage_object import NewStorageObject
 from .new_storage_pool import NewStoragePool
@@ -30,6 +33,7 @@ from .new_transfer import NewTransfer
 from .new_vm import NewVm
 from .new_vm_filesystem import NewVmFilesystem
 from .new_vm_network import NewVmNetwork
+from .new_vm_template import NewVmTemplate
 from .rate_limiter_config import RateLimiterConfig
 from .restore_request import RestoreRequest
 from .snapshot import Snapshot
@@ -55,6 +59,7 @@ from .vm_migrate_request import VmMigrateRequest
 from .vm_migrate_response import VmMigrateResponse
 from .vm_start_response import VmStartResponse
 from .vm_status import VmStatus
+from .vm_template import VmTemplate
 
 __all__ = (
     "AttachDiskRequest",
@@ -64,12 +69,14 @@ __all__ = (
     "BootSource",
     "CreateSnapshotRequest",
     "CreateVmResponse",
+    "CreateVmTemplateFromVmRequest",
     "DeployHostRequest",
     "Host",
     "HostStatus",
     "Hypervisor",
     "ImportToPoolRequest",
     "ImportToPoolResponse",
+    "InstanceType",
     "InterfaceType",
     "IpAllocation",
     "Job",
@@ -80,6 +87,7 @@ __all__ = (
     "NetworkStatus",
     "NewBootSource",
     "NewHost",
+    "NewInstanceType",
     "NewNetwork",
     "NewStorageObject",
     "NewStoragePool",
@@ -87,6 +95,7 @@ __all__ = (
     "NewVm",
     "NewVmFilesystem",
     "NewVmNetwork",
+    "NewVmTemplate",
     "RateLimiterConfig",
     "RestoreRequest",
     "Snapshot",
@@ -112,4 +121,5 @@ __all__ = (
     "VmMigrateResponse",
     "VmStartResponse",
     "VmStatus",
+    "VmTemplate",
 )

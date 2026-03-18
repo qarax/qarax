@@ -83,6 +83,10 @@ pub enum Commands {
     Transfer(commands::transfer::TransferArgs),
     /// Boot source operations
     BootSource(commands::boot_source::BootSourceArgs),
+    /// Instance type operations
+    InstanceType(commands::instance_type::InstanceTypeArgs),
+    /// VM template operations
+    VmTemplate(commands::vm_template::VmTemplateArgs),
     /// Network operations
     Network(commands::network::NetworkArgs),
     /// Async job operations
@@ -107,6 +111,9 @@ async fn main() -> Result<()> {
     match cli.command {
         Commands::Vm(args) => commands::vm::run(args, &client, cli.output).await,
         Commands::Host(args) => commands::host::run(args, &client, cli.output).await,
+        Commands::InstanceType(args) => {
+            commands::instance_type::run(args, &client, cli.output).await
+        }
         Commands::StoragePool(args) => commands::storage::run_pool(args, &client, cli.output).await,
         Commands::StorageObject(args) => {
             commands::storage::run_object(args, &client, cli.output).await
@@ -114,6 +121,7 @@ async fn main() -> Result<()> {
         Commands::Network(args) => commands::network::run(args, &client, cli.output).await,
         Commands::Transfer(args) => commands::transfer::run(args, &client, cli.output).await,
         Commands::BootSource(args) => commands::boot_source::run(args, &client, cli.output).await,
+        Commands::VmTemplate(args) => commands::vm_template::run(args, &client, cli.output).await,
         Commands::Job(args) => commands::job::run(args, &client, cli.output).await,
         Commands::Configure(_) => unreachable!(),
     }

@@ -14,34 +14,26 @@ if TYPE_CHECKING:
     from ..models.new_vm_network import NewVmNetwork
 
 
-T = TypeVar("T", bound="NewVm")
+T = TypeVar("T", bound="VmTemplate")
 
 
 @_attrs_define
-class NewVm:
+class VmTemplate:
     """
     Attributes:
+        config (Any):
+        id (UUID):
         name (str):
         boot_mode (BootMode | None | Unset):
         boot_source_id (None | Unset | UUID):
         boot_vcpus (int | None | Unset):
-        cloud_init_meta_data (None | str | Unset): Cloud-init meta-data (raw YAML). Auto-generated from vm id/name if
-            omitted.
-        cloud_init_network_config (None | str | Unset): Cloud-init network-config (raw YAML). When provided, kernel
-            `ip=` cmdline
-            params are suppressed so cloud-init owns networking.
-        cloud_init_user_data (None | str | Unset): Cloud-init user-data (raw YAML). When provided a NoCloud seed image
-            is
-            generated and attached as a read-only disk to the VM.
-        config (Any | Unset):
+        cloud_init_meta_data (None | str | Unset):
+        cloud_init_network_config (None | str | Unset):
+        cloud_init_user_data (None | str | Unset):
         cpu_topology (Any | Unset):
         description (None | str | Unset):
         hypervisor (Hypervisor | None | Unset):
-        image_ref (None | str | Unset): OCI image reference to use as root filesystem (e.g.
-            "docker.io/library/ubuntu:22.04").
-            When set, the handler will check whether the selected host has an OverlayBD storage pool.
-            If so, the image is served via lazy block loading (virtio-blk); otherwise via virtiofs.
-        instance_type_id (None | Unset | UUID):
+        image_ref (None | str | Unset):
         kvm_hyperv (bool | None | Unset):
         max_vcpus (int | None | Unset):
         memory_hotplug_size (int | None | Unset):
@@ -52,13 +44,13 @@ class NewVm:
         memory_shared (bool | None | Unset):
         memory_size (int | None | Unset):
         memory_thp (bool | None | Unset):
-        network_id (None | Unset | UUID): Network ID to attach the VM to (triggers IPAM allocation).
-        networks (list[NewVmNetwork] | None | Unset): Optional network interfaces to attach at create time (passed to
-            qarax-node).
+        network_id (None | Unset | UUID):
+        networks (list[NewVmNetwork] | None | Unset):
         root_disk_object_id (None | Unset | UUID):
-        vm_template_id (None | Unset | UUID):
     """
 
+    config: Any
+    id: UUID
     name: str
     boot_mode: BootMode | None | Unset = UNSET
     boot_source_id: None | Unset | UUID = UNSET
@@ -66,12 +58,10 @@ class NewVm:
     cloud_init_meta_data: None | str | Unset = UNSET
     cloud_init_network_config: None | str | Unset = UNSET
     cloud_init_user_data: None | str | Unset = UNSET
-    config: Any | Unset = UNSET
     cpu_topology: Any | Unset = UNSET
     description: None | str | Unset = UNSET
     hypervisor: Hypervisor | None | Unset = UNSET
     image_ref: None | str | Unset = UNSET
-    instance_type_id: None | Unset | UUID = UNSET
     kvm_hyperv: bool | None | Unset = UNSET
     max_vcpus: int | None | Unset = UNSET
     memory_hotplug_size: int | None | Unset = UNSET
@@ -85,10 +75,13 @@ class NewVm:
     network_id: None | Unset | UUID = UNSET
     networks: list[NewVmNetwork] | None | Unset = UNSET
     root_disk_object_id: None | Unset | UUID = UNSET
-    vm_template_id: None | Unset | UUID = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        config = self.config
+
+        id = str(self.id)
+
         name = self.name
 
         boot_mode: None | str | Unset
@@ -131,8 +124,6 @@ class NewVm:
         else:
             cloud_init_user_data = self.cloud_init_user_data
 
-        config = self.config
-
         cpu_topology = self.cpu_topology
 
         description: None | str | Unset
@@ -154,14 +145,6 @@ class NewVm:
             image_ref = UNSET
         else:
             image_ref = self.image_ref
-
-        instance_type_id: None | str | Unset
-        if isinstance(self.instance_type_id, Unset):
-            instance_type_id = UNSET
-        elif isinstance(self.instance_type_id, UUID):
-            instance_type_id = str(self.instance_type_id)
-        else:
-            instance_type_id = self.instance_type_id
 
         kvm_hyperv: bool | None | Unset
         if isinstance(self.kvm_hyperv, Unset):
@@ -251,18 +234,12 @@ class NewVm:
         else:
             root_disk_object_id = self.root_disk_object_id
 
-        vm_template_id: None | str | Unset
-        if isinstance(self.vm_template_id, Unset):
-            vm_template_id = UNSET
-        elif isinstance(self.vm_template_id, UUID):
-            vm_template_id = str(self.vm_template_id)
-        else:
-            vm_template_id = self.vm_template_id
-
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
             {
+                "config": config,
+                "id": id,
                 "name": name,
             }
         )
@@ -278,8 +255,6 @@ class NewVm:
             field_dict["cloud_init_network_config"] = cloud_init_network_config
         if cloud_init_user_data is not UNSET:
             field_dict["cloud_init_user_data"] = cloud_init_user_data
-        if config is not UNSET:
-            field_dict["config"] = config
         if cpu_topology is not UNSET:
             field_dict["cpu_topology"] = cpu_topology
         if description is not UNSET:
@@ -288,8 +263,6 @@ class NewVm:
             field_dict["hypervisor"] = hypervisor
         if image_ref is not UNSET:
             field_dict["image_ref"] = image_ref
-        if instance_type_id is not UNSET:
-            field_dict["instance_type_id"] = instance_type_id
         if kvm_hyperv is not UNSET:
             field_dict["kvm_hyperv"] = kvm_hyperv
         if max_vcpus is not UNSET:
@@ -316,8 +289,6 @@ class NewVm:
             field_dict["networks"] = networks
         if root_disk_object_id is not UNSET:
             field_dict["root_disk_object_id"] = root_disk_object_id
-        if vm_template_id is not UNSET:
-            field_dict["vm_template_id"] = vm_template_id
 
         return field_dict
 
@@ -326,6 +297,10 @@ class NewVm:
         from ..models.new_vm_network import NewVmNetwork
 
         d = dict(src_dict)
+        config = d.pop("config")
+
+        id = UUID(d.pop("id"))
+
         name = d.pop("name")
 
         def _parse_boot_mode(data: object) -> BootMode | None | Unset:
@@ -398,8 +373,6 @@ class NewVm:
 
         cloud_init_user_data = _parse_cloud_init_user_data(d.pop("cloud_init_user_data", UNSET))
 
-        config = d.pop("config", UNSET)
-
         cpu_topology = d.pop("cpu_topology", UNSET)
 
         def _parse_description(data: object) -> None | str | Unset:
@@ -436,23 +409,6 @@ class NewVm:
             return cast(None | str | Unset, data)
 
         image_ref = _parse_image_ref(d.pop("image_ref", UNSET))
-
-        def _parse_instance_type_id(data: object) -> None | Unset | UUID:
-            if data is None:
-                return data
-            if isinstance(data, Unset):
-                return data
-            try:
-                if not isinstance(data, str):
-                    raise TypeError()
-                instance_type_id_type_0 = UUID(data)
-
-                return instance_type_id_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
-                pass
-            return cast(None | Unset | UUID, data)
-
-        instance_type_id = _parse_instance_type_id(d.pop("instance_type_id", UNSET))
 
         def _parse_kvm_hyperv(data: object) -> bool | None | Unset:
             if data is None:
@@ -600,24 +556,9 @@ class NewVm:
 
         root_disk_object_id = _parse_root_disk_object_id(d.pop("root_disk_object_id", UNSET))
 
-        def _parse_vm_template_id(data: object) -> None | Unset | UUID:
-            if data is None:
-                return data
-            if isinstance(data, Unset):
-                return data
-            try:
-                if not isinstance(data, str):
-                    raise TypeError()
-                vm_template_id_type_0 = UUID(data)
-
-                return vm_template_id_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
-                pass
-            return cast(None | Unset | UUID, data)
-
-        vm_template_id = _parse_vm_template_id(d.pop("vm_template_id", UNSET))
-
-        new_vm = cls(
+        vm_template = cls(
+            config=config,
+            id=id,
             name=name,
             boot_mode=boot_mode,
             boot_source_id=boot_source_id,
@@ -625,12 +566,10 @@ class NewVm:
             cloud_init_meta_data=cloud_init_meta_data,
             cloud_init_network_config=cloud_init_network_config,
             cloud_init_user_data=cloud_init_user_data,
-            config=config,
             cpu_topology=cpu_topology,
             description=description,
             hypervisor=hypervisor,
             image_ref=image_ref,
-            instance_type_id=instance_type_id,
             kvm_hyperv=kvm_hyperv,
             max_vcpus=max_vcpus,
             memory_hotplug_size=memory_hotplug_size,
@@ -644,11 +583,10 @@ class NewVm:
             network_id=network_id,
             networks=networks,
             root_disk_object_id=root_disk_object_id,
-            vm_template_id=vm_template_id,
         )
 
-        new_vm.additional_properties = d
-        return new_vm
+        vm_template.additional_properties = d
+        return vm_template
 
     @property
     def additional_keys(self) -> list[str]:

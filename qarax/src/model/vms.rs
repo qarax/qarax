@@ -4,6 +4,11 @@ use strum_macros::{Display, EnumString};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+use crate::{
+    errors::Error,
+    model::{instance_types, vm_templates},
+};
+
 use crate::model::network_interfaces::{InterfaceType, RateLimiterConfig, VhostMode};
 
 #[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
@@ -217,16 +222,18 @@ pub struct NewVmNetwork {
 #[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
 pub struct NewVm {
     pub name: String,
-    pub hypervisor: Hypervisor,
+    pub vm_template_id: Option<Uuid>,
+    pub instance_type_id: Option<Uuid>,
+    pub hypervisor: Option<Hypervisor>,
 
     // CPU
-    pub boot_vcpus: i32,
-    pub max_vcpus: i32,
+    pub boot_vcpus: Option<i32>,
+    pub max_vcpus: Option<i32>,
     pub cpu_topology: Option<serde_json::Value>,
     pub kvm_hyperv: Option<bool>,
 
     // Memory
-    pub memory_size: i64,
+    pub memory_size: Option<i64>,
     pub memory_hotplug_size: Option<i64>,
     pub memory_mergeable: Option<bool>,
     pub memory_shared: Option<bool>,
@@ -236,6 +243,7 @@ pub struct NewVm {
     pub memory_thp: Option<bool>,
 
     pub boot_source_id: Option<Uuid>,
+    pub root_disk_object_id: Option<Uuid>,
     pub boot_mode: Option<BootMode>,
     pub description: Option<String>,
 
@@ -260,8 +268,279 @@ pub struct NewVm {
     #[serde(default)]
     pub networks: Option<Vec<NewVmNetwork>>,
 
-    #[serde(default)]
+    #[serde(default = "default_vm_config")]
     pub config: serde_json::Value,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedNewVm {
+    pub name: String,
+    pub hypervisor: Hypervisor,
+    pub boot_vcpus: i32,
+    pub max_vcpus: i32,
+    pub cpu_topology: Option<serde_json::Value>,
+    pub kvm_hyperv: Option<bool>,
+    pub memory_size: i64,
+    pub memory_hotplug_size: Option<i64>,
+    pub memory_mergeable: Option<bool>,
+    pub memory_shared: Option<bool>,
+    pub memory_hugepages: Option<bool>,
+    pub memory_hugepage_size: Option<i64>,
+    pub memory_prefault: Option<bool>,
+    pub memory_thp: Option<bool>,
+    pub boot_source_id: Option<Uuid>,
+    pub root_disk_object_id: Option<Uuid>,
+    pub boot_mode: Option<BootMode>,
+    pub description: Option<String>,
+    pub image_ref: Option<String>,
+    pub cloud_init_user_data: Option<String>,
+    pub cloud_init_meta_data: Option<String>,
+    pub cloud_init_network_config: Option<String>,
+    pub network_id: Option<Uuid>,
+    pub networks: Option<Vec<NewVmNetwork>>,
+    pub config: serde_json::Value,
+}
+
+fn default_vm_config() -> serde_json::Value {
+    serde_json::json!({})
+}
+
+fn merge_config(
+    template_config: serde_json::Value,
+    request_config: serde_json::Value,
+) -> serde_json::Value {
+    match (template_config, request_config) {
+        (serde_json::Value::Object(mut template), serde_json::Value::Object(request)) => {
+            template.extend(request);
+            serde_json::Value::Object(template)
+        }
+        (serde_json::Value::Null, serde_json::Value::Null) => default_vm_config(),
+        (_, serde_json::Value::Null) => default_vm_config(),
+        (serde_json::Value::Null, request) => request,
+        (_, request) => request,
+    }
+}
+
+pub async fn resolve_create_request(pool: &PgPool, request: NewVm) -> Result<ResolvedNewVm, Error> {
+    let NewVm {
+        name,
+        vm_template_id,
+        instance_type_id,
+        hypervisor,
+        boot_vcpus,
+        max_vcpus,
+        cpu_topology,
+        kvm_hyperv,
+        memory_size,
+        memory_hotplug_size,
+        memory_mergeable,
+        memory_shared,
+        memory_hugepages,
+        memory_hugepage_size,
+        memory_prefault,
+        memory_thp,
+        boot_source_id,
+        root_disk_object_id,
+        boot_mode,
+        description,
+        image_ref,
+        cloud_init_user_data,
+        cloud_init_meta_data,
+        cloud_init_network_config,
+        network_id,
+        networks,
+        config,
+    } = request;
+
+    let vm_template = match vm_template_id {
+        Some(id) => Some(vm_templates::get(pool, id).await?),
+        None => None,
+    };
+    let instance_type = match instance_type_id {
+        Some(id) => Some(instance_types::get(pool, id).await?),
+        None => None,
+    };
+
+    let boot_vcpus = boot_vcpus
+        .or(instance_type.as_ref().map(|it| it.boot_vcpus))
+        .or(vm_template.as_ref().and_then(|template| template.boot_vcpus))
+        .ok_or_else(|| {
+            Error::UnprocessableEntity(
+                "boot_vcpus is required unless provided by the selected instance type or VM template"
+                    .into(),
+            )
+        })?;
+
+    let direct_max_vcpus = max_vcpus;
+    let mut max_vcpus = direct_max_vcpus
+        .or(instance_type.as_ref().map(|it| it.max_vcpus))
+        .or(vm_template.as_ref().and_then(|template| template.max_vcpus))
+        .unwrap_or(boot_vcpus);
+    if let Some(direct_max_vcpus) = direct_max_vcpus {
+        if direct_max_vcpus < boot_vcpus {
+            return Err(Error::UnprocessableEntity(
+                "max_vcpus must be greater than or equal to boot_vcpus".into(),
+            ));
+        }
+    } else if max_vcpus < boot_vcpus {
+        max_vcpus = boot_vcpus;
+    }
+
+    let hypervisor = hypervisor
+        .or(vm_template
+            .as_ref()
+            .and_then(|template| template.hypervisor.clone()))
+        .ok_or_else(|| {
+            Error::UnprocessableEntity(
+                "hypervisor is required unless provided by the selected VM template".into(),
+            )
+        })?;
+
+    let memory_size = memory_size
+        .or(instance_type.as_ref().map(|it| it.memory_size))
+        .or(vm_template.as_ref().and_then(|template| template.memory_size))
+        .ok_or_else(|| {
+            Error::UnprocessableEntity(
+                "memory_size is required unless provided by the selected instance type or VM template"
+                    .into(),
+            )
+        })?;
+
+    Ok(ResolvedNewVm {
+        name,
+        hypervisor,
+        boot_vcpus,
+        max_vcpus,
+        cpu_topology: cpu_topology
+            .or_else(|| {
+                instance_type
+                    .as_ref()
+                    .and_then(|it| it.cpu_topology.clone())
+            })
+            .or_else(|| {
+                vm_template
+                    .as_ref()
+                    .and_then(|template| template.cpu_topology.clone())
+            }),
+        kvm_hyperv: kvm_hyperv
+            .or_else(|| instance_type.as_ref().and_then(|it| it.kvm_hyperv))
+            .or_else(|| {
+                vm_template
+                    .as_ref()
+                    .and_then(|template| template.kvm_hyperv)
+            }),
+        memory_size,
+        memory_hotplug_size: memory_hotplug_size
+            .or_else(|| instance_type.as_ref().and_then(|it| it.memory_hotplug_size))
+            .or_else(|| {
+                vm_template
+                    .as_ref()
+                    .and_then(|template| template.memory_hotplug_size)
+            }),
+        memory_mergeable: memory_mergeable
+            .or_else(|| instance_type.as_ref().and_then(|it| it.memory_mergeable))
+            .or_else(|| {
+                vm_template
+                    .as_ref()
+                    .and_then(|template| template.memory_mergeable)
+            }),
+        memory_shared: memory_shared
+            .or_else(|| instance_type.as_ref().and_then(|it| it.memory_shared))
+            .or_else(|| {
+                vm_template
+                    .as_ref()
+                    .and_then(|template| template.memory_shared)
+            }),
+        memory_hugepages: memory_hugepages
+            .or_else(|| instance_type.as_ref().and_then(|it| it.memory_hugepages))
+            .or_else(|| {
+                vm_template
+                    .as_ref()
+                    .and_then(|template| template.memory_hugepages)
+            }),
+        memory_hugepage_size: memory_hugepage_size
+            .or_else(|| {
+                instance_type
+                    .as_ref()
+                    .and_then(|it| it.memory_hugepage_size)
+            })
+            .or_else(|| {
+                vm_template
+                    .as_ref()
+                    .and_then(|template| template.memory_hugepage_size)
+            }),
+        memory_prefault: memory_prefault
+            .or_else(|| instance_type.as_ref().and_then(|it| it.memory_prefault))
+            .or_else(|| {
+                vm_template
+                    .as_ref()
+                    .and_then(|template| template.memory_prefault)
+            }),
+        memory_thp: memory_thp
+            .or_else(|| instance_type.as_ref().and_then(|it| it.memory_thp))
+            .or_else(|| {
+                vm_template
+                    .as_ref()
+                    .and_then(|template| template.memory_thp)
+            }),
+        boot_source_id: boot_source_id.or_else(|| {
+            vm_template
+                .as_ref()
+                .and_then(|template| template.boot_source_id)
+        }),
+        root_disk_object_id: root_disk_object_id.or_else(|| {
+            vm_template
+                .as_ref()
+                .and_then(|template| template.root_disk_object_id)
+        }),
+        boot_mode: boot_mode.or_else(|| {
+            vm_template
+                .as_ref()
+                .and_then(|template| template.boot_mode.clone())
+        }),
+        description: description.or_else(|| {
+            vm_template
+                .as_ref()
+                .and_then(|template| template.description.clone())
+        }),
+        image_ref: image_ref.or_else(|| {
+            vm_template
+                .as_ref()
+                .and_then(|template| template.image_ref.clone())
+        }),
+        cloud_init_user_data: cloud_init_user_data.or_else(|| {
+            vm_template
+                .as_ref()
+                .and_then(|template| template.cloud_init_user_data.clone())
+        }),
+        cloud_init_meta_data: cloud_init_meta_data.or_else(|| {
+            vm_template
+                .as_ref()
+                .and_then(|template| template.cloud_init_meta_data.clone())
+        }),
+        cloud_init_network_config: cloud_init_network_config.or_else(|| {
+            vm_template
+                .as_ref()
+                .and_then(|template| template.cloud_init_network_config.clone())
+        }),
+        network_id: network_id.or_else(|| {
+            vm_template
+                .as_ref()
+                .and_then(|template| template.network_id)
+        }),
+        networks: networks.or_else(|| {
+            vm_template
+                .as_ref()
+                .and_then(|template| template.networks.clone())
+        }),
+        config: merge_config(
+            vm_template
+                .as_ref()
+                .map(|template| template.config.clone())
+                .unwrap_or_else(default_vm_config),
+            config,
+        ),
+    })
 }
 
 pub async fn list(pool: &PgPool) -> Result<Vec<Vm>, sqlx::Error> {
@@ -343,7 +622,7 @@ WHERE id = $1
     Ok(vm.into())
 }
 
-pub async fn create(pool: &PgPool, vm: &NewVm) -> Result<Uuid, sqlx::Error> {
+pub async fn create(pool: &PgPool, vm: &ResolvedNewVm) -> Result<Uuid, sqlx::Error> {
     let mut tx = pool.begin().await?;
     let id = create_tx(&mut tx, vm).await?;
     tx.commit().await?;
@@ -353,7 +632,7 @@ pub async fn create(pool: &PgPool, vm: &NewVm) -> Result<Uuid, sqlx::Error> {
 /// Creates a VM row inside the given transaction. Used by the handler to roll back on node failure.
 pub async fn create_tx(
     tx: &mut Transaction<'_, Postgres>,
-    vm: &NewVm,
+    vm: &ResolvedNewVm,
 ) -> Result<Uuid, sqlx::Error> {
     create_tx_with_status(tx, vm, VmStatus::Created).await
 }
@@ -361,7 +640,7 @@ pub async fn create_tx(
 /// Creates a VM row with a specific initial status inside the given transaction.
 pub async fn create_tx_with_status(
     tx: &mut Transaction<'_, Postgres>,
-    vm: &NewVm,
+    vm: &ResolvedNewVm,
     status: VmStatus,
 ) -> Result<Uuid, sqlx::Error> {
     let id = Uuid::new_v4();
