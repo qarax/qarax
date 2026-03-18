@@ -28,6 +28,14 @@ class NewVm:
         name (str):
         boot_mode (BootMode | None | Unset):
         boot_source_id (None | Unset | UUID):
+        cloud_init_meta_data (None | str | Unset): Cloud-init meta-data (raw YAML). Auto-generated from vm id/name if
+            omitted.
+        cloud_init_network_config (None | str | Unset): Cloud-init network-config (raw YAML). When provided, kernel
+            `ip=` cmdline
+            params are suppressed so cloud-init owns networking.
+        cloud_init_user_data (None | str | Unset): Cloud-init user-data (raw YAML). When provided a NoCloud seed image
+            is
+            generated and attached as a read-only disk to the VM.
         config (Any | Unset):
         cpu_topology (Any | Unset):
         description (None | str | Unset):
@@ -55,6 +63,9 @@ class NewVm:
     name: str
     boot_mode: BootMode | None | Unset = UNSET
     boot_source_id: None | Unset | UUID = UNSET
+    cloud_init_meta_data: None | str | Unset = UNSET
+    cloud_init_network_config: None | str | Unset = UNSET
+    cloud_init_user_data: None | str | Unset = UNSET
     config: Any | Unset = UNSET
     cpu_topology: Any | Unset = UNSET
     description: None | str | Unset = UNSET
@@ -97,6 +108,24 @@ class NewVm:
             boot_source_id = str(self.boot_source_id)
         else:
             boot_source_id = self.boot_source_id
+
+        cloud_init_meta_data: None | str | Unset
+        if isinstance(self.cloud_init_meta_data, Unset):
+            cloud_init_meta_data = UNSET
+        else:
+            cloud_init_meta_data = self.cloud_init_meta_data
+
+        cloud_init_network_config: None | str | Unset
+        if isinstance(self.cloud_init_network_config, Unset):
+            cloud_init_network_config = UNSET
+        else:
+            cloud_init_network_config = self.cloud_init_network_config
+
+        cloud_init_user_data: None | str | Unset
+        if isinstance(self.cloud_init_user_data, Unset):
+            cloud_init_user_data = UNSET
+        else:
+            cloud_init_user_data = self.cloud_init_user_data
 
         config = self.config
 
@@ -197,6 +226,12 @@ class NewVm:
             field_dict["boot_mode"] = boot_mode
         if boot_source_id is not UNSET:
             field_dict["boot_source_id"] = boot_source_id
+        if cloud_init_meta_data is not UNSET:
+            field_dict["cloud_init_meta_data"] = cloud_init_meta_data
+        if cloud_init_network_config is not UNSET:
+            field_dict["cloud_init_network_config"] = cloud_init_network_config
+        if cloud_init_user_data is not UNSET:
+            field_dict["cloud_init_user_data"] = cloud_init_user_data
         if config is not UNSET:
             field_dict["config"] = config
         if cpu_topology is not UNSET:
@@ -276,6 +311,33 @@ class NewVm:
             return cast(None | Unset | UUID, data)
 
         boot_source_id = _parse_boot_source_id(d.pop("boot_source_id", UNSET))
+
+        def _parse_cloud_init_meta_data(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        cloud_init_meta_data = _parse_cloud_init_meta_data(d.pop("cloud_init_meta_data", UNSET))
+
+        def _parse_cloud_init_network_config(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        cloud_init_network_config = _parse_cloud_init_network_config(d.pop("cloud_init_network_config", UNSET))
+
+        def _parse_cloud_init_user_data(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        cloud_init_user_data = _parse_cloud_init_user_data(d.pop("cloud_init_user_data", UNSET))
 
         config = d.pop("config", UNSET)
 
@@ -418,6 +480,9 @@ class NewVm:
             name=name,
             boot_mode=boot_mode,
             boot_source_id=boot_source_id,
+            cloud_init_meta_data=cloud_init_meta_data,
+            cloud_init_network_config=cloud_init_network_config,
+            cloud_init_user_data=cloud_init_user_data,
             config=config,
             cpu_topology=cpu_topology,
             description=description,

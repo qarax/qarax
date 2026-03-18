@@ -34,6 +34,9 @@ class Vm:
         name (str):
         status (VmStatus):
         boot_source_id (None | Unset | UUID):
+        cloud_init_meta_data (None | str | Unset):
+        cloud_init_network_config (None | str | Unset):
+        cloud_init_user_data (None | str | Unset):
         cpu_topology (Any | Unset):
         description (None | str | Unset):
         host_id (None | Unset | UUID):
@@ -58,6 +61,9 @@ class Vm:
     name: str
     status: VmStatus
     boot_source_id: None | Unset | UUID = UNSET
+    cloud_init_meta_data: None | str | Unset = UNSET
+    cloud_init_network_config: None | str | Unset = UNSET
+    cloud_init_user_data: None | str | Unset = UNSET
     cpu_topology: Any | Unset = UNSET
     description: None | str | Unset = UNSET
     host_id: None | Unset | UUID = UNSET
@@ -104,6 +110,24 @@ class Vm:
             boot_source_id = str(self.boot_source_id)
         else:
             boot_source_id = self.boot_source_id
+
+        cloud_init_meta_data: None | str | Unset
+        if isinstance(self.cloud_init_meta_data, Unset):
+            cloud_init_meta_data = UNSET
+        else:
+            cloud_init_meta_data = self.cloud_init_meta_data
+
+        cloud_init_network_config: None | str | Unset
+        if isinstance(self.cloud_init_network_config, Unset):
+            cloud_init_network_config = UNSET
+        else:
+            cloud_init_network_config = self.cloud_init_network_config
+
+        cloud_init_user_data: None | str | Unset
+        if isinstance(self.cloud_init_user_data, Unset):
+            cloud_init_user_data = UNSET
+        else:
+            cloud_init_user_data = self.cloud_init_user_data
 
         cpu_topology = self.cpu_topology
 
@@ -162,6 +186,12 @@ class Vm:
         )
         if boot_source_id is not UNSET:
             field_dict["boot_source_id"] = boot_source_id
+        if cloud_init_meta_data is not UNSET:
+            field_dict["cloud_init_meta_data"] = cloud_init_meta_data
+        if cloud_init_network_config is not UNSET:
+            field_dict["cloud_init_network_config"] = cloud_init_network_config
+        if cloud_init_user_data is not UNSET:
+            field_dict["cloud_init_user_data"] = cloud_init_user_data
         if cpu_topology is not UNSET:
             field_dict["cpu_topology"] = cpu_topology
         if description is not UNSET:
@@ -226,6 +256,33 @@ class Vm:
             return cast(None | Unset | UUID, data)
 
         boot_source_id = _parse_boot_source_id(d.pop("boot_source_id", UNSET))
+
+        def _parse_cloud_init_meta_data(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        cloud_init_meta_data = _parse_cloud_init_meta_data(d.pop("cloud_init_meta_data", UNSET))
+
+        def _parse_cloud_init_network_config(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        cloud_init_network_config = _parse_cloud_init_network_config(d.pop("cloud_init_network_config", UNSET))
+
+        def _parse_cloud_init_user_data(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        cloud_init_user_data = _parse_cloud_init_user_data(d.pop("cloud_init_user_data", UNSET))
 
         cpu_topology = d.pop("cpu_topology", UNSET)
 
@@ -299,6 +356,9 @@ class Vm:
             name=name,
             status=status,
             boot_source_id=boot_source_id,
+            cloud_init_meta_data=cloud_init_meta_data,
+            cloud_init_network_config=cloud_init_network_config,
+            cloud_init_user_data=cloud_init_user_data,
             cpu_topology=cpu_topology,
             description=description,
             host_id=host_id,

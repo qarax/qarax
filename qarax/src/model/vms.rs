@@ -44,6 +44,11 @@ pub struct Vm {
     // OCI image boot support
     pub image_ref: Option<String>,
 
+    // Cloud-init NoCloud seed data
+    pub cloud_init_user_data: Option<String>,
+    pub cloud_init_meta_data: Option<String>,
+    pub cloud_init_network_config: Option<String>,
+
     // Legacy config field for flexibility
     pub config: serde_json::Value,
 }
@@ -77,6 +82,10 @@ pub struct VmRow {
 
     pub image_ref: Option<String>,
 
+    pub cloud_init_user_data: Option<String>,
+    pub cloud_init_meta_data: Option<String>,
+    pub cloud_init_network_config: Option<String>,
+
     pub config: Json<serde_json::Value>,
 }
 
@@ -107,6 +116,10 @@ impl From<VmRow> for Vm {
             memory_thp: row.memory_thp,
 
             image_ref: row.image_ref,
+
+            cloud_init_user_data: row.cloud_init_user_data,
+            cloud_init_meta_data: row.cloud_init_meta_data,
+            cloud_init_network_config: row.cloud_init_network_config,
 
             config: row.config.0,
         }
@@ -231,6 +244,15 @@ pub struct NewVm {
     /// If so, the image is served via lazy block loading (virtio-blk); otherwise via virtiofs.
     pub image_ref: Option<String>,
 
+    /// Cloud-init user-data (raw YAML). When provided a NoCloud seed image is
+    /// generated and attached as a read-only disk to the VM.
+    pub cloud_init_user_data: Option<String>,
+    /// Cloud-init meta-data (raw YAML). Auto-generated from vm id/name if omitted.
+    pub cloud_init_meta_data: Option<String>,
+    /// Cloud-init network-config (raw YAML). When provided, kernel `ip=` cmdline
+    /// params are suppressed so cloud-init owns networking.
+    pub cloud_init_network_config: Option<String>,
+
     /// Network ID to attach the VM to (triggers IPAM allocation).
     pub network_id: Option<Uuid>,
 
@@ -267,6 +289,9 @@ SELECT id,
         memory_prefault as "memory_prefault!",
         memory_thp as "memory_thp!",
         image_ref as "image_ref?",
+        cloud_init_user_data as "cloud_init_user_data?",
+        cloud_init_meta_data as "cloud_init_meta_data?",
+        cloud_init_network_config as "cloud_init_network_config?",
         config as "config: _"
 FROM vms
         "#
@@ -303,6 +328,9 @@ SELECT id,
         memory_prefault as "memory_prefault!",
         memory_thp as "memory_thp!",
         image_ref as "image_ref?",
+        cloud_init_user_data as "cloud_init_user_data?",
+        cloud_init_meta_data as "cloud_init_meta_data?",
+        cloud_init_network_config as "cloud_init_network_config?",
         config as "config: _"
 FROM vms
 WHERE id = $1
@@ -347,14 +375,18 @@ INSERT INTO vms (
     boot_vcpus, max_vcpus, cpu_topology, kvm_hyperv,
     memory_size, memory_hotplug_size, memory_mergeable, memory_shared,
     memory_hugepages, memory_hugepage_size, memory_prefault, memory_thp,
-    boot_source_id, boot_mode, description, image_ref, config
+    boot_source_id, boot_mode, description, image_ref,
+    cloud_init_user_data, cloud_init_meta_data, cloud_init_network_config,
+    config
 )
 VALUES (
     $1, $2, $3, $4,
     $5, $6, $7, $8,
     $9, $10, $11, $12,
     $13, $14, $15, $16,
-    $17, $18, $19, $20, $21
+    $17, $18, $19, $20,
+    $21, $22, $23,
+    $24
 )
         "#,
     )
@@ -378,6 +410,9 @@ VALUES (
     .bind(vm.boot_mode.clone().unwrap_or(BootMode::Kernel))
     .bind(&vm.description)
     .bind(&vm.image_ref)
+    .bind(&vm.cloud_init_user_data)
+    .bind(&vm.cloud_init_meta_data)
+    .bind(&vm.cloud_init_network_config)
     .bind(config)
     .execute(tx.as_mut())
     .await?;
@@ -409,6 +444,9 @@ SELECT id,
         memory_prefault,
         memory_thp,
         image_ref,
+        cloud_init_user_data,
+        cloud_init_meta_data,
+        cloud_init_network_config,
         config
 FROM vms
 WHERE status NOT IN ('SHUTDOWN', 'UNKNOWN', 'PENDING')

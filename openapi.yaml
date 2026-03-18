@@ -1816,6 +1816,25 @@ components:
         boot_vcpus:
           type: integer
           format: int32
+        cloud_init_meta_data:
+          type:
+          - string
+          - 'null'
+          description: Cloud-init meta-data (raw YAML). Auto-generated from vm id/name if omitted.
+        cloud_init_network_config:
+          type:
+          - string
+          - 'null'
+          description: |-
+            Cloud-init network-config (raw YAML). When provided, kernel `ip=` cmdline
+            params are suppressed so cloud-init owns networking.
+        cloud_init_user_data:
+          type:
+          - string
+          - 'null'
+          description: |-
+            Cloud-init user-data (raw YAML). When provided a NoCloud seed image is
+            generated and attached as a read-only disk to the VM.
         config: {}
         cpu_topology: {}
         description:
@@ -2295,6 +2314,18 @@ components:
         boot_vcpus:
           type: integer
           format: int32
+        cloud_init_meta_data:
+          type:
+          - string
+          - 'null'
+        cloud_init_network_config:
+          type:
+          - string
+          - 'null'
+        cloud_init_user_data:
+          type:
+          - string
+          - 'null'
         config: {}
         cpu_topology: {}
         description:

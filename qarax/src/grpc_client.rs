@@ -18,7 +18,7 @@ pub mod node {
 
 use node::{
     AddDiskDeviceRequest, AddNetworkDeviceRequest, AttachNetworkRequest, AttachStoragePoolRequest,
-    ConsoleConfig, ConsoleInput, ConsoleLogResponse, CopyFileRequest, CpusConfig,
+    CloudInitConfig, ConsoleConfig, ConsoleInput, ConsoleLogResponse, CopyFileRequest, CpusConfig,
     DetachNetworkRequest, DetachStoragePoolRequest, DiskConfig, DownloadFileRequest, FsConfig,
     ImportOverlayBdRequest, ImportOverlayBdResponse, MemoryConfig, NetConfig, NodeInfo,
     OciImageRequest, OciImageResponse, PayloadConfig, ReceiveMigrationRequest, RemoveDeviceRequest,
@@ -50,6 +50,12 @@ pub struct CreateVmRequest {
     pub memory_shared: bool,
     /// Disk configurations resolved from vm_disks + storage objects
     pub disks: Vec<DiskConfig>,
+    /// Cloud-init user-data (raw YAML)
+    pub cloud_init_user_data: Option<String>,
+    /// Cloud-init meta-data (raw YAML); auto-generated if None
+    pub cloud_init_meta_data: Option<String>,
+    /// Cloud-init network-config (optional raw YAML)
+    pub cloud_init_network_config: Option<String>,
 }
 
 /// Convert DB network interfaces to proto NetConfig for the node.
@@ -213,6 +219,9 @@ impl NodeClient {
             fs_configs,
             memory_shared,
             disks: extra_disks,
+            cloud_init_user_data,
+            cloud_init_meta_data,
+            cloud_init_network_config,
         } = req;
         debug!("Creating VM {} on node {}", vm_id, self.address);
 
@@ -283,6 +292,11 @@ impl NodeClient {
             console: None,
             rate_limit_groups: vec![],
             fs: fs_configs,
+            cloud_init: cloud_init_user_data.map(|user_data| CloudInitConfig {
+                user_data,
+                meta_data: cloud_init_meta_data.unwrap_or_default(),
+                network_config: cloud_init_network_config.unwrap_or_default(),
+            }),
         };
 
         client

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\nSELECT id,\n        name,\n        status as \"status: _\",\n        host_id as \"host_id?\",\n        hypervisor as \"hypervisor: _\",\n        boot_source_id as \"boot_source_id?\",\n        boot_mode as \"boot_mode: _\",\n        description as \"description?\",\n        boot_vcpus,\n        max_vcpus,\n        cpu_topology as \"cpu_topology: _\",\n        kvm_hyperv as \"kvm_hyperv!\",\n        memory_size,\n        memory_hotplug_size as \"memory_hotplug_size?\",\n        memory_mergeable as \"memory_mergeable!\",\n        memory_shared as \"memory_shared!\",\n        memory_hugepages as \"memory_hugepages!\",\n        memory_hugepage_size as \"memory_hugepage_size?\",\n        memory_prefault as \"memory_prefault!\",\n        memory_thp as \"memory_thp!\",\n        image_ref as \"image_ref?\",\n        config as \"config: _\"\nFROM vms\nWHERE id = $1\n        ",
+  "query": "\nSELECT id,\n        name,\n        status as \"status: _\",\n        host_id as \"host_id?\",\n        hypervisor as \"hypervisor: _\",\n        boot_source_id as \"boot_source_id?\",\n        boot_mode as \"boot_mode: _\",\n        description as \"description?\",\n        boot_vcpus,\n        max_vcpus,\n        cpu_topology as \"cpu_topology: _\",\n        kvm_hyperv as \"kvm_hyperv!\",\n        memory_size,\n        memory_hotplug_size as \"memory_hotplug_size?\",\n        memory_mergeable as \"memory_mergeable!\",\n        memory_shared as \"memory_shared!\",\n        memory_hugepages as \"memory_hugepages!\",\n        memory_hugepage_size as \"memory_hugepage_size?\",\n        memory_prefault as \"memory_prefault!\",\n        memory_thp as \"memory_thp!\",\n        image_ref as \"image_ref?\",\n        cloud_init_user_data as \"cloud_init_user_data?\",\n        cloud_init_meta_data as \"cloud_init_meta_data?\",\n        cloud_init_network_config as \"cloud_init_network_config?\",\n        config as \"config: _\"\nFROM vms\nWHERE id = $1\n        ",
   "describe": {
     "columns": [
       {
@@ -146,6 +146,21 @@
       },
       {
         "ordinal": 21,
+        "name": "cloud_init_user_data?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 22,
+        "name": "cloud_init_meta_data?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 23,
+        "name": "cloud_init_network_config?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 24,
         "name": "config: _",
         "type_info": "Jsonb"
       }
@@ -177,8 +192,11 @@
       true,
       true,
       true,
+      true,
+      true,
+      true,
       false
     ]
   },
-  "hash": "86fbda84b503bc642aa450e36a129b044fe94a60aaadee1eaca36eb12a7980d8"
+  "hash": "2cabd239b82a160476bf19d03331d682b5d1fee13bd11adc738353c438a6c5fc"
 }

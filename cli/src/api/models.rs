@@ -47,6 +47,12 @@ pub struct NewVm {
     pub network_id: Option<Uuid>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub networks: Option<Vec<NewVmNetwork>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cloud_init_user_data: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cloud_init_meta_data: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cloud_init_network_config: Option<String>,
     pub config: serde_json::Value,
 }
 

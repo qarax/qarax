@@ -15,6 +15,14 @@ message VmList {
   repeated VmState vms = 1;
 }
 
+// Cloud-init NoCloud seed data. When present the node generates a VFAT "cidata"
+// seed image and attaches it as a read-only disk to the VM.
+message CloudInitConfig {
+  string user_data = 1;        // cloud-init user-data (YAML)
+  string meta_data = 2;        // cloud-init meta-data (YAML); auto-generated if empty
+  string network_config = 3;   // cloud-init network-config (optional YAML)
+}
+
 message VmConfig {
   string vm_id = 1;
 
@@ -43,6 +51,9 @@ message VmConfig {
 
   // Filesystem (virtiofs) devices
   repeated FsConfig fs = 11;
+
+  // Cloud-init seed data (optional)
+  optional CloudInitConfig cloud_init = 12;
 }
 
 // ============================================================================

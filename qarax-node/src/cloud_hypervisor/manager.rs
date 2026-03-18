@@ -180,6 +180,10 @@ impl VmManager {
         self.runtime_dir.join(format!("{}.sock", vm_id))
     }
 
+    fn cloud_init_seed_path(&self, vm_id: &str) -> PathBuf {
+        self.runtime_dir.join(format!("{}-cidata.img", vm_id))
+    }
+
     /// Get the log path for a VM
     fn log_path(&self, vm_id: &str) -> PathBuf {
         self.runtime_dir.join(format!("{}.log", vm_id))
@@ -589,6 +593,30 @@ impl VmManager {
                     "FsConfig entries present but no ImageStoreManager configured — skipping virtiofsd startup"
                 );
             }
+        }
+
+        // Generate a cloud-init NoCloud seed image and attach it as a read-only
+        // disk if the VM has cloud-init data configured.
+        if let Some(ci) = &config.cloud_init
+            && !ci.user_data.is_empty()
+        {
+            let seed_path = self.cloud_init_seed_path(&vm_id);
+            // runtime_dir is created unconditionally below; seed_path lives there.
+            let network_config =
+                (!ci.network_config.is_empty()).then_some(ci.network_config.as_str());
+            let buf =
+                super::cloud_init::build_seed_image(&ci.user_data, &ci.meta_data, network_config)
+                    .map_err(|e| VmManagerError::InvalidConfig(e.to_string()))?;
+            tokio::fs::write(&seed_path, buf)
+                .await
+                .map_err(VmManagerError::SpawnError)?;
+            config.disks.push(ProtoDiskConfig {
+                id: "cidata".to_string(),
+                path: Some(seed_path.display().to_string()),
+                readonly: Some(true),
+                ..Default::default()
+            });
+            info!("Cloud-init seed disk attached for VM {}", vm_id);
         }
 
         // Ensure runtime directory exists
@@ -1340,6 +1368,12 @@ impl VmManager {
         let config_path = self.config_path(vm_id);
         if config_path.exists() {
             let _ = tokio::fs::remove_file(&config_path).await;
+        }
+
+        // Clean up cloud-init seed image if present
+        let seed_path = self.cloud_init_seed_path(vm_id);
+        if tokio::fs::try_exists(&seed_path).await.unwrap_or(false) {
+            let _ = tokio::fs::remove_file(&seed_path).await;
         }
 
         // Clean up TAP devices created by qarax-node

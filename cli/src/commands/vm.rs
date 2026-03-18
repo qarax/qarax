@@ -67,6 +67,15 @@ enum VmCommand {
         /// Static IP address to assign to the VM (requires --network)
         #[arg(long, requires = "network")]
         ip: Option<String>,
+        /// Path to cloud-init user-data file (triggers NoCloud seed disk attachment)
+        #[arg(long, value_name = "FILE")]
+        cloud_init_user_data: Option<std::path::PathBuf>,
+        /// Path to cloud-init meta-data file (auto-generated from VM name/id if omitted)
+        #[arg(long, value_name = "FILE", requires = "cloud_init_user_data")]
+        cloud_init_meta_data: Option<std::path::PathBuf>,
+        /// Path to cloud-init network-config file (suppresses kernel ip= params when set)
+        #[arg(long, value_name = "FILE", requires = "cloud_init_user_data")]
+        cloud_init_network_config: Option<std::path::PathBuf>,
     },
     /// Delete a VM
     Delete {
@@ -297,6 +306,9 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
             boot_mode,
             network,
             ip,
+            cloud_init_user_data,
+            cloud_init_meta_data,
+            cloud_init_network_config,
         } => {
             let boot_source_id = match boot_source {
                 Some(ref s) => Some(resolve_boot_source_id(client, s).await?),
@@ -325,6 +337,17 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
                     }
                 }
             };
+            let read_file = |path: Option<std::path::PathBuf>| -> anyhow::Result<Option<String>> {
+                path.map(|p| {
+                    std::fs::read_to_string(&p)
+                        .map_err(|e| anyhow::anyhow!("Failed to read {}: {}", p.display(), e))
+                })
+                .transpose()
+            };
+            let ci_user_data = read_file(cloud_init_user_data)?;
+            let ci_meta_data = read_file(cloud_init_meta_data)?;
+            let ci_network_config = read_file(cloud_init_network_config)?;
+
             let new_vm = NewVm {
                 name,
                 hypervisor: "cloud_hv".to_string(),
@@ -337,6 +360,9 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
                 image_ref: image_ref.clone(),
                 network_id,
                 networks,
+                cloud_init_user_data: ci_user_data,
+                cloud_init_meta_data: ci_meta_data,
+                cloud_init_network_config: ci_network_config,
                 config: serde_json::json!({}),
             };
 

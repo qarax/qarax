@@ -1521,6 +1521,11 @@ async fn build_create_vm_request(env: &App, vm: &Vm) -> Result<CreateVmRequest> 
         }
     }
 
+    // Suppress kernel ip= params if cloud-init will configure networking instead.
+    if vm.cloud_init_network_config.is_some() {
+        ip_params.clear();
+    }
+
     let has_vhost_user_network = networks.iter().any(|n| n.vhost_user.unwrap_or(false));
 
     // Choose cmdline based on what's attached
@@ -1565,6 +1570,15 @@ async fn build_create_vm_request(env: &App, vm: &Vm) -> Result<CreateVmRequest> 
     // directly. The test initramfs contains /.qarax-config.json which prevents switch_root.
     let initramfs = if has_overlaybd_boot { None } else { initramfs };
 
+    // Auto-generate meta-data if not provided by the caller.
+    let cloud_init_meta_data = vm.cloud_init_meta_data.clone().or_else(|| {
+        vm.cloud_init_user_data.as_ref()?;
+        Some(format!(
+            "instance-id: {}\nlocal-hostname: {}\n",
+            vm.id, vm.name
+        ))
+    });
+
     Ok(CreateVmRequest {
         vm_id,
         boot_vcpus: vm.boot_vcpus,
@@ -1578,6 +1592,9 @@ async fn build_create_vm_request(env: &App, vm: &Vm) -> Result<CreateVmRequest> 
         fs_configs,
         memory_shared: memory_shared || has_vhost_user_network,
         disks: resolved_disks,
+        cloud_init_user_data: vm.cloud_init_user_data.clone(),
+        cloud_init_meta_data,
+        cloud_init_network_config: vm.cloud_init_network_config.clone(),
     })
 }
 
@@ -2240,6 +2257,16 @@ pub async fn migrate(
             console: None,
             rate_limit_groups: vec![],
             fs: create_req.fs_configs,
+            cloud_init: create_req.cloud_init_user_data.as_ref().map(|user_data| {
+                crate::grpc_client::node::CloudInitConfig {
+                    user_data: user_data.clone(),
+                    meta_data: create_req.cloud_init_meta_data.clone().unwrap_or_default(),
+                    network_config: create_req
+                        .cloud_init_network_config
+                        .clone()
+                        .unwrap_or_default(),
+                }
+            }),
         };
 
         // Step 1: Prepare the destination node.
