@@ -5,7 +5,7 @@ Covers:
   - Attaching a disk to a VM in Created state (DB-only, no gRPC)
   - Removing a disk from a Created VM
   - Adding / removing a NIC on a Created VM
-  - Hotplugging a disk into a running VM (NFS-backed, real Cloud Hypervisor call)
+  - Hotplugging a disk into a running VM (local pool, real Cloud Hypervisor call)
   - Hotunplugging a disk from a running VM
   - Hotplugging a NIC into a running VM (isolated network)
   - Hotunplugging a NIC from a running VM
@@ -15,8 +15,8 @@ Covers:
   - Negative: remove non-existent NIC → 404
 
 Prerequisites for running-VM tests:
-  - An NFS server at nfs-server:/nfs-export (shared with live-migration tests)
   - A qarax-node instance reachable with KVM passthrough
+  - /var/lib/qarax/images/test-initramfs.gz present on every node (used as a raw block device)
 """
 
 import asyncio
@@ -43,10 +43,6 @@ from qarax_api_client.api.storage_pools import (
     create as create_pool,
     delete as delete_pool,
 )
-from qarax_api_client.api.transfers import (
-    create as create_transfer,
-    get as get_transfer,
-)
 from qarax_api_client.api.vms import (
     add_nic,
     attach_disk,
@@ -62,10 +58,8 @@ from qarax_api_client.models import (
     Hypervisor,
     NewNetwork,
     NewStoragePool,
-    NewTransfer,
     NewVm,
     StoragePoolType,
-    TransferStatus,
     VmStatus,
 )
 from qarax_api_client.models.attach_disk_request import AttachDiskRequest
@@ -376,7 +370,7 @@ async def test_remove_nic_not_found_returns_404(client):
                 await delete_vm.asyncio_detailed(client=c, vm_id=vm_id)
 
 
-# ─── Running-VM hotplug tests (require NFS + real Cloud Hypervisor) ───────────
+# ─── Running-VM hotplug tests (require real Cloud Hypervisor) ────────────────
 
 
 @pytest.mark.asyncio
@@ -384,9 +378,9 @@ async def test_disk_hotplug_running_vm(client):
     """
     Hotplug a disk into a running VM, verify the VM stays Running, then hotunplug.
 
-    Uses an NFS storage pool and a transfer to provision an actual disk file before
-    hotplugging — Cloud Hypervisor requires the file to exist at hotplug time.
-    The pool is attached to all hosts so hotplug works regardless of VM placement.
+    Uses a local pool attached to all hosts so the hotplug works regardless of VM
+    placement. The storage object points to the test initramfs which already exists
+    on every node — Cloud Hypervisor treats any file as a raw block device.
     """
     test_id = uuid.uuid4().hex[:8]
     pool_id = disk_id = vm_id = None
@@ -395,48 +389,38 @@ async def test_disk_hotplug_running_vm(client):
             hosts = await list_hosts.asyncio(client=c)
             assert hosts, "No hosts available"
 
-            # Create an NFS pool and attach it to all hosts so the disk file is accessible
-            # regardless of which host the VM is scheduled on.
-            pool_id = await _make_nfs_pool(c, test_id, hosts)
-            for host in hosts[1:]:
+            # Create a local pool and attach it to ALL hosts. The local-pool validation
+            # in attach_disk requires the VM's host to have the pool attached, so we
+            # pre-attach to every host to avoid scheduling-dependent failures.
+            pool_id_raw = await create_pool.asyncio(
+                client=c,
+                body=NewStoragePool(
+                    name=f"e2e-hp-disk-pool-{test_id}",
+                    pool_type=StoragePoolType.LOCAL,
+                    config={"path": f"/var/lib/qarax/e2e-hp-{test_id}"},
+                ),
+            )
+            pool_id = UUID(str(pool_id_raw).strip('"'))
+            for host in hosts:
                 await attach_pool_host.asyncio_detailed(
                     client=c,
                     pool_id=pool_id,
                     body=AttachPoolHostRequest(host_id=host.id),
                 )
 
-            # Provision the disk file via a transfer so the file actually exists on the node.
-            # Cloud Hypervisor requires the file to be present at hotplug time.
-            # We copy the test kernel as a raw "disk" image — CH accepts any file as raw block.
-            transfer = await create_transfer.asyncio(
+            # Create a storage object pointing to the test initramfs which already
+            # exists on every node. CH opens any file as a raw block device, so no
+            # provisioning step is needed.
+            disk_id_raw = await create_storage_object.asyncio(
                 client=c,
-                pool_id=str(pool_id),
-                body=NewTransfer(
+                body=NewStorageObject(
                     name=f"e2e-hp-disk-{test_id}",
-                    source="/var/lib/qarax/images/vmlinux",
+                    storage_pool_id=str(pool_id),
                     object_type=StorageObjectType.DISK,
+                    config={"path": "/var/lib/qarax/images/test-initramfs.gz"},
                 ),
             )
-            assert transfer is not None, "Transfer creation failed"
-
-            # Wait for the transfer to complete and get the resulting storage object ID.
-            start = time.time()
-            while time.time() - start < 30:
-                transfer = await get_transfer.asyncio(
-                    client=c,
-                    pool_id=str(pool_id),
-                    transfer_id=str(transfer.id),
-                )
-                if transfer.status == TransferStatus.COMPLETED:
-                    break
-                if transfer.status == TransferStatus.FAILED:
-                    pytest.fail(f"Transfer failed: {transfer.error_message}")
-                await asyncio.sleep(0.5)
-            else:
-                pytest.fail(f"Transfer did not complete within 30s (status: {transfer.status})")
-
-            disk_id = transfer.storage_object_id
-            assert disk_id is not None, "Transfer completed but no storage object ID"
+            disk_id = UUID(str(disk_id_raw).strip('"'))
 
             vm_id = await _make_vm(c, test_id)
 
