@@ -417,6 +417,7 @@ async def test_disk_hotplug_running_vm(client):
                     name=f"e2e-hp-disk-{test_id}",
                     storage_pool_id=str(pool_id),
                     object_type=StorageObjectType.DISK,
+                    size_bytes=1,
                     config={"path": "/var/lib/qarax/images/test-initramfs.gz"},
                 ),
             )
