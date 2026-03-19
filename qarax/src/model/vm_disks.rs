@@ -81,7 +81,7 @@ impl From<VmDiskRow> for VmDisk {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct NewVmDisk {
     pub vm_id: Uuid,
     pub storage_object_id: Option<Uuid>,

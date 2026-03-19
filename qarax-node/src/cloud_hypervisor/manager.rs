@@ -264,25 +264,12 @@ impl VmManager {
                 None => continue,
             };
 
-            // Check if config file exists
-            let config_path = self.config_path(&vm_id);
-            if !config_path.exists() {
-                continue;
-            }
-
-            // Read persisted proto config (stored as protobuf binary)
-            let config_bytes = match tokio::fs::read(&config_path).await {
-                Ok(b) => b,
+            // Load persisted proto config
+            let proto_config = match self.load_persisted_vm_config(&vm_id).await {
+                Ok(Some(c)) => c,
+                Ok(None) => continue,
                 Err(e) => {
-                    warn!("Failed to read config for VM {}: {}", vm_id, e);
-                    continue;
-                }
-            };
-
-            let proto_config = match ProtoVmConfig::decode(config_bytes.as_slice()) {
-                Ok(c) => c,
-                Err(e) => {
-                    warn!("Failed to decode config for VM {}: {}", vm_id, e);
+                    warn!("Failed to load config for VM {}: {}", vm_id, e);
                     continue;
                 }
             };
@@ -353,27 +340,29 @@ impl VmManager {
         }
     }
 
+    /// Extract the first 8 hex digits from a VM UUID string (dashes stripped).
+    fn vm_hex_prefix(vm_id: &str) -> String {
+        vm_id
+            .chars()
+            .filter(|c| c.is_ascii_hexdigit())
+            .take(8)
+            .collect()
+    }
+
     /// Generate a deterministic TAP device name for a network interface.
     ///
     /// Format: "qt" + first 8 hex chars of VM UUID + "n" + NIC index.
     /// Example: "qt24b6061en0" (12 chars, well within the 15-char Linux limit).
     fn tap_name_for_net(vm_id: &str, net_index: usize) -> String {
-        let hex_id: String = vm_id
-            .chars()
-            .filter(|c| c.is_ascii_hexdigit())
-            .take(8)
-            .collect();
-        format!("qt{}n{}", hex_id, net_index)
+        format!("qt{}n{}", Self::vm_hex_prefix(vm_id), net_index)
     }
 
     fn passt_socket_path(&self, vm_id: &str, net_index: usize) -> PathBuf {
-        let hex_id: String = vm_id
-            .chars()
-            .filter(|c| c.is_ascii_hexdigit())
-            .take(8)
-            .collect();
-        self.runtime_dir
-            .join(format!("qp{}n{}.sock", hex_id, net_index))
+        self.runtime_dir.join(format!(
+            "qp{}n{}.sock",
+            Self::vm_hex_prefix(vm_id),
+            net_index
+        ))
     }
 
     fn should_spawn_passt(net: &ProtoNetConfig) -> bool {
@@ -872,14 +861,15 @@ impl VmManager {
     pub async fn pause_vm(&self, vm_id: &str) -> Result<(), VmManagerError> {
         info!("Pausing VM: {}", vm_id);
 
-        let vms = self.vms.lock().await;
-        let instance = vms
-            .get(vm_id)
-            .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
+        let socket_path = {
+            let vms = self.vms.lock().await;
+            let instance = vms
+                .get(vm_id)
+                .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
+            instance.socket_path.clone()
+        };
 
-        Self::send_api_request(&instance.socket_path, "PUT", "/api/v1/vm.pause", None).await?;
-
-        drop(vms);
+        Self::send_api_request(&socket_path, "PUT", "/api/v1/vm.pause", None).await?;
 
         let mut vms = self.vms.lock().await;
         if let Some(instance) = vms.get_mut(vm_id) {
@@ -894,14 +884,15 @@ impl VmManager {
     pub async fn resume_vm(&self, vm_id: &str) -> Result<(), VmManagerError> {
         info!("Resuming VM: {}", vm_id);
 
-        let vms = self.vms.lock().await;
-        let instance = vms
-            .get(vm_id)
-            .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
+        let socket_path = {
+            let vms = self.vms.lock().await;
+            let instance = vms
+                .get(vm_id)
+                .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
+            instance.socket_path.clone()
+        };
 
-        Self::send_api_request(&instance.socket_path, "PUT", "/api/v1/vm.resume", None).await?;
-
-        drop(vms);
+        Self::send_api_request(&socket_path, "PUT", "/api/v1/vm.resume", None).await?;
 
         let mut vms = self.vms.lock().await;
         if let Some(instance) = vms.get_mut(vm_id) {
@@ -1168,24 +1159,27 @@ impl VmManager {
             let _ = tokio::fs::remove_file(&socket_path).await;
         }
 
-        let log_file = tokio::fs::File::create(&log_path)
-            .await
-            .map_err(|e| {
+        let log_file = match tokio::fs::File::create(&log_path).await {
+            Ok(f) => f,
+            Err(e) => {
                 for tap in &tap_devices {
-                    // best-effort cleanup: spawn is non-blocking
-                    let _ = Command::new("ip").args(["link", "delete", tap]).spawn();
+                    Self::delete_tap_device(tap).await;
                 }
-                VmManagerError::SpawnError(e)
-            })?
-            .into_std()
-            .await;
-
-        let stderr_file = log_file.try_clone().map_err(|e| {
-            for tap in &tap_devices {
-                let _ = Command::new("ip").args(["link", "delete", tap]).spawn();
+                return Err(VmManagerError::SpawnError(e));
             }
-            VmManagerError::SpawnError(e)
-        })?;
+        }
+        .into_std()
+        .await;
+
+        let stderr_file = match log_file.try_clone() {
+            Ok(f) => f,
+            Err(e) => {
+                for tap in &tap_devices {
+                    Self::delete_tap_device(tap).await;
+                }
+                return Err(VmManagerError::SpawnError(e));
+            }
+        };
 
         let process = Command::new(&self.ch_binary)
             .arg("--api-socket")
@@ -1342,10 +1336,11 @@ impl VmManager {
     pub async fn delete_vm(&self, vm_id: &str) -> Result<(), VmManagerError> {
         info!("Deleting VM: {}", vm_id);
 
-        let mut vms = self.vms.lock().await;
-        let mut instance = vms
-            .remove(vm_id)
-            .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
+        let mut instance = {
+            let mut vms = self.vms.lock().await;
+            vms.remove(vm_id)
+                .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?
+        };
 
         // Try to shutdown via SDK first
         if let Err(e) = instance.vm.shutdown().await {
@@ -1386,7 +1381,8 @@ impl VmManager {
 
         // Clean up any virtiofsd processes for this VM's fs devices
         if let Some(store) = &self.image_store_manager {
-            for i in 0..8 {
+            let fs_count = instance.proto_config.fs.len();
+            for i in 0..fs_count {
                 store.cleanup_vm(&format!("{}-fs{}", vm_id, i)).await;
             }
         }
@@ -1474,7 +1470,7 @@ impl VmManager {
             .get(vm_id)
             .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
 
-        let sdk_config = self.proto_net_to_sdk(config);
+        let sdk_config = Self::proto_net_to_sdk(config);
         let body = serde_json::to_string(&sdk_config)
             .map_err(|e| VmManagerError::InvalidConfig(e.to_string()))?;
 
@@ -1489,27 +1485,32 @@ impl VmManager {
         Ok(())
     }
 
+    async fn remove_device_by_id(
+        &self,
+        vm_id: &str,
+        device_id: &str,
+    ) -> Result<(), VmManagerError> {
+        let socket_path = {
+            let vms = self.vms.lock().await;
+            let instance = vms
+                .get(vm_id)
+                .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
+            instance.socket_path.clone()
+        };
+
+        let body = serde_json::json!({ "id": device_id }).to_string();
+        Self::send_api_request(&socket_path, "PUT", "/api/v1/vm.remove-device", Some(&body))
+            .await?;
+        Ok(())
+    }
+
     /// Remove a network device from a VM
     pub async fn remove_network_device(
         &self,
         vm_id: &str,
         device_id: &str,
     ) -> Result<(), VmManagerError> {
-        let vms = self.vms.lock().await;
-        let instance = vms
-            .get(vm_id)
-            .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
-
-        let body = serde_json::json!({ "id": device_id }).to_string();
-        Self::send_api_request(
-            &instance.socket_path,
-            "PUT",
-            "/api/v1/vm.remove-device",
-            Some(&body),
-        )
-        .await?;
-
-        Ok(())
+        self.remove_device_by_id(vm_id, device_id).await
     }
 
     /// Add a disk device to a VM
@@ -1523,7 +1524,7 @@ impl VmManager {
             .get(vm_id)
             .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
 
-        let sdk_config = self.proto_disk_to_sdk(config);
+        let sdk_config = Self::proto_disk_to_sdk(config);
         let body = serde_json::to_string(&sdk_config)
             .map_err(|e| VmManagerError::InvalidConfig(e.to_string()))?;
 
@@ -1544,21 +1545,7 @@ impl VmManager {
         vm_id: &str,
         device_id: &str,
     ) -> Result<(), VmManagerError> {
-        let vms = self.vms.lock().await;
-        let instance = vms
-            .get(vm_id)
-            .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
-
-        let body = serde_json::json!({ "id": device_id }).to_string();
-        Self::send_api_request(
-            &instance.socket_path,
-            "PUT",
-            "/api/v1/vm.remove-device",
-            Some(&body),
-        )
-        .await?;
-
-        Ok(())
+        self.remove_device_by_id(vm_id, device_id).await
     }
 
     /// Send a raw API request to Cloud Hypervisor
@@ -1633,7 +1620,7 @@ impl VmManager {
         let payload = config
             .payload
             .as_ref()
-            .map(|p| self.proto_payload_to_sdk(p))
+            .map(Self::proto_payload_to_sdk)
             .unwrap_or_else(|| PayloadConfig {
                 firmware: None,
                 kernel: None,
@@ -1647,67 +1634,55 @@ impl VmManager {
 
         // CPU config
         if let Some(cpus) = &config.cpus {
-            sdk_config.cpus = Some(Box::new(self.proto_cpus_to_sdk(cpus)));
+            sdk_config.cpus = Some(Box::new(Self::proto_cpus_to_sdk(cpus)));
         }
 
         // Memory config
         if let Some(memory) = &config.memory {
-            sdk_config.memory = Some(Box::new(self.proto_memory_to_sdk(memory)));
+            sdk_config.memory = Some(Box::new(Self::proto_memory_to_sdk(memory)));
         }
 
         // Disks
         if !config.disks.is_empty() {
-            sdk_config.disks = Some(
-                config
-                    .disks
-                    .iter()
-                    .map(|d| self.proto_disk_to_sdk(d))
-                    .collect(),
-            );
+            sdk_config.disks = Some(config.disks.iter().map(Self::proto_disk_to_sdk).collect());
         }
 
         // Networks
         if !config.networks.is_empty() {
-            sdk_config.net = Some(
-                config
-                    .networks
-                    .iter()
-                    .map(|n| self.proto_net_to_sdk(n))
-                    .collect(),
-            );
+            sdk_config.net = Some(config.networks.iter().map(Self::proto_net_to_sdk).collect());
         }
 
         // RNG
         if let Some(rng) = &config.rng {
-            sdk_config.rng = Some(Box::new(self.proto_rng_to_sdk(rng)));
+            sdk_config.rng = Some(Box::new(Self::proto_rng_to_sdk(rng)));
         }
 
         // Serial console
         if let Some(serial) = &config.serial {
-            sdk_config.serial = Some(Box::new(self.proto_console_to_sdk(serial)));
+            sdk_config.serial = Some(Box::new(Self::proto_console_to_sdk(serial)));
         }
 
         // Console
         if let Some(console) = &config.console {
-            sdk_config.console = Some(Box::new(self.proto_console_to_sdk(console)));
+            sdk_config.console = Some(Box::new(Self::proto_console_to_sdk(console)));
         }
 
         // Filesystems (virtiofs)
         if !config.fs.is_empty() {
-            sdk_config.fs = Some(config.fs.iter().map(|f| self.proto_fs_to_sdk(f)).collect());
+            sdk_config.fs = Some(config.fs.iter().map(Self::proto_fs_to_sdk).collect());
         }
 
         Ok(sdk_config)
     }
 
-    fn proto_cpus_to_sdk(&self, cpus: &ProtoCpusConfig) -> CpusConfig {
+    fn proto_cpus_to_sdk(cpus: &ProtoCpusConfig) -> CpusConfig {
         CpusConfig {
             boot_vcpus: cpus.boot_vcpus,
             max_vcpus: cpus.max_vcpus,
             topology: cpus
                 .topology
                 .as_ref()
-                .map(|t| Box::new(self.proto_topology_to_sdk(t))),
+                .map(|t| Box::new(Self::proto_topology_to_sdk(t))),
             kvm_hyperv: cpus.kvm_hyperv,
             max_phys_bits: cpus.max_phys_bits,
             affinity: None,
@@ -1716,7 +1691,7 @@ impl VmManager {
         }
     }
 
-    fn proto_topology_to_sdk(&self, topology: &ProtoCpuTopology) -> models::CpuTopology {
+    fn proto_topology_to_sdk(topology: &ProtoCpuTopology) -> models::CpuTopology {
         models::CpuTopology {
             threads_per_core: topology.threads_per_core,
             cores_per_die: topology.cores_per_die,
@@ -1725,7 +1700,7 @@ impl VmManager {
         }
     }
 
-    fn proto_memory_to_sdk(&self, memory: &ProtoMemoryConfig) -> MemoryConfig {
+    fn proto_memory_to_sdk(memory: &ProtoMemoryConfig) -> MemoryConfig {
         MemoryConfig {
             size: memory.size,
             hotplug_size: memory.hotplug_size,
@@ -1741,7 +1716,7 @@ impl VmManager {
         }
     }
 
-    fn proto_payload_to_sdk(&self, payload: &ProtoPayloadConfig) -> PayloadConfig {
+    fn proto_payload_to_sdk(payload: &ProtoPayloadConfig) -> PayloadConfig {
         PayloadConfig {
             firmware: payload.firmware.clone(),
             kernel: payload.kernel.clone(),
@@ -1752,7 +1727,7 @@ impl VmManager {
         }
     }
 
-    fn proto_disk_to_sdk(&self, disk: &ProtoDiskConfig) -> models::DiskConfig {
+    fn proto_disk_to_sdk(disk: &ProtoDiskConfig) -> models::DiskConfig {
         models::DiskConfig {
             path: disk.path.clone(),
             readonly: disk.readonly,
@@ -1765,7 +1740,7 @@ impl VmManager {
             rate_limiter_config: disk
                 .rate_limiter
                 .as_ref()
-                .map(|r| Box::new(self.proto_rate_limiter_to_sdk(r))),
+                .map(|r| Box::new(Self::proto_rate_limiter_to_sdk(r))),
             pci_segment: disk.pci_segment,
             id: Some(disk.id.clone()),
             serial: disk.serial.clone(),
@@ -1779,7 +1754,7 @@ impl VmManager {
         }
     }
 
-    fn proto_net_to_sdk(&self, net: &ProtoNetConfig) -> models::NetConfig {
+    fn proto_net_to_sdk(net: &ProtoNetConfig) -> models::NetConfig {
         models::NetConfig {
             tap: net.tap.clone(),
             ip: net.ip.clone(),
@@ -1804,21 +1779,21 @@ impl VmManager {
             rate_limiter_config: net
                 .rate_limiter
                 .as_ref()
-                .map(|r| Box::new(self.proto_rate_limiter_to_sdk(r))),
+                .map(|r| Box::new(Self::proto_rate_limiter_to_sdk(r))),
             offload_tso: net.offload_tso,
             offload_ufo: net.offload_ufo,
             offload_csum: net.offload_csum,
         }
     }
 
-    fn proto_rng_to_sdk(&self, rng: &ProtoRngConfig) -> models::RngConfig {
+    fn proto_rng_to_sdk(rng: &ProtoRngConfig) -> models::RngConfig {
         models::RngConfig {
             src: rng.src.clone(),
             iommu: rng.iommu,
         }
     }
 
-    fn proto_console_to_sdk(&self, console: &ProtoConsoleConfig) -> models::ConsoleConfig {
+    fn proto_console_to_sdk(console: &ProtoConsoleConfig) -> models::ConsoleConfig {
         let mode = match ProtoConsoleMode::try_from(console.mode) {
             Ok(ProtoConsoleMode::Off) => ConsoleMode::Off,
             Ok(ProtoConsoleMode::Pty) => ConsoleMode::Pty,
@@ -1837,7 +1812,7 @@ impl VmManager {
         }
     }
 
-    fn proto_fs_to_sdk(&self, fs: &ProtoFsConfig) -> FsConfig {
+    fn proto_fs_to_sdk(fs: &ProtoFsConfig) -> FsConfig {
         FsConfig {
             tag: fs.tag.clone(),
             socket: fs.socket.clone(),
@@ -1859,7 +1834,7 @@ impl VmManager {
             .get(vm_id)
             .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
 
-        let sdk_config = self.proto_fs_to_sdk(config);
+        let sdk_config = Self::proto_fs_to_sdk(config);
         let body = serde_json::to_string(&sdk_config)
             .map_err(|e| VmManagerError::InvalidConfig(e.to_string()))?;
 
@@ -1880,40 +1855,25 @@ impl VmManager {
         vm_id: &str,
         device_id: &str,
     ) -> Result<(), VmManagerError> {
-        let vms = self.vms.lock().await;
-        let instance = vms
-            .get(vm_id)
-            .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
-
-        let body = serde_json::json!({ "id": device_id }).to_string();
-        Self::send_api_request(
-            &instance.socket_path,
-            "PUT",
-            "/api/v1/vm.remove-device",
-            Some(&body),
-        )
-        .await?;
-
-        Ok(())
+        self.remove_device_by_id(vm_id, device_id).await
     }
 
     fn proto_rate_limiter_to_sdk(
-        &self,
         rate_limiter: &ProtoRateLimiterConfig,
     ) -> models::RateLimiterConfig {
         models::RateLimiterConfig {
             bandwidth: rate_limiter
                 .bandwidth
                 .as_ref()
-                .map(|b| Box::new(self.proto_token_bucket_to_sdk(b))),
+                .map(|b| Box::new(Self::proto_token_bucket_to_sdk(b))),
             ops: rate_limiter
                 .ops
                 .as_ref()
-                .map(|o| Box::new(self.proto_token_bucket_to_sdk(o))),
+                .map(|o| Box::new(Self::proto_token_bucket_to_sdk(o))),
         }
     }
 
-    fn proto_token_bucket_to_sdk(&self, bucket: &ProtoTokenBucket) -> models::TokenBucket {
+    fn proto_token_bucket_to_sdk(bucket: &ProtoTokenBucket) -> models::TokenBucket {
         models::TokenBucket {
             size: bucket.size,
             refill_time: bucket.refill_time,
@@ -1938,10 +1898,13 @@ impl VmManager {
         // if the PTY paths are in the filesystem based on CH's behavior.
         // CH creates PTY devices and links them predictably.
 
-        let serial_pty = if matches!(
-            instance.proto_config.serial.as_ref().map(|s| s.mode),
-            Some(1) // PTY mode
-        ) {
+        let serial_pty = if instance
+            .proto_config
+            .serial
+            .as_ref()
+            .map(|s| s.mode == ProtoConsoleMode::Pty as i32)
+            .unwrap_or(false)
+        {
             // Cloud Hypervisor uses /dev/pts/X for PTY devices
             // We need to query the actual path via the /proc filesystem or API
             // For now, we'll track this in the instance after creation
@@ -1950,29 +1913,19 @@ impl VmManager {
             None
         };
 
-        let console_pty = if matches!(
-            instance.proto_config.console.as_ref().map(|c| c.mode),
-            Some(1) // PTY mode
-        ) {
+        let console_pty = if instance
+            .proto_config
+            .console
+            .as_ref()
+            .map(|c| c.mode == ProtoConsoleMode::Pty as i32)
+            .unwrap_or(false)
+        {
             instance.console_pty_path.clone()
         } else {
             None
         };
 
         Ok((serial_pty, console_pty))
-    }
-
-    /// Query Cloud Hypervisor for PTY paths and update the instance.
-    /// This must be called after VM is created/started to discover PTY paths.
-    pub async fn update_pty_paths(&self, _vm_id: &str) -> Result<(), VmManagerError> {
-        // Cloud Hypervisor doesn't expose PTY paths via HTTP API in v1
-        // The PTY devices are created in /dev/pts/ but we can't reliably determine
-        // which ones belong to our VM without process introspection.
-        //
-        // For now, we'll use a socket-based console approach instead of PTY.
-        // PTY mode works but is hard to multiplex. Socket mode is better for
-        // remote access.
-        Ok(())
     }
 
     /// Query Cloud Hypervisor's vm.info API to obtain PTY device paths.
@@ -1986,11 +1939,15 @@ impl VmManager {
         socket_path: &PathBuf,
         config: &ProtoVmConfig,
     ) -> (Option<String>, Option<String>) {
-        let serial_is_pty = config.serial.as_ref().map(|s| s.mode == 1).unwrap_or(false);
+        let serial_is_pty = config
+            .serial
+            .as_ref()
+            .map(|s| s.mode == ProtoConsoleMode::Pty as i32)
+            .unwrap_or(false);
         let console_is_pty = config
             .console
             .as_ref()
-            .map(|c| c.mode == 1)
+            .map(|c| c.mode == ProtoConsoleMode::Pty as i32)
             .unwrap_or(false);
 
         if !serial_is_pty && !console_is_pty {
@@ -2118,9 +2075,8 @@ impl VmManager {
 
         // Check if console is configured in PTY mode
         if let Some(console) = &instance.proto_config.console
-            && console.mode == 1
+            && console.mode == ProtoConsoleMode::Pty as i32
         {
-            // PTY mode
             return Ok(instance.console_pty_path.clone());
         }
 

@@ -162,9 +162,7 @@ pub async fn attach_host(
     Json(body): Json<AttachPoolHostRequest>,
 ) -> Result<StatusCode> {
     let pool = storage_pools::get(env.pool(), pool_id).await?;
-    let host = hosts::get_by_id(env.pool(), body.host_id)
-        .await?
-        .ok_or(crate::errors::Error::NotFound)?;
+    let host = hosts::require_by_id(env.pool(), body.host_id).await?;
 
     // Perform the real attachment on the node first.
     let client = NodeClient::new(&host.address, host.port as u16);
@@ -203,9 +201,7 @@ pub async fn detach_host(
     Path((pool_id, host_id)): Path<(Uuid, Uuid)>,
 ) -> Result<StatusCode> {
     let pool = storage_pools::get(env.pool(), pool_id).await?;
-    let host = hosts::get_by_id(env.pool(), host_id)
-        .await?
-        .ok_or(crate::errors::Error::NotFound)?;
+    let host = hosts::require_by_id(env.pool(), host_id).await?;
 
     // Perform the real detachment on the node first.
     let client = NodeClient::new(&host.address, host.port as u16);
@@ -276,9 +272,7 @@ pub async fn import_to_pool(
                 "No host attached to this storage pool".into(),
             )
         })?;
-    let host = hosts::get_by_id(env.pool(), host_id)
-        .await?
-        .ok_or(crate::errors::Error::NotFound)?;
+    let host = hosts::require_by_id(env.pool(), host_id).await?;
 
     // Create storage object record
     let storage_object_id = storage_objects::create(

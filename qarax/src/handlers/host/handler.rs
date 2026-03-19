@@ -48,7 +48,7 @@ pub async fn add(
     Extension(env): Extension<App>,
     Json(host): Json<NewHost>,
 ) -> Result<(StatusCode, String)> {
-    host.validate_unique_name(env.pool(), &host.name).await?;
+    host.validate_unique_name(env.pool()).await?;
     let id = hosts::add(env.pool(), &host).await?;
     Ok((StatusCode::CREATED, id.to_string()))
 }
@@ -101,12 +101,9 @@ pub async fn deploy(
     Path(host_id): Path<Uuid>,
     Json(body): Json<DeployHostRequest>,
 ) -> Result<(StatusCode, String)> {
-    body.validate()
-        .map_err(crate::errors::Error::UnprocessableEntity)?;
+    body.validate()?;
 
-    let host = hosts::get_by_id(env.pool(), host_id)
-        .await?
-        .ok_or(crate::errors::Error::NotFound)?;
+    let host = hosts::require_by_id(env.pool(), host_id).await?;
     hosts::update_status(env.pool(), host_id, HostStatus::Installing).await?;
 
     let db_pool = env.pool_arc();
@@ -162,9 +159,7 @@ pub async fn init(
     Extension(env): Extension<App>,
     Path(host_id): Path<Uuid>,
 ) -> Result<ApiResponse<Host>> {
-    let host = hosts::get_by_id(env.pool(), host_id)
-        .await?
-        .ok_or(crate::errors::Error::NotFound)?;
+    let host = hosts::require_by_id(env.pool(), host_id).await?;
 
     let node_client = crate::grpc_client::NodeClient::new(&host.address, host.port as u16);
 
@@ -206,9 +201,7 @@ pub async fn init(
 
     hosts::update_status(env.pool(), host_id, HostStatus::Up).await?;
 
-    let updated_host = hosts::get_by_id(env.pool(), host_id)
-        .await?
-        .ok_or(crate::errors::Error::NotFound)?;
+    let updated_host = hosts::require_by_id(env.pool(), host_id).await?;
 
     // Background: attach this host to every existing storage pool via gRPC, then record in DB.
     let db_pool = env.pool_arc();

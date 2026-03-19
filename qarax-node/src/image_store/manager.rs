@@ -9,6 +9,8 @@ use oci_client::client::{Client, ClientConfig, ClientProtocol};
 use oci_client::manifest::OciImageManifest;
 use oci_client::secrets::RegistryAuth;
 use serde::{Deserialize, Serialize};
+
+use crate::oci_config::{OciImageConfig, OciImageConfigDetails};
 use thiserror::Error;
 use tokio::process::Child;
 use tokio::process::Command;
@@ -42,20 +44,6 @@ pub struct ImageInfo {
     pub env: Option<Vec<String>>,
     pub entrypoint: Option<Vec<String>>,
     pub cmd: Option<Vec<String>>,
-}
-
-// OCI Config parsing structures
-#[derive(Serialize, Deserialize)]
-struct OciImageConfig {
-    config: OciImageConfigDetails,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "PascalCase")]
-struct OciImageConfigDetails {
-    env: Option<Vec<String>>,
-    entrypoint: Option<Vec<String>>,
-    cmd: Option<Vec<String>>,
 }
 
 struct VirtiofsdProcess {

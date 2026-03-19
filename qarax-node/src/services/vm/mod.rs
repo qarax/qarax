@@ -44,6 +44,30 @@ impl VmServiceImpl {
     pub fn from_manager(manager: Arc<VmManager>) -> Self {
         Self { manager }
     }
+
+    /// Run a unit-returning VM operation, logging start/success/failure uniformly.
+    async fn run_vm_op<F, Fut>(
+        &self,
+        op_name: &str,
+        vm_id: String,
+        f: F,
+    ) -> Result<Response<()>, Status>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<(), crate::cloud_hypervisor::VmManagerError>>,
+    {
+        info!("{} VM: {}", op_name, vm_id);
+        match f().await {
+            Ok(()) => {
+                info!("VM {} {}d successfully", vm_id, op_name.to_lowercase());
+                Ok(Response::new(()))
+            }
+            Err(e) => {
+                error!("Failed to {} VM {}: {}", op_name.to_lowercase(), vm_id, e);
+                Err(map_manager_error(e))
+            }
+        }
+    }
 }
 
 #[tonic::async_trait]
@@ -69,66 +93,26 @@ impl VmService for VmServiceImpl {
 
     async fn start_vm(&self, request: Request<VmId>) -> Result<Response<()>, Status> {
         let vm_id = request.into_inner().id;
-        info!("Starting VM: {}", vm_id);
-
-        match self.manager.start_vm(&vm_id).await {
-            Ok(()) => {
-                info!("VM {} started successfully", vm_id);
-                Ok(Response::new(()))
-            }
-            Err(e) => {
-                error!("Failed to start VM {}: {}", vm_id, e);
-                Err(map_manager_error(e))
-            }
-        }
+        self.run_vm_op("Start", vm_id.clone(), || self.manager.start_vm(&vm_id))
+            .await
     }
 
     async fn stop_vm(&self, request: Request<VmId>) -> Result<Response<()>, Status> {
         let vm_id = request.into_inner().id;
-        info!("Stopping VM: {}", vm_id);
-
-        match self.manager.stop_vm(&vm_id).await {
-            Ok(()) => {
-                info!("VM {} stopped successfully", vm_id);
-                Ok(Response::new(()))
-            }
-            Err(e) => {
-                error!("Failed to stop VM {}: {}", vm_id, e);
-                Err(map_manager_error(e))
-            }
-        }
+        self.run_vm_op("Stop", vm_id.clone(), || self.manager.stop_vm(&vm_id))
+            .await
     }
 
     async fn pause_vm(&self, request: Request<VmId>) -> Result<Response<()>, Status> {
         let vm_id = request.into_inner().id;
-        info!("Pausing VM: {}", vm_id);
-
-        match self.manager.pause_vm(&vm_id).await {
-            Ok(()) => {
-                info!("VM {} paused successfully", vm_id);
-                Ok(Response::new(()))
-            }
-            Err(e) => {
-                error!("Failed to pause VM {}: {}", vm_id, e);
-                Err(map_manager_error(e))
-            }
-        }
+        self.run_vm_op("Pause", vm_id.clone(), || self.manager.pause_vm(&vm_id))
+            .await
     }
 
     async fn resume_vm(&self, request: Request<VmId>) -> Result<Response<()>, Status> {
         let vm_id = request.into_inner().id;
-        info!("Resuming VM: {}", vm_id);
-
-        match self.manager.resume_vm(&vm_id).await {
-            Ok(()) => {
-                info!("VM {} resumed successfully", vm_id);
-                Ok(Response::new(()))
-            }
-            Err(e) => {
-                error!("Failed to resume VM {}: {}", vm_id, e);
-                Err(map_manager_error(e))
-            }
-        }
+        self.run_vm_op("Resume", vm_id.clone(), || self.manager.resume_vm(&vm_id))
+            .await
     }
 
     async fn snapshot_vm(
@@ -170,18 +154,8 @@ impl VmService for VmServiceImpl {
 
     async fn delete_vm(&self, request: Request<VmId>) -> Result<Response<()>, Status> {
         let vm_id = request.into_inner().id;
-        info!("Deleting VM: {}", vm_id);
-
-        match self.manager.delete_vm(&vm_id).await {
-            Ok(()) => {
-                info!("VM {} deleted successfully", vm_id);
-                Ok(Response::new(()))
-            }
-            Err(e) => {
-                error!("Failed to delete VM {}: {}", vm_id, e);
-                Err(map_manager_error(e))
-            }
-        }
+        self.run_vm_op("Delete", vm_id.clone(), || self.manager.delete_vm(&vm_id))
+            .await
     }
 
     async fn get_vm_info(&self, request: Request<VmId>) -> Result<Response<VmState>, Status> {

@@ -129,9 +129,7 @@ pub async fn attach_host(
     Json(body): Json<AttachHostRequest>,
 ) -> Result<StatusCode> {
     let network = networks::get(env.pool(), network_id).await?;
-    let host = hosts::get_by_id(env.pool(), body.host_id)
-        .await?
-        .ok_or(crate::errors::Error::NotFound)?;
+    let host = hosts::require_by_id(env.pool(), body.host_id).await?;
 
     // passt-backed networks don't require bridge/DHCP/NAT provisioning.
     if network.network_type.as_deref() == Some("passt") {
@@ -202,9 +200,7 @@ pub async fn detach_host(
     Extension(env): Extension<App>,
     Path((network_id, host_id)): Path<(Uuid, Uuid)>,
 ) -> Result<StatusCode> {
-    let host = hosts::get_by_id(env.pool(), host_id)
-        .await?
-        .ok_or(crate::errors::Error::NotFound)?;
+    let host = hosts::require_by_id(env.pool(), host_id).await?;
 
     let bridge_name = networks::get_host_bridge(env.pool(), host_id, network_id)
         .await?

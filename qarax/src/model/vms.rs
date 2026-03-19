@@ -172,7 +172,7 @@ pub enum VmStatus {
 }
 
 /// Network interface config for create-VM request. Passed to qarax-node; id is required.
-#[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, ToSchema)]
 pub struct NewVmNetwork {
     /// Unique device id (e.g. "net0")
     pub id: String,

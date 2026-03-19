@@ -15,10 +15,11 @@ use std::time::Duration;
 use oci_client::Reference;
 use oci_client::client::{Client, ClientConfig, ClientProtocol, Config, ImageLayer};
 use oci_client::secrets::RegistryAuth;
-use serde::Deserialize;
 use thiserror::Error;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
+
+use crate::oci_config::{OciImageConfig, OciImageConfigDetails};
 
 /// Path to the overlaybd-create binary installed by the overlaybd RPM.
 const OVERLAYBD_CREATE: &str = "/opt/overlaybd/bin/overlaybd-create";
@@ -51,18 +52,12 @@ pub enum OverlayBdError {
     Json(#[from] serde_json::Error),
 }
 
-// OCI Config parsing structures (same as image_store/manager.rs)
-#[derive(Deserialize)]
-struct OciImageConfig {
-    config: OciImageConfigDetails,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "PascalCase")]
-struct OciImageConfigDetails {
-    env: Option<Vec<String>>,
-    entrypoint: Option<Vec<String>>,
-    cmd: Option<Vec<String>>,
+/// Normalize a registry URL to a bare host[:port] string.
+fn registry_host(url: &str) -> String {
+    url.trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .trim_end_matches('/')
+        .to_string()
 }
 
 /// Represents a successfully mounted OverlayBD block device.
@@ -139,13 +134,7 @@ impl OverlayBdManager {
         let target_ref = Reference::try_from(target)
             .map_err(|e| OverlayBdError::InvalidImageRef(e.to_string()))?;
 
-        let registry_host = registry_url
-            .trim_start_matches("https://")
-            .trim_start_matches("http://")
-            .trim_end_matches('/')
-            .to_string();
-
-        let mut excepts = vec![registry_host];
+        let mut excepts = vec![registry_host(registry_url)];
         let source_host = source_ref.registry().to_string();
         if source_host.starts_with("localhost") || source_host.starts_with("127.0.0.1") {
             excepts.push(source_host);
@@ -332,20 +321,7 @@ impl OverlayBdManager {
 
         // 3. Create the TCMU backstore in configfs.
         //    Names are derived deterministically from vm_id so they survive restart.
-        let hex_id: String = vm_id
-            .chars()
-            .filter(|c| c.is_ascii_hexdigit())
-            .take(12)
-            .collect();
-        let tcmu_name = format!("obd-{}", hex_id);
-        let wwn = format!("naa.{}", {
-            let h: String = vm_id
-                .chars()
-                .filter(|c| c.is_ascii_hexdigit())
-                .take(16)
-                .collect();
-            h
-        });
+        let (tcmu_name, wwn) = Self::vm_tcmu_names(vm_id);
 
         let tcmu_base = PathBuf::from("/sys/kernel/config/target/core/user_1");
         let tcmu_dir = tcmu_base.join(&tcmu_name);
@@ -457,20 +433,7 @@ impl OverlayBdManager {
             (m.config_dir, m.tcmu_name, m.wwn)
         } else {
             // Re-derive names deterministically (no files needed).
-            let hex_id: String = vm_id
-                .chars()
-                .filter(|c| c.is_ascii_hexdigit())
-                .take(12)
-                .collect();
-            let tcmu_name = format!("obd-{}", hex_id);
-            let wwn = format!("naa.{}", {
-                let h: String = vm_id
-                    .chars()
-                    .filter(|c| c.is_ascii_hexdigit())
-                    .take(16)
-                    .collect();
-                h
-            });
+            let (tcmu_name, wwn) = Self::vm_tcmu_names(vm_id);
             (self.cache_dir.join(vm_id), tcmu_name, wwn)
         };
 
@@ -557,20 +520,7 @@ impl OverlayBdManager {
                 continue;
             }
 
-            let hex_id: String = vm_id
-                .chars()
-                .filter(|c| c.is_ascii_hexdigit())
-                .take(12)
-                .collect();
-            let tcmu_name = format!("obd-{}", hex_id);
-            let wwn = format!("naa.{}", {
-                let h: String = vm_id
-                    .chars()
-                    .filter(|c| c.is_ascii_hexdigit())
-                    .take(16)
-                    .collect();
-                h
-            });
+            let (tcmu_name, wwn) = Self::vm_tcmu_names(&vm_id);
 
             info!(
                 "Recovered OverlayBD mount for VM {}: {}",
@@ -703,23 +653,19 @@ impl OverlayBdManager {
         image_ref: &str,
         registry_url: &str,
     ) -> Result<OciImageConfigDetails, OverlayBdError> {
-        let registry_host = registry_url
-            .trim_start_matches("https://")
-            .trim_start_matches("http://")
-            .trim_end_matches('/')
-            .to_string();
+        let host = registry_host(registry_url);
 
-        let full_ref_str = if image_ref.starts_with(&registry_host) {
+        let full_ref_str = if image_ref.starts_with(&host) {
             image_ref.to_string()
         } else {
-            format!("{}/{}", registry_host, image_ref)
+            format!("{}/{}", host, image_ref)
         };
 
         let local_ref = Reference::try_from(full_ref_str.as_str())
             .map_err(|e| OverlayBdError::InvalidImageRef(e.to_string()))?;
 
         let client = Client::new(ClientConfig {
-            protocol: ClientProtocol::HttpsExcept(vec![registry_host]),
+            protocol: ClientProtocol::HttpsExcept(vec![host]),
             ..Default::default()
         });
 
@@ -828,24 +774,20 @@ impl OverlayBdManager {
         image_ref: &str,
         registry_url: &str,
     ) -> Result<Vec<serde_json::Value>, OverlayBdError> {
-        let registry_host = registry_url
-            .trim_start_matches("https://")
-            .trim_start_matches("http://")
-            .trim_end_matches('/')
-            .to_string();
+        let host = registry_host(registry_url);
 
         // image_ref already includes the registry host (e.g. "registry:5000/docker/library/alpine:latest")
-        let full_ref_str = if image_ref.starts_with(&registry_host) {
+        let full_ref_str = if image_ref.starts_with(&host) {
             image_ref.to_string()
         } else {
-            format!("{}/{}", registry_host, image_ref)
+            format!("{}/{}", host, image_ref)
         };
 
         let local_ref = Reference::try_from(full_ref_str.as_str())
             .map_err(|e| OverlayBdError::InvalidImageRef(e.to_string()))?;
 
         let client = Client::new(ClientConfig {
-            protocol: ClientProtocol::HttpsExcept(vec![registry_host]),
+            protocol: ClientProtocol::HttpsExcept(vec![host]),
             ..Default::default()
         });
 
@@ -1089,6 +1031,27 @@ impl OverlayBdManager {
             "No new sd* block device appeared in /sys/block/ after 10s".into(),
         ))
     }
+
+    /// Derive the deterministic TCMU backstore name and loopback WWN from a VM ID.
+    ///
+    /// Returns `(tcmu_name, wwn)` where:
+    /// - `tcmu_name` is `"obd-<12 hex chars from vm_id>"`
+    /// - `wwn` is `"naa.<16 hex chars from vm_id>"`
+    fn vm_tcmu_names(vm_id: &str) -> (String, String) {
+        let hex_id: String = vm_id
+            .chars()
+            .filter(|c| c.is_ascii_hexdigit())
+            .take(12)
+            .collect();
+        let tcmu_name = format!("obd-{}", hex_id);
+        let wwn_hex: String = vm_id
+            .chars()
+            .filter(|c| c.is_ascii_hexdigit())
+            .take(16)
+            .collect();
+        let wwn = format!("naa.{}", wwn_hex);
+        (tcmu_name, wwn)
+    }
 }
 
 // ── Free functions ────────────────────────────────────────────────────────────
@@ -1098,10 +1061,8 @@ impl OverlayBdManager {
 ///      registry_url = "http://registry:5000"
 /// ->   "registry:5000/docker/library/ubuntu:22.04"
 fn build_target_ref(image_ref: &str, registry_url: &str) -> Result<String, OverlayBdError> {
-    let host = registry_url
-        .trim_start_matches("https://")
-        .trim_start_matches("http://")
-        .trim_end_matches('/');
+    let host_owned = registry_host(registry_url);
+    let host = host_owned.as_str();
 
     if host.is_empty() {
         return Err(OverlayBdError::InvalidImageRef(format!(

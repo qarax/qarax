@@ -99,20 +99,10 @@ async fn create_root_disk_record(
         device_path: "/dev/vda".to_string(),
         boot_order: Some(0),
         read_only: Some(false),
-        direct: None,
-        vhost_user: None,
-        vhost_socket: None,
-        num_queues: None,
-        queue_size: None,
-        rate_limiter: None,
-        rate_limit_group: None,
-        pci_segment: None,
-        serial_number: None,
         config: serde_json::json!({}),
+        ..Default::default()
     };
-    vm_disks::create_tx(tx, &disk)
-        .await
-        .map_err(crate::errors::Error::Sqlx)?;
+    vm_disks::create_tx(tx, &disk).await?;
     Ok(())
 }
 
@@ -209,9 +199,7 @@ pub async fn create(
 
     // Store network interfaces in DB (inside tx, so rolls back if any insert fails)
     for net in vm.networks.as_deref().unwrap_or(&[]) {
-        network_interfaces::create(&mut tx, id, net)
-            .await
-            .map_err(crate::errors::Error::Sqlx)?;
+        network_interfaces::create(&mut tx, id, net).await?;
     }
 
     tx.commit().await?;
@@ -225,45 +213,7 @@ pub async fn create(
 
     // If network_id is provided, allocate an IP and create a default network interface
     if let Some(network_id) = vm.network_id {
-        let ip = networks::next_available_ip(env.pool(), network_id)
-            .await
-            .map_err(crate::errors::Error::Sqlx)?
-            .ok_or_else(|| {
-                crate::errors::Error::UnprocessableEntity("No available IPs in network".into())
-            })?;
-
-        networks::allocate_ip(env.pool(), network_id, &ip, Some(id))
-            .await
-            .map_err(crate::errors::Error::Sqlx)?;
-
-        // Create a default network interface for this VM
-        let net = crate::model::vms::NewVmNetwork {
-            id: "net0".to_string(),
-            network_id: Some(network_id),
-            mac: None,
-            tap: None,
-            ip: Some(ip),
-            mask: None,
-            mtu: None,
-            host_mac: None,
-            interface_type: None,
-            vhost_user: None,
-            vhost_socket: None,
-            vhost_mode: None,
-            num_queues: None,
-            queue_size: None,
-            rate_limiter: None,
-            offload_tso: None,
-            offload_ufo: None,
-            offload_csum: None,
-            pci_segment: None,
-            iommu: None,
-        };
-        let mut net_tx = env.pool().begin().await?;
-        network_interfaces::create(&mut net_tx, id, &net)
-            .await
-            .map_err(crate::errors::Error::Sqlx)?;
-        net_tx.commit().await?;
+        create_managed_network_interface(env.pool(), id, network_id).await?;
     }
 
     Ok(ApiResponse {
@@ -343,9 +293,7 @@ async fn create_with_image(env: App, vm: ResolvedNewVm) -> Result<axum::response
 
     // Store network interfaces in the transaction
     for net in vm.networks.as_deref().unwrap_or(&[]) {
-        network_interfaces::create(&mut tx, vm_id, net)
-            .await
-            .map_err(crate::errors::Error::Sqlx)?;
+        network_interfaces::create(&mut tx, vm_id, net).await?;
     }
     if let Some(root_disk_object_id) = vm.root_disk_object_id {
         create_root_disk_record(&mut tx, vm_id, root_disk_object_id).await?;
@@ -359,44 +307,7 @@ async fn create_with_image(env: App, vm: ResolvedNewVm) -> Result<axum::response
     // If network_id is provided, allocate an IP and create a default interface.
     // This mirrors the synchronous create path so async image-based VMs get managed networking.
     if let Some(network_id) = vm.network_id {
-        let ip = networks::next_available_ip(env.pool(), network_id)
-            .await
-            .map_err(crate::errors::Error::Sqlx)?
-            .ok_or_else(|| {
-                crate::errors::Error::UnprocessableEntity("No available IPs in network".into())
-            })?;
-
-        networks::allocate_ip(env.pool(), network_id, &ip, Some(vm_id))
-            .await
-            .map_err(crate::errors::Error::Sqlx)?;
-
-        let net = crate::model::vms::NewVmNetwork {
-            id: "net0".to_string(),
-            network_id: Some(network_id),
-            mac: None,
-            tap: None,
-            ip: Some(ip),
-            mask: None,
-            mtu: None,
-            host_mac: None,
-            interface_type: None,
-            vhost_user: None,
-            vhost_socket: None,
-            vhost_mode: None,
-            num_queues: None,
-            queue_size: None,
-            rate_limiter: None,
-            offload_tso: None,
-            offload_ufo: None,
-            offload_csum: None,
-            pci_segment: None,
-            iommu: None,
-        };
-        let mut net_tx = env.pool().begin().await?;
-        network_interfaces::create(&mut net_tx, vm_id, &net)
-            .await
-            .map_err(crate::errors::Error::Sqlx)?;
-        net_tx.commit().await?;
+        create_managed_network_interface(env.pool(), vm_id, network_id).await?;
     }
 
     // Record host assignment
@@ -454,6 +365,30 @@ async fn create_with_image(env: App, vm: ResolvedNewVm) -> Result<axum::response
     .into_response())
 }
 
+/// Allocate an IP from the given network and create the default network interface record for a VM.
+async fn create_managed_network_interface(
+    pool: &sqlx::PgPool,
+    vm_id: uuid::Uuid,
+    network_id: uuid::Uuid,
+) -> Result<(), crate::errors::Error> {
+    let ip = networks::next_available_ip(pool, network_id)
+        .await?
+        .ok_or_else(|| {
+            crate::errors::Error::UnprocessableEntity("No available IPs in network".into())
+        })?;
+    networks::allocate_ip(pool, network_id, &ip, Some(vm_id)).await?;
+    let net = crate::model::vms::NewVmNetwork {
+        id: "net0".to_string(),
+        network_id: Some(network_id),
+        ip: Some(ip),
+        ..Default::default()
+    };
+    let mut tx = pool.begin().await?;
+    network_interfaces::create(&mut tx, vm_id, &net).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
 /// Helper to register explicitly provided static IPs in IPAM during VM creation.
 async fn register_static_ips(
     pool: &sqlx::PgPool,
@@ -462,16 +397,13 @@ async fn register_static_ips(
 ) -> Result<()> {
     for net in networks.unwrap_or(&[]) {
         if let (Some(net_id), Some(ip)) = (net.network_id, &net.ip) {
-            networks::allocate_ip(pool, net_id, ip, Some(vm_id))
-                .await
-                .map_err(crate::errors::Error::Sqlx)?;
+            networks::allocate_ip(pool, net_id, ip, Some(vm_id)).await?;
         }
     }
     Ok(())
 }
 
 /// Background task for the virtiofs (Nydus) OCI image boot path.
-#[allow(clippy::too_many_arguments)]
 async fn run_virtiofs_create(
     node_client: &NodeClient,
     db_pool: &sqlx::PgPool,
@@ -604,16 +536,7 @@ async fn run_overlaybd_create(
         device_path: format!("/dev/{}", logical_name),
         boot_order: Some(0),
         read_only: Some(false),
-        direct: None,
-        vhost_user: None,
-        vhost_socket: None,
-        num_queues: None,
-        queue_size: None,
-        rate_limiter: None,
-        rate_limit_group: None,
-        pci_segment: None,
-        serial_number: None,
-        config: serde_json::Value::default(),
+        ..Default::default()
     };
     if let Err(e) = vm_disks::create(db_pool, &disk_record).await {
         let msg = format!("Failed to persist OverlayBD disk record: {}", e);
@@ -887,9 +810,7 @@ pub async fn list_snapshots(
     // Verify VM exists
     vms::get(env.pool(), vm_id).await?;
 
-    let list = snapshots::list_for_vm(env.pool(), vm_id)
-        .await
-        .map_err(crate::errors::Error::Sqlx)?;
+    let list = snapshots::list_for_vm(env.pool(), vm_id).await?;
 
     Ok(ApiResponse {
         data: list,
@@ -932,9 +853,7 @@ pub async fn create_snapshot(
     let preferred_pool_id = if body.storage_pool_id.is_some() {
         body.storage_pool_id
     } else {
-        let disks = vm_disks::list_by_vm(env.pool(), vm_id)
-            .await
-            .map_err(crate::errors::Error::Sqlx)?;
+        let disks = vm_disks::list_by_vm(env.pool(), vm_id).await?;
         let mut found = None;
         for disk in &disks {
             if let Some(so_id) = disk.storage_object_id
@@ -953,8 +872,7 @@ pub async fn create_snapshot(
     };
 
     let pool_id = storage_pools::pick_active_non_overlaybd(env.pool(), preferred_pool_id)
-        .await
-        .map_err(crate::errors::Error::Sqlx)?
+        .await?
         .ok_or_else(|| {
             crate::errors::Error::UnprocessableEntity(
                 "no suitable storage pool available for snapshot".into(),
@@ -978,12 +896,9 @@ pub async fn create_snapshot(
             parent_id: None,
         },
     )
-    .await
-    .map_err(crate::errors::Error::Sqlx)?;
+    .await?;
 
-    let so = storage_objects::get(env.pool(), so_id)
-        .await
-        .map_err(crate::errors::Error::Sqlx)?;
+    let so = storage_objects::get(env.pool(), so_id).await?;
 
     let dir_path = storage_objects::get_path_from_config(&so.config)
         .ok_or(crate::errors::Error::InternalServerError)?;
@@ -997,8 +912,7 @@ pub async fn create_snapshot(
             name,
         },
     )
-    .await
-    .map_err(crate::errors::Error::Sqlx)?;
+    .await?;
 
     let node_client = NodeClient::new(&host.address, host.port as u16);
 
@@ -1022,9 +936,7 @@ pub async fn create_snapshot(
 
     match snap_result {
         Ok(()) => {
-            snapshots::update_status(env.pool(), id, SnapshotStatus::Ready)
-                .await
-                .map_err(crate::errors::Error::Sqlx)?;
+            snapshots::update_status(env.pool(), id, SnapshotStatus::Ready).await?;
 
             // Snapshot succeeded but VM is stuck Paused — return an error so
             // the client knows manual intervention is needed.
@@ -1039,9 +951,7 @@ pub async fn create_snapshot(
         }
     }
 
-    let snapshot = snapshots::get(env.pool(), id)
-        .await
-        .map_err(crate::errors::Error::Sqlx)?;
+    let snapshot = snapshots::get(env.pool(), id).await?;
 
     Ok(ApiResponse {
         data: snapshot,
@@ -1108,9 +1018,7 @@ pub async fn restore(
 
     vms::update_status(env.pool(), vm_id, VmStatus::Pending).await?;
 
-    let so = storage_objects::get(env.pool(), snapshot.storage_object_id)
-        .await
-        .map_err(crate::errors::Error::Sqlx)?;
+    let so = storage_objects::get(env.pool(), snapshot.storage_object_id).await?;
     let dir_path = storage_objects::get_path_from_config(&so.config)
         .ok_or(crate::errors::Error::InternalServerError)?;
     let snapshot_url = format!("file://{}", dir_path);
@@ -1776,16 +1684,7 @@ pub async fn attach_disk(
         device_path: format!("/dev/{}", logical_name),
         boot_order: Some(boot_order),
         read_only: Some(false),
-        direct: None,
-        vhost_user: None,
-        vhost_socket: None,
-        num_queues: None,
-        queue_size: None,
-        rate_limiter: None,
-        rate_limit_group: None,
-        pci_segment: None,
-        serial_number: None,
-        config: serde_json::Value::default(),
+        ..Default::default()
     };
 
     let id = vm_disks::create(env.pool(), &disk_record).await?;
@@ -1953,8 +1852,7 @@ pub async fn remove_disk(
     }
 
     let disk = vm_disks::get_by_logical_name(env.pool(), vm_id, &device_id)
-        .await
-        .map_err(crate::errors::Error::Sqlx)?
+        .await?
         .ok_or(crate::errors::Error::NotFound)?;
 
     if vm.status == VmStatus::Running {
@@ -1971,9 +1869,7 @@ pub async fn remove_disk(
             })?;
     }
 
-    vm_disks::delete(env.pool(), disk.id)
-        .await
-        .map_err(crate::errors::Error::Sqlx)?;
+    vm_disks::delete(env.pool(), disk.id).await?;
 
     Ok(ApiResponse {
         data: (),
@@ -2015,9 +1911,7 @@ pub async fn add_nic(
         }
     }
 
-    let existing = network_interfaces::list_by_vm(env.pool(), vm_id)
-        .await
-        .map_err(crate::errors::Error::Sqlx)?;
+    let existing = network_interfaces::list_by_vm(env.pool(), vm_id).await?;
 
     // Auto-generate device ID if not provided or empty
     if req.id.is_empty() {
@@ -2035,14 +1929,11 @@ pub async fn add_nic(
     let req = if let Some(network_id) = req.network_id {
         if req.ip.is_none() {
             let ip = networks::next_available_ip(env.pool(), network_id)
-                .await
-                .map_err(crate::errors::Error::Sqlx)?
+                .await?
                 .ok_or_else(|| {
                     crate::errors::Error::UnprocessableEntity("No available IPs in network".into())
                 })?;
-            networks::allocate_ip(env.pool(), network_id, &ip, Some(vm_id))
-                .await
-                .map_err(crate::errors::Error::Sqlx)?;
+            networks::allocate_ip(env.pool(), network_id, &ip, Some(vm_id)).await?;
             NewVmNetwork {
                 ip: Some(ip),
                 ..req
@@ -2054,8 +1945,7 @@ pub async fn add_nic(
                 req.ip.as_deref().unwrap(),
                 Some(vm_id),
             )
-            .await
-            .map_err(crate::errors::Error::Sqlx)?;
+            .await?;
             req
         }
     } else {
@@ -2063,14 +1953,10 @@ pub async fn add_nic(
     };
 
     let mut tx = env.pool().begin().await?;
-    let nic_id = network_interfaces::create(&mut tx, vm_id, &req)
-        .await
-        .map_err(crate::errors::Error::Sqlx)?;
+    let nic_id = network_interfaces::create(&mut tx, vm_id, &req).await?;
     tx.commit().await?;
 
-    let nic = network_interfaces::get(env.pool(), nic_id)
-        .await
-        .map_err(crate::errors::Error::Sqlx)?;
+    let nic = network_interfaces::get(env.pool(), nic_id).await?;
 
     if vm.status == VmStatus::Running {
         let host = host_for_vm(&env, vm_id).await?;
@@ -2128,8 +2014,7 @@ pub async fn remove_nic(
     }
 
     let nic = network_interfaces::get_by_device_id(env.pool(), vm_id, &device_id)
-        .await
-        .map_err(crate::errors::Error::Sqlx)?
+        .await?
         .ok_or(crate::errors::Error::NotFound)?;
 
     if vm.status == VmStatus::Running {
@@ -2146,9 +2031,7 @@ pub async fn remove_nic(
             })?;
     }
 
-    network_interfaces::delete(env.pool(), nic.id)
-        .await
-        .map_err(crate::errors::Error::Sqlx)?;
+    network_interfaces::delete(env.pool(), nic.id).await?;
 
     Ok(ApiResponse {
         data: (),
@@ -2228,9 +2111,7 @@ pub async fn migrate(
     }
 
     let source_host = host_for_vm(&env, vm_id).await?;
-    let target_host = hosts::get_by_id(env.pool(), req.target_host_id)
-        .await?
-        .ok_or(crate::errors::Error::NotFound)?;
+    let target_host = hosts::require_by_id(env.pool(), req.target_host_id).await?;
 
     if source_host.id == target_host.id {
         return Err(crate::errors::Error::UnprocessableEntity(

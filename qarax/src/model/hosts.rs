@@ -93,33 +93,41 @@ pub struct DeployHostRequest {
 }
 
 impl DeployHostRequest {
-    pub fn validate(&self) -> std::result::Result<(), String> {
+    pub fn validate(&self) -> Result<(), crate::errors::Error> {
         if self.image.trim().is_empty() {
-            return Err("image is required".to_string());
+            return Err(crate::errors::Error::UnprocessableEntity(
+                "image is required".to_string(),
+            ));
         }
 
         if self.ssh_password.is_some() && self.ssh_private_key_path.is_some() {
-            return Err(
+            return Err(crate::errors::Error::UnprocessableEntity(
                 "provide either ssh_password or ssh_private_key_path, but not both".to_string(),
-            );
+            ));
         }
 
         if let Some(user) = &self.ssh_user
             && user.trim().is_empty()
         {
-            return Err("ssh_user cannot be empty".to_string());
+            return Err(crate::errors::Error::UnprocessableEntity(
+                "ssh_user cannot be empty".to_string(),
+            ));
         }
 
         if let Some(path) = &self.ssh_private_key_path
             && path.trim().is_empty()
         {
-            return Err("ssh_private_key_path cannot be empty".to_string());
+            return Err(crate::errors::Error::UnprocessableEntity(
+                "ssh_private_key_path cannot be empty".to_string(),
+            ));
         }
 
         if let Some(port) = self.ssh_port
             && port == 0
         {
-            return Err("ssh_port must be greater than 0".to_string());
+            return Err(crate::errors::Error::UnprocessableEntity(
+                "ssh_port must be greater than 0".to_string(),
+            ));
         }
 
         Ok(())
@@ -152,12 +160,10 @@ pub struct NewHost {
 }
 
 impl NewHost {
-    pub async fn validate_unique_name(
-        &self,
-        pool: &PgPool,
-        name: &str,
-    ) -> Result<(), errors::Error> {
-        let host = by_name(pool, name).await.map_err(errors::Error::Sqlx)?;
+    pub async fn validate_unique_name(&self, pool: &PgPool) -> Result<(), errors::Error> {
+        let host = by_name(pool, &self.name)
+            .await
+            .map_err(errors::Error::Sqlx)?;
 
         if host.is_some() {
             let mut errors = ValidationErrors::new();
@@ -211,6 +217,13 @@ pub async fn update_status(pool: &PgPool, id: Uuid, status: HostStatus) -> Resul
         .execute(pool)
         .await?;
     Ok(())
+}
+
+/// Returns a host by id, or `Error::NotFound` if it does not exist.
+pub async fn require_by_id(pool: &PgPool, id: Uuid) -> Result<Host, crate::errors::Error> {
+    get_by_id(pool, id)
+        .await?
+        .ok_or(crate::errors::Error::NotFound)
 }
 
 /// Returns a host by id, if it exists.
