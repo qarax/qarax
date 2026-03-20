@@ -1,4 +1,5 @@
 pub mod boot_sources;
+pub mod host_gpus;
 pub mod hosts;
 pub mod instance_types;
 pub mod jobs;

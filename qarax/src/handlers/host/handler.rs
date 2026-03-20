@@ -4,6 +4,7 @@ use crate::{
     grpc_client::NodeClient,
     host_deployer,
     model::{
+        host_gpus::{self, HostGpu},
         hosts::{self, DeployHostRequest, Host, HostStatus, NewHost, UpdateHostRequest},
         storage_pools,
     },
@@ -244,6 +245,33 @@ pub async fn init(
 
     Ok(ApiResponse {
         data: updated_host,
+        code: StatusCode::OK,
+    })
+}
+
+#[utoipa::path(
+    get,
+    path = "/hosts/{host_id}/gpus",
+    params(
+        ("host_id" = uuid::Uuid, Path, description = "Host unique identifier")
+    ),
+    responses(
+        (status = 200, description = "List GPUs on the host", body = Vec<HostGpu>),
+        (status = 404, description = "Host not found"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "hosts"
+)]
+#[instrument(skip(env))]
+pub async fn list_gpus(
+    Extension(env): Extension<App>,
+    Path(host_id): Path<Uuid>,
+) -> Result<ApiResponse<Vec<HostGpu>>> {
+    // Verify host exists (returns 404 for unknown host_id)
+    hosts::require_by_id(env.pool(), host_id).await?;
+    let gpus = host_gpus::list_by_host(env.pool(), host_id).await?;
+    Ok(ApiResponse {
+        data: gpus,
         code: StatusCode::OK,
     })
 }

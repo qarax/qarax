@@ -65,6 +65,8 @@ pub struct NewVm {
     pub cloud_init_network_config: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub accelerator_config: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -210,6 +212,18 @@ pub struct DeployHostRequest {
     pub install_bootc: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reboot: Option<bool>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct HostGpu {
+    pub id: Uuid,
+    pub host_id: Uuid,
+    pub pci_address: String,
+    pub model: Option<String>,
+    pub vendor: Option<String>,
+    pub vram_bytes: Option<i64>,
+    pub iommu_group: i32,
+    pub vm_id: Option<Uuid>,
 }
 
 // ─── Storage ─────────────────────────────────────────────────────────────────

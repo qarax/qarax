@@ -183,6 +183,32 @@ paths:
           description: Invalid input
         '500':
           description: Internal server error
+  /hosts/{host_id}/gpus:
+    get:
+      tags:
+      - hosts
+      operationId: list_gpus
+      parameters:
+      - name: host_id
+        in: path
+        description: Host unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: List GPUs on the host
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/HostGpu'
+        '404':
+          description: Host not found
+        '500':
+          description: Internal server error
   /hosts/{host_id}/init:
     post:
       tags:
@@ -1411,6 +1437,28 @@ paths:
           description: Internal server error
 components:
   schemas:
+    AcceleratorConfig:
+      type: object
+      description: Typed accelerator_config from instance types / VM requests
+      required:
+      - gpu_count
+      properties:
+        gpu_count:
+          type: integer
+          format: int32
+        gpu_model:
+          type:
+          - string
+          - 'null'
+        gpu_vendor:
+          type:
+          - string
+          - 'null'
+        min_vram_bytes:
+          type:
+          - integer
+          - 'null'
+          format: int64
     AttachDiskRequest:
       type: object
       required:
@@ -1629,6 +1677,53 @@ components:
           - 'null'
           format: int32
         total_memory_bytes:
+          type:
+          - integer
+          - 'null'
+          format: int64
+    HostGpu:
+      type: object
+      required:
+      - id
+      - host_id
+      - pci_address
+      - iommu_group
+      properties:
+        discovered_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        host_id:
+          type: string
+          format: uuid
+        id:
+          type: string
+          format: uuid
+        iommu_group:
+          type: integer
+          format: int32
+        model:
+          type:
+          - string
+          - 'null'
+        pci_address:
+          type: string
+        updated_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        vendor:
+          type:
+          - string
+          - 'null'
+        vm_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        vram_bytes:
           type:
           - integer
           - 'null'
@@ -2130,6 +2225,11 @@ components:
       required:
       - name
       properties:
+        accelerator_config:
+          description: |-
+            Accelerator (GPU) configuration. When set, GPU-aware scheduling picks a
+            host with available GPUs matching these filters, and VFIO passthrough
+            devices are attached to the VM.
         boot_mode:
           oneOf:
           - type: 'null'

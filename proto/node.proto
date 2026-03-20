@@ -54,6 +54,9 @@ message VmConfig {
 
   // Cloud-init seed data (optional)
   optional CloudInitConfig cloud_init = 12;
+
+  // VFIO device passthrough (GPU, etc.)
+  repeated VfioDeviceConfig devices = 13;
 }
 
 // ============================================================================
@@ -304,6 +307,27 @@ message NodeInfo {
   double load_average_1m = 7;
   int64 disk_total_bytes = 8;
   int64 disk_available_bytes = 9;
+  // GPU inventory (discovered via sysfs, only devices bound to vfio-pci)
+  repeated GpuInfo gpus = 10;
+}
+
+// ============================================================================
+// VFIO Device Passthrough
+// ============================================================================
+
+message VfioDeviceConfig {
+  string id = 1;
+  string path = 2;                // VFIO sysfs path: "/sys/bus/pci/devices/0000:01:00.0"
+  optional bool iommu = 3;
+  optional int32 pci_segment = 4;
+}
+
+message GpuInfo {
+  string pci_address = 1;         // "0000:01:00.0"
+  string model = 2;
+  string vendor = 3;
+  int64 vram_bytes = 4;
+  int32 iommu_group = 5;
 }
 
 // ============================================================================
@@ -381,6 +405,10 @@ service VmService {
   rpc AddFsDevice(AddFsDeviceRequest) returns (google.protobuf.Empty) {}
   rpc RemoveFsDevice(RemoveDeviceRequest) returns (google.protobuf.Empty) {}
 
+  // VFIO device hot-attach operations (GPU passthrough)
+  rpc AddDevice(AddDeviceRequest) returns (google.protobuf.Empty) {}
+  rpc RemoveVfioDevice(RemoveDeviceRequest) returns (google.protobuf.Empty) {}
+
   // OCI image management
   rpc PullImage(OciImageRequest) returns (OciImageResponse) {}
   rpc GetImageStatus(OciImageRequest) returns (OciImageResponse) {}
@@ -442,6 +470,11 @@ message AddDiskDeviceRequest {
 message AddFsDeviceRequest {
   string vm_id = 1;
   FsConfig config = 2;
+}
+
+message AddDeviceRequest {
+  string vm_id = 1;
+  VfioDeviceConfig config = 2;
 }
 
 message RemoveDeviceRequest {

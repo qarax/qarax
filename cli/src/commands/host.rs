@@ -9,7 +9,7 @@ use crate::{
     client::Client,
 };
 
-use super::{OutputFormat, print_output, resolve_host_id};
+use super::{OutputFormat, format_bytes, print_output, resolve_host_id};
 
 #[derive(Args)]
 pub struct HostArgs {
@@ -70,6 +70,11 @@ enum HostCommand {
         /// Host name or ID
         host: String,
     },
+    /// List GPUs on a host
+    Gpus {
+        /// Host name or ID
+        host: String,
+    },
 }
 
 #[derive(Tabled)]
@@ -94,6 +99,24 @@ struct HostRow {
     memory: String,
     #[tabled(rename = "Load")]
     load: String,
+}
+
+#[derive(Tabled)]
+struct GpuRow {
+    #[tabled(rename = "ID")]
+    id: String,
+    #[tabled(rename = "PCI Address")]
+    pci_address: String,
+    #[tabled(rename = "Vendor")]
+    vendor: String,
+    #[tabled(rename = "Model")]
+    model: String,
+    #[tabled(rename = "VRAM")]
+    vram: String,
+    #[tabled(rename = "IOMMU Group")]
+    iommu_group: i32,
+    #[tabled(rename = "VM")]
+    vm_id: String,
 }
 
 pub async fn run(args: HostArgs, client: &Client, output: OutputFormat) -> anyhow::Result<()> {
@@ -195,17 +218,35 @@ pub async fn run(args: HostArgs, client: &Client, output: OutputFormat) -> anyho
                 }
             }
         }
+
+        HostCommand::Gpus { host } => {
+            let id = resolve_host_id(client, &host).await?;
+            let gpus = api::hosts::list_gpus(client, id).await?;
+            if !matches!(output, OutputFormat::Table) {
+                print_output(&gpus, output)?;
+            } else {
+                let rows: Vec<GpuRow> = gpus
+                    .iter()
+                    .map(|g| GpuRow {
+                        id: g.id.to_string(),
+                        pci_address: g.pci_address.clone(),
+                        vendor: g.vendor.clone().unwrap_or_else(|| "-".to_string()),
+                        model: g.model.clone().unwrap_or_else(|| "-".to_string()),
+                        vram: g
+                            .vram_bytes
+                            .map(format_bytes)
+                            .unwrap_or_else(|| "-".to_string()),
+                        iommu_group: g.iommu_group,
+                        vm_id: g
+                            .vm_id
+                            .map(|id| id.to_string())
+                            .unwrap_or_else(|| "-".to_string()),
+                    })
+                    .collect();
+                println!("{}", Table::new(rows).with(Style::psql()));
+            }
+        }
     }
 
     Ok(())
-}
-
-fn format_bytes(bytes: i64) -> String {
-    const GIB: i64 = 1024 * 1024 * 1024;
-    const MIB: i64 = 1024 * 1024;
-    if bytes >= GIB {
-        format!("{:.1} GiB", bytes as f64 / GIB as f64)
-    } else {
-        format!("{:.0} MiB", bytes as f64 / MIB as f64)
-    }
 }

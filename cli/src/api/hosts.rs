@@ -2,7 +2,7 @@ use uuid::Uuid;
 
 use crate::client::Client;
 
-use super::models::{DeployHostRequest, Host, NewHost};
+use super::models::{DeployHostRequest, Host, HostGpu, NewHost};
 
 pub async fn list(client: &Client) -> anyhow::Result<Vec<Host>> {
     client.get("/hosts").await
@@ -27,4 +27,9 @@ pub async fn init(client: &Client, host_id: Uuid) -> anyhow::Result<Host> {
     client
         .post_empty_json(&format!("/hosts/{host_id}/init"))
         .await
+}
+
+/// List all GPUs on a host.
+pub async fn list_gpus(client: &Client, host_id: Uuid) -> anyhow::Result<Vec<HostGpu>> {
+    client.get(&format!("/hosts/{host_id}/gpus")).await
 }

@@ -8,6 +8,7 @@ use tokio::time::{Duration, Instant, interval_at};
 use tracing::warn;
 
 use crate::grpc_client::{NodeClient, node::NodeInfo};
+use crate::model::host_gpus::{self, GpuDiscovery};
 use crate::model::hosts::{self, Host, HostStatus};
 
 async fn handle_probe_result(pool: &PgPool, host: &Host, node_info: Result<NodeInfo>) {
@@ -27,6 +28,25 @@ async fn handle_probe_result(pool: &PgPool, host: &Host, node_info: Result<NodeI
             {
                 warn!(
                     "Resource monitor: failed to update resources for host {}: {}",
+                    host.name, e
+                );
+            }
+
+            // Sync GPU inventory
+            let gpu_discoveries: Vec<GpuDiscovery> = info
+                .gpus
+                .iter()
+                .map(|g| GpuDiscovery {
+                    pci_address: g.pci_address.clone(),
+                    model: g.model.clone(),
+                    vendor: g.vendor.clone(),
+                    vram_bytes: g.vram_bytes,
+                    iommu_group: g.iommu_group,
+                })
+                .collect();
+            if let Err(e) = host_gpus::sync_gpus(pool, host.id, &gpu_discoveries).await {
+                warn!(
+                    "Resource monitor: failed to sync GPUs for host {}: {}",
                     host.name, e
                 );
             }
@@ -201,6 +221,7 @@ mod tests {
                 load_average_1m: 0.5,
                 disk_total_bytes: 100 * 1024 * 1024,
                 disk_available_bytes: 60 * 1024 * 1024,
+                gpus: vec![],
             }),
         )
         .await;

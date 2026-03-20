@@ -16,7 +16,7 @@ use crate::{
         node::{DiskConfig, FsConfig, NetConfig, VhostMode},
     },
     model::{
-        boot_sources, hosts,
+        boot_sources, host_gpus, hosts,
         hosts::Host,
         jobs::{self, JobType, NewJob},
         network_interfaces::{self, NetworkInterface},
@@ -53,14 +53,69 @@ pub struct VmMetrics {
 }
 
 /// Pick an UP host with sufficient resources for scheduling a new VM.
-async fn pick_host(env: &App, requested_memory: i64) -> Result<Host> {
-    hosts::pick_up_host(env.pool(), requested_memory)
+async fn pick_host(
+    env: &App,
+    requested_memory: i64,
+    accel: Option<&host_gpus::AcceleratorConfig>,
+) -> Result<Host> {
+    let host = if let Some(accel) = accel {
+        hosts::pick_up_host_with_gpu(
+            env.pool(),
+            requested_memory,
+            accel.gpu_count,
+            accel.gpu_vendor.as_deref(),
+            accel.gpu_model.as_deref(),
+            accel.min_vram_bytes,
+        )
         .await?
-        .ok_or_else(|| {
-            crate::errors::Error::UnprocessableEntity(
-                "no hosts in UP state with sufficient resources available for scheduling".into(),
-            )
-        })
+    } else {
+        hosts::pick_up_host(env.pool(), requested_memory).await?
+    };
+
+    host.ok_or_else(|| {
+        crate::errors::Error::UnprocessableEntity(
+            "no hosts in UP state with sufficient resources available for scheduling".into(),
+        )
+    })
+}
+
+/// Allocate GPUs for a VM inside an existing transaction. Returns an error if
+/// fewer GPUs were allocated than requested.
+async fn allocate_vm_gpus(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    host_id: Uuid,
+    vm_id: Uuid,
+    accel: &host_gpus::AcceleratorConfig,
+) -> Result<()> {
+    let allocated = host_gpus::allocate_gpus(
+        tx,
+        host_id,
+        vm_id,
+        accel.gpu_count,
+        accel.gpu_vendor.as_deref(),
+        accel.gpu_model.as_deref(),
+        accel.min_vram_bytes,
+    )
+    .await?;
+    if (allocated.len() as i32) < accel.gpu_count {
+        return Err(crate::errors::Error::UnprocessableEntity(format!(
+            "requested {} GPUs but only {} available on selected host",
+            accel.gpu_count,
+            allocated.len()
+        )));
+    }
+    Ok(())
+}
+
+/// Derive the rootfs path for an OCI image the same way the image store does:
+/// replace '/', ':', '@' with '_' and place under /var/lib/qarax/images/<safe>\/rootfs.
+/// Must stay in sync with `qarax-node/src/image_store/manager.rs::safe_name()`.
+fn image_ref_to_rootfs_path(image_ref: &str) -> String {
+    let safe: String = image_ref
+        .chars()
+        .map(|c| if matches!(c, '/' | ':' | '@') { '_' } else { c })
+        .collect();
+    format!("/var/lib/qarax/images/{}/rootfs", safe)
 }
 
 async fn validate_root_disk_for_host(env: &App, host_id: Uuid, object_id: Uuid) -> Result<()> {
@@ -184,7 +239,11 @@ pub async fn create(
         return create_with_image(env, vm).await;
     }
 
-    let host = pick_host(&env, vm.memory_size).await?;
+    let accel_config = vm
+        .accelerator_config
+        .as_ref()
+        .and_then(host_gpus::AcceleratorConfig::from_value);
+    let host = pick_host(&env, vm.memory_size, accel_config.as_ref()).await?;
     if let Some(root_disk_object_id) = vm.root_disk_object_id {
         validate_root_disk_for_host(&env, host.id, root_disk_object_id).await?;
     }
@@ -200,6 +259,11 @@ pub async fn create(
     // Store network interfaces in DB (inside tx, so rolls back if any insert fails)
     for net in vm.networks.as_deref().unwrap_or(&[]) {
         network_interfaces::create(&mut tx, id, net).await?;
+    }
+
+    // Allocate GPUs atomically inside the transaction
+    if let Some(ref accel) = accel_config {
+        allocate_vm_gpus(&mut tx, host.id, id, accel).await?;
     }
 
     tx.commit().await?;
@@ -231,7 +295,11 @@ async fn create_with_image(env: App, vm: ResolvedNewVm) -> Result<axum::response
         .expect("image_ref checked before calling");
 
     // Pick host eagerly so we return 422 immediately if none are UP
-    let host = pick_host(&env, vm.memory_size).await?;
+    let accel_config = vm
+        .accelerator_config
+        .as_ref()
+        .and_then(host_gpus::AcceleratorConfig::from_value);
+    let host = pick_host(&env, vm.memory_size, accel_config.as_ref()).await?;
     if let Some(root_disk_object_id) = vm.root_disk_object_id {
         validate_root_disk_for_host(&env, host.id, root_disk_object_id).await?;
     }
@@ -297,6 +365,11 @@ async fn create_with_image(env: App, vm: ResolvedNewVm) -> Result<axum::response
     }
     if let Some(root_disk_object_id) = vm.root_disk_object_id {
         create_root_disk_record(&mut tx, vm_id, root_disk_object_id).await?;
+    }
+
+    // Allocate GPUs atomically inside the transaction
+    if let Some(ref accel) = accel_config {
+        allocate_vm_gpus(&mut tx, host.id, vm_id, accel).await?;
     }
 
     tx.commit().await?;
@@ -717,6 +790,11 @@ pub async fn stop(
 
     vms::update_status(env.pool(), vm_id, VmStatus::Shutdown).await?;
 
+    // Release any allocated GPUs
+    if let Err(e) = host_gpus::deallocate_by_vm(env.pool(), vm_id).await {
+        warn!("Failed to deallocate GPUs for VM {}: {}", vm_id, e);
+    }
+
     Ok(ApiResponse {
         data: (),
         code: StatusCode::OK,
@@ -1124,6 +1202,11 @@ pub async fn delete(
 ) -> Result<ApiResponse<()>> {
     let vm = vms::get(env.pool(), vm_id).await?;
 
+    // Release any allocated GPUs before deleting
+    if let Err(e) = host_gpus::deallocate_by_vm(env.pool(), vm_id).await {
+        warn!("Failed to deallocate GPUs for VM {}: {}", vm_id, e);
+    }
+
     // Only call delete_vm on the node if the VM was ever provisioned there
     if vm.status != VmStatus::Created
         && vm.status != VmStatus::Pending
@@ -1520,6 +1603,10 @@ async fn build_create_vm_request(env: &App, vm: &Vm) -> Result<CreateVmRequest> 
     } else if !filesystems.is_empty() {
         let fs = &filesystems[0];
         let socket_path = format!("/var/lib/qarax/vms/{}-fs0.sock", vm_id);
+        // Derive the rootfs path from image_ref so the node can start virtiofsd.
+        // The image store uses: <cache_dir>/<safe_name>/rootfs
+        // where safe_name replaces '/', ':', '@' with '_'.
+        let bootstrap_path = fs.image_ref.as_deref().map(image_ref_to_rootfs_path);
         let fs_config = FsConfig {
             tag: fs.tag.clone(),
             socket: socket_path,
@@ -1527,7 +1614,7 @@ async fn build_create_vm_request(env: &App, vm: &Vm) -> Result<CreateVmRequest> 
             queue_size: fs.queue_size,
             pci_segment: fs.pci_segment,
             id: Some("fs0".to_string()),
-            bootstrap_path: None,
+            bootstrap_path,
         };
         (
             vec![fs_config],
@@ -1556,6 +1643,19 @@ async fn build_create_vm_request(env: &App, vm: &Vm) -> Result<CreateVmRequest> 
         ))
     });
 
+    // Build VFIO device configs from allocated GPUs
+    let allocated_gpus = host_gpus::list_by_vm(env.pool(), vm_id).await?;
+    let devices: Vec<_> = allocated_gpus
+        .iter()
+        .enumerate()
+        .map(|(i, gpu)| crate::grpc_client::node::VfioDeviceConfig {
+            id: format!("gpu{}", i),
+            path: format!("/sys/bus/pci/devices/{}", gpu.pci_address),
+            iommu: Some(true),
+            pci_segment: None,
+        })
+        .collect();
+
     Ok(CreateVmRequest {
         vm_id,
         boot_vcpus: vm.boot_vcpus,
@@ -1572,6 +1672,7 @@ async fn build_create_vm_request(env: &App, vm: &Vm) -> Result<CreateVmRequest> 
         cloud_init_user_data: vm.cloud_init_user_data.clone(),
         cloud_init_meta_data,
         cloud_init_network_config: vm.cloud_init_network_config.clone(),
+        devices,
     })
 }
 
@@ -2242,6 +2343,7 @@ pub async fn migrate(
                         .unwrap_or_default(),
                 }
             }),
+            devices: create_req.devices,
         };
 
         // Step 1: Prepare the destination node.

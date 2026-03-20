@@ -16,9 +16,9 @@ use crate::{
 };
 
 use super::{
-    OutputFormat, format_bytes, print_output, resolve_boot_source_id, resolve_host_id,
-    resolve_instance_type_id, resolve_network_id, resolve_object_id, resolve_vm_id,
-    resolve_vm_template_id,
+    OutputFormat, build_accelerator_config, format_bytes, print_output, resolve_boot_source_id,
+    resolve_host_id, resolve_instance_type_id, resolve_network_id, resolve_object_id,
+    resolve_vm_id, resolve_vm_template_id,
 };
 
 #[derive(Args)]
@@ -90,6 +90,18 @@ enum VmCommand {
         /// Path to cloud-init network-config file (suppresses kernel ip= params when set)
         #[arg(long, value_name = "FILE", requires = "cloud_init_user_data")]
         cloud_init_network_config: Option<std::path::PathBuf>,
+        /// Number of GPUs to request (enables GPU-aware scheduling)
+        #[arg(long)]
+        gpu_count: Option<i32>,
+        /// Filter GPUs by vendor (e.g. "nvidia")
+        #[arg(long, requires = "gpu_count")]
+        gpu_vendor: Option<String>,
+        /// Filter GPUs by model (e.g. "NVIDIA A100")
+        #[arg(long, requires = "gpu_count")]
+        gpu_model: Option<String>,
+        /// Minimum GPU VRAM in bytes
+        #[arg(long, requires = "gpu_count")]
+        min_vram: Option<i64>,
     },
     /// Delete a VM
     Delete {
@@ -327,6 +339,10 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
             cloud_init_user_data,
             cloud_init_meta_data,
             cloud_init_network_config,
+            gpu_count,
+            gpu_vendor,
+            gpu_model,
+            min_vram,
         } => {
             let vm_template_id = match template {
                 Some(ref template) => Some(resolve_vm_template_id(client, template).await?),
@@ -392,6 +408,9 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
                 (None, None) => None,
             };
 
+            let accelerator_config =
+                build_accelerator_config(gpu_count, &gpu_vendor, &gpu_model, min_vram);
+
             let new_vm = NewVm {
                 name,
                 vm_template_id,
@@ -411,6 +430,7 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
                 cloud_init_meta_data: ci_meta_data,
                 cloud_init_network_config: ci_network_config,
                 config: Some(serde_json::json!({})),
+                accelerator_config,
             };
 
             let result = api::vms::create(client, &new_vm).await?;

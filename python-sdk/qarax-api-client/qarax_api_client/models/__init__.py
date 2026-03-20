@@ -1,5 +1,6 @@
 """Contains all the data models used in inputs/outputs"""
 
+from .accelerator_config import AcceleratorConfig
 from .attach_disk_request import AttachDiskRequest
 from .attach_host_request import AttachHostRequest
 from .attach_pool_host_request import AttachPoolHostRequest
@@ -10,6 +11,7 @@ from .create_vm_response import CreateVmResponse
 from .create_vm_template_from_vm_request import CreateVmTemplateFromVmRequest
 from .deploy_host_request import DeployHostRequest
 from .host import Host
+from .host_gpu import HostGpu
 from .host_status import HostStatus
 from .hypervisor import Hypervisor
 from .import_to_pool_request import ImportToPoolRequest
@@ -62,6 +64,7 @@ from .vm_status import VmStatus
 from .vm_template import VmTemplate
 
 __all__ = (
+    "AcceleratorConfig",
     "AttachDiskRequest",
     "AttachHostRequest",
     "AttachPoolHostRequest",
@@ -72,6 +75,7 @@ __all__ = (
     "CreateVmTemplateFromVmRequest",
     "DeployHostRequest",
     "Host",
+    "HostGpu",
     "HostStatus",
     "Hypervisor",
     "ImportToPoolRequest",

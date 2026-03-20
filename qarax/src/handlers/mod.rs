@@ -38,6 +38,7 @@ pub type Result<T, E = Error> = ::std::result::Result<T, E>;
         host::handler::update,
         host::handler::deploy,
         host::handler::init,
+        host::handler::list_gpus,
         instance_type::handler::list,
         instance_type::handler::get,
         instance_type::handler::create,
@@ -100,6 +101,8 @@ pub type Result<T, E = Error> = ::std::result::Result<T, E>;
             crate::model::hosts::UpdateHostRequest,
             crate::model::hosts::DeployHostRequest,
             crate::model::hosts::HostStatus,
+            crate::model::host_gpus::HostGpu,
+            crate::model::host_gpus::AcceleratorConfig,
             crate::model::instance_types::InstanceType,
             crate::model::instance_types::NewInstanceType,
             crate::model::vms::Vm,
@@ -218,6 +221,7 @@ fn hosts() -> Router {
         .route("/hosts/{host_id}", patch(host::handler::update))
         .route("/hosts/{host_id}/deploy", post(host::handler::deploy))
         .route("/hosts/{host_id}/init", post(host::handler::init))
+        .route("/hosts/{host_id}/gpus", get(host::handler::list_gpus))
 }
 
 fn vms() -> Router {

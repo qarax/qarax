@@ -268,6 +268,11 @@ pub struct NewVm {
     #[serde(default)]
     pub networks: Option<Vec<NewVmNetwork>>,
 
+    /// Accelerator (GPU) configuration. When set, GPU-aware scheduling picks a
+    /// host with available GPUs matching these filters, and VFIO passthrough
+    /// devices are attached to the VM.
+    pub accelerator_config: Option<serde_json::Value>,
+
     #[serde(default = "default_vm_config")]
     pub config: serde_json::Value,
 }
@@ -298,6 +303,7 @@ pub struct ResolvedNewVm {
     pub cloud_init_network_config: Option<String>,
     pub network_id: Option<Uuid>,
     pub networks: Option<Vec<NewVmNetwork>>,
+    pub accelerator_config: Option<serde_json::Value>,
     pub config: serde_json::Value,
 }
 
@@ -349,6 +355,7 @@ pub async fn resolve_create_request(pool: &PgPool, request: NewVm) -> Result<Res
         cloud_init_network_config,
         network_id,
         networks,
+        accelerator_config,
         config,
     } = request;
 
@@ -532,6 +539,16 @@ pub async fn resolve_create_request(pool: &PgPool, request: NewVm) -> Result<Res
             vm_template
                 .as_ref()
                 .and_then(|template| template.networks.clone())
+        }),
+        accelerator_config: accelerator_config.or_else(|| {
+            instance_type.as_ref().and_then(|it| {
+                let v = &it.accelerator_config;
+                if v.is_null() || v.as_object().map(|o| o.is_empty()).unwrap_or(true) {
+                    None
+                } else {
+                    Some(v.clone())
+                }
+            })
         }),
         config: merge_config(
             vm_template

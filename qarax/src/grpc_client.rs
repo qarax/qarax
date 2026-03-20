@@ -22,8 +22,8 @@ use node::{
     DetachNetworkRequest, DetachStoragePoolRequest, DiskConfig, DownloadFileRequest, FsConfig,
     ImportOverlayBdRequest, ImportOverlayBdResponse, MemoryConfig, NetConfig, NodeInfo,
     OciImageRequest, OciImageResponse, PayloadConfig, ReceiveMigrationRequest, RemoveDeviceRequest,
-    RestoreVmRequest, SendMigrationRequest, SnapshotVmRequest, StoragePoolKind, VmConfig,
-    VmCounters, VmId, VmState, file_transfer_service_client::FileTransferServiceClient,
+    RestoreVmRequest, SendMigrationRequest, SnapshotVmRequest, StoragePoolKind, VfioDeviceConfig,
+    VmConfig, VmCounters, VmId, VmState, file_transfer_service_client::FileTransferServiceClient,
     vm_service_client::VmServiceClient,
 };
 
@@ -56,6 +56,8 @@ pub struct CreateVmRequest {
     pub cloud_init_meta_data: Option<String>,
     /// Cloud-init network-config (optional raw YAML)
     pub cloud_init_network_config: Option<String>,
+    /// VFIO device configs for GPU passthrough
+    pub devices: Vec<VfioDeviceConfig>,
 }
 
 /// Convert DB network interfaces to proto NetConfig for the node.
@@ -222,6 +224,7 @@ impl NodeClient {
             cloud_init_user_data,
             cloud_init_meta_data,
             cloud_init_network_config,
+            devices,
         } = req;
         debug!("Creating VM {} on node {}", vm_id, self.address);
 
@@ -297,6 +300,7 @@ impl NodeClient {
                 meta_data: cloud_init_meta_data.unwrap_or_default(),
                 network_config: cloud_init_network_config.unwrap_or_default(),
             }),
+            devices,
         };
 
         client

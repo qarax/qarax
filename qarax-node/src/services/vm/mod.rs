@@ -8,14 +8,14 @@ use tracing::{debug, error, info, warn};
 
 use crate::cloud_hypervisor::VmManager;
 use crate::rpc::node::{
-    AddDiskDeviceRequest, AddFsDeviceRequest, AddNetworkDeviceRequest, AttachNetworkRequest,
-    AttachNetworkResponse, AttachStoragePoolRequest, AttachStoragePoolResponse, ConsoleInput,
-    ConsoleLogResponse, ConsoleOutput, ConsolePtyPathResponse, DetachNetworkRequest,
-    DetachNetworkResponse, DetachStoragePoolRequest, DeviceCounters, ImportOverlayBdRequest,
-    ImportOverlayBdResponse, NodeInfo, OciImageRequest, OciImageResponse, ReceiveMigrationRequest,
-    ReceiveMigrationResponse, RemoveDeviceRequest, RestoreVmRequest, SendMigrationRequest,
-    SnapshotVmRequest, StoragePoolKind, VmConfig, VmCounters, VmId, VmList, VmState,
-    vm_service_server::VmService,
+    AddDeviceRequest, AddDiskDeviceRequest, AddFsDeviceRequest, AddNetworkDeviceRequest,
+    AttachNetworkRequest, AttachNetworkResponse, AttachStoragePoolRequest,
+    AttachStoragePoolResponse, ConsoleInput, ConsoleLogResponse, ConsoleOutput,
+    ConsolePtyPathResponse, DetachNetworkRequest, DetachNetworkResponse, DetachStoragePoolRequest,
+    DeviceCounters, GpuInfo, ImportOverlayBdRequest, ImportOverlayBdResponse, NodeInfo,
+    OciImageRequest, OciImageResponse, ReceiveMigrationRequest, ReceiveMigrationResponse,
+    RemoveDeviceRequest, RestoreVmRequest, SendMigrationRequest, SnapshotVmRequest,
+    StoragePoolKind, VmConfig, VmCounters, VmId, VmList, VmState, vm_service_server::VmService,
 };
 
 /// Implementation of VmService using Cloud Hypervisor
@@ -365,6 +365,56 @@ impl VmService for VmServiceImpl {
         }
     }
 
+    async fn add_device(&self, request: Request<AddDeviceRequest>) -> Result<Response<()>, Status> {
+        let req = request.into_inner();
+        let config = req
+            .config
+            .ok_or_else(|| Status::invalid_argument("config is required"))?;
+        info!("Adding VFIO device {} to VM: {}", config.id, req.vm_id);
+
+        match self.manager.add_device(&req.vm_id, &config).await {
+            Ok(()) => {
+                info!("VFIO device {} added to VM {}", config.id, req.vm_id);
+                Ok(Response::new(()))
+            }
+            Err(e) => {
+                error!(
+                    "Failed to add VFIO device {} to VM {}: {}",
+                    config.id, req.vm_id, e
+                );
+                Err(map_manager_error(e))
+            }
+        }
+    }
+
+    async fn remove_vfio_device(
+        &self,
+        request: Request<RemoveDeviceRequest>,
+    ) -> Result<Response<()>, Status> {
+        let req = request.into_inner();
+        info!(
+            "Removing VFIO device {} from VM: {}",
+            req.device_id, req.vm_id
+        );
+
+        match self.manager.remove_device(&req.vm_id, &req.device_id).await {
+            Ok(()) => {
+                info!(
+                    "VFIO device {} removed from VM {}",
+                    req.device_id, req.vm_id
+                );
+                Ok(Response::new(()))
+            }
+            Err(e) => {
+                error!(
+                    "Failed to remove VFIO device {} from VM {}: {}",
+                    req.device_id, req.vm_id, e
+                );
+                Err(map_manager_error(e))
+            }
+        }
+    }
+
     async fn pull_image(
         &self,
         request: Request<OciImageRequest>,
@@ -524,6 +574,8 @@ impl VmService for VmServiceImpl {
 
         let (disk_total_bytes, disk_available_bytes) = disk_usage(self.manager.runtime_dir());
 
+        let gpus = discover_gpus().await;
+
         Ok(Response::new(NodeInfo {
             hostname,
             cloud_hypervisor_version: ch_version,
@@ -534,6 +586,7 @@ impl VmService for VmServiceImpl {
             load_average_1m,
             disk_total_bytes,
             disk_available_bytes,
+            gpus,
         }))
     }
 
@@ -1070,6 +1123,124 @@ async fn check_overlaybd_registry(config_json: &str) -> AnyhowResult<String> {
             status
         ))
     }
+}
+
+/// Discover GPUs bound to vfio-pci by scanning /sys/bus/pci/devices.
+// PCI class codes for display controllers
+const PCI_CLASS_VGA: &str = "0x030000"; // VGA compatible controller
+const PCI_CLASS_3D: &str = "0x030200"; // 3D controller
+
+// PCI vendor IDs
+const PCI_VENDOR_NVIDIA: &str = "0x10de";
+const PCI_VENDOR_AMD: &str = "0x1002";
+const PCI_VENDOR_INTEL: &str = "0x8086";
+
+async fn discover_gpus() -> Vec<GpuInfo> {
+    let mut gpus = Vec::new();
+
+    let devices_dir = std::path::Path::new("/sys/bus/pci/devices");
+    let entries = match tokio::fs::read_dir(devices_dir).await {
+        Ok(e) => e,
+        Err(_) => return gpus,
+    };
+
+    let mut entries = entries;
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let dev_path = entry.path();
+
+        // Check PCI class — VGA (0x030000) or 3D controller (0x030200)
+        let class_path = dev_path.join("class");
+        let class_str = match tokio::fs::read_to_string(&class_path).await {
+            Ok(s) => s.trim().to_string(),
+            Err(_) => continue,
+        };
+        if class_str != PCI_CLASS_VGA && class_str != PCI_CLASS_3D {
+            continue;
+        }
+
+        // Check device is bound to vfio-pci
+        let driver_link = dev_path.join("driver");
+        match tokio::fs::read_link(&driver_link).await {
+            Ok(target) => {
+                let driver_name = target.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if driver_name != "vfio-pci" {
+                    continue;
+                }
+            }
+            Err(_) => continue,
+        }
+
+        let pci_address = entry.file_name().to_string_lossy().to_string();
+
+        // Read vendor ID
+        let vendor_id = tokio::fs::read_to_string(dev_path.join("vendor"))
+            .await
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        let vendor = match vendor_id.as_str() {
+            PCI_VENDOR_NVIDIA => "nvidia".to_string(),
+            PCI_VENDOR_AMD => "amd".to_string(),
+            PCI_VENDOR_INTEL => "intel".to_string(),
+            _ => vendor_id.clone(),
+        };
+
+        // Read device ID for model name
+        let device_id = tokio::fs::read_to_string(dev_path.join("device"))
+            .await
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        let model = format!("{}:{}", vendor_id, device_id);
+
+        // Read IOMMU group
+        let iommu_group = match tokio::fs::read_link(dev_path.join("iommu_group")).await {
+            Ok(target) => target
+                .file_name()
+                .and_then(|n| n.to_str())
+                .and_then(|s| s.parse::<i32>().ok())
+                .unwrap_or(-1),
+            Err(_) => -1,
+        };
+
+        // Estimate VRAM from BAR sizes in the resource file
+        let vram_bytes = estimate_vram(&dev_path).await;
+
+        gpus.push(GpuInfo {
+            pci_address,
+            model,
+            vendor,
+            vram_bytes,
+            iommu_group,
+        });
+    }
+
+    gpus
+}
+
+/// Estimate GPU VRAM by summing large BARs from the PCI resource file.
+async fn estimate_vram(dev_path: &std::path::Path) -> i64 {
+    let resource_content = match tokio::fs::read_to_string(dev_path.join("resource")).await {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+
+    let mut max_bar: i64 = 0;
+    for line in resource_content.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() >= 3
+            && let (Ok(start), Ok(end)) = (
+                i64::from_str_radix(parts[0].trim_start_matches("0x"), 16),
+                i64::from_str_radix(parts[1].trim_start_matches("0x"), 16),
+            )
+        {
+            let size = end.saturating_sub(start) + 1;
+            if size > max_bar {
+                max_bar = size;
+            }
+        }
+    }
+    max_bar
 }
 
 /// Parse /proc/meminfo to get total and available memory in bytes.

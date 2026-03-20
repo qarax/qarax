@@ -22,6 +22,9 @@ class NewVm:
     """
     Attributes:
         name (str):
+        accelerator_config (Any | Unset): Accelerator (GPU) configuration. When set, GPU-aware scheduling picks a
+            host with available GPUs matching these filters, and VFIO passthrough
+            devices are attached to the VM.
         boot_mode (BootMode | None | Unset):
         boot_source_id (None | Unset | UUID):
         boot_vcpus (int | None | Unset):
@@ -60,6 +63,7 @@ class NewVm:
     """
 
     name: str
+    accelerator_config: Any | Unset = UNSET
     boot_mode: BootMode | None | Unset = UNSET
     boot_source_id: None | Unset | UUID = UNSET
     boot_vcpus: int | None | Unset = UNSET
@@ -90,6 +94,8 @@ class NewVm:
 
     def to_dict(self) -> dict[str, Any]:
         name = self.name
+
+        accelerator_config = self.accelerator_config
 
         boot_mode: None | str | Unset
         if isinstance(self.boot_mode, Unset):
@@ -266,6 +272,8 @@ class NewVm:
                 "name": name,
             }
         )
+        if accelerator_config is not UNSET:
+            field_dict["accelerator_config"] = accelerator_config
         if boot_mode is not UNSET:
             field_dict["boot_mode"] = boot_mode
         if boot_source_id is not UNSET:
@@ -327,6 +335,8 @@ class NewVm:
 
         d = dict(src_dict)
         name = d.pop("name")
+
+        accelerator_config = d.pop("accelerator_config", UNSET)
 
         def _parse_boot_mode(data: object) -> BootMode | None | Unset:
             if data is None:
@@ -619,6 +629,7 @@ class NewVm:
 
         new_vm = cls(
             name=name,
+            accelerator_config=accelerator_config,
             boot_mode=boot_mode,
             boot_source_id=boot_source_id,
             boot_vcpus=boot_vcpus,

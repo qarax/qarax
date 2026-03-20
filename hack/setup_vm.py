@@ -258,6 +258,38 @@ def delete_existing_vm(base_url: str, name: str) -> None:
         log(f"Failed to delete existing VM (HTTP {resp.status_code}), continuing")
 
 
+def ensure_instance_type(
+    base_url: str,
+    name: str,
+    boot_vcpus: int,
+    max_vcpus: int,
+    memory_size: int,
+    accelerator_config: dict | None = None,
+) -> str:
+    """Get or create an instance type, return instance_type_id."""
+    resp = api("GET", "/instance-types", base_url)
+    resp.raise_for_status()
+    it = find_by_name(resp.json(), name)
+    if it:
+        log(f"Using existing instance type: {it['id']}")
+        return it["id"]
+
+    body = {
+        "name": name,
+        "boot_vcpus": boot_vcpus,
+        "max_vcpus": max_vcpus,
+        "memory_size": memory_size,
+    }
+    if accelerator_config:
+        body["accelerator_config"] = accelerator_config
+
+    resp = api("POST", "/instance-types", base_url, json=body)
+    resp.raise_for_status()
+    it_id = resp.text.strip().strip('"')
+    log(f"Instance type created: {it_id}")
+    return it_id
+
+
 def create_and_start_vm(
     base_url: str,
     name: str,
@@ -325,6 +357,11 @@ def main() -> None:
     parser.add_argument("--initramfs-path", default="")
     parser.add_argument("--cmdline", default="console=ttyS0")
     parser.add_argument(
+        "--gpu-instance-type",
+        action="store_true",
+        help="Create a GPU-enabled instance type (gpu.small: 4 vCPUs, 8G, 1 nvidia GPU)",
+    )
+    parser.add_argument(
         "--skip-vm",
         action="store_true",
         help="Only set up host and storage pools; skip local pool, transfers, boot source, and VM",
@@ -345,6 +382,17 @@ def main() -> None:
 
     overlaybd_pool_id = ensure_overlaybd_pool(base, "overlaybd-pool", args.overlaybd_registry_url)
     print(f"OVERLAYBD_POOL_ID={overlaybd_pool_id}")
+
+    if args.gpu_instance_type:
+        gpu_it_id = ensure_instance_type(
+            base,
+            "gpu.small",
+            boot_vcpus=4,
+            max_vcpus=4,
+            memory_size=8 * 1024 * 1024 * 1024,
+            accelerator_config={"gpu_count": 1, "gpu_vendor": "nvidia"},
+        )
+        print(f"GPU_INSTANCE_TYPE_ID={gpu_it_id}")
 
     if args.skip_vm:
         return

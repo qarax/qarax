@@ -6,7 +6,9 @@ use crate::{
     client::Client,
 };
 
-use super::{OutputFormat, format_bytes, print_output, resolve_instance_type_id};
+use super::{
+    OutputFormat, build_accelerator_config, format_bytes, print_output, resolve_instance_type_id,
+};
 
 #[derive(Args)]
 pub struct InstanceTypeArgs {
@@ -40,6 +42,18 @@ enum InstanceTypeCommand {
         /// Description
         #[arg(long)]
         description: Option<String>,
+        /// Number of GPUs to request
+        #[arg(long)]
+        gpu_count: Option<i32>,
+        /// Filter GPUs by vendor (e.g. "nvidia")
+        #[arg(long, requires = "gpu_count")]
+        gpu_vendor: Option<String>,
+        /// Filter GPUs by model (e.g. "NVIDIA A100")
+        #[arg(long, requires = "gpu_count")]
+        gpu_model: Option<String>,
+        /// Minimum GPU VRAM in bytes
+        #[arg(long, requires = "gpu_count")]
+        min_vram: Option<i64>,
     },
     /// Delete an instance type
     Delete {
@@ -107,14 +121,20 @@ pub async fn run(
             max_vcpus,
             memory,
             description,
+            gpu_count,
+            gpu_vendor,
+            gpu_model,
+            min_vram,
         } => {
+            let accelerator_config =
+                build_accelerator_config(gpu_count, &gpu_vendor, &gpu_model, min_vram);
             let new_instance_type = NewInstanceType {
                 name,
                 description,
                 boot_vcpus: vcpus,
                 max_vcpus: max_vcpus.unwrap_or(vcpus),
                 memory_size: memory,
-                accelerator_config: None,
+                accelerator_config,
             };
             let id = api::instance_types::create(client, &new_instance_type).await?;
             if !matches!(output, OutputFormat::Table) {

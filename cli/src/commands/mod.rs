@@ -141,6 +141,28 @@ pub fn format_bytes(bytes: i64) -> String {
     }
 }
 
+/// Build an accelerator_config JSON value from optional GPU CLI flags.
+pub fn build_accelerator_config(
+    gpu_count: Option<i32>,
+    gpu_vendor: &Option<String>,
+    gpu_model: &Option<String>,
+    min_vram: Option<i64>,
+) -> Option<serde_json::Value> {
+    gpu_count.map(|count| {
+        let mut config = serde_json::json!({ "gpu_count": count });
+        if let Some(v) = gpu_vendor {
+            config["gpu_vendor"] = serde_json::json!(v);
+        }
+        if let Some(m) = gpu_model {
+            config["gpu_model"] = serde_json::json!(m);
+        }
+        if let Some(vram) = min_vram {
+            config["min_vram_bytes"] = serde_json::json!(vram);
+        }
+        config
+    })
+}
+
 /// Print output in the requested format (JSON or YAML). Falls back to JSON for Table.
 pub fn print_output<T: serde::Serialize>(value: &T, format: OutputFormat) -> anyhow::Result<()> {
     match format {

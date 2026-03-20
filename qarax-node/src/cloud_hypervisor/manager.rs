@@ -34,7 +34,8 @@ use crate::rpc::node::{
     CpuTopology as ProtoCpuTopology, CpusConfig as ProtoCpusConfig, DiskConfig as ProtoDiskConfig,
     FsConfig as ProtoFsConfig, MemoryConfig as ProtoMemoryConfig, NetConfig as ProtoNetConfig,
     PayloadConfig as ProtoPayloadConfig, RateLimiterConfig as ProtoRateLimiterConfig,
-    RngConfig as ProtoRngConfig, TokenBucket as ProtoTokenBucket, VhostMode as ProtoVhostMode,
+    RngConfig as ProtoRngConfig, TokenBucket as ProtoTokenBucket,
+    VfioDeviceConfig as ProtoVfioDeviceConfig, VhostMode as ProtoVhostMode,
     VmConfig as ProtoVmConfig, VmState, VmStatus,
 };
 
@@ -1672,6 +1673,17 @@ impl VmManager {
             sdk_config.fs = Some(config.fs.iter().map(Self::proto_fs_to_sdk).collect());
         }
 
+        // VFIO devices (GPU passthrough)
+        if !config.devices.is_empty() {
+            sdk_config.devices = Some(
+                config
+                    .devices
+                    .iter()
+                    .map(Self::proto_vfio_device_to_sdk)
+                    .collect(),
+            );
+        }
+
         Ok(sdk_config)
     }
 
@@ -1821,6 +1833,47 @@ impl VmManager {
             pci_segment: fs.pci_segment,
             id: fs.id.clone(),
         }
+    }
+
+    fn proto_vfio_device_to_sdk(device: &ProtoVfioDeviceConfig) -> models::DeviceConfig {
+        models::DeviceConfig {
+            path: device.path.clone(),
+            iommu: device.iommu,
+            pci_segment: device.pci_segment,
+            id: Some(device.id.clone()),
+            x_nv_gpudirect_clique: None,
+        }
+    }
+
+    /// Add a VFIO device (e.g., GPU) to a running VM
+    pub async fn add_device(
+        &self,
+        vm_id: &str,
+        config: &ProtoVfioDeviceConfig,
+    ) -> Result<(), VmManagerError> {
+        let vms = self.vms.lock().await;
+        let instance = vms
+            .get(vm_id)
+            .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
+
+        let sdk_config = Self::proto_vfio_device_to_sdk(config);
+        let body = serde_json::to_string(&sdk_config)
+            .map_err(|e| VmManagerError::InvalidConfig(e.to_string()))?;
+
+        Self::send_api_request(
+            &instance.socket_path,
+            "PUT",
+            "/api/v1/vm.add-device",
+            Some(&body),
+        )
+        .await?;
+
+        Ok(())
+    }
+
+    /// Remove a VFIO device from a running VM
+    pub async fn remove_device(&self, vm_id: &str, device_id: &str) -> Result<(), VmManagerError> {
+        self.remove_device_by_id(vm_id, device_id).await
     }
 
     /// Add a filesystem (virtiofs) device to a running VM

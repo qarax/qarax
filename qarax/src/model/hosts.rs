@@ -298,6 +298,48 @@ LIMIT 1
     Ok(row.map(|r| host_from_row(&r)))
 }
 
+/// Pick an UP host that has enough available GPUs matching the given filters.
+pub async fn pick_up_host_with_gpu(
+    pool: &PgPool,
+    requested_memory: i64,
+    gpu_count: i32,
+    gpu_vendor: Option<&str>,
+    gpu_model: Option<&str>,
+    min_vram_bytes: Option<i64>,
+) -> Result<Option<Host>, sqlx::Error> {
+    let row = sqlx::query(
+        r#"
+SELECT h.id, h.name, h.address, h.port, h.host_user, h.password,
+       h.status, h.cloud_hypervisor_version, h.kernel_version,
+       h.total_cpus, h.total_memory_bytes, h.available_memory_bytes,
+       h.load_average, h.disk_total_bytes, h.disk_available_bytes,
+       h.resources_updated_at
+FROM hosts h
+WHERE h.status = 'UP'
+  AND (h.available_memory_bytes IS NULL OR h.available_memory_bytes >= $1)
+  AND (
+    SELECT COUNT(*) FROM host_gpus g
+    WHERE g.host_id = h.id
+      AND g.vm_id IS NULL
+      AND ($3::VARCHAR IS NULL OR g.vendor = $3)
+      AND ($4::VARCHAR IS NULL OR g.model = $4)
+      AND ($5::BIGINT IS NULL OR g.vram_bytes >= $5)
+  ) >= $2
+ORDER BY h.load_average ASC NULLS LAST
+LIMIT 1
+        "#,
+    )
+    .bind(requested_memory)
+    .bind(gpu_count as i64)
+    .bind(gpu_vendor)
+    .bind(gpu_model)
+    .bind(min_vram_bytes)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|r| host_from_row(&r)))
+}
+
 /// Return all UP hosts.
 pub async fn list_up(pool: &PgPool) -> Result<Vec<Host>, sqlx::Error> {
     let rows = sqlx::query(
