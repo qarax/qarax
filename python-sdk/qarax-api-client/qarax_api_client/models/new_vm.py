@@ -59,6 +59,7 @@ class NewVm:
         networks (list[NewVmNetwork] | None | Unset): Optional network interfaces to attach at create time (passed to
             qarax-node).
         root_disk_object_id (None | Unset | UUID):
+        tags (list[str] | None | Unset):
         vm_template_id (None | Unset | UUID):
     """
 
@@ -89,6 +90,7 @@ class NewVm:
     network_id: None | Unset | UUID = UNSET
     networks: list[NewVmNetwork] | None | Unset = UNSET
     root_disk_object_id: None | Unset | UUID = UNSET
+    tags: list[str] | None | Unset = UNSET
     vm_template_id: None | Unset | UUID = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -257,6 +259,15 @@ class NewVm:
         else:
             root_disk_object_id = self.root_disk_object_id
 
+        tags: list[str] | None | Unset
+        if isinstance(self.tags, Unset):
+            tags = UNSET
+        elif isinstance(self.tags, list):
+            tags = self.tags
+
+        else:
+            tags = self.tags
+
         vm_template_id: None | str | Unset
         if isinstance(self.vm_template_id, Unset):
             vm_template_id = UNSET
@@ -324,6 +335,8 @@ class NewVm:
             field_dict["networks"] = networks
         if root_disk_object_id is not UNSET:
             field_dict["root_disk_object_id"] = root_disk_object_id
+        if tags is not UNSET:
+            field_dict["tags"] = tags
         if vm_template_id is not UNSET:
             field_dict["vm_template_id"] = vm_template_id
 
@@ -610,6 +623,23 @@ class NewVm:
 
         root_disk_object_id = _parse_root_disk_object_id(d.pop("root_disk_object_id", UNSET))
 
+        def _parse_tags(data: object) -> list[str] | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, list):
+                    raise TypeError()
+                tags_type_0 = cast(list[str], data)
+
+                return tags_type_0
+            except (TypeError, ValueError, AttributeError, KeyError):
+                pass
+            return cast(list[str] | None | Unset, data)
+
+        tags = _parse_tags(d.pop("tags", UNSET))
+
         def _parse_vm_template_id(data: object) -> None | Unset | UUID:
             if data is None:
                 return data
@@ -655,6 +685,7 @@ class NewVm:
             network_id=network_id,
             networks=networks,
             root_disk_object_id=root_disk_object_id,
+            tags=tags,
             vm_template_id=vm_template_id,
         )
 

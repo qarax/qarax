@@ -87,6 +87,7 @@ async def test_vm_create_and_list(client):
         # Create a new VM
         new_vm = NewVm(
             name="test-vm-e2e-create",
+            tags=["e2e", "smoke"],
             hypervisor=Hypervisor.CLOUD_HV,
             boot_vcpus=1,
             max_vcpus=1,
@@ -100,6 +101,7 @@ async def test_vm_create_and_list(client):
             # Verify VM was created
             vm = await call_api(get_vm, client=c, vm_id=str(vm_id))
             assert vm.name == "test-vm-e2e-create"
+            assert vm.tags == ["e2e", "smoke"]
             assert vm.status == VmStatus.CREATED
             assert vm.boot_vcpus == 1
             assert vm.max_vcpus == 1
@@ -108,7 +110,8 @@ async def test_vm_create_and_list(client):
             # List VMs and verify our VM is in the list
             vms = await call_api(list_vms, client=c)
             assert vms is not None
-            assert any(v.id == vm.id for v in vms)
+            listed_vm = next(v for v in vms if v.id == vm.id)
+            assert listed_vm.tags == ["e2e", "smoke"]
 
         finally:
             # Cleanup

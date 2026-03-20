@@ -42,6 +42,9 @@ enum VmCommand {
         /// VM name
         #[arg(long)]
         name: String,
+        /// VM tag to attach. Repeat to set multiple tags.
+        #[arg(long = "tag")]
+        tags: Vec<String>,
         /// Number of vCPUs at boot
         #[arg(long)]
         vcpus: Option<i32>,
@@ -278,6 +281,8 @@ struct VmRow {
     memory: String,
     #[tabled(rename = "Image")]
     image_ref: String,
+    #[tabled(rename = "Tags")]
+    tags: String,
 }
 
 pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow::Result<()> {
@@ -300,6 +305,11 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
                         vcpus: format!("{}/{}", vm.boot_vcpus, vm.max_vcpus),
                         memory: format_bytes(vm.memory_size),
                         image_ref: vm.image_ref.clone().unwrap_or_else(|| "-".to_string()),
+                        tags: if vm.tags.is_empty() {
+                            "-".to_string()
+                        } else {
+                            vm.tags.join(",")
+                        },
                     })
                     .collect();
                 println!("{}", Table::new(rows).with(Style::psql()));
@@ -334,11 +344,15 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
                 if let Some(img) = &vm.image_ref {
                     println!("Image:       {img}");
                 }
+                if !vm.tags.is_empty() {
+                    println!("Tags:        {}", vm.tags.join(", "));
+                }
             }
         }
 
         VmCommand::Create {
             name,
+            tags,
             vcpus,
             max_vcpus,
             memory,
@@ -429,6 +443,7 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
 
             let new_vm = NewVm {
                 name,
+                tags: (!tags.is_empty()).then_some(tags),
                 vm_template_id,
                 instance_type_id,
                 hypervisor,

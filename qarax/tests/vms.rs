@@ -281,6 +281,87 @@ async fn test_list_vms_includes_boot_mode() {
     assert_eq!(firmware_vm["boot_mode"], "firmware");
 }
 
+#[tokio::test]
+async fn test_create_vm_with_tags_round_trips() {
+    let app = spawn_app().await;
+    let client = reqwest::Client::new();
+    ensure_host_up(&client, &app.address).await;
+
+    let vm_id = create_vm(
+        &client,
+        &app.address,
+        json!({
+            "name": "test-vm-tags",
+            "tags": ["prod", "web"],
+            "hypervisor": "cloud_hv",
+            "boot_vcpus": 1,
+            "max_vcpus": 1,
+            "memory_size": 268435456,
+            "config": {}
+        }),
+    )
+    .await;
+
+    let res = client
+        .get(format!("{}/vms/{}", &app.address, vm_id))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let vm: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(vm["tags"], json!(["prod", "web"]));
+}
+
+#[tokio::test]
+async fn test_list_vms_includes_tags() {
+    let app = spawn_app().await;
+    let client = reqwest::Client::new();
+    ensure_host_up(&client, &app.address).await;
+
+    create_vm(
+        &client,
+        &app.address,
+        json!({
+            "name": "vm-tagged",
+            "tags": ["batch", "blue"],
+            "hypervisor": "cloud_hv",
+            "boot_vcpus": 1,
+            "max_vcpus": 1,
+            "memory_size": 268435456,
+            "config": {}
+        }),
+    )
+    .await;
+
+    create_vm(
+        &client,
+        &app.address,
+        json!({
+            "name": "vm-untagged",
+            "hypervisor": "cloud_hv",
+            "boot_vcpus": 1,
+            "max_vcpus": 1,
+            "memory_size": 268435456,
+            "config": {}
+        }),
+    )
+    .await;
+
+    let res = client
+        .get(format!("{}/vms", &app.address))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let vms: Vec<serde_json::Value> = res.json().await.unwrap();
+
+    let tagged_vm = vms.iter().find(|v| v["name"] == "vm-tagged").unwrap();
+    assert_eq!(tagged_vm["tags"], json!(["batch", "blue"]));
+
+    let untagged_vm = vms.iter().find(|v| v["name"] == "vm-untagged").unwrap();
+    assert_eq!(untagged_vm["tags"], json!([]));
+}
+
 // ── Disk attachment with logical_name ───────────────────────────────────
 
 /// Helper: create a local storage pool and storage object, and attach pool to host.

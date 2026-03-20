@@ -7,6 +7,7 @@ use uuid::Uuid;
 pub struct Vm {
     pub id: Uuid,
     pub name: String,
+    pub tags: Vec<String>,
     pub host_id: Option<Uuid>,
     pub status: String,
     pub hypervisor: String,
@@ -31,6 +32,8 @@ pub struct NewVmNetwork {
 #[derive(Debug, Serialize)]
 pub struct NewVm {
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vm_template_id: Option<Uuid>,
     #[serde(skip_serializing_if = "Option::is_none")]

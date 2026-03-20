@@ -2490,6 +2490,12 @@ components:
           - string
           - 'null'
           format: uuid
+        tags:
+          type:
+          - array
+          - 'null'
+          items:
+            type: string
         vm_template_id:
           type:
           - string
@@ -2986,6 +2992,7 @@ components:
       required:
       - id
       - name
+      - tags
       - status
       - hypervisor
       - boot_mode
@@ -3074,6 +3081,10 @@ components:
           type: string
         status:
           $ref: '#/components/schemas/VmStatus'
+        tags:
+          type: array
+          items:
+            type: string
     VmDisk:
       type: object
       required:

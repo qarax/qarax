@@ -33,6 +33,7 @@ class Vm:
         memory_thp (bool):
         name (str):
         status (VmStatus):
+        tags (list[str]):
         boot_source_id (None | Unset | UUID):
         cloud_init_meta_data (None | str | Unset):
         cloud_init_network_config (None | str | Unset):
@@ -60,6 +61,7 @@ class Vm:
     memory_thp: bool
     name: str
     status: VmStatus
+    tags: list[str]
     boot_source_id: None | Unset | UUID = UNSET
     cloud_init_meta_data: None | str | Unset = UNSET
     cloud_init_network_config: None | str | Unset = UNSET
@@ -102,6 +104,8 @@ class Vm:
         name = self.name
 
         status = self.status.value
+
+        tags = self.tags
 
         boot_source_id: None | str | Unset
         if isinstance(self.boot_source_id, Unset):
@@ -182,6 +186,7 @@ class Vm:
                 "memory_thp": memory_thp,
                 "name": name,
                 "status": status,
+                "tags": tags,
             }
         )
         if boot_source_id is not UNSET:
@@ -239,6 +244,8 @@ class Vm:
         name = d.pop("name")
 
         status = VmStatus(d.pop("status"))
+
+        tags = cast(list[str], d.pop("tags"))
 
         def _parse_boot_source_id(data: object) -> None | Unset | UUID:
             if data is None:
@@ -355,6 +362,7 @@ class Vm:
             memory_thp=memory_thp,
             name=name,
             status=status,
+            tags=tags,
             boot_source_id=boot_source_id,
             cloud_init_meta_data=cloud_init_meta_data,
             cloud_init_network_config=cloud_init_network_config,

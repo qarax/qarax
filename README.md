@@ -241,6 +241,7 @@ curl -s -X POST http://localhost:8000/vms \
   -H 'Content-Type: application/json' \
   -d '{
     "name": "my-vm",
+    "tags": ["dev", "ci"],
     "hypervisor": "cloud_hv",
     "boot_vcpus": 2,
     "max_vcpus": 2,
@@ -251,6 +252,7 @@ curl -s -X POST http://localhost:8000/vms \
 ```
 
 `memory_size` is in bytes (536870912 = 512 MiB).
+`tags` is optional and accepts a list of strings for grouping or ownership metadata.
 
 **Using a template + instance type:**
 

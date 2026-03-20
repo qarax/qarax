@@ -23,6 +23,7 @@ pub struct CpuTopology {
 pub struct Vm {
     pub id: Uuid,
     pub name: String,
+    pub tags: Vec<String>,
     pub host_id: Option<Uuid>,
     pub status: VmStatus,
     pub hypervisor: Hypervisor,
@@ -62,6 +63,7 @@ pub struct Vm {
 pub struct VmRow {
     pub id: Uuid,
     pub name: String,
+    pub tags: Vec<String>,
     pub host_id: Option<Uuid>,
     pub status: VmStatus,
     pub hypervisor: Hypervisor,
@@ -99,6 +101,7 @@ impl From<VmRow> for Vm {
         Vm {
             id: row.id,
             name: row.name,
+            tags: row.tags,
             status: row.status,
             host_id: row.host_id,
             hypervisor: row.hypervisor,
@@ -222,6 +225,7 @@ pub struct NewVmNetwork {
 #[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
 pub struct NewVm {
     pub name: String,
+    pub tags: Option<Vec<String>>,
     pub vm_template_id: Option<Uuid>,
     pub instance_type_id: Option<Uuid>,
     pub hypervisor: Option<Hypervisor>,
@@ -280,6 +284,7 @@ pub struct NewVm {
 #[derive(Debug, Clone)]
 pub struct ResolvedNewVm {
     pub name: String,
+    pub tags: Vec<String>,
     pub hypervisor: Hypervisor,
     pub boot_vcpus: i32,
     pub max_vcpus: i32,
@@ -330,6 +335,7 @@ fn merge_config(
 pub async fn resolve_create_request(pool: &PgPool, request: NewVm) -> Result<ResolvedNewVm, Error> {
     let NewVm {
         name,
+        tags,
         vm_template_id,
         instance_type_id,
         hypervisor,
@@ -415,6 +421,7 @@ pub async fn resolve_create_request(pool: &PgPool, request: NewVm) -> Result<Res
 
     Ok(ResolvedNewVm {
         name,
+        tags: tags.unwrap_or_default(),
         hypervisor,
         boot_vcpus,
         max_vcpus,
@@ -566,6 +573,7 @@ pub async fn list(pool: &PgPool, name_filter: Option<&str>) -> Result<Vec<Vm>, s
         r#"
 SELECT id,
         name,
+        tags as "tags!",
         status as "status: _",
         host_id as "host_id?",
         hypervisor as "hypervisor: _",
@@ -607,6 +615,7 @@ pub async fn get(pool: &PgPool, vm_id: Uuid) -> Result<Vm, sqlx::Error> {
         r#"
 SELECT id,
         name,
+        tags as "tags!",
         status as "status: _",
         host_id as "host_id?",
         hypervisor as "hypervisor: _",
@@ -669,7 +678,7 @@ pub async fn create_tx_with_status(
     sqlx::query(
         r#"
 INSERT INTO vms (
-    id, name, status, hypervisor,
+    id, name, tags, status, hypervisor,
     boot_vcpus, max_vcpus, cpu_topology, kvm_hyperv,
     memory_size, memory_hotplug_size, memory_mergeable, memory_shared,
     memory_hugepages, memory_hugepage_size, memory_prefault, memory_thp,
@@ -678,18 +687,19 @@ INSERT INTO vms (
     config
 )
 VALUES (
-    $1, $2, $3, $4,
-    $5, $6, $7, $8,
-    $9, $10, $11, $12,
-    $13, $14, $15, $16,
-    $17, $18, $19, $20,
-    $21, $22, $23,
-    $24
+    $1, $2, $3, $4, $5,
+    $6, $7, $8, $9,
+    $10, $11, $12, $13,
+    $14, $15, $16, $17,
+    $18, $19, $20, $21,
+    $22, $23, $24,
+    $25
 )
         "#,
     )
     .bind(id)
     .bind(&vm.name)
+    .bind(&vm.tags)
     .bind(status)
     .bind(vm.hypervisor.clone())
     .bind(vm.boot_vcpus)
@@ -723,6 +733,7 @@ pub async fn list_active(pool: &PgPool) -> Result<Vec<Vm>, sqlx::Error> {
         r#"
 SELECT id,
         name,
+        tags,
         status,
         host_id,
         hypervisor,
