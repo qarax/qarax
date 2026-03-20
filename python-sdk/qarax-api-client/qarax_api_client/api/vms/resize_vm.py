@@ -7,51 +7,46 @@ import httpx
 
 from ... import errors
 from ...client import AuthenticatedClient, Client
-from ...models.snapshot import Snapshot
-from ...types import UNSET, Response, Unset
+from ...models.vm import Vm
+from ...models.vm_resize_request import VmResizeRequest
+from ...types import Response
 
 
 def _get_kwargs(
     vm_id: UUID,
     *,
-    name: None | str | Unset = UNSET,
+    body: VmResizeRequest,
 ) -> dict[str, Any]:
-    params: dict[str, Any] = {}
-
-    json_name: None | str | Unset
-    if isinstance(name, Unset):
-        json_name = UNSET
-    else:
-        json_name = name
-    params["name"] = json_name
-
-    params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
+    headers: dict[str, Any] = {}
 
     _kwargs: dict[str, Any] = {
-        "method": "get",
-        "url": "/vms/{vm_id}/snapshots".format(
+        "method": "put",
+        "url": "/vms/{vm_id}/resize".format(
             vm_id=quote(str(vm_id), safe=""),
         ),
-        "params": params,
     }
 
+    _kwargs["json"] = body.to_dict()
+
+    headers["Content-Type"] = "application/json"
+
+    _kwargs["headers"] = headers
     return _kwargs
 
 
-def _parse_response(*, client: AuthenticatedClient | Client, response: httpx.Response) -> Any | list[Snapshot] | None:
+def _parse_response(*, client: AuthenticatedClient | Client, response: httpx.Response) -> Any | Vm | None:
     if response.status_code == 200:
-        response_200 = []
-        _response_200 = response.json()
-        for response_200_item_data in _response_200:
-            response_200_item = Snapshot.from_dict(response_200_item_data)
-
-            response_200.append(response_200_item)
+        response_200 = Vm.from_dict(response.json())
 
         return response_200
 
     if response.status_code == 404:
         response_404 = cast(Any, None)
         return response_404
+
+    if response.status_code == 422:
+        response_422 = cast(Any, None)
+        return response_422
 
     if response.status_code == 500:
         response_500 = cast(Any, None)
@@ -63,9 +58,7 @@ def _parse_response(*, client: AuthenticatedClient | Client, response: httpx.Res
         return None
 
 
-def _build_response(
-    *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> Response[Any | list[Snapshot]]:
+def _build_response(*, client: AuthenticatedClient | Client, response: httpx.Response) -> Response[Any | Vm]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -78,24 +71,28 @@ def sync_detailed(
     vm_id: UUID,
     *,
     client: AuthenticatedClient | Client,
-    name: None | str | Unset = UNSET,
-) -> Response[Any | list[Snapshot]]:
+    body: VmResizeRequest,
+) -> Response[Any | Vm]:
     """
     Args:
         vm_id (UUID):
-        name (None | str | Unset):
+        body (VmResizeRequest): Request body for `PUT /vms/{vm_id}/resize`.
+
+            At least one of `desired_vcpus` or `desired_ram` must be provided.
+            - `desired_vcpus` must be in the range `[boot_vcpus, max_vcpus]`.
+            - `desired_ram` must be in the range `[memory_size, memory_size + memory_hotplug_size]`.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Any | list[Snapshot]]
+        Response[Any | Vm]
     """
 
     kwargs = _get_kwargs(
         vm_id=vm_id,
-        name=name,
+        body=body,
     )
 
     response = client.get_httpx_client().request(
@@ -109,25 +106,29 @@ def sync(
     vm_id: UUID,
     *,
     client: AuthenticatedClient | Client,
-    name: None | str | Unset = UNSET,
-) -> Any | list[Snapshot] | None:
+    body: VmResizeRequest,
+) -> Any | Vm | None:
     """
     Args:
         vm_id (UUID):
-        name (None | str | Unset):
+        body (VmResizeRequest): Request body for `PUT /vms/{vm_id}/resize`.
+
+            At least one of `desired_vcpus` or `desired_ram` must be provided.
+            - `desired_vcpus` must be in the range `[boot_vcpus, max_vcpus]`.
+            - `desired_ram` must be in the range `[memory_size, memory_size + memory_hotplug_size]`.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Any | list[Snapshot]
+        Any | Vm
     """
 
     return sync_detailed(
         vm_id=vm_id,
         client=client,
-        name=name,
+        body=body,
     ).parsed
 
 
@@ -135,24 +136,28 @@ async def asyncio_detailed(
     vm_id: UUID,
     *,
     client: AuthenticatedClient | Client,
-    name: None | str | Unset = UNSET,
-) -> Response[Any | list[Snapshot]]:
+    body: VmResizeRequest,
+) -> Response[Any | Vm]:
     """
     Args:
         vm_id (UUID):
-        name (None | str | Unset):
+        body (VmResizeRequest): Request body for `PUT /vms/{vm_id}/resize`.
+
+            At least one of `desired_vcpus` or `desired_ram` must be provided.
+            - `desired_vcpus` must be in the range `[boot_vcpus, max_vcpus]`.
+            - `desired_ram` must be in the range `[memory_size, memory_size + memory_hotplug_size]`.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Any | list[Snapshot]]
+        Response[Any | Vm]
     """
 
     kwargs = _get_kwargs(
         vm_id=vm_id,
-        name=name,
+        body=body,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -164,25 +169,29 @@ async def asyncio(
     vm_id: UUID,
     *,
     client: AuthenticatedClient | Client,
-    name: None | str | Unset = UNSET,
-) -> Any | list[Snapshot] | None:
+    body: VmResizeRequest,
+) -> Any | Vm | None:
     """
     Args:
         vm_id (UUID):
-        name (None | str | Unset):
+        body (VmResizeRequest): Request body for `PUT /vms/{vm_id}/resize`.
+
+            At least one of `desired_vcpus` or `desired_ram` must be provided.
+            - `desired_vcpus` must be in the range `[boot_vcpus, max_vcpus]`.
+            - `desired_ram` must be in the range `[memory_size, memory_size + memory_hotplug_size]`.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Any | list[Snapshot]
+        Any | Vm
     """
 
     return (
         await asyncio_detailed(
             vm_id=vm_id,
             client=client,
-            name=name,
+            body=body,
         )
     ).parsed

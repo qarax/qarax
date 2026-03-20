@@ -30,6 +30,12 @@ mod vm_template;
 
 pub type Result<T, E = Error> = ::std::result::Result<T, E>;
 
+#[derive(serde::Deserialize, utoipa::IntoParams, Debug)]
+pub struct NameQuery {
+    /// Optional name filter for list queries
+    pub name: Option<String>,
+}
+
 #[derive(OpenApi)]
 #[openapi(
     paths(
@@ -63,6 +69,7 @@ pub type Result<T, E = Error> = ::std::result::Result<T, E>;
         vm::handler::remove_disk,
         vm::handler::add_nic,
         vm::handler::remove_nic,
+        vm::handler::resize_vm,
         storage_object::handler::list,
         storage_object::handler::get,
         storage_object::handler::create,
@@ -147,6 +154,7 @@ pub type Result<T, E = Error> = ::std::result::Result<T, E>;
             crate::handlers::vm::handler::RestoreRequest,
             crate::handlers::vm::handler::VmMigrateRequest,
             crate::handlers::vm::handler::VmMigrateResponse,
+            crate::handlers::vm::handler::VmResizeRequest,
             crate::handlers::storage_pool::handler::ImportToPoolRequest,
             crate::handlers::storage_pool::handler::ImportToPoolResponse,
             crate::model::networks::Network,
@@ -261,6 +269,10 @@ fn vms() -> Router {
         )
         .route("/vms/{vm_id}/restore", post(vm::handler::restore))
         .route("/vms/{vm_id}/migrate", post(vm::handler::migrate))
+        .route(
+            "/vms/{vm_id}/resize",
+            axum::routing::put(vm::handler::resize_vm),
+        )
 }
 
 fn instance_types() -> Router {

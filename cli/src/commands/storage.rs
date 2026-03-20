@@ -102,7 +102,7 @@ pub async fn run_pool(
 ) -> anyhow::Result<()> {
     match args.command {
         StoragePoolCommand::List => {
-            let pools = api::storage::list_pools(client).await?;
+            let pools = api::storage::list_pools(client, None).await?;
             if !matches!(output, OutputFormat::Table) {
                 print_output(&pools, output)?;
             } else {
@@ -318,7 +318,7 @@ pub async fn run_object(
 ) -> anyhow::Result<()> {
     match args.command {
         StorageObjectCommand::List => {
-            let objects = api::storage::list_objects(client).await?;
+            let objects = api::storage::list_objects(client, None).await?;
             if !matches!(output, OutputFormat::Table) {
                 print_output(&objects, output)?;
             } else {

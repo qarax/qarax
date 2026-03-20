@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\nSELECT id,\n        name,\n        storage_pool_id,\n        object_type as \"object_type: _\",\n        size_bytes,\n        config as \"config: _\",\n        parent_id as \"parent_id?\"\nFROM storage_objects\n        ",
+  "query": "\nSELECT id,\n        name,\n        storage_pool_id,\n        object_type as \"object_type: _\",\n        size_bytes,\n        config as \"config: _\",\n        parent_id as \"parent_id?\"\nFROM storage_objects\nWHERE ($1::text IS NULL OR name = $1)\n        ",
   "describe": {
     "columns": [
       {
@@ -54,7 +54,9 @@
       }
     ],
     "parameters": {
-      "Left": []
+      "Left": [
+        "Text"
+      ]
     },
     "nullable": [
       false,
@@ -66,5 +68,5 @@
       true
     ]
   },
-  "hash": "80e2e657bdd664d931d0d5009be9a06727f5137d5c0052130af68df22a7f918f"
+  "hash": "8ddaefa3cae3ac996dc4819395ca1a385f8f98db14225545fd33255c2e5ec79c"
 }

@@ -4,8 +4,12 @@ use crate::client::Client;
 
 use super::models::{DeployHostRequest, Host, HostGpu, NewHost};
 
-pub async fn list(client: &Client) -> anyhow::Result<Vec<Host>> {
-    client.get("/hosts").await
+pub async fn list(client: &Client, name: Option<&str>) -> anyhow::Result<Vec<Host>> {
+    let path = match name {
+        Some(n) => format!("/hosts?name={n}"),
+        None => "/hosts".to_string(),
+    };
+    client.get(&path).await
 }
 
 /// Add a new host. Returns the new host's UUID as a plain-text string.

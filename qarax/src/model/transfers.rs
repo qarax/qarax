@@ -172,7 +172,11 @@ WHERE id = $1
     Ok(row.into())
 }
 
-pub async fn list_by_pool(pool: &PgPool, pool_id: Uuid) -> Result<Vec<Transfer>, sqlx::Error> {
+pub async fn list_by_pool(
+    pool: &PgPool,
+    pool_id: Uuid,
+    name_filter: Option<&str>,
+) -> Result<Vec<Transfer>, sqlx::Error> {
     let rows: Vec<TransferRow> = sqlx::query_as!(
         TransferRow,
         r#"
@@ -192,10 +196,11 @@ SELECT id,
        started_at as "started_at?",
        completed_at as "completed_at?"
 FROM transfers
-WHERE storage_pool_id = $1
+WHERE storage_pool_id = $1 AND ($2::text IS NULL OR name = $2)
 ORDER BY created_at DESC
         "#,
-        pool_id
+        pool_id,
+        name_filter
     )
     .fetch_all(pool)
     .await?;

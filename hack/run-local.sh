@@ -617,7 +617,7 @@ if [[ $VM_MODE -eq 1 ]]; then
 	echo -e "${GREEN}Qarax stack ready (node running in libvirt VM).${NC}"
 	echo ""
 	print_api_endpoints
-	print_overlaybd_workflow "${OVERLAYBD_POOL_ID}"
+	print_overlaybd_workflow "overlaybd-pool"
 	print_command_section "Other useful commands:" \
 		"cargo run -p cli vm list" \
 		"cargo run -p cli vm get <VM_ID>" \

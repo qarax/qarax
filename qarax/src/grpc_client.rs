@@ -22,9 +22,9 @@ use node::{
     DetachNetworkRequest, DetachStoragePoolRequest, DiskConfig, DownloadFileRequest, FsConfig,
     ImportOverlayBdRequest, ImportOverlayBdResponse, MemoryConfig, NetConfig, NodeInfo,
     OciImageRequest, OciImageResponse, PayloadConfig, ReceiveMigrationRequest, RemoveDeviceRequest,
-    RestoreVmRequest, SendMigrationRequest, SnapshotVmRequest, StoragePoolKind, VfioDeviceConfig,
-    VmConfig, VmCounters, VmId, VmState, file_transfer_service_client::FileTransferServiceClient,
-    vm_service_client::VmServiceClient,
+    ResizeVmRequest, RestoreVmRequest, SendMigrationRequest, SnapshotVmRequest, StoragePoolKind,
+    VfioDeviceConfig, VmConfig, VmCounters, VmId, VmState,
+    file_transfer_service_client::FileTransferServiceClient, vm_service_client::VmServiceClient,
 };
 
 /// Client for communicating with qarax-node via gRPC
@@ -48,6 +48,10 @@ pub struct CreateVmRequest {
     pub fs_configs: Vec<FsConfig>,
     /// Whether to enable shared memory (required for vhost-user-fs)
     pub memory_shared: bool,
+    /// Maximum hotplug memory in bytes (enables memory hotplug when > 0)
+    pub memory_hotplug_size: Option<i64>,
+    /// Whether to use hugepages for VM memory
+    pub memory_hugepages: bool,
     /// Disk configurations resolved from vm_disks + storage objects
     pub disks: Vec<DiskConfig>,
     /// Cloud-init user-data (raw YAML)
@@ -220,6 +224,8 @@ impl NodeClient {
             cmdline,
             fs_configs,
             memory_shared,
+            memory_hotplug_size,
+            memory_hugepages,
             disks: extra_disks,
             cloud_init_user_data,
             cloud_init_meta_data,
@@ -268,10 +274,10 @@ impl NodeClient {
             }),
             memory: Some(MemoryConfig {
                 size: memory_size,
-                hotplug_size: None,
+                hotplug_size: memory_hotplug_size,
                 mergeable: None,
                 shared: if memory_shared { Some(true) } else { None },
-                hugepages: None,
+                hugepages: if memory_hugepages { Some(true) } else { None },
                 hugepage_size: None,
                 prefault: None,
                 thp: None,
@@ -963,6 +969,30 @@ impl NodeClient {
             })
             .await
             .context("Failed to hotunplug network device on qarax-node")?;
+        Ok(())
+    }
+
+    /// Resize vCPUs and/or memory of a running VM
+    #[instrument(skip(self))]
+    pub async fn resize_vm(
+        &self,
+        vm_id: Uuid,
+        desired_vcpus: Option<i32>,
+        desired_ram: Option<i64>,
+    ) -> Result<()> {
+        debug!(
+            "Resizing VM {} on node {}: vcpus={:?} ram={:?}",
+            vm_id, self.address, desired_vcpus, desired_ram
+        );
+        let mut client = self.connect_vm_service().await?;
+        client
+            .resize_vm(ResizeVmRequest {
+                vm_id: vm_id.to_string(),
+                desired_vcpus,
+                desired_ram,
+            })
+            .await
+            .context("Failed to resize VM on qarax-node")?;
         Ok(())
     }
 

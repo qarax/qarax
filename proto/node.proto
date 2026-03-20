@@ -409,6 +409,9 @@ service VmService {
   rpc AddDevice(AddDeviceRequest) returns (google.protobuf.Empty) {}
   rpc RemoveVfioDevice(RemoveDeviceRequest) returns (google.protobuf.Empty) {}
 
+  // CPU and memory hotplug (resize running VM)
+  rpc ResizeVm(ResizeVmRequest) returns (google.protobuf.Empty) {}
+
   // OCI image management
   rpc PullImage(OciImageRequest) returns (OciImageResponse) {}
   rpc GetImageStatus(OciImageRequest) returns (OciImageResponse) {}
@@ -480,6 +483,12 @@ message AddDeviceRequest {
 message RemoveDeviceRequest {
   string vm_id = 1;
   string device_id = 2;
+}
+
+message ResizeVmRequest {
+  string vm_id = 1;
+  optional int32 desired_vcpus = 2;  // Target vCPU count (must be within boot_vcpus..max_vcpus)
+  optional int64 desired_ram = 3;    // Target memory in bytes (must be within size..size+hotplug_size)
 }
 
 // ============================================================================

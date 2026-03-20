@@ -102,13 +102,15 @@ impl From<IpAllocationRow> for IpAllocation {
 
 // ─── CRUD ─────────────────────────────────────────────────────────────────────
 
-pub async fn list(pool: &PgPool) -> Result<Vec<Network>, sqlx::Error> {
+pub async fn list(pool: &PgPool, name_filter: Option<&str>) -> Result<Vec<Network>, sqlx::Error> {
     let rows: Vec<NetworkRow> = sqlx::query_as::<_, NetworkRow>(
         r#"
 SELECT id, name, subnet::text, gateway::text, dns::text, type, status
 FROM networks
+WHERE ($1::text IS NULL OR name = $1)
         "#,
     )
+    .bind(name_filter)
     .fetch_all(pool)
     .await?;
 

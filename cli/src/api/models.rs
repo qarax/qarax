@@ -381,6 +381,16 @@ pub struct Job {
     pub updated_at: String,
 }
 
+// ─── VM resize ────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct VmResizeRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub desired_vcpus: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub desired_ram: Option<i64>,
+}
+
 // ─── VM disks ─────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize)]

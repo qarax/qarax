@@ -4,8 +4,12 @@ use crate::client::Client;
 
 use super::models::{BootSource, NewBootSource};
 
-pub async fn list(client: &Client) -> anyhow::Result<Vec<BootSource>> {
-    client.get("/boot-sources").await
+pub async fn list(client: &Client, name: Option<&str>) -> anyhow::Result<Vec<BootSource>> {
+    let path = match name {
+        Some(n) => format!("/boot-sources?name={n}"),
+        None => "/boot-sources".to_string(),
+    };
+    client.get(&path).await
 }
 
 pub async fn get(client: &Client, id: Uuid) -> anyhow::Result<BootSource> {

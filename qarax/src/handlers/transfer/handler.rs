@@ -133,7 +133,8 @@ pub async fn create(
     get,
     path = "/storage-pools/{pool_id}/transfers",
     params(
-        ("pool_id" = uuid::Uuid, Path, description = "Storage pool unique identifier")
+        ("pool_id" = uuid::Uuid, Path, description = "Storage pool unique identifier"),
+        crate::handlers::NameQuery
     ),
     responses(
         (status = 200, description = "List transfers for this pool", body = Vec<Transfer>),
@@ -145,8 +146,9 @@ pub async fn create(
 pub async fn list(
     Extension(env): Extension<App>,
     Path(pool_id): Path<Uuid>,
+    axum::extract::Query(query): axum::extract::Query<crate::handlers::NameQuery>,
 ) -> Result<ApiResponse<Vec<Transfer>>> {
-    let transfers = transfers::list_by_pool(env.pool(), pool_id).await?;
+    let transfers = transfers::list_by_pool(env.pool(), pool_id, query.name.as_deref()).await?;
     Ok(ApiResponse {
         data: transfers,
         code: StatusCode::OK,

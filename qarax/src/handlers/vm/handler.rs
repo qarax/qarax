@@ -175,6 +175,7 @@ async fn host_for_vm(env: &App, vm_id: Uuid) -> Result<Host> {
 #[utoipa::path(
     get,
     path = "/vms",
+    params(crate::handlers::NameQuery),
     responses(
         (status = 200, description = "List all VMs", body = Vec<Vm>),
         (status = 500, description = "Internal server error")
@@ -182,8 +183,11 @@ async fn host_for_vm(env: &App, vm_id: Uuid) -> Result<Host> {
     tag = "vms"
 )]
 #[instrument(skip(env))]
-pub async fn list(Extension(env): Extension<App>) -> Result<ApiResponse<Vec<Vm>>> {
-    let hosts = vms::list(env.pool()).await?;
+pub async fn list(
+    Extension(env): Extension<App>,
+    axum::extract::Query(query): axum::extract::Query<crate::handlers::NameQuery>,
+) -> Result<ApiResponse<Vec<Vm>>> {
+    let hosts = vms::list(env.pool(), query.name.as_deref()).await?;
     Ok(ApiResponse {
         data: hosts,
         code: StatusCode::OK,
@@ -871,7 +875,8 @@ pub async fn resume(
     get,
     path = "/vms/{vm_id}/snapshots",
     params(
-        ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier")
+        ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier"),
+        crate::handlers::NameQuery
     ),
     responses(
         (status = 200, description = "List snapshots for a VM", body = Vec<Snapshot>),
@@ -884,11 +889,12 @@ pub async fn resume(
 pub async fn list_snapshots(
     Extension(env): Extension<App>,
     Path(vm_id): Path<Uuid>,
+    axum::extract::Query(query): axum::extract::Query<crate::handlers::NameQuery>,
 ) -> Result<ApiResponse<Vec<Snapshot>>> {
-    // Verify VM exists
-    vms::get(env.pool(), vm_id).await?;
+    // Return 404 if VM doesn't exist
+    let _vm = vms::get(env.pool(), vm_id).await?;
 
-    let list = snapshots::list_for_vm(env.pool(), vm_id).await?;
+    let list = snapshots::list_for_vm(env.pool(), vm_id, query.name.as_deref()).await?;
 
     Ok(ApiResponse {
         data: list,
@@ -1668,6 +1674,8 @@ async fn build_create_vm_request(env: &App, vm: &Vm) -> Result<CreateVmRequest> 
         cmdline,
         fs_configs,
         memory_shared: memory_shared || has_vhost_user_network,
+        memory_hotplug_size: vm.memory_hotplug_size,
+        memory_hugepages: vm.memory_hugepages,
         disks: resolved_disks,
         cloud_init_user_data: vm.cloud_init_user_data.clone(),
         cloud_init_meta_data,
@@ -2303,14 +2311,18 @@ pub async fn migrate(
             }),
             memory: Some(crate::grpc_client::node::MemoryConfig {
                 size: create_req.memory_size,
-                hotplug_size: None,
+                hotplug_size: create_req.memory_hotplug_size,
                 mergeable: None,
                 shared: if create_req.memory_shared {
                     Some(true)
                 } else {
                     None
                 },
-                hugepages: None,
+                hugepages: if create_req.memory_hugepages {
+                    Some(true)
+                } else {
+                    None
+                },
                 hugepage_size: None,
                 prefault: None,
                 thp: None,
@@ -2403,6 +2415,112 @@ pub async fn migrate(
     Ok(ApiResponse {
         data: VmMigrateResponse { job_id },
         code: StatusCode::ACCEPTED,
+    }
+    .into_response())
+}
+
+/// Request body for `PUT /vms/{vm_id}/resize`.
+///
+/// At least one of `desired_vcpus` or `desired_ram` must be provided.
+/// - `desired_vcpus` must be in the range `[boot_vcpus, max_vcpus]`.
+/// - `desired_ram` must be in the range `[memory_size, memory_size + memory_hotplug_size]`.
+/// - On x86_64, Cloud Hypervisor ACPI memory hotplug only supports 128 MiB increments.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct VmResizeRequest {
+    /// Target vCPU count
+    pub desired_vcpus: Option<i32>,
+    /// Target memory size in bytes
+    pub desired_ram: Option<i64>,
+}
+
+#[utoipa::path(
+    put,
+    path = "/vms/{vm_id}/resize",
+    params(
+        ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier")
+    ),
+    request_body = VmResizeRequest,
+    responses(
+        (status = 200, description = "VM resized successfully", body = Vm),
+        (status = 404, description = "VM not found"),
+        (status = 422, description = "VM not running, or resize parameters out of range"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "vms"
+)]
+#[instrument(skip(env))]
+pub async fn resize_vm(
+    Extension(env): Extension<App>,
+    Path(vm_id): Path<Uuid>,
+    Json(req): Json<VmResizeRequest>,
+) -> Result<axum::response::Response> {
+    use axum::response::IntoResponse as _;
+    const HOTPLUG_MEMORY_INCREMENT_BYTES: i64 = 128 * 1024 * 1024;
+
+    if req.desired_vcpus.is_none() && req.desired_ram.is_none() {
+        return Err(crate::errors::Error::UnprocessableEntity(
+            "At least one of desired_vcpus or desired_ram must be provided".into(),
+        ));
+    }
+
+    let vm = vms::get(env.pool(), vm_id).await?;
+    if vm.status != VmStatus::Running {
+        return Err(crate::errors::Error::UnprocessableEntity(
+            "VM must be running to resize CPU or memory".into(),
+        ));
+    }
+
+    if let Some(vcpus) = req.desired_vcpus {
+        let valid_range = vm.boot_vcpus..=vm.max_vcpus;
+        if !valid_range.contains(&vcpus) {
+            return Err(crate::errors::Error::UnprocessableEntity(format!(
+                "desired_vcpus {} is out of range [{}, {}]",
+                vcpus, vm.boot_vcpus, vm.max_vcpus
+            )));
+        }
+    }
+
+    if let Some(ram) = req.desired_ram {
+        let max_ram = vm.memory_size + vm.memory_hotplug_size.unwrap_or(0);
+        let valid_range = vm.memory_size..=max_ram;
+        if !valid_range.contains(&ram) {
+            return Err(crate::errors::Error::UnprocessableEntity(format!(
+                "desired_ram {} is out of range [{}, {}]",
+                ram, vm.memory_size, max_ram
+            )));
+        }
+
+        let hotplug_addition = ram - vm.memory_size;
+        if hotplug_addition % HOTPLUG_MEMORY_INCREMENT_BYTES != 0 {
+            return Err(crate::errors::Error::UnprocessableEntity(format!(
+                "desired_ram {} requires a hotplug addition of {} bytes, which is not a multiple of {} bytes",
+                ram, hotplug_addition, HOTPLUG_MEMORY_INCREMENT_BYTES
+            )));
+        }
+    }
+
+    let host = host_for_vm(&env, vm_id).await?;
+    NodeClient::new(&host.address, host.port as u16)
+        .resize_vm(vm_id, req.desired_vcpus, req.desired_ram)
+        .await
+        .map_err(|e| {
+            error!("Failed to resize VM {}: {}", vm_id, e);
+            crate::errors::Error::InternalServerError
+        })?;
+
+    vms::update_resize(env.pool(), vm_id, req.desired_vcpus, req.desired_ram).await?;
+
+    // Update the already-fetched vm struct rather than doing another SELECT
+    let mut updated_vm = vm;
+    if let Some(vcpus) = req.desired_vcpus {
+        updated_vm.boot_vcpus = vcpus;
+    }
+    if let Some(ram) = req.desired_ram {
+        updated_vm.memory_size = ram;
+    }
+    Ok(ApiResponse {
+        data: updated_vm,
+        code: StatusCode::OK,
     }
     .into_response())
 }

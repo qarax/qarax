@@ -1549,6 +1549,40 @@ impl VmManager {
         self.remove_device_by_id(vm_id, device_id).await
     }
 
+    /// Resize vCPUs and/or memory of a running VM
+    pub async fn resize_vm(
+        &self,
+        vm_id: &str,
+        desired_vcpus: Option<i32>,
+        desired_ram: Option<i64>,
+    ) -> Result<(), VmManagerError> {
+        let socket_path = {
+            let vms = self.vms.lock().await;
+            let instance = vms
+                .get(vm_id)
+                .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
+            instance.socket_path.clone()
+        };
+
+        #[derive(serde::Serialize)]
+        struct VmResizeBody {
+            #[serde(skip_serializing_if = "Option::is_none")]
+            desired_vcpus: Option<i32>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            desired_ram: Option<i64>,
+        }
+
+        let body = serde_json::to_string(&VmResizeBody {
+            desired_vcpus,
+            desired_ram,
+        })
+        .map_err(|e| VmManagerError::InvalidConfig(e.to_string()))?;
+
+        Self::send_api_request(&socket_path, "PUT", "/api/v1/vm.resize", Some(&body)).await?;
+
+        Ok(())
+    }
+
     /// Send a raw API request to Cloud Hypervisor
     async fn send_api_request(
         socket_path: &PathBuf,

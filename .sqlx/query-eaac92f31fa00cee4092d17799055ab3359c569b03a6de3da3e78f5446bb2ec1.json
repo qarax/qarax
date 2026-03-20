@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\nSELECT id,\n       name,\n       transfer_type as \"transfer_type: _\",\n       status as \"status: _\",\n       source,\n       storage_pool_id,\n       object_type as \"object_type: _\",\n       storage_object_id as \"storage_object_id?\",\n       total_bytes as \"total_bytes?\",\n       transferred_bytes as \"transferred_bytes?\",\n       error_message as \"error_message?\",\n       created_at as \"created_at?\",\n       updated_at as \"updated_at?\",\n       started_at as \"started_at?\",\n       completed_at as \"completed_at?\"\nFROM transfers\nWHERE storage_pool_id = $1\nORDER BY created_at DESC\n        ",
+  "query": "\nSELECT id,\n       name,\n       transfer_type as \"transfer_type: _\",\n       status as \"status: _\",\n       source,\n       storage_pool_id,\n       object_type as \"object_type: _\",\n       storage_object_id as \"storage_object_id?\",\n       total_bytes as \"total_bytes?\",\n       transferred_bytes as \"transferred_bytes?\",\n       error_message as \"error_message?\",\n       created_at as \"created_at?\",\n       updated_at as \"updated_at?\",\n       started_at as \"started_at?\",\n       completed_at as \"completed_at?\"\nFROM transfers\nWHERE storage_pool_id = $1 AND ($2::text IS NULL OR name = $2)\nORDER BY created_at DESC\n        ",
   "describe": {
     "columns": [
       {
@@ -117,7 +117,8 @@
     ],
     "parameters": {
       "Left": [
-        "Uuid"
+        "Uuid",
+        "Text"
       ]
     },
     "nullable": [
@@ -138,5 +139,5 @@
       true
     ]
   },
-  "hash": "f7e85c00eb8d1e32d4f1bf16d4590a49645d1f2634418aa5f4fa391d2bdfdcae"
+  "hash": "eaac92f31fa00cee4092d17799055ab3359c569b03a6de3da3e78f5446bb2ec1"
 }

@@ -17,6 +17,7 @@ use uuid::Uuid;
 #[utoipa::path(
     get,
     path = "/hosts",
+    params(crate::handlers::NameQuery),
     responses(
         (status = 200, description = "List all hosts", body = Vec<Host>),
         (status = 500, description = "Internal server error")
@@ -24,8 +25,11 @@ use uuid::Uuid;
     tag = "hosts"
 )]
 #[instrument(skip(env))]
-pub async fn list(Extension(env): Extension<App>) -> Result<ApiResponse<Vec<Host>>> {
-    let hosts = hosts::list(env.pool()).await?;
+pub async fn list(
+    Extension(env): Extension<App>,
+    axum::extract::Query(query): axum::extract::Query<crate::handlers::NameQuery>,
+) -> Result<ApiResponse<Vec<Host>>> {
+    let hosts = hosts::list(env.pool(), query.name.as_deref()).await?;
     Ok(ApiResponse {
         data: hosts,
         code: StatusCode::OK,
@@ -209,7 +213,7 @@ pub async fn init(
     let host_address = host.address.clone();
     let host_port = host.port;
     tokio::spawn(async move {
-        let pools = match storage_pools::list(&db_pool).await {
+        let pools = match storage_pools::list(&db_pool, None).await {
             Ok(p) => p,
             Err(e) => {
                 warn!(host_id = %host_id, error = %e, "Failed to list storage pools for host init");

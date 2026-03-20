@@ -11,6 +11,15 @@ paths:
       tags:
       - boot-sources
       operationId: list
+      parameters:
+      - name: name
+        in: query
+        description: Optional name filter for list queries
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
       responses:
         '200':
           description: List all boot sources
@@ -91,6 +100,15 @@ paths:
       tags:
       - hosts
       operationId: list
+      parameters:
+      - name: name
+        in: query
+        description: Optional name filter for list queries
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
       responses:
         '200':
           description: List all hosts
@@ -238,6 +256,15 @@ paths:
       tags:
       - instance-types
       operationId: list
+      parameters:
+      - name: name
+        in: query
+        description: Optional name filter for list queries
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
       responses:
         '200':
           description: List all instance types
@@ -344,6 +371,15 @@ paths:
       tags:
       - networks
       operationId: list
+      parameters:
+      - name: name
+        in: query
+        description: Optional name filter for list queries
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
       responses:
         '200':
           description: List all networks
@@ -505,6 +541,15 @@ paths:
       tags:
       - storage-objects
       operationId: list
+      parameters:
+      - name: name
+        in: query
+        description: Optional name filter for list queries
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
       responses:
         '200':
           description: List all storage objects
@@ -585,6 +630,15 @@ paths:
       tags:
       - storage-pools
       operationId: list
+      parameters:
+      - name: name
+        in: query
+        description: Optional name filter for list queries
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
       responses:
         '200':
           description: List all storage pools
@@ -759,6 +813,14 @@ paths:
         schema:
           type: string
           format: uuid
+      - name: name
+        in: query
+        description: Optional name filter for list queries
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
       responses:
         '200':
           description: List transfers for this pool
@@ -837,6 +899,15 @@ paths:
       tags:
       - vm-templates
       operationId: list
+      parameters:
+      - name: name
+        in: query
+        description: Optional name filter for list queries
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
       responses:
         '200':
           description: List all VM templates
@@ -919,6 +990,15 @@ paths:
       tags:
       - vms
       operationId: list
+      parameters:
+      - name: name
+        in: query
+        description: Optional name filter for list queries
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
       responses:
         '200':
           description: List all VMs
@@ -1250,6 +1330,38 @@ paths:
           description: VM not found
         '500':
           description: Internal server error
+  /vms/{vm_id}/resize:
+    put:
+      tags:
+      - vms
+      operationId: resize_vm
+      parameters:
+      - name: vm_id
+        in: path
+        description: VM unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VmResizeRequest'
+        required: true
+      responses:
+        '200':
+          description: VM resized successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Vm'
+        '404':
+          description: VM not found
+        '422':
+          description: VM not running, or resize parameters out of range
+        '500':
+          description: Internal server error
   /vms/{vm_id}/restore:
     post:
       tags:
@@ -1315,6 +1427,14 @@ paths:
         schema:
           type: string
           format: uuid
+      - name: name
+        in: query
+        description: Optional name filter for list queries
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
       responses:
         '200':
           description: List snapshots for a VM
@@ -3081,6 +3201,28 @@ components:
         job_id:
           type: string
           format: uuid
+    VmResizeRequest:
+      type: object
+      description: |-
+        Request body for `PUT /vms/{vm_id}/resize`.
+
+        At least one of `desired_vcpus` or `desired_ram` must be provided.
+        - `desired_vcpus` must be in the range `[boot_vcpus, max_vcpus]`.
+        - `desired_ram` must be in the range `[memory_size, memory_size + memory_hotplug_size]`.
+        - On x86_64, Cloud Hypervisor ACPI memory hotplug only supports 128 MiB increments.
+      properties:
+        desired_ram:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          description: Target memory size in bytes
+        desired_vcpus:
+          type:
+          - integer
+          - 'null'
+          format: int32
+          description: Target vCPU count
     VmStartResponse:
       type: object
       required:

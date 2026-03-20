@@ -17,6 +17,7 @@ use uuid::Uuid;
 #[utoipa::path(
     get,
     path = "/networks",
+    params(crate::handlers::NameQuery),
     responses(
         (status = 200, description = "List all networks", body = Vec<Network>),
         (status = 500, description = "Internal server error")
@@ -24,8 +25,11 @@ use uuid::Uuid;
     tag = "networks"
 )]
 #[instrument(skip(env))]
-pub async fn list(Extension(env): Extension<App>) -> Result<ApiResponse<Vec<Network>>> {
-    let nets = networks::list(env.pool()).await?;
+pub async fn list(
+    Extension(env): Extension<App>,
+    axum::extract::Query(query): axum::extract::Query<crate::handlers::NameQuery>,
+) -> Result<ApiResponse<Vec<Network>>> {
+    let nets = networks::list(env.pool(), query.name.as_deref()).await?;
     Ok(ApiResponse {
         data: nets,
         code: StatusCode::OK,

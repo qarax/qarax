@@ -11,6 +11,7 @@ use uuid::Uuid;
 #[utoipa::path(
     get,
     path = "/vm-templates",
+    params(crate::handlers::NameQuery),
     responses(
         (status = 200, description = "List all VM templates", body = Vec<VmTemplate>),
         (status = 500, description = "Internal server error")
@@ -18,8 +19,11 @@ use uuid::Uuid;
     tag = "vm-templates"
 )]
 #[instrument(skip(env))]
-pub async fn list(Extension(env): Extension<App>) -> Result<ApiResponse<Vec<VmTemplate>>> {
-    let vm_templates = vm_templates::list(env.pool()).await?;
+pub async fn list(
+    Extension(env): Extension<App>,
+    axum::extract::Query(query): axum::extract::Query<crate::handlers::NameQuery>,
+) -> Result<ApiResponse<Vec<VmTemplate>>> {
+    let vm_templates = vm_templates::list(env.pool(), query.name.as_deref()).await?;
     Ok(ApiResponse {
         data: vm_templates,
         code: StatusCode::OK,

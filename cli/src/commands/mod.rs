@@ -26,9 +26,9 @@ pub async fn resolve_vm_id(client: &Client, name_or_id: &str) -> anyhow::Result<
     if let Ok(id) = Uuid::parse_str(name_or_id) {
         return Ok(id);
     }
-    let vms = api::vms::list(client).await?;
+    let vms = api::vms::list(client, Some(name_or_id)).await?;
     vms.into_iter()
-        .find(|vm| vm.name == name_or_id)
+        .next()
         .map(|vm| vm.id)
         .ok_or_else(|| anyhow::anyhow!("no VM named {:?}", name_or_id))
 }
@@ -38,10 +38,10 @@ pub async fn resolve_host_id(client: &Client, name_or_id: &str) -> anyhow::Resul
     if let Ok(id) = Uuid::parse_str(name_or_id) {
         return Ok(id);
     }
-    let hosts = api::hosts::list(client).await?;
+    let hosts = api::hosts::list(client, Some(name_or_id)).await?;
     hosts
         .into_iter()
-        .find(|h| h.name == name_or_id)
+        .next()
         .map(|h| h.id)
         .ok_or_else(|| anyhow::anyhow!("no host named {:?}", name_or_id))
 }
@@ -51,10 +51,10 @@ pub async fn resolve_pool_id(client: &Client, name_or_id: &str) -> anyhow::Resul
     if let Ok(id) = Uuid::parse_str(name_or_id) {
         return Ok(id);
     }
-    let pools = api::storage::list_pools(client).await?;
+    let pools = api::storage::list_pools(client, Some(name_or_id)).await?;
     pools
         .into_iter()
-        .find(|p| p.name == name_or_id)
+        .next()
         .map(|p| p.id)
         .ok_or_else(|| anyhow::anyhow!("no storage pool named {:?}", name_or_id))
 }
@@ -64,10 +64,10 @@ pub async fn resolve_object_id(client: &Client, name_or_id: &str) -> anyhow::Res
     if let Ok(id) = Uuid::parse_str(name_or_id) {
         return Ok(id);
     }
-    let objects = api::storage::list_objects(client).await?;
+    let objects = api::storage::list_objects(client, Some(name_or_id)).await?;
     objects
         .into_iter()
-        .find(|o| o.name == name_or_id)
+        .next()
         .map(|o| o.id)
         .ok_or_else(|| anyhow::anyhow!("no storage object named {:?}", name_or_id))
 }
@@ -77,10 +77,10 @@ pub async fn resolve_network_id(client: &Client, name_or_id: &str) -> anyhow::Re
     if let Ok(id) = Uuid::parse_str(name_or_id) {
         return Ok(id);
     }
-    let networks = api::networks::list(client).await?;
+    let networks = api::networks::list(client, Some(name_or_id)).await?;
     networks
         .into_iter()
-        .find(|n| n.name == name_or_id)
+        .next()
         .map(|n| n.id)
         .ok_or_else(|| anyhow::anyhow!("no network named {:?}", name_or_id))
 }
@@ -90,10 +90,10 @@ pub async fn resolve_boot_source_id(client: &Client, name_or_id: &str) -> anyhow
     if let Ok(id) = Uuid::parse_str(name_or_id) {
         return Ok(id);
     }
-    let sources = api::boot_sources::list(client).await?;
+    let sources = api::boot_sources::list(client, Some(name_or_id)).await?;
     sources
         .into_iter()
-        .find(|bs| bs.name == name_or_id)
+        .next()
         .map(|bs| bs.id)
         .ok_or_else(|| anyhow::anyhow!("no boot source named {:?}", name_or_id))
 }
@@ -103,10 +103,10 @@ pub async fn resolve_vm_template_id(client: &Client, name_or_id: &str) -> anyhow
     if let Ok(id) = Uuid::parse_str(name_or_id) {
         return Ok(id);
     }
-    let templates = api::vm_templates::list(client).await?;
+    let templates = api::vm_templates::list(client, Some(name_or_id)).await?;
     templates
         .into_iter()
-        .find(|template| template.name == name_or_id)
+        .next()
         .map(|template| template.id)
         .ok_or_else(|| anyhow::anyhow!("no VM template named {:?}", name_or_id))
 }
@@ -116,12 +116,29 @@ pub async fn resolve_instance_type_id(client: &Client, name_or_id: &str) -> anyh
     if let Ok(id) = Uuid::parse_str(name_or_id) {
         return Ok(id);
     }
-    let instance_types = api::instance_types::list(client).await?;
+    let instance_types = api::instance_types::list(client, Some(name_or_id)).await?;
     instance_types
         .into_iter()
-        .find(|instance_type| instance_type.name == name_or_id)
+        .next()
         .map(|instance_type| instance_type.id)
         .ok_or_else(|| anyhow::anyhow!("no instance type named {:?}", name_or_id))
+}
+
+/// Resolve a snapshot name or UUID string to a UUID.
+pub async fn resolve_snapshot_id(
+    client: &Client,
+    vm_id: Uuid,
+    name_or_id: &str,
+) -> anyhow::Result<Uuid> {
+    if let Ok(id) = Uuid::parse_str(name_or_id) {
+        return Ok(id);
+    }
+    let snapshots = api::vms::list_snapshots(client, vm_id, Some(name_or_id)).await?;
+    snapshots
+        .into_iter()
+        .next()
+        .map(|s| s.id)
+        .ok_or_else(|| anyhow::anyhow!("no snapshot named {:?}", name_or_id))
 }
 
 /// Format a byte count as a human-readable string (GiB / MiB / KiB / B).

@@ -7,11 +7,15 @@ use crate::client::Client;
 use super::models::{
     AttachDiskRequest, CreateSnapshotRequest, CreateVmResponse, CreateVmResult, HotplugNicRequest,
     NetworkInterface, NewVm, RestoreRequest, Snapshot, Vm, VmDisk, VmMigrateRequest,
-    VmMigrateResponse, VmStartResponse,
+    VmMigrateResponse, VmResizeRequest, VmStartResponse,
 };
 
-pub async fn list(client: &Client) -> anyhow::Result<Vec<Vm>> {
-    client.get("/vms").await
+pub async fn list(client: &Client, name: Option<&str>) -> anyhow::Result<Vec<Vm>> {
+    let path = match name {
+        Some(n) => format!("/vms?name={n}"),
+        None => "/vms".to_string(),
+    };
+    client.get(&path).await
 }
 
 pub async fn get(client: &Client, vm_id: Uuid) -> anyhow::Result<Vm> {
@@ -103,8 +107,16 @@ pub async fn create_snapshot(
     client.post(&format!("/vms/{vm_id}/snapshots"), req).await
 }
 
-pub async fn list_snapshots(client: &Client, vm_id: Uuid) -> anyhow::Result<Vec<Snapshot>> {
-    client.get(&format!("/vms/{vm_id}/snapshots")).await
+pub async fn list_snapshots(
+    client: &Client,
+    vm_id: Uuid,
+    name: Option<&str>,
+) -> anyhow::Result<Vec<Snapshot>> {
+    let path = match name {
+        Some(n) => format!("/vms/{vm_id}/snapshots?name={n}"),
+        None => format!("/vms/{vm_id}/snapshots"),
+    };
+    client.get(&path).await
 }
 
 pub async fn restore(client: &Client, vm_id: Uuid, req: &RestoreRequest) -> anyhow::Result<Vm> {
@@ -117,4 +129,8 @@ pub async fn migrate(
     req: &VmMigrateRequest,
 ) -> anyhow::Result<VmMigrateResponse> {
     client.post(&format!("/vms/{vm_id}/migrate"), req).await
+}
+
+pub async fn resize(client: &Client, vm_id: Uuid, req: &VmResizeRequest) -> anyhow::Result<Vm> {
+    client.put(&format!("/vms/{vm_id}/resize"), req).await
 }

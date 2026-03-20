@@ -68,7 +68,7 @@ pub async fn run(args: TransferArgs, client: &Client, output: OutputFormat) -> a
     match args.command {
         TransferCommand::List { pool } => {
             let pool_id = resolve_pool_id(client, &pool).await?;
-            let transfers = api::transfers::list(client, pool_id).await?;
+            let transfers = api::transfers::list(client, pool_id, None).await?;
             if !matches!(output, OutputFormat::Table) {
                 print_output(&transfers, output)?;
             } else {

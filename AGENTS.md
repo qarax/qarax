@@ -156,6 +156,7 @@ GitHub Actions (`rust-ci.yml`): fmt check (nightly) → clippy → build (musl) 
 - **After any SQL query change:** run `cargo sqlx prepare --workspace` to update the offline query cache.
 - **When renaming anything:** search `hack/`, `e2e/`, `.github/`, and all workspace crates for stale references before finishing.
 - **Plan before implementing on non-trivial changes.** List files to modify and describe the approach. Do not create or edit files until the plan is clear.
+- **When making user facing changes** Make sure you have implemented a CLI and added working e2e tests.
 - **Never embed credentials, secrets, or personal data in source code.** Use environment variables or config files excluded from version control.
 - **When the user redirects or interrupts, stop immediately.** Do not continue the previous approach. Ask a clarifying question if the new direction is unclear.
 

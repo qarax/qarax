@@ -90,7 +90,10 @@ pub struct NewInstanceType {
     pub accelerator_config: serde_json::Value,
 }
 
-pub async fn list(pool: &PgPool) -> Result<Vec<InstanceType>, sqlx::Error> {
+pub async fn list(
+    pool: &PgPool,
+    name_filter: Option<&str>,
+) -> Result<Vec<InstanceType>, sqlx::Error> {
     let rows = sqlx::query_as::<_, InstanceTypeRow>(
         r#"
 SELECT id,
@@ -110,9 +113,11 @@ SELECT id,
        memory_thp,
        accelerator_config
 FROM instance_types
+WHERE ($1::text IS NULL OR name = $1)
 ORDER BY name
         "#,
     )
+    .bind(name_filter)
     .fetch_all(pool)
     .await?;
 

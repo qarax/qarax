@@ -135,6 +135,26 @@ impl Client {
             .context("failed to parse response")
     }
 
+    /// PUT request with a JSON body, deserializing the response as JSON.
+    pub async fn put<B: Serialize, T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> anyhow::Result<T> {
+        let resp = self
+            .inner
+            .put(self.url(path))
+            .json(body)
+            .send()
+            .await
+            .with_context(|| format!("PUT {path}"))?;
+        Self::check_error(resp)
+            .await?
+            .json()
+            .await
+            .context("failed to parse response")
+    }
+
     /// DELETE request, discarding the response body.
     pub async fn delete(&self, path: &str) -> anyhow::Result<()> {
         let resp = self

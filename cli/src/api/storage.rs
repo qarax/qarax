@@ -9,8 +9,12 @@ use super::models::{
 
 // ─── Storage pools ────────────────────────────────────────────────────────────
 
-pub async fn list_pools(client: &Client) -> anyhow::Result<Vec<StoragePool>> {
-    client.get("/storage-pools").await
+pub async fn list_pools(client: &Client, name: Option<&str>) -> anyhow::Result<Vec<StoragePool>> {
+    let path = match name {
+        Some(n) => format!("/storage-pools?name={n}"),
+        None => "/storage-pools".to_string(),
+    };
+    client.get(&path).await
 }
 
 pub async fn get_pool(client: &Client, pool_id: Uuid) -> anyhow::Result<StoragePool> {
@@ -52,8 +56,15 @@ pub async fn detach_host_from_pool(
 
 // ─── Storage objects ──────────────────────────────────────────────────────────
 
-pub async fn list_objects(client: &Client) -> anyhow::Result<Vec<StorageObject>> {
-    client.get("/storage-objects").await
+pub async fn list_objects(
+    client: &Client,
+    name: Option<&str>,
+) -> anyhow::Result<Vec<StorageObject>> {
+    let path = match name {
+        Some(n) => format!("/storage-objects?name={n}"),
+        None => "/storage-objects".to_string(),
+    };
+    client.get(&path).await
 }
 
 pub async fn get_object(client: &Client, object_id: Uuid) -> anyhow::Result<StorageObject> {

@@ -175,10 +175,11 @@ impl NewHost {
     }
 }
 
-pub async fn list(pool: &PgPool) -> Result<Vec<Host>, sqlx::Error> {
+pub async fn list(pool: &PgPool, name_filter: Option<&str>) -> Result<Vec<Host>, sqlx::Error> {
     let rows = sqlx::query(
-        "SELECT id, name, address, port, host_user, password, status, cloud_hypervisor_version, kernel_version, total_cpus, total_memory_bytes, available_memory_bytes, load_average, disk_total_bytes, disk_available_bytes, resources_updated_at FROM hosts",
+        "SELECT id, name, address, port, host_user, password, status, cloud_hypervisor_version, kernel_version, total_cpus, total_memory_bytes, available_memory_bytes, load_average, disk_total_bytes, disk_available_bytes, resources_updated_at FROM hosts WHERE ($1::text IS NULL OR name = $1)",
     )
+    .bind(name_filter)
     .fetch_all(pool)
     .await?;
 

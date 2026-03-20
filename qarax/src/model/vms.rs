@@ -560,7 +560,7 @@ pub async fn resolve_create_request(pool: &PgPool, request: NewVm) -> Result<Res
     })
 }
 
-pub async fn list(pool: &PgPool) -> Result<Vec<Vm>, sqlx::Error> {
+pub async fn list(pool: &PgPool, name_filter: Option<&str>) -> Result<Vec<Vm>, sqlx::Error> {
     let vms: Vec<VmRow> = sqlx::query_as!(
         VmRow,
         r#"
@@ -590,7 +590,9 @@ SELECT id,
         cloud_init_network_config as "cloud_init_network_config?",
         config as "config: _"
 FROM vms
-        "#
+WHERE ($1::text IS NULL OR name = $1)
+        "#,
+        name_filter
     )
     .fetch_all(pool)
     .await?;
@@ -776,6 +778,42 @@ pub async fn update_host_id(pool: &PgPool, vm_id: Uuid, host_id: Uuid) -> Result
         .execute(pool)
         .await?;
 
+    Ok(())
+}
+
+/// Update boot_vcpus and/or memory_size in a single query.
+/// At least one of the two options must be `Some`.
+pub async fn update_resize(
+    pool: &PgPool,
+    vm_id: Uuid,
+    boot_vcpus: Option<i32>,
+    memory_size: Option<i64>,
+) -> Result<(), sqlx::Error> {
+    match (boot_vcpus, memory_size) {
+        (Some(vcpus), Some(mem)) => {
+            sqlx::query("UPDATE vms SET boot_vcpus = $1, memory_size = $2 WHERE id = $3")
+                .bind(vcpus)
+                .bind(mem)
+                .bind(vm_id)
+                .execute(pool)
+                .await?;
+        }
+        (Some(vcpus), None) => {
+            sqlx::query("UPDATE vms SET boot_vcpus = $1 WHERE id = $2")
+                .bind(vcpus)
+                .bind(vm_id)
+                .execute(pool)
+                .await?;
+        }
+        (None, Some(mem)) => {
+            sqlx::query("UPDATE vms SET memory_size = $1 WHERE id = $2")
+                .bind(mem)
+                .bind(vm_id)
+                .execute(pool)
+                .await?;
+        }
+        (None, None) => {}
+    }
     Ok(())
 }
 

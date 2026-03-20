@@ -4,10 +4,16 @@ use crate::client::Client;
 
 use super::models::{NewTransfer, Transfer};
 
-pub async fn list(client: &Client, pool_id: Uuid) -> anyhow::Result<Vec<Transfer>> {
-    client
-        .get(&format!("/storage-pools/{pool_id}/transfers"))
-        .await
+pub async fn list(
+    client: &Client,
+    pool_id: Uuid,
+    name: Option<&str>,
+) -> anyhow::Result<Vec<Transfer>> {
+    let path = match name {
+        Some(n) => format!("/storage-pools/{pool_id}/transfers?name={n}"),
+        None => format!("/storage-pools/{pool_id}/transfers"),
+    };
+    client.get(&path).await
 }
 
 pub async fn get(client: &Client, pool_id: Uuid, transfer_id: Uuid) -> anyhow::Result<Transfer> {

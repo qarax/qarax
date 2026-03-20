@@ -14,8 +14,9 @@ use crate::rpc::node::{
     ConsolePtyPathResponse, DetachNetworkRequest, DetachNetworkResponse, DetachStoragePoolRequest,
     DeviceCounters, GpuInfo, ImportOverlayBdRequest, ImportOverlayBdResponse, NodeInfo,
     OciImageRequest, OciImageResponse, ReceiveMigrationRequest, ReceiveMigrationResponse,
-    RemoveDeviceRequest, RestoreVmRequest, SendMigrationRequest, SnapshotVmRequest,
-    StoragePoolKind, VmConfig, VmCounters, VmId, VmList, VmState, vm_service_server::VmService,
+    RemoveDeviceRequest, ResizeVmRequest, RestoreVmRequest, SendMigrationRequest,
+    SnapshotVmRequest, StoragePoolKind, VmConfig, VmCounters, VmId, VmList, VmState,
+    vm_service_server::VmService,
 };
 
 /// Implementation of VmService using Cloud Hypervisor
@@ -410,6 +411,29 @@ impl VmService for VmServiceImpl {
                     "Failed to remove VFIO device {} from VM {}: {}",
                     req.device_id, req.vm_id, e
                 );
+                Err(map_manager_error(e))
+            }
+        }
+    }
+
+    async fn resize_vm(&self, request: Request<ResizeVmRequest>) -> Result<Response<()>, Status> {
+        let req = request.into_inner();
+        info!(
+            "Resizing VM {}: vcpus={:?} ram={:?}",
+            req.vm_id, req.desired_vcpus, req.desired_ram
+        );
+
+        match self
+            .manager
+            .resize_vm(&req.vm_id, req.desired_vcpus, req.desired_ram)
+            .await
+        {
+            Ok(()) => {
+                info!("VM {} resized successfully", req.vm_id);
+                Ok(Response::new(()))
+            }
+            Err(e) => {
+                error!("Failed to resize VM {}: {}", req.vm_id, e);
                 Err(map_manager_error(e))
             }
         }

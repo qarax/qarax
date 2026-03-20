@@ -4,8 +4,12 @@ use crate::client::Client;
 
 use super::models::{InstanceType, NewInstanceType};
 
-pub async fn list(client: &Client) -> anyhow::Result<Vec<InstanceType>> {
-    client.get("/instance-types").await
+pub async fn list(client: &Client, name: Option<&str>) -> anyhow::Result<Vec<InstanceType>> {
+    let path = match name {
+        Some(n) => format!("/instance-types?name={n}"),
+        None => "/instance-types".to_string(),
+    };
+    client.get(&path).await
 }
 
 pub async fn get(client: &Client, id: Uuid) -> anyhow::Result<InstanceType> {

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\nSELECT id, vm_id, storage_object_id, name, status as \"status: _\", created_at\nFROM vm_snapshots\nWHERE vm_id = $1\nORDER BY created_at ASC\n        ",
+  "query": "\nSELECT id, vm_id, storage_object_id, name, status as \"status: _\", created_at\nFROM vm_snapshots\nWHERE vm_id = $1 AND ($2::text IS NULL OR name = $2)\nORDER BY created_at ASC\n        ",
   "describe": {
     "columns": [
       {
@@ -47,7 +47,8 @@
     ],
     "parameters": {
       "Left": [
-        "Uuid"
+        "Uuid",
+        "Text"
       ]
     },
     "nullable": [
@@ -59,5 +60,5 @@
       false
     ]
   },
-  "hash": "32456d7dbc47a586e84f8012e06f16614d67e4b690d2ccfe12d524bef5719bd6"
+  "hash": "dce0131b456bc2bbaeda8df8c0019c407992930574014776b8eeaec1838eb7e5"
 }

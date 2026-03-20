@@ -108,7 +108,7 @@ struct IpRow {
 pub async fn run(args: NetworkArgs, client: &Client, output: OutputFormat) -> anyhow::Result<()> {
     match args.command {
         NetworkCommand::List => {
-            let networks = api::networks::list(client).await?;
+            let networks = api::networks::list(client, None).await?;
             if !matches!(output, OutputFormat::Table) {
                 print_output(&networks, output)?;
             } else {

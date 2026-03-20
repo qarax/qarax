@@ -47,7 +47,10 @@ pub struct NewBootSource {
     pub initrd_image_id: Option<Uuid>,
 }
 
-pub async fn list(pool: &PgPool) -> Result<Vec<BootSource>, sqlx::Error> {
+pub async fn list(
+    pool: &PgPool,
+    name_filter: Option<&str>,
+) -> Result<Vec<BootSource>, sqlx::Error> {
     let boot_sources: Vec<BootSourceRow> = sqlx::query_as!(
         BootSourceRow,
         r#"
@@ -58,7 +61,9 @@ SELECT id,
         kernel_params as "kernel_params?",
         initrd_image_id as "initrd_image_id?"
 FROM boot_sources
-        "#
+WHERE ($1::text IS NULL OR name = $1)
+        "#,
+        name_filter
     )
     .fetch_all(pool)
     .await?;

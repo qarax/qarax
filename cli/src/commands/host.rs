@@ -122,7 +122,7 @@ struct GpuRow {
 pub async fn run(args: HostArgs, client: &Client, output: OutputFormat) -> anyhow::Result<()> {
     match args.command {
         HostCommand::List => {
-            let hosts = api::hosts::list(client).await?;
+            let hosts = api::hosts::list(client, None).await?;
             if !matches!(output, OutputFormat::Table) {
                 print_output(&hosts, output)?;
             } else {

@@ -141,7 +141,10 @@ pub struct CreateVmTemplateFromVmRequest {
     pub description: Option<String>,
 }
 
-pub async fn list(pool: &PgPool) -> Result<Vec<VmTemplate>, sqlx::Error> {
+pub async fn list(
+    pool: &PgPool,
+    name_filter: Option<&str>,
+) -> Result<Vec<VmTemplate>, sqlx::Error> {
     let rows = sqlx::query_as::<_, VmTemplateRow>(
         r#"
 SELECT id,
@@ -171,9 +174,11 @@ SELECT id,
        networks,
        config
 FROM vm_templates
+WHERE ($1::text IS NULL OR name = $1)
 ORDER BY name
         "#,
     )
+    .bind(name_filter)
     .fetch_all(pool)
     .await?;
 

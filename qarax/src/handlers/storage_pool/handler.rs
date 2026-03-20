@@ -19,6 +19,7 @@ use uuid::Uuid;
 #[utoipa::path(
     get,
     path = "/storage-pools",
+    params(crate::handlers::NameQuery),
     responses(
         (status = 200, description = "List all storage pools", body = Vec<StoragePool>),
         (status = 500, description = "Internal server error")
@@ -26,8 +27,11 @@ use uuid::Uuid;
     tag = "storage-pools"
 )]
 #[instrument(skip(env))]
-pub async fn list(Extension(env): Extension<App>) -> Result<ApiResponse<Vec<StoragePool>>> {
-    let pools = storage_pools::list(env.pool()).await?;
+pub async fn list(
+    Extension(env): Extension<App>,
+    axum::extract::Query(query): axum::extract::Query<crate::handlers::NameQuery>,
+) -> Result<ApiResponse<Vec<StoragePool>>> {
+    let pools = storage_pools::list(env.pool(), query.name.as_deref()).await?;
     Ok(ApiResponse {
         data: pools,
         code: StatusCode::OK,

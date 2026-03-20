@@ -103,13 +103,18 @@ pub struct NewStoragePool {
     pub capacity_bytes: Option<i64>,
 }
 
-pub async fn list(pool: &PgPool) -> Result<Vec<StoragePool>, sqlx::Error> {
+pub async fn list(
+    pool: &PgPool,
+    name_filter: Option<&str>,
+) -> Result<Vec<StoragePool>, sqlx::Error> {
     let rows: Vec<StoragePoolRow> = sqlx::query_as::<_, StoragePoolRow>(
         r#"
 SELECT id, name, pool_type, status, config, capacity_bytes, allocated_bytes
 FROM storage_pools
+WHERE ($1::text IS NULL OR name = $1)
         "#,
     )
+    .bind(name_filter)
     .fetch_all(pool)
     .await?;
 

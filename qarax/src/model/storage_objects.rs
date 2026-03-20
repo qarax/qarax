@@ -72,7 +72,10 @@ pub struct NewStorageObject {
     pub parent_id: Option<Uuid>,
 }
 
-pub async fn list(pool: &PgPool) -> Result<Vec<StorageObject>, sqlx::Error> {
+pub async fn list(
+    pool: &PgPool,
+    name_filter: Option<&str>,
+) -> Result<Vec<StorageObject>, sqlx::Error> {
     let storage_objects: Vec<StorageObjectRow> = sqlx::query_as!(
         StorageObjectRow,
         r#"
@@ -84,7 +87,9 @@ SELECT id,
         config as "config: _",
         parent_id as "parent_id?"
 FROM storage_objects
-        "#
+WHERE ($1::text IS NULL OR name = $1)
+        "#,
+        name_filter
     )
     .fetch_all(pool)
     .await?;

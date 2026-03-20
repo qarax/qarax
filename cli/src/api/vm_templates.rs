@@ -4,8 +4,12 @@ use crate::client::Client;
 
 use super::models::{CreateVmTemplateFromVmRequest, NewVmTemplate, VmTemplate};
 
-pub async fn list(client: &Client) -> anyhow::Result<Vec<VmTemplate>> {
-    client.get("/vm-templates").await
+pub async fn list(client: &Client, name: Option<&str>) -> anyhow::Result<Vec<VmTemplate>> {
+    let path = match name {
+        Some(n) => format!("/vm-templates?name={n}"),
+        None => "/vm-templates".to_string(),
+    };
+    client.get(&path).await
 }
 
 pub async fn get(client: &Client, id: Uuid) -> anyhow::Result<VmTemplate> {

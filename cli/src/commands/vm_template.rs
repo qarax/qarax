@@ -97,7 +97,7 @@ pub async fn run(
 ) -> anyhow::Result<()> {
     match args.command {
         VmTemplateCommand::List => {
-            let templates = api::vm_templates::list(client).await?;
+            let templates = api::vm_templates::list(client, None).await?;
             if !matches!(output, OutputFormat::Table) {
                 print_output(&templates, output)?;
             } else {

@@ -69,7 +69,7 @@ pub async fn run(
 ) -> anyhow::Result<()> {
     match args.command {
         BootSourceCommand::List => {
-            let sources = api::boot_sources::list(client).await?;
+            let sources = api::boot_sources::list(client, None).await?;
             if !matches!(output, OutputFormat::Table) {
                 print_output(&sources, output)?;
             } else {

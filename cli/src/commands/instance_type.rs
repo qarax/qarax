@@ -81,7 +81,7 @@ pub async fn run(
 ) -> anyhow::Result<()> {
     match args.command {
         InstanceTypeCommand::List => {
-            let instance_types = api::instance_types::list(client).await?;
+            let instance_types = api::instance_types::list(client, None).await?;
             if !matches!(output, OutputFormat::Table) {
                 print_output(&instance_types, output)?;
             } else {

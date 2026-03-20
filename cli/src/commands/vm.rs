@@ -8,7 +8,7 @@ use crate::{
         self,
         models::{
             AttachDiskRequest, CreateSnapshotRequest, CreateVmResult, HotplugNicRequest, NewVm,
-            NewVmNetwork, RestoreRequest, VmMigrateRequest,
+            NewVmNetwork, RestoreRequest, VmMigrateRequest, VmResizeRequest,
         },
     },
     client::Client,
@@ -191,6 +191,17 @@ enum VmCommand {
         #[arg(long)]
         device_id: String,
     },
+    /// Resize vCPUs and/or memory of a running VM (hotplug)
+    Resize {
+        /// VM name or ID
+        vm: String,
+        /// Target vCPU count (must be within [boot_vcpus, max_vcpus])
+        #[arg(long)]
+        vcpus: Option<i32>,
+        /// Target memory size in bytes (must be within [memory_size, memory_size + hotplug_size])
+        #[arg(long)]
+        ram: Option<i64>,
+    },
     /// Live-migrate a running VM to another host (NFS-backed storage only)
     Migrate {
         /// VM name or ID
@@ -228,9 +239,9 @@ enum SnapshotCommand {
     Restore {
         /// VM name or ID
         vm: String,
-        /// Snapshot ID to restore from
+        /// Snapshot name or ID to restore from
         #[arg(long)]
-        snapshot: Uuid,
+        snapshot: String,
     },
 }
 
@@ -267,7 +278,7 @@ struct VmRow {
 pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow::Result<()> {
     match args.command {
         VmCommand::List => {
-            let vms = api::vms::list(client).await?;
+            let vms = api::vms::list(client, None).await?;
             if !matches!(output, OutputFormat::Table) {
                 print_output(&vms, output)?;
             } else {
@@ -573,6 +584,26 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
             println!("Removed NIC {device_id} from VM {vm}");
         }
 
+        VmCommand::Resize { vm, vcpus, ram } => {
+            if vcpus.is_none() && ram.is_none() {
+                return Err(anyhow!("At least one of --vcpus or --ram must be provided"));
+            }
+            let vm_id = resolve_vm_id(client, &vm).await?;
+            let req = VmResizeRequest {
+                desired_vcpus: vcpus,
+                desired_ram: ram,
+            };
+            let updated = api::vms::resize(client, vm_id, &req).await?;
+            if !matches!(output, OutputFormat::Table) {
+                print_output(&updated, output)?;
+            } else {
+                println!(
+                    "Resized VM {vm}: vcpus={}, memory={}",
+                    updated.boot_vcpus, updated.memory_size
+                );
+            }
+        }
+
         VmCommand::Migrate { vm, host } => {
             let vm_id = resolve_vm_id(client, &vm).await?;
             let host_id = resolve_host_id(client, &host).await?;
@@ -609,7 +640,7 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
 
             SnapshotCommand::List { vm } => {
                 let id = resolve_vm_id(client, &vm).await?;
-                let snapshots = api::vms::list_snapshots(client, id).await?;
+                let snapshots = api::vms::list_snapshots(client, id, None).await?;
                 if !matches!(output, OutputFormat::Table) {
                     print_output(&snapshots, output)?;
                 } else {
@@ -628,9 +659,8 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
 
             SnapshotCommand::Restore { vm, snapshot } => {
                 let id = resolve_vm_id(client, &vm).await?;
-                let req = RestoreRequest {
-                    snapshot_id: snapshot,
-                };
+                let snapshot_id = super::resolve_snapshot_id(client, id, &snapshot).await?;
+                let req = RestoreRequest { snapshot_id };
                 let restored = api::vms::restore(client, id, &req).await?;
                 if !matches!(output, OutputFormat::Table) {
                     print_output(&restored, output)?;

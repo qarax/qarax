@@ -77,16 +77,21 @@ pub async fn get_with_storage_object(
     Ok((snapshot, so))
 }
 
-pub async fn list_for_vm(pool: &PgPool, vm_id: Uuid) -> Result<Vec<Snapshot>, sqlx::Error> {
+pub async fn list_for_vm(
+    pool: &PgPool,
+    vm_id: Uuid,
+    name_filter: Option<&str>,
+) -> Result<Vec<Snapshot>, sqlx::Error> {
     sqlx::query_as!(
         Snapshot,
         r#"
 SELECT id, vm_id, storage_object_id, name, status as "status: _", created_at
 FROM vm_snapshots
-WHERE vm_id = $1
+WHERE vm_id = $1 AND ($2::text IS NULL OR name = $2)
 ORDER BY created_at ASC
         "#,
-        vm_id
+        vm_id,
+        name_filter
     )
     .fetch_all(pool)
     .await

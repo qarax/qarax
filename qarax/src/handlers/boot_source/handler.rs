@@ -11,6 +11,7 @@ use uuid::Uuid;
 #[utoipa::path(
     get,
     path = "/boot-sources",
+    params(crate::handlers::NameQuery),
     responses(
         (status = 200, description = "List all boot sources", body = Vec<BootSource>),
         (status = 500, description = "Internal server error")
@@ -18,8 +19,11 @@ use uuid::Uuid;
     tag = "boot-sources"
 )]
 #[instrument(skip(env))]
-pub async fn list(Extension(env): Extension<App>) -> Result<ApiResponse<Vec<BootSource>>> {
-    let boot_sources = boot_sources::list(env.pool()).await?;
+pub async fn list(
+    Extension(env): Extension<App>,
+    axum::extract::Query(query): axum::extract::Query<crate::handlers::NameQuery>,
+) -> Result<ApiResponse<Vec<BootSource>>> {
+    let boot_sources = boot_sources::list(env.pool(), query.name.as_deref()).await?;
     Ok(ApiResponse {
         data: boot_sources,
         code: StatusCode::OK,
