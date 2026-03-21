@@ -75,8 +75,9 @@ def sync_detailed(
 ) -> Response[Any | VmDisk]:
     """Attach a storage object to a VM as a disk.
     For VMs in `Created` state the disk is only recorded in the database and will be
-    passed to Cloud Hypervisor when the VM starts.  For VMs already in `Running` state
-    the disk is recorded **and** immediately hotplugged into the running VM.
+    passed to Cloud Hypervisor when the VM starts.  For VMs in `Running` or `Shutdown`
+    state the disk is recorded **and** immediately applied via the Cloud Hypervisor API
+    (CH keeps the VM definition after shutdown, so disk changes are accepted).
 
     Args:
         vm_id (UUID):
@@ -110,8 +111,9 @@ def sync(
 ) -> Any | VmDisk | None:
     """Attach a storage object to a VM as a disk.
     For VMs in `Created` state the disk is only recorded in the database and will be
-    passed to Cloud Hypervisor when the VM starts.  For VMs already in `Running` state
-    the disk is recorded **and** immediately hotplugged into the running VM.
+    passed to Cloud Hypervisor when the VM starts.  For VMs in `Running` or `Shutdown`
+    state the disk is recorded **and** immediately applied via the Cloud Hypervisor API
+    (CH keeps the VM definition after shutdown, so disk changes are accepted).
 
     Args:
         vm_id (UUID):
@@ -140,8 +142,9 @@ async def asyncio_detailed(
 ) -> Response[Any | VmDisk]:
     """Attach a storage object to a VM as a disk.
     For VMs in `Created` state the disk is only recorded in the database and will be
-    passed to Cloud Hypervisor when the VM starts.  For VMs already in `Running` state
-    the disk is recorded **and** immediately hotplugged into the running VM.
+    passed to Cloud Hypervisor when the VM starts.  For VMs in `Running` or `Shutdown`
+    state the disk is recorded **and** immediately applied via the Cloud Hypervisor API
+    (CH keeps the VM definition after shutdown, so disk changes are accepted).
 
     Args:
         vm_id (UUID):
@@ -173,8 +176,9 @@ async def asyncio(
 ) -> Any | VmDisk | None:
     """Attach a storage object to a VM as a disk.
     For VMs in `Created` state the disk is only recorded in the database and will be
-    passed to Cloud Hypervisor when the VM starts.  For VMs already in `Running` state
-    the disk is recorded **and** immediately hotplugged into the running VM.
+    passed to Cloud Hypervisor when the VM starts.  For VMs in `Running` or `Shutdown`
+    state the disk is recorded **and** immediately applied via the Cloud Hypervisor API
+    (CH keeps the VM definition after shutdown, so disk changes are accepted).
 
     Args:
         vm_id (UUID):

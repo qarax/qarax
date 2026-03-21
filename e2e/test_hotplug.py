@@ -9,7 +9,7 @@ Covers:
   - Hotunplugging a disk from a running VM
   - Hotplugging a NIC into a running VM (isolated network)
   - Hotunplugging a NIC from a running VM
-  - Negative: attach disk to Shutdown VM → 422
+  - Attaching / removing a disk on a Shutdown VM (applied to CH via gRPC)
   - Negative: remove non-existent disk → 404
   - Negative: duplicate NIC device ID → 409
   - Negative: remove non-existent NIC → 404
@@ -272,16 +272,42 @@ async def test_add_remove_nic_created_vm(client):
 
 
 @pytest.mark.asyncio
-async def test_attach_disk_shutdown_vm_returns_422(client):
-    """Attaching a disk to a Shutdown VM returns 422."""
+async def test_attach_remove_disk_shutdown_vm(client):
+    """Attach and remove a disk on a Shutdown VM — applied to CH immediately."""
     test_id = uuid.uuid4().hex[:8]
     async with client as c:
         hosts = await list_hosts.asyncio(client=c)
         assert hosts, "No hosts available"
         pool_id = disk_id = vm_id = None
         try:
-            pool_id = await _make_nfs_pool(c, test_id, hosts)
-            disk_id = await _make_disk(c, test_id, pool_id)
+            # Use a local pool so the disk can be resolved on the node
+            pool_id_raw = await create_pool.asyncio(
+                client=c,
+                body=NewStoragePool(
+                    name=f"e2e-hp-sd-pool-{test_id}",
+                    pool_type=StoragePoolType.LOCAL,
+                    config={"path": f"/var/lib/qarax/e2e-sd-{test_id}"},
+                ),
+            )
+            pool_id = UUID(str(pool_id_raw).strip('"'))
+            for host in hosts:
+                await attach_pool_host.asyncio_detailed(
+                    client=c,
+                    pool_id=pool_id,
+                    body=AttachPoolHostRequest(host_id=host.id),
+                )
+
+            disk_id_raw = await create_storage_object.asyncio(
+                client=c,
+                body=NewStorageObject(
+                    name=f"e2e-hp-sd-disk-{test_id}",
+                    storage_pool_id=str(pool_id),
+                    object_type=StorageObjectType.DISK,
+                    size_bytes=1,
+                    config={"path": "/var/lib/qarax/images/test-initramfs.gz"},
+                ),
+            )
+            disk_id = UUID(str(disk_id_raw).strip('"'))
             vm_id = await _make_vm(c, test_id)
 
             # Start then stop so status = SHUTDOWN
@@ -290,21 +316,41 @@ async def test_attach_disk_shutdown_vm_returns_422(client):
             await stop_vm.asyncio_detailed(client=c, vm_id=vm_id)
             await wait_for_status(c, vm_id, VmStatus.SHUTDOWN)
 
+            # Attach disk to shutdown VM — should succeed and apply via gRPC
             resp = await attach_disk.asyncio_detailed(
                 client=c,
                 vm_id=vm_id,
                 body=AttachDiskRequest(storage_object_id=disk_id),
             )
-            assert resp.status_code == 422, (
-                f"Expected 422 for SHUTDOWN VM, got {resp.status_code}"
+            assert resp.status_code == 201, (
+                f"Expected 201 for SHUTDOWN VM, got {resp.status_code}: {resp.content.decode()}"
+            )
+            device_id = resp.parsed.logical_name
+
+            # Verify VM is still shutdown
+            vm = await get_vm.asyncio(client=c, vm_id=vm_id)
+            assert vm.status == VmStatus.SHUTDOWN
+
+            # Remove the disk while still shutdown
+            rm_resp = await remove_disk.asyncio_detailed(
+                client=c, vm_id=vm_id, device_id=device_id
+            )
+            assert rm_resp.status_code == 204, (
+                f"Expected 204 for disk removal on SHUTDOWN VM, got {rm_resp.status_code}"
             )
         finally:
             if vm_id:
                 await delete_vm.asyncio_detailed(client=c, vm_id=vm_id)
             if disk_id:
-                await delete_storage_object.asyncio_detailed(client=c, object_id=disk_id)
+                try:
+                    await delete_storage_object.asyncio_detailed(client=c, object_id=disk_id)
+                except Exception as e:
+                    print(f"Ignoring error during disk cleanup: {e}")
             if pool_id:
-                await delete_pool.asyncio_detailed(client=c, pool_id=pool_id)
+                try:
+                    await delete_pool.asyncio_detailed(client=c, pool_id=pool_id)
+                except Exception as e:
+                    print(f"Ignoring error during pool cleanup: {e}")
 
 
 @pytest.mark.asyncio

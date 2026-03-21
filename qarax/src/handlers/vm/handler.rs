@@ -1758,8 +1758,9 @@ pub struct AttachDiskRequest {
 
 /// Attach a storage object to a VM as a disk.
 /// For VMs in `Created` state the disk is only recorded in the database and will be
-/// passed to Cloud Hypervisor when the VM starts.  For VMs already in `Running` state
-/// the disk is recorded **and** immediately hotplugged into the running VM.
+/// passed to Cloud Hypervisor when the VM starts.  For VMs in `Running` or `Shutdown`
+/// state the disk is recorded **and** immediately applied via the Cloud Hypervisor API
+/// (CH keeps the VM definition after shutdown, so disk changes are accepted).
 #[utoipa::path(
     post,
     path = "/vms/{vm_id}/disks",
@@ -1768,9 +1769,9 @@ pub struct AttachDiskRequest {
     ),
     request_body = AttachDiskRequest,
     responses(
-        (status = 201, description = "Disk attached (and hotplugged if VM is running)", body = crate::model::vm_disks::VmDisk),
+        (status = 201, description = "Disk attached (and applied to CH if VM is running or shutdown)", body = crate::model::vm_disks::VmDisk),
         (status = 404, description = "VM or storage object not found"),
-        (status = 422, description = "VM not in Created or Running state"),
+        (status = 422, description = "VM not in Created, Running, or Shutdown state"),
         (status = 500, description = "Internal server error")
     ),
     tag = "vms"
@@ -1785,10 +1786,10 @@ pub async fn attach_disk(
 
     let vm = vms::get(env.pool(), vm_id).await?;
     match vm.status {
-        VmStatus::Created | VmStatus::Running => {}
+        VmStatus::Created | VmStatus::Running | VmStatus::Shutdown => {}
         _ => {
             return Err(crate::errors::Error::UnprocessableEntity(
-                "Disks can only be attached to VMs in Created or Running state".into(),
+                "Disks can only be attached to VMs in Created, Running, or Shutdown state".into(),
             ));
         }
     }
@@ -1847,18 +1848,20 @@ pub async fn attach_disk(
     let id = vm_disks::create(env.pool(), &disk_record).await?;
     let disk = vm_disks::get(env.pool(), id).await?;
 
-    // If the VM is running, hotplug the disk immediately via gRPC
-    if vm.status == VmStatus::Running {
+    // If the VM is running or shutdown, apply the disk via gRPC immediately.
+    // Cloud Hypervisor keeps the VM definition after shutdown (CH "Created" state),
+    // so add-disk works on both running and stopped VMs.
+    if matches!(vm.status, VmStatus::Running | VmStatus::Shutdown) {
         let host = host_for_vm(&env, vm_id).await?;
         let disk_config = disk_config_for_hotplug(&disk, &obj, &pool);
         if let Err(e) = NodeClient::new(&host.address, host.port as u16)
             .add_disk_device(vm_id, disk_config)
             .await
         {
-            error!("Failed to hotplug disk to running VM {}: {}", vm_id, e);
+            error!("Failed to add disk to VM {}: {}", vm_id, e);
             if let Err(delete_err) = vm_disks::delete(env.pool(), disk.id).await {
                 error!(
-                    "Failed to clean up vm_disk record {} after hotplug failure: {}",
+                    "Failed to clean up vm_disk record {} after add-disk failure: {}",
                     disk.id, delete_err
                 );
             }
@@ -1986,9 +1989,9 @@ fn next_net_id(existing: &[NetworkInterface]) -> String {
         ("device_id" = String, Path, description = "Disk logical name (e.g. \"disk0\")")
     ),
     responses(
-        (status = 204, description = "Disk removed (and hotunplugged if VM was running)"),
+        (status = 204, description = "Disk removed (and removed from CH if VM was running or shutdown)"),
         (status = 404, description = "VM or disk not found"),
-        (status = 422, description = "VM not in Created or Running state"),
+        (status = 422, description = "VM not in Created, Running, or Shutdown state"),
         (status = 500, description = "Internal server error")
     ),
     tag = "vms"
@@ -2000,10 +2003,10 @@ pub async fn remove_disk(
 ) -> Result<ApiResponse<()>> {
     let vm = vms::get(env.pool(), vm_id).await?;
     match vm.status {
-        VmStatus::Created | VmStatus::Running => {}
+        VmStatus::Created | VmStatus::Running | VmStatus::Shutdown => {}
         _ => {
             return Err(crate::errors::Error::UnprocessableEntity(
-                "Disks can only be removed from VMs in Created or Running state".into(),
+                "Disks can only be removed from VMs in Created, Running, or Shutdown state".into(),
             ));
         }
     }
@@ -2012,14 +2015,16 @@ pub async fn remove_disk(
         .await?
         .ok_or(crate::errors::Error::NotFound)?;
 
-    if vm.status == VmStatus::Running {
+    // Remove from CH if the VM has been created on the node (Running or Shutdown).
+    // CH keeps the VM definition after shutdown, so remove-disk works in both states.
+    if matches!(vm.status, VmStatus::Running | VmStatus::Shutdown) {
         let host = host_for_vm(&env, vm_id).await?;
         NodeClient::new(&host.address, host.port as u16)
             .remove_disk_device(vm_id, &device_id)
             .await
             .map_err(|e| {
                 error!(
-                    "Failed to hotunplug disk {} from VM {}: {}",
+                    "Failed to remove disk {} from VM {}: {}",
                     device_id, vm_id, e
                 );
                 crate::errors::Error::InternalServerError

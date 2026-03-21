@@ -1134,8 +1134,9 @@ paths:
       summary: |-
         Attach a storage object to a VM as a disk.
         For VMs in `Created` state the disk is only recorded in the database and will be
-        passed to Cloud Hypervisor when the VM starts.  For VMs already in `Running` state
-        the disk is recorded **and** immediately hotplugged into the running VM.
+        passed to Cloud Hypervisor when the VM starts.  For VMs in `Running` or `Shutdown`
+        state the disk is recorded **and** immediately applied via the Cloud Hypervisor API
+        (CH keeps the VM definition after shutdown, so disk changes are accepted).
       operationId: attach_disk
       parameters:
       - name: vm_id
@@ -1153,7 +1154,7 @@ paths:
         required: true
       responses:
         '201':
-          description: Disk attached (and hotplugged if VM is running)
+          description: Disk attached (and applied to CH if VM is running or shutdown)
           content:
             application/json:
               schema:
@@ -1161,7 +1162,7 @@ paths:
         '404':
           description: VM or storage object not found
         '422':
-          description: VM not in Created or Running state
+          description: VM not in Created, Running, or Shutdown state
         '500':
           description: Internal server error
   /vms/{vm_id}/disks/{device_id}:
@@ -1185,11 +1186,11 @@ paths:
           type: string
       responses:
         '204':
-          description: Disk removed (and hotunplugged if VM was running)
+          description: Disk removed (and removed from CH if VM was running or shutdown)
         '404':
           description: VM or disk not found
         '422':
-          description: VM not in Created or Running state
+          description: VM not in Created, Running, or Shutdown state
         '500':
           description: Internal server error
   /vms/{vm_id}/force-stop:
