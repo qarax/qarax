@@ -16,10 +16,10 @@
 #     (run-local.sh --with-vm provides these at the default paths below)
 #
 # Usage:
-#   ./demos/demo-boot-source.sh                                     # use defaults from run-local.sh --with-vm
-#   ./demos/demo-boot-source.sh --kernel /path/to/vmlinux           # custom kernel path
-#   ./demos/demo-boot-source.sh --initramfs /path/to/initramfs.gz   # custom initramfs
-#   ./demos/demo-boot-source.sh --cmdline "console=ttyS0 root=/dev/vda"
+#   ./demos/boot-source/run.sh                                     # use defaults from run-local.sh --with-vm
+#   ./demos/boot-source/run.sh --kernel /path/to/vmlinux           # custom kernel path
+#   ./demos/boot-source/run.sh --initramfs /path/to/initramfs.gz   # custom initramfs
+#   ./demos/boot-source/run.sh --cmdline "console=ttyS0 root=/dev/vda"
 #
 
 set -euo pipefail

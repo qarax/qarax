@@ -205,6 +205,30 @@ qarax boot-source delete my-boot-source
 
 ---
 
+## Lifecycle hooks
+
+```bash
+# List hooks
+qarax hook list
+
+# Create a hook
+qarax hook create \
+  --name vm-events \
+  --url https://example.com/webhook \
+  --scope global
+
+# Update a hook
+qarax hook update vm-events \
+  --url https://example.com/new-webhook \
+  --secret new-secret
+
+# Clear nullable hook fields
+qarax hook update vm-events --clear-secret
+qarax hook update vm-events --scope global --clear-scope-value
+```
+
+---
+
 ## Jobs
 
 Long-running operations (e.g. OCI image pulls) run as async jobs. The `vm create` command polls the job automatically, but you can also inspect it directly.

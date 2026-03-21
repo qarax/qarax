@@ -27,18 +27,21 @@
 #   - qarax CLI on PATH
 #
 # Usage:
-#   sudo ./demos/demo-hyperconverged.sh             # Full build + run
-#   sudo SKIP_BUILD=1 ./demos/demo-hyperconverged.sh # Skip cargo build
-#   sudo ./demos/demo-hyperconverged.sh --cleanup    # Tear down everything
-#   sudo ./demos/demo-hyperconverged.sh --with-local # Also create a local storage pool
-#   sudo ./demos/demo-hyperconverged.sh --with-nfs --nfs-url server:/export  # Also create an NFS pool
-#   sudo ./demos/demo-hyperconverged.sh --with-local-vm  # Also boot a firmware VM with cloud image
-#   sudo ./demos/demo-hyperconverged.sh --with-db-vm    # Also boot an OCI PostgreSQL VM
-#   sudo ./demos/demo-hyperconverged.sh --network-backend passt  # Use passt-backed VM networking
+#   sudo ./demos/hyperconverged/run.sh             # Full build + run
+#   sudo SKIP_BUILD=1 ./demos/hyperconverged/run.sh # Skip cargo build
+#   sudo ./demos/hyperconverged/run.sh --cleanup    # Tear down everything
+#   sudo ./demos/hyperconverged/run.sh --with-local # Also create a local storage pool
+#   sudo ./demos/hyperconverged/run.sh --with-nfs --nfs-url server:/export  # Also create an NFS pool
+#   sudo ./demos/hyperconverged/run.sh --with-local-vm  # Also boot a firmware VM with cloud image
+#   sudo ./demos/hyperconverged/run.sh --with-db-vm    # Also boot an OCI PostgreSQL VM
+#   sudo ./demos/hyperconverged/run.sh --network-backend passt  # Use passt-backed VM networking
 
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+DEMO_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "${REPO_ROOT}/demos/lib.sh"
+
 cd "$REPO_ROOT"
 
 # Ensure cargo/rustup are on PATH when running under sudo
@@ -48,11 +51,6 @@ if [[ -n "${SUDO_USER:-}" ]]; then
 	export RUSTUP_HOME="${RUSTUP_HOME:-${SUDO_HOME}/.rustup}"
 	export CARGO_HOME="${CARGO_HOME:-${SUDO_HOME}/.cargo}"
 fi
-
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-NC='\033[0m'
 
 # Configuration
 CP_VM_CPUS=4
@@ -78,7 +76,6 @@ REGISTRY_CONTAINER_NAME="qarax-demo-registry"
 cleanup() {
 	echo -e "${YELLOW}Cleaning up hyperconverged demo...${NC}"
 
-	# Stop control plane VM
 	if [[ -S "$CP_API_SOCKET" ]]; then
 		echo "Stopping control plane VM..."
 		"$CH_BINARY" --api-socket "$CP_API_SOCKET" api vm.shutdown 2>/dev/null || true
@@ -87,28 +84,23 @@ cleanup() {
 		sleep 1
 	fi
 
-	# Kill any lingering cloud-hypervisor for the control plane
 	if [[ -f /tmp/qarax-cp-ch.pid ]]; then
 		kill "$(cat /tmp/qarax-cp-ch.pid)" 2>/dev/null || true
 		rm -f /tmp/qarax-cp-ch.pid
 	fi
 
-	# Stop local registry container
 	if podman container exists "$REGISTRY_CONTAINER_NAME" 2>/dev/null; then
 		echo "Stopping local registry..."
 		podman rm -f "$REGISTRY_CONTAINER_NAME" 2>/dev/null || true
 	fi
 
-	# Remove NAT masquerade rule (interface-agnostic)
 	iptables -t nat -D POSTROUTING -s 192.168.100.0/24 -j MASQUERADE 2>/dev/null || true
 
-	# Remove TAP device
 	if ip link show "$TAP_NAME" &>/dev/null; then
 		echo "Removing TAP device ${TAP_NAME}..."
 		ip link delete "$TAP_NAME" 2>/dev/null || true
 	fi
 
-	# Clean up temp files
 	rm -f "$CP_API_SOCKET" "$CP_CONSOLE_LOG" "$CP_ROOTFS"
 
 	echo -e "${GREEN}Cleanup complete.${NC}"
@@ -182,9 +174,7 @@ if [[ "$WITH_NFS" -eq 1 && -z "$NFS_URL" ]]; then
 	exit 1
 fi
 
-if [[ -z "$NETWORK_BACKEND" ]]; then
-	NETWORK_BACKEND="bridge"
-fi
+NETWORK_BACKEND="${NETWORK_BACKEND:-bridge}"
 
 if [[ "$NETWORK_BACKEND" != "bridge" && "$NETWORK_BACKEND" != "passt" ]]; then
 	echo -e "${RED}--network-backend must be 'bridge' or 'passt'${NC}"
@@ -202,21 +192,11 @@ if [[ $EUID -ne 0 ]]; then
 	exit 1
 fi
 
-if [[ ! -e /dev/kvm ]]; then
-	echo -e "${RED}/dev/kvm not found. KVM is required.${NC}"
-	exit 1
-fi
-
-if ! command -v podman &>/dev/null; then
-	echo -e "${RED}podman is required. Install it and try again.${NC}"
-	exit 1
-fi
+[[ -e /dev/kvm ]] || die "/dev/kvm not found. KVM is required."
+command -v podman &>/dev/null || die "podman is required. Install it and try again."
 
 for tool in sgdisk mkfs.fat partprobe; do
-	if ! command -v "$tool" &>/dev/null; then
-		echo -e "${RED}${tool} is required. Install gdisk, dosfstools, and parted.${NC}"
-		exit 1
-	fi
+	command -v "$tool" &>/dev/null || die "${tool} is required. Install gdisk, dosfstools, and parted."
 done
 
 if [[ ! -x "$CH_BINARY" ]]; then
@@ -243,8 +223,6 @@ fi
 
 echo -e "${YELLOW}Phase 1: Build${NC}"
 
-MUSL_TARGET="x86_64-unknown-linux-musl"
-
 if [[ -z "${SKIP_BUILD:-}" ]]; then
 	if ! rustup target list --installed 2>/dev/null | grep -q "$MUSL_TARGET"; then
 		echo "Adding Rust target ${MUSL_TARGET}..."
@@ -256,17 +234,13 @@ else
 	echo "Skipping build (SKIP_BUILD=1)"
 fi
 
-# Verify binaries exist
 for bin in qarax qarax-node qarax-init; do
-	if [[ ! -f "${REPO_ROOT}/target/${MUSL_TARGET}/release/${bin}" ]]; then
-		echo -e "${RED}Binary not found: target/${MUSL_TARGET}/release/${bin}${NC}"
-		echo "Run without SKIP_BUILD to build first."
-		exit 1
-	fi
+	[[ -f "${REPO_ROOT}/target/${MUSL_TARGET}/release/${bin}" ]] \
+		|| die "Binary not found: target/${MUSL_TARGET}/release/${bin} — run without SKIP_BUILD to build first."
 done
 
 echo "Building control plane OCI image..."
-podman build -f demos/Containerfile.control-plane -t qarax-control-plane .
+podman build -f "${DEMO_DIR}/Containerfile.control-plane" -t qarax-control-plane .
 
 echo "Exporting rootfs tarball..."
 CONTAINER_ID=$(podman create qarax-control-plane /bin/true | tail -1)
@@ -275,24 +249,19 @@ rm -f "$ROOTFS_TAR" "$CP_ROOTFS"
 podman export "$CONTAINER_ID" -o "$ROOTFS_TAR"
 podman rm "$CONTAINER_ID"
 
-# Build a GPT disk image with ESP (FAT32) + root (ext4).
-# hypervisor-fw boots via Boot Loader Specification entries on the ESP.
 echo "Building GPT disk image (ESP + root)..."
 ESP_SIZE_MB=256
 dd if=/dev/zero of="$CP_ROOTFS" bs=1M count="$CP_ROOTFS_SIZE_MB"
 
-# Create GPT: partition 1 = ESP (256 MB), partition 2 = root (rest)
 sgdisk -Z "$CP_ROOTFS"
 sgdisk -n 1:2048:+${ESP_SIZE_MB}M -t 1:ef00 -c 1:"EFI System" "$CP_ROOTFS"
 sgdisk -n 2:0:0 -t 2:8300 -c 2:"Linux root" "$CP_ROOTFS"
 sgdisk -p "$CP_ROOTFS"
 
 LOOP_DEV=$(losetup --find --show -P "$CP_ROOTFS")
-# -P creates partition devices: ${LOOP_DEV}p1, ${LOOP_DEV}p2
 ESP_DEV="${LOOP_DEV}p1"
 ROOT_DEV="${LOOP_DEV}p2"
 
-# Wait for partition devices to appear
 timeout=5; elapsed=0
 while [[ ! -b "$ROOT_DEV" && $elapsed -lt $timeout ]]; do
 	sleep 0.5; elapsed=$((elapsed + 1))
@@ -308,18 +277,13 @@ fi
 mkfs.fat -F 32 "$ESP_DEV"
 mkfs.ext4 -F "$ROOT_DEV"
 
-# Mount root and populate from tarball
 ROOTFS_MOUNT=$(mktemp -d)
 mount "$ROOT_DEV" "$ROOTFS_MOUNT"
 tar xf "$ROOTFS_TAR" -C "$ROOTFS_MOUNT"
 
-# Find the kernel version and save boot files before mounting ESP over /boot
 KVER=$(ls "${ROOTFS_MOUNT}/lib/modules/" | sort -V | tail -1)
 echo "Kernel version in rootfs: ${KVER}"
 
-# Find vmlinuz - in Fedora containers, kernel-core installs it to
-# /lib/modules/<version>/vmlinuz (kernel-install doesn't run without systemd).
-# Check both /boot/ and /lib/modules/ locations.
 VMLINUZ=""
 if [[ -f "${ROOTFS_MOUNT}/boot/vmlinuz-${KVER}" ]]; then
 	VMLINUZ="${ROOTFS_MOUNT}/boot/vmlinuz-${KVER}"
@@ -337,12 +301,10 @@ if [[ -z "$VMLINUZ" ]]; then
 fi
 echo "Found vmlinuz at: ${VMLINUZ}"
 
-# Mount ESP at /boot and copy kernel + BLS entry
 mount "$ESP_DEV" "${ROOTFS_MOUNT}/boot"
 cp "$VMLINUZ" "${ROOTFS_MOUNT}/boot/vmlinuz-${KVER}"
 echo "Copied vmlinuz-${KVER} to ESP"
 
-# Create BLS loader config and entry for hypervisor-fw
 mkdir -p "${ROOTFS_MOUNT}/boot/loader/entries"
 
 cat > "${ROOTFS_MOUNT}/boot/loader/loader.conf" << EOF
@@ -368,7 +330,6 @@ losetup -d "$LOOP_DEV"
 rmdir "$ROOTFS_MOUNT"
 rm -f "$ROOTFS_TAR"
 
-# Build the CLI last so the `qarax` binary in target/ is the CLI, not the server.
 echo "Building qarax CLI..."
 cargo build --release -p cli
 QARAX_CLI="${REPO_ROOT}/target/${MUSL_TARGET}/release/qarax"
@@ -389,25 +350,20 @@ else
 		registry:2
 fi
 
-# Wait for registry to be ready
 echo -n "Waiting for registry"
-timeout=15
-elapsed=0
+timeout=15; elapsed=0
 while [[ $elapsed -lt $timeout ]]; do
 	if curl -sf "http://localhost:${REGISTRY_PORT}/v2/" -o /dev/null 2>/dev/null; then
 		echo ""
 		echo -e "${GREEN}Local registry is ready on port ${REGISTRY_PORT}${NC}"
 		break
 	fi
-	echo -n "."
-	sleep 1
-	elapsed=$((elapsed + 1))
+	echo -n "."; sleep 1; elapsed=$((elapsed + 1))
 done
 
 if [[ $elapsed -ge $timeout ]]; then
 	echo ""
-	echo -e "${RED}Timeout waiting for local registry${NC}"
-	exit 1
+	die "Timeout waiting for local registry"
 fi
 
 echo ""
@@ -416,7 +372,6 @@ echo ""
 
 echo -e "${YELLOW}Phase 3: Launch control plane VM${NC}"
 
-# Create TAP device
 if ip link show "$TAP_NAME" &>/dev/null; then
 	echo "TAP device ${TAP_NAME} already exists, reusing"
 else
@@ -426,8 +381,6 @@ fi
 ip link set "$TAP_NAME" up
 ip addr add "${HOST_TAP_IP}/24" dev "$TAP_NAME" 2>/dev/null || true
 
-# Enable IP forwarding and NAT masquerade (needed for VM internet access)
-# Use interface-agnostic rule so it survives switching between wifi/ethernet.
 sysctl -q net.ipv4.ip_forward=1
 if ! iptables -t nat -C POSTROUTING -s 192.168.100.0/24 -j MASQUERADE 2>/dev/null; then
 	echo "Setting up NAT masquerade for 192.168.100.0/24..."
@@ -451,21 +404,16 @@ echo "Cloud Hypervisor PID: ${CH_PID}"
 echo "Console log: ${CP_CONSOLE_LOG}"
 echo ""
 
-# Wait for API to become healthy
 echo -n "Waiting for qarax API at http://${CP_VM_IP}:8000/"
-timeout=120
-elapsed=0
+timeout=120; elapsed=0
 while [[ $elapsed -lt $timeout ]]; do
 	if curl -sf "http://${CP_VM_IP}:8000/" -o /dev/null 2>/dev/null; then
 		echo ""
 		echo -e "${GREEN}qarax API is ready!${NC}"
 		break
 	fi
-	echo -n "."
-	sleep 2
-	elapsed=$((elapsed + 2))
+	echo -n "."; sleep 2; elapsed=$((elapsed + 2))
 
-	# Check if CH process died
 	if ! kill -0 "$CH_PID" 2>/dev/null; then
 		echo ""
 		echo -e "${RED}Cloud Hypervisor process died. Check console log:${NC}"
@@ -503,16 +451,12 @@ HOST_ID=$(curl -sf -X POST "${QARAX_API}/hosts" \
 		"password": ""
 	}' | tr -d '"')
 
-if [[ -z "$HOST_ID" ]]; then
-	echo -e "${RED}Failed to add host${NC}"
-	exit 1
-fi
+[[ -n "$HOST_ID" ]] || die "Failed to add host"
 echo -e "Host added: ${HOST_ID}"
 
 echo "Initializing host (gRPC handshake)..."
 curl -sf -X POST "${QARAX_API}/hosts/${HOST_ID}/init" | head -c 200
 echo ""
-
 echo ""
 
 # ── Phase 5: Create storage pools and workload VMs ────────────────────────
@@ -525,17 +469,12 @@ DEMO_VM_MEMORY=268435456  # 256 MiB
 
 export QARAX_SERVER="${QARAX_API}"
 
-# -- Default network (always created) --
-
 echo "Creating default network (192.168.100.0/24)..."
 "$QARAX_CLI" network create --name default --subnet 192.168.100.0/24 --gateway 192.168.100.1 --network-type "$NETWORK_BACKEND"
 
 echo "Attaching network to host (bridged to eth0)..."
 "$QARAX_CLI" network attach-host --network default --host local-node --bridge-name qbr0 --parent-interface eth0
-
 echo ""
-
-# -- OverlayBD pool (always created) --
 
 echo "Creating overlaybd storage pool..."
 "$QARAX_CLI" storage-pool create --name overlaybd-pool --pool-type overlaybd \
@@ -557,38 +496,25 @@ echo "Attaching OCI disk..."
 
 echo "Starting OCI VM..."
 "$QARAX_CLI" vm start "${DEMO_VM_NAME}"
-
 echo ""
-
-# -- Local storage pool (optional) --
 
 if [[ "$WITH_LOCAL" -eq 1 ]]; then
 	echo "Creating local storage pool..."
 	"$QARAX_CLI" storage-pool create --name local-pool --pool-type local \
 		--config '{"path":"'"${LOCAL_POOL_PATH}"'"}'
-
-	echo "Attaching local pool to host..."
 	"$QARAX_CLI" storage-pool attach-host local-pool local-node
-
 	echo -e "${GREEN}Local storage pool 'local-pool' created (path: ${LOCAL_POOL_PATH})${NC}"
 	echo ""
 fi
-
-# -- NFS storage pool (optional) --
 
 if [[ "$WITH_NFS" -eq 1 ]]; then
 	echo "Creating NFS storage pool..."
 	"$QARAX_CLI" storage-pool create --name nfs-pool --pool-type nfs \
 		--config '{"url":"'"${NFS_URL}"'"}'
-
-	echo "Attaching NFS pool to host..."
 	"$QARAX_CLI" storage-pool attach-host nfs-pool local-node
-
 	echo -e "${GREEN}NFS storage pool 'nfs-pool' created (url: ${NFS_URL})${NC}"
 	echo ""
 fi
-
-# -- Firmware-boot VM with cloud image (optional) --
 
 if [[ "$WITH_LOCAL_VM" -eq 1 ]]; then
 	CLOUD_VM_NAME="cloud-vm"
@@ -611,11 +537,6 @@ if [[ "$WITH_LOCAL_VM" -eq 1 ]]; then
 	echo ""
 fi
 
-# -- OCI database VM (optional) --
-# Uses --image-ref which triggers the async path: the server imports the image
-# into the overlaybd pool, creates a storage object, and attaches a vda disk
-# automatically — no manual import or attach-disk needed.
-
 if [[ "$WITH_DB_VM" -eq 1 ]]; then
 	DB_VM_NAME="db-vm"
 	DB_VM_MEMORY=536870912  # 512 MiB
@@ -629,7 +550,6 @@ ENV POSTGRES_HOST_AUTH_METHOD=trust
 EOF
 		podman build -t localhost:${REGISTRY_PORT}/postgres:17-alpine-trust -f /tmp/Containerfile.postgres
 		podman push localhost:${REGISTRY_PORT}/postgres:17-alpine-trust --tls-verify=false
-		# Make sure qarax-node can resolve the host registry IP
 		DB_IMAGE="${HOST_TAP_IP}:${REGISTRY_PORT}/postgres:17-alpine-trust"
 	fi
 
@@ -664,27 +584,11 @@ for item in items:
 	echo -e "${GREEN}OCI database VM '${DB_VM_NAME}' started (image: ${DB_IMAGE})${NC}"
 	echo ""
 	echo -e "${YELLOW}Database VM usage:${NC}"
-	echo "  Once the VM is running, attach a console to interact with it:"
-	echo ""
-	echo "    qarax vm attach ${DB_VM_NAME}"
-	echo ""
-	echo "  Inside the VM, PostgreSQL will be running. Connect with:"
-	echo ""
-	echo "    psql -U postgres"
-	echo ""
-	echo "  The VM is bridged to the host network (192.168.100.0/24)."
-	echo "  Connect directly from the host:"
-	echo ""
+	echo "  qarax vm attach ${DB_VM_NAME}   # interactive console"
+	echo "  psql -U postgres                # inside the VM"
 	if [[ -n "${DB_VM_IP}" ]]; then
-		echo "    psql -h ${DB_VM_IP} -U postgres"
-	else
-		echo "    psql -h <vm-ip> -U postgres"
+		echo "  psql -h ${DB_VM_IP} -U postgres # from the host"
 	fi
-	echo ""
-	echo "  Check VM status and logs:"
-	echo ""
-	echo "    qarax vm get ${DB_VM_NAME}"
-	echo "    qarax vm console ${DB_VM_NAME}"
 	echo ""
 fi
 
@@ -700,25 +604,13 @@ echo "  Console log: ${CP_CONSOLE_LOG}"
 echo ""
 echo "Storage pools:"
 echo "  overlaybd-pool   (overlaybd, registry: http://${HOST_TAP_IP}:${REGISTRY_PORT})"
-if [[ "$WITH_LOCAL" -eq 1 ]]; then
-	echo "  local-pool        (local, path: ${LOCAL_POOL_PATH})"
-fi
-if [[ "$WITH_NFS" -eq 1 ]]; then
-	echo "  nfs-pool          (nfs, url: ${NFS_URL})"
-fi
+[[ "$WITH_LOCAL" -eq 1 ]] && echo "  local-pool        (local, path: ${LOCAL_POOL_PATH})"
+[[ "$WITH_NFS"   -eq 1 ]] && echo "  nfs-pool          (nfs, url: ${NFS_URL})"
 echo ""
 echo "Workload VMs:"
 echo "  ${DEMO_VM_NAME}         (OCI: ${DEMO_IMAGE})"
-if [[ "$WITH_DB_VM" -eq 1 ]]; then
-	echo "  db-vm             (OCI: ${DB_IMAGE}, PostgreSQL)"
-fi
-if [[ "$WITH_LOCAL_VM" -eq 1 ]]; then
-	echo "  cloud-vm          (firmware boot, cloud image)"
-fi
-echo ""
-echo "Local OCI Registry:"
-echo "  Host URL:    http://localhost:${REGISTRY_PORT}"
-echo "  VM URL:      http://${HOST_TAP_IP}:${REGISTRY_PORT}"
+[[ "$WITH_DB_VM"    -eq 1 ]] && echo "  db-vm             (OCI: ${DB_IMAGE}, PostgreSQL)"
+[[ "$WITH_LOCAL_VM" -eq 1 ]] && echo "  cloud-vm          (firmware boot, cloud image)"
 echo ""
 echo "Set server for CLI commands:"
 echo "  export QARAX_SERVER=http://${CP_VM_IP}:8000"
@@ -726,15 +618,9 @@ echo ""
 echo "Interact with VMs:"
 echo "  qarax vm list"
 echo "  qarax vm attach ${DEMO_VM_NAME}"
-if [[ "$WITH_DB_VM" -eq 1 ]]; then
-	echo "  qarax vm attach db-vm          # interactive console"
-	echo "  qarax vm console db-vm         # view boot/console log"
-	echo "  # Inside the VM:  psql -U postgres"
-fi
-if [[ "$WITH_LOCAL_VM" -eq 1 ]]; then
-	echo "  qarax vm attach cloud-vm"
-fi
+[[ "$WITH_DB_VM"    -eq 1 ]] && echo "  qarax vm attach db-vm"
+[[ "$WITH_LOCAL_VM" -eq 1 ]] && echo "  qarax vm attach cloud-vm"
 echo ""
 echo "Cleanup:"
-echo "  sudo ./demos/demo-hyperconverged.sh --cleanup"
+echo "  sudo ./demos/hyperconverged/run.sh --cleanup"
 echo ""

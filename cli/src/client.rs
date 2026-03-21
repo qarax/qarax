@@ -155,6 +155,26 @@ impl Client {
             .context("failed to parse response")
     }
 
+    /// PATCH request with a JSON body, deserializing the response as JSON.
+    pub async fn patch<B: Serialize, T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> anyhow::Result<T> {
+        let resp = self
+            .inner
+            .patch(self.url(path))
+            .json(body)
+            .send()
+            .await
+            .with_context(|| format!("PATCH {path}"))?;
+        Self::check_error(resp)
+            .await?
+            .json()
+            .await
+            .context("failed to parse response")
+    }
+
     /// DELETE request, discarding the response body.
     pub async fn delete(&self, path: &str) -> anyhow::Result<()> {
         let resp = self

@@ -5,7 +5,7 @@
 # In VM mode, pass the VM IP explicitly as QARAX_NODE_HOST or as the second arg.
 # Usage: ./setup_host.sh [QARAX_URL] [QARAX_NODE_HOST] [QARAX_NODE_PORT] [HOST_NAME]
 
-set -e
+set -euo pipefail
 
 QARAX_URL="${1:-http://localhost:8000}"
 QARAX_NODE_HOST="${2:-qarax-node}"
@@ -37,15 +37,37 @@ QARAX="$QARAX_BIN --server $QARAX_URL"
 
 echo "Registering host (${QARAX_NODE_HOST}:${QARAX_NODE_PORT})..."
 
-# Attempt registration; ignore errors since the host may already exist
-# (the address column has a UNIQUE constraint).
-$QARAX host add \
-	--name "$HOST_NAME" \
-	--address "$QARAX_NODE_HOST" \
-	--port "$QARAX_NODE_PORT" \
-	--user root \
-	--password "" 2>/dev/null || true
+add_output=""
+if ! add_output=$(
+	$QARAX host add \
+		--name "$HOST_NAME" \
+		--address "$QARAX_NODE_HOST" \
+		--port "$QARAX_NODE_PORT" \
+		--user root \
+		--password "" 2>&1
+); then
+	# A rerun can legitimately hit uniqueness conflicts if the host already exists.
+	# Log the reason and continue to init/update the existing host entry.
+	echo "Host add returned non-zero, continuing with init: ${add_output}" >&2
+elif [[ -n "$add_output" ]]; then
+	echo "$add_output"
+fi
 
-$QARAX host init "$HOST_NAME"
+attempts=10
+delay_secs=2
+for attempt in $(seq 1 "$attempts"); do
+	if init_output=$($QARAX host init "$HOST_NAME" 2>&1); then
+		echo "$init_output"
+		echo "Host initialized and set to UP (name: ${HOST_NAME})"
+		exit 0
+	fi
 
-echo "Host initialized and set to UP (name: ${HOST_NAME})"
+	echo "Host init attempt ${attempt}/${attempts} failed for ${HOST_NAME}: ${init_output}" >&2
+
+	if [[ "$attempt" -lt "$attempts" ]]; then
+		sleep "$delay_secs"
+	fi
+done
+
+echo "Host init failed after ${attempts} attempts for ${HOST_NAME}" >&2
+exit 1

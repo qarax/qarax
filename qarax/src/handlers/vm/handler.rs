@@ -19,6 +19,7 @@ use crate::{
         boot_sources, host_gpus, hosts,
         hosts::Host,
         jobs::{self, JobType, NewJob},
+        lifecycle_hooks,
         network_interfaces::{self, NetworkInterface},
         networks, snapshots,
         snapshots::{NewSnapshot, Snapshot, SnapshotStatus},
@@ -1271,6 +1272,14 @@ pub async fn delete(
         if let Err(e) = node_client.delete_vm(vm_id).await {
             tracing::warn!("delete_vm on node failed (ignoring): {}", e);
         }
+    }
+
+    // Fire lifecycle hooks before deleting the row
+    let prev_status_str = vm.status.to_string();
+    if let Err(e) =
+        lifecycle_hooks::enqueue_matching(env.pool(), &vm, &prev_status_str, "deleted").await
+    {
+        tracing::warn!("failed to enqueue delete hooks for VM {}: {}", vm_id, e);
     }
 
     vms::delete(env.pool(), vm_id).await?;

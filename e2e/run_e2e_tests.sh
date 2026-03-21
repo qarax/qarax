@@ -18,6 +18,21 @@ cd "$(dirname "$0")"
 #   KEEP=1          - Keep services running after tests (for debugging)
 #   SKIP_BUILD=1    - Skip building qarax-node binary
 
+default_webhook_host() {
+	if [ "$(uname -s)" != "Linux" ]; then
+		echo "host.docker.internal"
+		return
+	fi
+
+	local gw
+	gw=$(docker network inspect e2e_default 2>/dev/null \
+		| python3 -c "import json,sys; cfg=json.load(sys.stdin)[0]['IPAM']['Config']; print(cfg[0]['Gateway'])" 2>/dev/null) \
+		|| gw=$(docker network inspect bridge 2>/dev/null \
+			| python3 -c "import json,sys; cfg=json.load(sys.stdin)[0]['IPAM']['Config']; print(cfg[0]['Gateway'])" 2>/dev/null) \
+		|| gw="172.17.0.1"
+	echo "$gw"
+}
+
 cleanup() {
 	if [ -n "$KEEP" ]; then
 		echo ""
@@ -133,6 +148,8 @@ echo -e "${YELLOW}Installing test dependencies...${NC}"
 uv sync --frozen
 
 # Run the tests
+export WEBHOOK_HOST="${WEBHOOK_HOST:-$(default_webhook_host)}"
+echo -e "${YELLOW}Using webhook host:${NC} ${WEBHOOK_HOST}"
 echo -e "${YELLOW}Running E2E tests...${NC}"
 if uv run pytest -v "$@"; then
 	echo ""

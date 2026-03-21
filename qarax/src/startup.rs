@@ -21,6 +21,9 @@ pub async fn run(
         a.pool_arc(),
     ));
 
+    // Spawn background task to deliver lifecycle hook webhooks
+    tokio::spawn(crate::hook_executor::start_hook_executor(a.pool_arc()));
+
     let app = app(a);
     let server = axum::serve(listener, app);
     Ok(server)

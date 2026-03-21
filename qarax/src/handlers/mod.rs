@@ -21,6 +21,7 @@ mod boot_source;
 mod host;
 mod instance_type;
 mod job;
+mod lifecycle_hook;
 mod network;
 mod storage_object;
 mod storage_pool;
@@ -101,6 +102,12 @@ pub struct NameQuery {
         network::handler::attach_host,
         network::handler::detach_host,
         network::handler::list_ips,
+        lifecycle_hook::handler::list,
+        lifecycle_hook::handler::get,
+        lifecycle_hook::handler::create,
+        lifecycle_hook::handler::update,
+        lifecycle_hook::handler::delete,
+        lifecycle_hook::handler::list_executions,
     ),
     components(
         schemas(
@@ -163,6 +170,12 @@ pub struct NameQuery {
             crate::model::networks::NetworkStatus,
             crate::model::networks::IpAllocation,
             crate::handlers::network::handler::AttachHostRequest,
+            crate::model::lifecycle_hooks::LifecycleHook,
+            crate::model::lifecycle_hooks::NewLifecycleHook,
+            crate::model::lifecycle_hooks::UpdateLifecycleHook,
+            crate::model::lifecycle_hooks::HookExecution,
+            crate::model::lifecycle_hooks::HookScope,
+            crate::model::lifecycle_hooks::HookExecutionStatus,
         )
     ),
     tags(
@@ -175,7 +188,8 @@ pub struct NameQuery {
         (name = "boot-sources", description = "Boot source management endpoints"),
         (name = "transfers", description = "File transfer management endpoints"),
         (name = "jobs", description = "Async job management endpoints"),
-        (name = "networks", description = "Network management endpoints")
+        (name = "networks", description = "Network management endpoints"),
+        (name = "hooks", description = "Lifecycle hook management endpoints")
     ),
     info(
         title = "Qarax API",
@@ -199,6 +213,7 @@ pub fn app(env: App) -> Router {
         .merge(transfers())
         .merge(jobs())
         .merge(networks())
+        .merge(hooks())
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .layer(
             ServiceBuilder::new()
@@ -374,6 +389,24 @@ fn networks() -> Router {
         .route(
             "/networks/{network_id}/ips",
             get(network::handler::list_ips),
+        )
+}
+
+fn hooks() -> Router {
+    Router::new()
+        .route(
+            "/hooks",
+            get(lifecycle_hook::handler::list).post(lifecycle_hook::handler::create),
+        )
+        .route(
+            "/hooks/{hook_id}",
+            get(lifecycle_hook::handler::get)
+                .patch(lifecycle_hook::handler::update)
+                .delete(lifecycle_hook::handler::delete),
+        )
+        .route(
+            "/hooks/{hook_id}/executions",
+            get(lifecycle_hook::handler::list_executions),
         )
 }
 

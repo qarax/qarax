@@ -773,11 +773,28 @@ pub async fn update_status(
     vm_id: Uuid,
     status: VmStatus,
 ) -> Result<(), sqlx::Error> {
+    // Fetch the VM before the update so we have previous status + metadata for hooks
+    let vm = get(pool, vm_id).await.ok();
+
     sqlx::query("UPDATE vms SET status = $1 WHERE id = $2")
-        .bind(status)
+        .bind(&status)
         .bind(vm_id)
         .execute(pool)
         .await?;
+
+    // Enqueue lifecycle hooks (best-effort — don't fail the status update)
+    if let Some(vm) = vm
+        && vm.status != status
+    {
+        let new_status_str = status.to_string();
+        let prev_status_str = vm.status.to_string();
+        if let Err(e) =
+            super::lifecycle_hooks::enqueue_matching(pool, &vm, &prev_status_str, &new_status_str)
+                .await
+        {
+            tracing::warn!("failed to enqueue lifecycle hooks for VM {}: {}", vm_id, e);
+        }
+    }
 
     Ok(())
 }

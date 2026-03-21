@@ -1,5 +1,6 @@
 pub mod boot_source;
 pub mod configure;
+pub mod hook;
 pub mod host;
 pub mod instance_type;
 pub mod job;
@@ -83,6 +84,19 @@ pub async fn resolve_network_id(client: &Client, name_or_id: &str) -> anyhow::Re
         .next()
         .map(|n| n.id)
         .ok_or_else(|| anyhow::anyhow!("no network named {:?}", name_or_id))
+}
+
+/// Resolve a lifecycle hook name or UUID string to a UUID.
+pub async fn resolve_hook_id(client: &Client, name_or_id: &str) -> anyhow::Result<Uuid> {
+    if let Ok(id) = Uuid::parse_str(name_or_id) {
+        return Ok(id);
+    }
+    let hooks = api::hooks::list(client, Some(name_or_id)).await?;
+    hooks
+        .into_iter()
+        .next()
+        .map(|h| h.id)
+        .ok_or_else(|| anyhow::anyhow!("no hook named {:?}", name_or_id))
 }
 
 /// Resolve a boot source name or UUID string to a UUID.

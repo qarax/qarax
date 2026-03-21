@@ -95,6 +95,152 @@ paths:
           description: Boot source not found
         '500':
           description: Internal server error
+  /hooks:
+    get:
+      tags:
+      - hooks
+      operationId: list
+      parameters:
+      - name: name
+        in: query
+        description: Optional name filter for list queries
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      responses:
+        '200':
+          description: List all lifecycle hooks
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/LifecycleHook'
+        '500':
+          description: Internal server error
+    post:
+      tags:
+      - hooks
+      operationId: create
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewLifecycleHook'
+        required: true
+      responses:
+        '201':
+          description: Lifecycle hook created successfully
+          content:
+            text/plain:
+              schema:
+                type: string
+        '409':
+          description: Hook with this name already exists
+        '422':
+          description: Invalid input
+        '500':
+          description: Internal server error
+  /hooks/{hook_id}:
+    get:
+      tags:
+      - hooks
+      operationId: get
+      parameters:
+      - name: hook_id
+        in: path
+        description: Lifecycle hook unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Lifecycle hook found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LifecycleHook'
+        '404':
+          description: Lifecycle hook not found
+        '500':
+          description: Internal server error
+    delete:
+      tags:
+      - hooks
+      operationId: delete
+      parameters:
+      - name: hook_id
+        in: path
+        description: Lifecycle hook unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '204':
+          description: Lifecycle hook deleted successfully
+        '404':
+          description: Lifecycle hook not found
+        '500':
+          description: Internal server error
+    patch:
+      tags:
+      - hooks
+      operationId: update
+      parameters:
+      - name: hook_id
+        in: path
+        description: Lifecycle hook unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateLifecycleHook'
+        required: true
+      responses:
+        '200':
+          description: Lifecycle hook updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LifecycleHook'
+        '404':
+          description: Lifecycle hook not found
+        '500':
+          description: Internal server error
+  /hooks/{hook_id}/executions:
+    get:
+      tags:
+      - hooks
+      operationId: list_executions
+      parameters:
+      - name: hook_id
+        in: path
+        description: Lifecycle hook unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: List hook executions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/HookExecution'
+        '404':
+          description: Lifecycle hook not found
+        '500':
+          description: Internal server error
   /hosts:
     get:
       tags:
@@ -1755,6 +1901,79 @@ components:
           - string
           - 'null'
           description: SSH user override. Defaults to the host's registered `host_user`.
+    HookExecution:
+      type: object
+      required:
+      - id
+      - hook_id
+      - vm_id
+      - previous_status
+      - new_status
+      - status
+      - attempt_count
+      - max_attempts
+      - next_retry_at
+      - payload
+      - created_at
+      properties:
+        attempt_count:
+          type: integer
+          format: int32
+        created_at:
+          type: string
+          format: date-time
+        delivered_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        hook_id:
+          type: string
+          format: uuid
+        id:
+          type: string
+          format: uuid
+        last_error:
+          type:
+          - string
+          - 'null'
+        max_attempts:
+          type: integer
+          format: int32
+        new_status:
+          type: string
+        next_retry_at:
+          type: string
+          format: date-time
+        payload: {}
+        previous_status:
+          type: string
+        response_body:
+          type:
+          - string
+          - 'null'
+        response_status:
+          type:
+          - integer
+          - 'null'
+          format: int32
+        status:
+          $ref: '#/components/schemas/HookExecutionStatus'
+        vm_id:
+          type: string
+          format: uuid
+    HookExecutionStatus:
+      type: string
+      enum:
+      - pending
+      - delivered
+      - failed
+    HookScope:
+      type: string
+      enum:
+      - global
+      - vm
+      - tag
     Host:
       type: object
       required:
@@ -2068,6 +2287,47 @@ components:
       - image_pull
       - vm_start
       - vm_migrate
+    LifecycleHook:
+      type: object
+      required:
+      - id
+      - name
+      - url
+      - scope
+      - events
+      - active
+      - created_at
+      - updated_at
+      properties:
+        active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        events:
+          type: array
+          items:
+            type: string
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        scope:
+          $ref: '#/components/schemas/HookScope'
+        scope_value:
+          type:
+          - string
+          - 'null'
+        secret:
+          type:
+          - string
+          - 'null'
+        updated_at:
+          type: string
+          format: date-time
+        url:
+          type: string
     Network:
       type: object
       required:
@@ -2283,6 +2543,30 @@ components:
           - boolean
           - 'null'
         name:
+          type: string
+    NewLifecycleHook:
+      type: object
+      required:
+      - name
+      - url
+      properties:
+        events:
+          type: array
+          items:
+            type: string
+        name:
+          type: string
+        scope:
+          $ref: '#/components/schemas/HookScope'
+        scope_value:
+          type:
+          - string
+          - 'null'
+        secret:
+          type:
+          - string
+          - 'null'
+        url:
           type: string
     NewNetwork:
       type: object
@@ -2983,6 +3267,35 @@ components:
       properties:
         status:
           $ref: '#/components/schemas/HostStatus'
+    UpdateLifecycleHook:
+      type: object
+      properties:
+        active:
+          type:
+          - boolean
+          - 'null'
+        events:
+          type:
+          - array
+          - 'null'
+          items:
+            type: string
+        scope:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/HookScope'
+        scope_value:
+          type:
+          - string
+          - 'null'
+        secret:
+          type:
+          - string
+          - 'null'
+        url:
+          type:
+          - string
+          - 'null'
     VhostMode:
       type: string
       enum:
@@ -3406,3 +3719,5 @@ tags:
   description: Async job management endpoints
 - name: networks
   description: Network management endpoints
+- name: hooks
+  description: Lifecycle hook management endpoints

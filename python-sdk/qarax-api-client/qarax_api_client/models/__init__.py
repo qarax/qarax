@@ -10,6 +10,9 @@ from .create_snapshot_request import CreateSnapshotRequest
 from .create_vm_response import CreateVmResponse
 from .create_vm_template_from_vm_request import CreateVmTemplateFromVmRequest
 from .deploy_host_request import DeployHostRequest
+from .hook_execution import HookExecution
+from .hook_execution_status import HookExecutionStatus
+from .hook_scope import HookScope
 from .host import Host
 from .host_gpu import HostGpu
 from .host_status import HostStatus
@@ -22,12 +25,14 @@ from .ip_allocation import IpAllocation
 from .job import Job
 from .job_status import JobStatus
 from .job_type import JobType
+from .lifecycle_hook import LifecycleHook
 from .network import Network
 from .network_interface import NetworkInterface
 from .network_status import NetworkStatus
 from .new_boot_source import NewBootSource
 from .new_host import NewHost
 from .new_instance_type import NewInstanceType
+from .new_lifecycle_hook import NewLifecycleHook
 from .new_network import NewNetwork
 from .new_storage_object import NewStorageObject
 from .new_storage_pool import NewStoragePool
@@ -50,6 +55,7 @@ from .transfer import Transfer
 from .transfer_status import TransferStatus
 from .transfer_type import TransferType
 from .update_host_request import UpdateHostRequest
+from .update_lifecycle_hook import UpdateLifecycleHook
 from .vhost_mode import VhostMode
 from .vm import Vm
 from .vm_disk import VmDisk
@@ -75,6 +81,9 @@ __all__ = (
     "CreateVmResponse",
     "CreateVmTemplateFromVmRequest",
     "DeployHostRequest",
+    "HookExecution",
+    "HookExecutionStatus",
+    "HookScope",
     "Host",
     "HostGpu",
     "HostStatus",
@@ -87,12 +96,14 @@ __all__ = (
     "Job",
     "JobStatus",
     "JobType",
+    "LifecycleHook",
     "Network",
     "NetworkInterface",
     "NetworkStatus",
     "NewBootSource",
     "NewHost",
     "NewInstanceType",
+    "NewLifecycleHook",
     "NewNetwork",
     "NewStorageObject",
     "NewStoragePool",
@@ -115,6 +126,7 @@ __all__ = (
     "TransferStatus",
     "TransferType",
     "UpdateHostRequest",
+    "UpdateLifecycleHook",
     "VhostMode",
     "Vm",
     "VmDisk",

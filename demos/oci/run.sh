@@ -15,10 +15,10 @@
 #   - OverlayBD storage pool created (run-local.sh does this automatically)
 #
 # Usage:
-#   ./demos/demo-oci.sh                                          # defaults: Alpine, 1 vCPU, 256 MiB
-#   ./demos/demo-oci.sh --image docker.io/library/ubuntu:latest  # custom image
-#   ./demos/demo-oci.sh --name my-vm --vcpus 2 --memory 512      # custom VM config
-#   ./demos/demo-oci.sh --pool my-pool                           # specify storage pool
+#   ./demos/oci/run.sh                                          # defaults: Alpine, 1 vCPU, 256 MiB
+#   ./demos/oci/run.sh --image docker.io/library/ubuntu:latest  # custom image
+#   ./demos/oci/run.sh --name my-vm --vcpus 2 --memory 512      # custom VM config
+#   ./demos/oci/run.sh --pool my-pool                           # specify storage pool
 #
 
 set -euo pipefail

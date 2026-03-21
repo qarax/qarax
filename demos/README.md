@@ -1,88 +1,28 @@
 # qarax Demos
 
-Demo scripts showcasing different ways to deploy VMs with qarax.
+Each demo lives in its own directory with a `run.sh` and a `README.md`.
 
-## Prerequisites
+| Demo | Description | Stack required |
+|------|-------------|----------------|
+| [oci/](oci/) | Boot a VM from an OCI container image via OverlayBD | `./hack/run-local.sh` |
+| [boot-source/](boot-source/) | Boot a VM from a kernel + initramfs | `./hack/run-local.sh --with-vm` |
+| [hooks/](hooks/) | Watch lifecycle webhook notifications fire in real-time | `make run-local` |
+| [etcd-cluster/](etcd-cluster/) | Self-contained 3-node etcd cluster, each node as a VM | Docker + podman + KVM |
+| [gpu-passthrough/](gpu-passthrough/) | GPU passthrough via VFIO to an OCI-booted VM | `make run-local` + VFIO GPU |
+| [hyperconverged/](hyperconverged/) | Control plane running inside a Cloud Hypervisor VM on bare metal | KVM + podman + root |
 
-1. Start the local stack:
-   ```bash
-   ./hack/run-local.sh           # OCI workflow (no VM networking)
-   ./hack/run-local.sh --with-vm # boot source workflow (builds kernel + rootfs)
-   ```
-
-2. Ensure the `qarax` CLI is installed and on your PATH.
-
-## Demos
-
-### OCI Image (demo-oci.sh)
-
-Run a VM from an OCI container image via OverlayBD. The image is imported into a storage pool, attached as a disk, and booted.
+## Quick start
 
 ```bash
-# Default: Alpine Linux
-./demos/demo-oci.sh
+# Start the local stack
+./hack/run-local.sh
 
-# Custom image
-./demos/demo-oci.sh --image docker.io/library/ubuntu:latest --name ubuntu-vm
+# Run the OCI demo
+./demos/oci/run.sh
 
-# More resources
-./demos/demo-oci.sh --vcpus 2 --memory 512
+# Run the hooks demo
+./demos/hooks/run.sh
 ```
-
-Requires: `./hack/run-local.sh` (creates the overlaybd storage pool).
-
-### Boot Source (demo-boot-source.sh)
-
-Run a VM from a kernel + initramfs (traditional direct-boot). A local storage pool is created, kernel/initramfs are transferred in, and a boot source is assembled.
-
-```bash
-# Default: uses kernel/initramfs from run-local.sh --with-vm
-./demos/demo-boot-source.sh
-
-# Custom kernel
-./demos/demo-boot-source.sh --kernel /path/to/vmlinux --no-initramfs
-
-# Custom kernel cmdline
-./demos/demo-boot-source.sh --cmdline "console=ttyS0 root=/dev/vda rw"
-```
-
-Requires: `./hack/run-local.sh --with-vm` (builds kernel and initramfs).
-
-### Hyperconverged (demo-hyperconverged.sh)
-
-Run the qarax control plane (API + PostgreSQL) inside a Cloud Hypervisor VM on bare metal, with qarax-node managing VMs on the same host. This is the "hosted engine" pattern where the management server itself runs as a VM managed by the host agent.
-
-```
-Host (bare metal)
-├── qarax-node (port 50051)
-├── TAP: qarax-cp-tap0 (192.168.100.1/24)
-└── Cloud Hypervisor VM: control-plane
-    ├── eth0 (192.168.100.10/24)
-    ├── qarax API (port 8000)
-    └── PostgreSQL (local)
-```
-
-```bash
-# Full build + run (requires root for TAP device)
-sudo ./demos/demo-hyperconverged.sh
-
-# Skip cargo build (use existing binaries)
-sudo SKIP_BUILD=1 ./demos/demo-hyperconverged.sh
-
-# Custom kernel path
-sudo KERNEL_PATH=/path/to/vmlinux ./demos/demo-hyperconverged.sh
-
-# Cleanup
-sudo ./demos/demo-hyperconverged.sh --cleanup
-```
-
-Requires:
-- Linux host with KVM (`/dev/kvm`)
-- `podman` (for building the control plane image)
-- `cloud-hypervisor` binary on PATH or at `/usr/local/bin/cloud-hypervisor`
-- Kernel image at `/var/lib/qarax/images/vmlinux` (or set `KERNEL_PATH`)
-- Root/sudo access (for TAP device creation)
-- `qarax` CLI on PATH
 
 ## Cleanup
 

@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_with::rust::double_option;
 use uuid::Uuid;
 
 // ─── VMs ────────────────────────────────────────────────────────────────────
@@ -497,4 +498,74 @@ pub struct ImportToPoolRequest {
 pub struct ImportToPoolResponse {
     pub job_id: Uuid,
     pub storage_object_id: Uuid,
+}
+
+// ─── Lifecycle Hooks ────────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LifecycleHook {
+    pub id: Uuid,
+    pub name: String,
+    pub url: String,
+    pub secret: Option<String>,
+    pub scope: String,
+    pub scope_value: Option<String>,
+    pub events: Vec<String>,
+    pub active: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct NewLifecycleHook {
+    pub name: String,
+    pub url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub secret: Option<String>,
+    pub scope: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope_value: Option<String>,
+    #[serde(default)]
+    pub events: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UpdateLifecycleHook {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(
+        default,
+        with = "double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub secret: Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+    #[serde(
+        default,
+        with = "double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub scope_value: Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub events: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active: Option<bool>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct HookExecution {
+    pub id: Uuid,
+    pub hook_id: Uuid,
+    pub vm_id: Uuid,
+    pub previous_status: String,
+    pub new_status: String,
+    pub status: String,
+    pub attempt_count: i32,
+    pub max_attempts: i32,
+    pub payload: serde_json::Value,
+    pub response_status: Option<i32>,
+    pub last_error: Option<String>,
+    pub created_at: String,
+    pub delivered_at: Option<String>,
 }

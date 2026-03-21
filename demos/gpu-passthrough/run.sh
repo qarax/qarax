@@ -31,11 +31,11 @@
 #   ls -la /dev/vfio/   # should show an IOMMU group number
 #
 # Usage:
-#   ./demos/demo-gpu-passthrough.sh                              # defaults (CUDA image, 1 GPU)
-#   ./demos/demo-gpu-passthrough.sh --gpu-count 2                # request 2 GPUs
-#   ./demos/demo-gpu-passthrough.sh --gpu-vendor nvidia          # filter by vendor
-#   ./demos/demo-gpu-passthrough.sh --image-ref nvcr.io/nvidia/cuda:12.6.3-devel-ubuntu24.04
-#   ./demos/demo-gpu-passthrough.sh --host my-node               # specify host
+#   ./demos/gpu-passthrough/run.sh                              # defaults (CUDA image, 1 GPU)
+#   ./demos/gpu-passthrough/run.sh --gpu-count 2                # request 2 GPUs
+#   ./demos/gpu-passthrough/run.sh --gpu-vendor nvidia          # filter by vendor
+#   ./demos/gpu-passthrough/run.sh --image-ref nvcr.io/nvidia/cuda:12.6.3-devel-ubuntu24.04
+#   ./demos/gpu-passthrough/run.sh --host my-node               # specify host
 
 set -euo pipefail
 

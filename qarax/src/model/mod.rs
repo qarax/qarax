@@ -3,6 +3,7 @@ pub mod host_gpus;
 pub mod hosts;
 pub mod instance_types;
 pub mod jobs;
+pub mod lifecycle_hooks;
 pub mod network_interfaces;
 pub mod networks;
 pub mod rate_limit_groups;

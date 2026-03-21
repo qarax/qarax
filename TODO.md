@@ -29,3 +29,6 @@ VM Lifecycle
   - Nested virtualization — not exposed as a configurable option
   - USB passthrough — only VFIO/GPU passthrough exists
   - Health checks / probes — no guest-level liveness monitoring
+
+
+qarax-node updates - inform out of date nodes, update mechanism, etc

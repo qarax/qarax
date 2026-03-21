@@ -65,10 +65,18 @@ def ensure_host(base_url: str, name: str, address: str, port: int) -> str:
             host_id = resp.text.strip().strip('"')
             log(f"Host registered: {host_id}")
         elif resp.status_code == 409:
-            # Race condition: re-fetch
+            # Conflict — host already exists (by name or address). Re-fetch and find it.
             resp2 = api("GET", "/hosts", base_url)
             resp2.raise_for_status()
-            host = find_by_name(resp2.json(), name)
+            hosts = resp2.json()
+            host = find_by_name(hosts, name)
+            if host is None:
+                # Name didn't match — conflict was on address; find by address
+                host = next((h for h in hosts if h.get("address") == address), None)
+            if host is None:
+                raise RuntimeError(
+                    f"Host 409 conflict but could not find host by name={name!r} or address={address!r}"
+                )
             host_id = host["id"]
             log(f"Host already registered: {host_id}")
         else:

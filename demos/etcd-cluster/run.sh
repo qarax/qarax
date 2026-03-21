@@ -18,12 +18,15 @@
 #   - Rust toolchain
 #
 # Usage:
-#   ./demos/demo-etcd-cluster.sh           # run everything
-#   ./demos/demo-etcd-cluster.sh --cleanup # stop VMs and tear down stack
+#   ./demos/etcd-cluster/run.sh           # run everything
+#   ./demos/etcd-cluster/run.sh --cleanup # stop VMs and tear down stack
 
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+DEMO_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "${REPO_ROOT}/demos/lib.sh"
+
 cd "$REPO_ROOT"
 
 # ── Configuration ────────────────────────────────────────────────────────────
@@ -47,42 +50,33 @@ NODES=(etcd-0 etcd-1 etcd-2)
 declare -A NODE_IPS=([etcd-0]="10.100.0.10" [etcd-1]="10.100.0.11" [etcd-2]="10.100.0.12")
 
 MEMORY_BYTES=$(( MEMORY_MIB * 1024 * 1024 ))
-MUSL_TARGET="x86_64-unknown-linux-musl"
-
-GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; CYAN='\033[0;36m'; NC='\033[0m'
 
 step() { echo -e "\n${CYAN}=== $* ===${NC}"; }
 ok()   { echo -e "${GREEN}✓ $*${NC}"; }
 info() { echo -e "${YELLOW}$*${NC}"; }
-die()  { echo -e "${RED}ERROR: $*${NC}" >&2; exit 1; }
 
 # ── Locate qarax CLI ─────────────────────────────────────────────────────────
 
-find_qarax_bin() {
-    if command -v qarax &>/dev/null; then
-        echo "qarax"
-    elif [[ -x "$REPO_ROOT/target/$MUSL_TARGET/debug/qarax" ]]; then
-        echo "$REPO_ROOT/target/$MUSL_TARGET/debug/qarax"
-    elif [[ -x "$REPO_ROOT/target/$MUSL_TARGET/release/qarax" ]]; then
-        echo "$REPO_ROOT/target/$MUSL_TARGET/release/qarax"
-    else
-        echo ""
-    fi
-}
+if [[ -z "$(find_qarax_bin)" ]]; then
+    echo "qarax CLI not found — building..."
+    cargo build -p cli
+fi
+
+QARAX_BIN="$(find_qarax_bin)"
+[[ -n "$QARAX_BIN" ]] || die "qarax CLI not found even after build"
+QARAX="$QARAX_BIN --server $SERVER"
 
 # ── Cleanup ──────────────────────────────────────────────────────────────────
 
 cleanup() {
     step "Cleaning up etcd cluster demo"
 
-    # Remove host-side veth (also removes the peer inside the container)
     if ip link show "$VETH_HOST" &>/dev/null; then
         sudo ip link del "$VETH_HOST" 2>/dev/null || true
         ok "Host veth removed"
     fi
 
-    QARAX_BIN="$(find_qarax_bin)"
-    if [[ -n "$QARAX_BIN" ]]; then
+    if [[ -n "$(find_qarax_bin)" ]]; then
         for node in "${NODES[@]}"; do
             "$QARAX_BIN" --server "$SERVER" vm stop   "$node" 2>/dev/null || true
             "$QARAX_BIN" --server "$SERVER" vm delete "$node" 2>/dev/null || true
@@ -168,18 +162,27 @@ cd "$REPO_ROOT"
 
 step "Setting up overlaybd storage pool"
 
-# Check if pool already exists
 pool_exists=$($QARAX storage-pool list 2>/dev/null | grep -c overlaybd 2>/dev/null; true)
 pool_exists=${pool_exists:-0}
 if [[ "$pool_exists" -gt 0 ]]; then
     ok "overlaybd pool already exists"
 else
-    # Register host as "e2e-node" (address "qarax-node" is the Docker Compose service name)
-    python3 hack/setup_vm.py \
-        --skip-vm \
-        --host-name e2e-node \
-        --host-address qarax-node \
-        --kernel-path /dev/null
+    # Register host if not already present
+    if ! $QARAX host list 2>/dev/null | grep -q "$HOST_NAME"; then
+        $QARAX host add --name "$HOST_NAME" --address qarax-node --port 50051 --user root --password ""
+    fi
+
+    # Init host with retries (qarax-node may still be starting)
+    for attempt in 1 2 3 4 5; do
+        if $QARAX host init "$HOST_NAME" 2>/dev/null; then
+            ok "Host initialized"
+            break
+        fi
+        [[ $attempt -lt 5 ]] && { info "Host init attempt $attempt/5 failed, retrying..."; sleep 3; }
+        [[ $attempt -eq 5 ]] && die "Could not initialize host after 5 attempts"
+    done
+
+    $QARAX storage-pool create --name overlaybd-pool --pool-type overlaybd --config '{"url":"http://registry:5000"}'
     ok "overlaybd pool created"
 fi
 
@@ -187,7 +190,7 @@ fi
 
 step "Building etcd node OCI image"
 
-podman build -f demos/etcd/Containerfile -t localhost:5001/etcd-node:src demos/etcd/
+podman build -f "${DEMO_DIR}/Containerfile" -t localhost:5001/etcd-node:src "${DEMO_DIR}/"
 ok "Image built"
 
 step "Pushing etcd image to local registry"
@@ -345,14 +348,14 @@ echo "  etcdctl --endpoints=http://10.100.0.10:2379 put hello world"
 echo "  etcdctl --endpoints=http://10.100.0.11:2379 get hello"
 echo ""
 echo "  # Kill a node and show the cluster survives:"
-echo "  $(find_qarax_bin) --server $SERVER vm stop etcd-2"
+echo "  $QARAX_BIN --server $SERVER vm stop etcd-2"
 echo "  etcdctl --endpoints=http://10.100.0.10:2379,http://10.100.0.11:2379 put still running yes"
 echo ""
 echo "  # View boot log:"
-echo "  $(find_qarax_bin) --server $SERVER vm console etcd-0"
+echo "  $QARAX_BIN --server $SERVER vm console etcd-0"
 echo ""
 echo "  # Interactive serial console:"
-echo "  $(find_qarax_bin) --server $SERVER vm attach etcd-0"
+echo "  $QARAX_BIN --server $SERVER vm attach etcd-0"
 echo ""
 echo "  # Tear down everything:"
-echo "  ./demos/demo-etcd-cluster.sh --cleanup"
+echo "  ./demos/etcd-cluster/run.sh --cleanup"

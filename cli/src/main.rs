@@ -84,6 +84,8 @@ pub enum Commands {
     Transfer(commands::transfer::TransferArgs),
     /// Boot source operations
     BootSource(commands::boot_source::BootSourceArgs),
+    /// Lifecycle hook operations
+    Hook(commands::hook::HookArgs),
     /// Instance type operations
     InstanceType(commands::instance_type::InstanceTypeArgs),
     /// VM template operations
@@ -123,6 +125,7 @@ async fn main() -> Result<()> {
         Commands::Transfer(args) => commands::transfer::run(args, &client, cli.output).await,
         Commands::BootSource(args) => commands::boot_source::run(args, &client, cli.output).await,
         Commands::VmTemplate(args) => commands::vm_template::run(args, &client, cli.output).await,
+        Commands::Hook(args) => commands::hook::run(args, &client, cli.output).await,
         Commands::Job(args) => commands::job::run(args, &client, cli.output).await,
         Commands::Configure(_) => unreachable!(),
     }
