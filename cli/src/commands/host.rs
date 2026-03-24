@@ -21,6 +21,11 @@ pub struct HostArgs {
 enum HostCommand {
     /// List all hosts
     List,
+    /// Get details of a specific host
+    Get {
+        /// Host name or ID
+        host: String,
+    },
     /// Add a new host
     Add {
         /// Host name
@@ -154,6 +159,23 @@ pub async fn run(args: HostArgs, client: &Client, output: OutputFormat) -> anyho
                     })
                     .collect();
                 println!("{}", Table::new(rows).with(Style::psql()));
+            }
+        }
+
+        HostCommand::Get { host } => {
+            let h = api::hosts::get(client, &host).await?;
+            if !matches!(output, OutputFormat::Table) {
+                print_output(&h, output)?;
+            } else {
+                println!("ID:      {}", h.id);
+                println!("Name:    {}", h.name);
+                println!("Address: {}", h.address);
+                println!("Port:    {}", h.port);
+                println!("Status:  {}", h.status);
+                println!("User:    {}", h.host_user);
+                if let Some(ch) = &h.cloud_hypervisor_version {
+                    println!("CH:      {ch}");
+                }
             }
         }
 

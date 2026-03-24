@@ -9,6 +9,7 @@ ARG OVERLAYBD_RPM_SUFFIX=20250818.4601fb2
 ARG OVERLAYBD_RPM_DIST=azurelinux.3.0
 ARG ACI_VERSION=1.4.1
 ARG ACI_RPM_SUFFIX=20260114025326.c6ba42c
+ENV CURL_RETRY_ARGS="--fail --show-error --silent --location --retry 5 --retry-delay 5 --retry-all-errors --connect-timeout 30 --max-time 1800"
 
 # Install dependencies including kernel for vmlinux extraction
 RUN dnf install -y \
@@ -17,6 +18,7 @@ RUN dnf install -y \
     socat \
     iptables \
     nftables \
+    tcpdump \
     passt \
     nmap-ncat \
     curl \
@@ -27,20 +29,32 @@ RUN dnf install -y \
     virtiofsd \
     e2fsprogs \
     nfs-utils \
+    guestfs-tools \
     && dnf clean all \
     && ln -sf /usr/libexec/virtiofsd /usr/local/bin/virtiofsd
 
 # Install Cloud Hypervisor (static binary)
-RUN curl -fsSL \
+RUN curl ${CURL_RETRY_ARGS} \
     "https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/${CLOUD_HYPERVISOR_VERSION}/cloud-hypervisor-static" \
     -o /usr/local/bin/cloud-hypervisor && \
     chmod +x /usr/local/bin/cloud-hypervisor && \
     cloud-hypervisor --version
 
+# Install Cloud Hypervisor UEFI firmware (CLOUDHV.fd).
+# This is the EDK2-based UEFI firmware from the cloud-hypervisor/edk2 project.
+# Unlike standard OVMF, it supports the PVH entry point required by Cloud Hypervisor's
+# --firmware option, and can boot standard OS images (Fedora, Ubuntu, etc.).
+ARG CLOUDHV_FW_TAG=ch-a54f262b09
+RUN mkdir -p /usr/share/cloud-hypervisor && \
+    curl ${CURL_RETRY_ARGS} \
+    "https://github.com/cloud-hypervisor/edk2/releases/download/${CLOUDHV_FW_TAG}/CLOUDHV.fd" \
+    -o /usr/share/cloud-hypervisor/CLOUDHV.fd && \
+    chmod 644 /usr/share/cloud-hypervisor/CLOUDHV.fd
+
 # Install overlaybd-tcmu (provides the TCMU block-device backend for OverlayBD images).
 # The el8 RPM is used because it matches the overlaybd build environment; files are
 # extracted manually to avoid running RPM scriptlets in the container.
-RUN curl -fsSL \
+RUN curl ${CURL_RETRY_ARGS} \
     "https://github.com/containerd/overlaybd/releases/download/v${OVERLAYBD_VERSION}/overlaybd-${OVERLAYBD_VERSION}-${OVERLAYBD_RPM_SUFFIX}.${OVERLAYBD_RPM_DIST}.x86_64.rpm" \
     -o /tmp/overlaybd.rpm && \
     cd / && rpm2cpio /tmp/overlaybd.rpm | cpio -idm --no-absolute-filenames && \
@@ -49,18 +63,14 @@ RUN curl -fsSL \
 
 # Install the overlaybd-snapshotter convertor (statically-linked Go binary).
 # Used to convert OCI images to OverlayBD format.
-RUN curl -fsSL \
+RUN curl ${CURL_RETRY_ARGS} \
     "https://github.com/containerd/accelerated-container-image/releases/download/v${ACI_VERSION}/overlaybd-snapshotter-${ACI_VERSION}-${ACI_RPM_SUFFIX}.x86_64.rpm" \
     -o /tmp/aci.rpm && \
     cd / && rpm2cpio /tmp/aci.rpm | cpio -idm --no-absolute-filenames && \
     rm /tmp/aci.rpm
 
-# Copy qarax-node and qarax-init binaries
-COPY target/x86_64-unknown-linux-musl/release/qarax-node /usr/local/bin/qarax-node
-COPY target/x86_64-unknown-linux-musl/release/qarax-init /usr/local/bin/qarax-init
-RUN chmod +x /usr/local/bin/qarax-node /usr/local/bin/qarax-init
-
 # Create directories for VM data
+# (kept before binary COPY so this layer stays cached across binary rebuilds)
 RUN mkdir -p /var/lib/qarax/vms \
     /var/lib/qarax/images \
     /var/lib/qarax/disks \
@@ -69,11 +79,17 @@ RUN mkdir -p /var/lib/qarax/vms \
 
 # Download Cloud Hypervisor kernel (vmlinux)
 # This kernel has CONFIG_VIRTIO_FS=y (built-in)
-RUN curl -fsSL \
+# Placed before binary COPY so this expensive download stays cached across rebuilds.
+RUN curl ${CURL_RETRY_ARGS} \
     "https://github.com/cloud-hypervisor/linux/releases/download/ch-release-v6.16.9-20251112/vmlinux-x86_64" \
     -o /var/lib/qarax/images/vmlinux && \
     chmod 644 /var/lib/qarax/images/vmlinux && \
     ls -la /var/lib/qarax/images/
+
+# Copy qarax-node and qarax-init binaries
+COPY target/x86_64-unknown-linux-musl/release/qarax-node /usr/local/bin/qarax-node
+COPY target/x86_64-unknown-linux-musl/release/qarax-init /usr/local/bin/qarax-init
+RUN chmod +x /usr/local/bin/qarax-node /usr/local/bin/qarax-init
 
 # Build test initramfs: qarax-init as PID 1, dropbear for SSH access
 # Network is configured statically by the kernel via ip= cmdline parameter.

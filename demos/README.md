@@ -8,6 +8,7 @@ Each demo lives in its own directory with a `run.sh` and a `README.md`.
 | [boot-source/](boot-source/) | Boot a VM from a kernel + initramfs | `./hack/run-local.sh --with-vm` |
 | [hooks/](hooks/) | Watch lifecycle webhook notifications fire in real-time | `make run-local` |
 | [etcd-cluster/](etcd-cluster/) | Self-contained 3-node etcd cluster, each node as a VM | Docker + podman + KVM |
+| [k8s-cluster/](k8s-cluster/) | Upstream 3-node Kubernetes cluster via kubeadm on VMs | Docker + podman + KVM |
 | [gpu-passthrough/](gpu-passthrough/) | GPU passthrough via VFIO to an OCI-booted VM | `make run-local` + VFIO GPU |
 | [hyperconverged/](hyperconverged/) | Control plane running inside a Cloud Hypervisor VM on bare metal | KVM + podman + root |
 

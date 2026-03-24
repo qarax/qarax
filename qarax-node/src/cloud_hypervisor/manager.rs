@@ -1798,6 +1798,18 @@ impl VmManager {
         }
     }
 
+    fn is_qcow2(path: &str) -> bool {
+        use std::io::Read;
+        let mut f = match std::fs::File::open(path) {
+            Ok(f) => f,
+            Err(_) => return false,
+        };
+        let mut magic = [0u8; 4];
+        f.read_exact(&mut magic)
+            .map(|_| magic == [0x51, 0x46, 0x49, 0xfb])
+            .unwrap_or(false)
+    }
+
     fn proto_disk_to_sdk(disk: &ProtoDiskConfig) -> models::DiskConfig {
         models::DiskConfig {
             path: disk.path.clone(),
@@ -1818,9 +1830,16 @@ impl VmManager {
             rate_limit_group: disk.rate_limit_group.clone(),
             queue_affinity: None,
             backing_files: None,
-            // Explicitly set raw to prevent CH from autodetecting and disabling
-            // sector 0 writes, which breaks ext4 superblock updates.
-            image_type: Some(models::DiskImageType::Raw),
+            // Detect qcow2 by magic bytes (QFI\xfb); otherwise force Raw to
+            // prevent CH from autodetecting and disabling sector 0 writes,
+            // which breaks ext4 superblock updates on raw images.
+            image_type: Some(
+                if disk.path.as_deref().map(Self::is_qcow2).unwrap_or(false) {
+                    models::DiskImageType::Qcow2
+                } else {
+                    models::DiskImageType::Raw
+                },
+            ),
             sparse: None,
         }
     }

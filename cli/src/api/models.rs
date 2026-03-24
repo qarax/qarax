@@ -28,6 +28,12 @@ pub struct NewVmNetwork {
     pub network_id: Option<Uuid>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ip: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offload_tso: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offload_ufo: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offload_csum: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -459,6 +465,12 @@ pub struct HotplugNicRequest {
     pub tap: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mtu: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offload_tso: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offload_ufo: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offload_csum: Option<bool>,
 }
 
 // ─── Snapshots ────────────────────────────────────────────────────────────────

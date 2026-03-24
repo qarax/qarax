@@ -52,6 +52,7 @@ services:
       - /dev/net/tun:/dev/net/tun
     volumes:
       - ${PRODUCTION_IMAGES_DIR:-/tmp/qarax-no-production-images}:/var/lib/qarax/production-images:rw
+      - qarax_storage_2:/var/lib/qarax/storage
       - qarax_vms_2:/var/lib/qarax/vms
       - qarax_overlaybd_2:/var/lib/qarax/overlaybd
       - /lib/modules:/lib/modules:ro
@@ -86,6 +87,7 @@ services:
       VM_INITRAMFS: ${VM_INITRAMFS:-/var/lib/qarax/images/test-initramfs.gz}
       VM_CMDLINE: ${VM_CMDLINE:-console=ttyS0 reboot=k panic=1}
       VM_ROOTFS: ${PRODUCTION_ROOTFS:-}
+      VM_FIRMWARE: ${VM_FIRMWARE:-/usr/share/cloud-hypervisor/CLOUDHV.fd}
     ports:
       - "8000:8000"
     depends_on:
@@ -114,6 +116,7 @@ services:
       # Default location: ./local-test-images (created by run-local.sh --with-vm)
       # Note: rw is needed because rootfs.img needs to be writable by VMs
       - ${PRODUCTION_IMAGES_DIR:-/tmp/qarax-no-production-images}:/var/lib/qarax/production-images:rw
+      - qarax_storage:/var/lib/qarax/storage
       - qarax_vms:/var/lib/qarax/vms
       - qarax_overlaybd:/var/lib/qarax/overlaybd
       # Required for modprobe to load host kernel modules (e.g. target_core_user for overlaybd-tcmu)
@@ -141,8 +144,10 @@ services:
 volumes:
   postgres_data:
   registry_data:
+  qarax_storage:
   qarax_vms:
   qarax_overlaybd:
+  qarax_storage_2:
   qarax_vms_2:
   qarax_overlaybd_2:
   nfs_export:

@@ -84,6 +84,15 @@ enum VmCommand {
         /// Static IP address to assign to the VM (requires --network)
         #[arg(long, requires = "network")]
         ip: Option<String>,
+        /// Enable TCP Segmentation Offload for the primary NIC
+        #[arg(long, requires = "network")]
+        offload_tso: Option<bool>,
+        /// Enable UDP Fragmentation Offload for the primary NIC
+        #[arg(long, requires = "network")]
+        offload_ufo: Option<bool>,
+        /// Enable checksum offload for the primary NIC
+        #[arg(long, requires = "network")]
+        offload_csum: Option<bool>,
         /// Path to cloud-init user-data file (triggers NoCloud seed disk attachment)
         #[arg(long, value_name = "FILE")]
         cloud_init_user_data: Option<std::path::PathBuf>,
@@ -190,6 +199,15 @@ enum VmCommand {
         /// MTU override
         #[arg(long)]
         mtu: Option<i32>,
+        /// Enable TCP Segmentation Offload for the NIC
+        #[arg(long)]
+        offload_tso: Option<bool>,
+        /// Enable UDP Fragmentation Offload for the NIC
+        #[arg(long)]
+        offload_ufo: Option<bool>,
+        /// Enable checksum offload for the NIC
+        #[arg(long)]
+        offload_csum: Option<bool>,
     },
     /// Remove a NIC from a VM (hotunplugs if VM is running)
     RemoveNic {
@@ -366,6 +384,9 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
             boot_mode,
             network,
             ip,
+            offload_tso,
+            offload_ufo,
+            offload_csum,
             cloud_init_user_data,
             cloud_init_meta_data,
             cloud_init_network_config,
@@ -399,15 +420,22 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
             };
             // When --ip is given we pass an explicit networks entry so the server
             // uses that IP instead of auto-allocating one.
+            let explicit_nic = ip.is_some()
+                || offload_tso.is_some()
+                || offload_ufo.is_some()
+                || offload_csum.is_some();
             let (network_id, networks) = match network {
                 None => (None, None),
                 Some(ref s) => {
                     let nid = resolve_network_id(client, s).await?;
-                    if let Some(addr) = ip {
+                    if explicit_nic {
                         let iface = NewVmNetwork {
                             id: "net0".to_string(),
                             network_id: Some(nid),
-                            ip: Some(addr),
+                            ip,
+                            offload_tso,
+                            offload_ufo,
+                            offload_csum,
                         };
                         (None, Some(vec![iface]))
                     } else {
@@ -579,6 +607,9 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
             mac,
             tap,
             mtu,
+            offload_tso,
+            offload_ufo,
+            offload_csum,
         } => {
             let vm_id = resolve_vm_id(client, &vm).await?;
             let network_id = match network {
@@ -592,6 +623,9 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
                 mac,
                 tap,
                 mtu,
+                offload_tso,
+                offload_ufo,
+                offload_csum,
             };
             let nic = api::vms::add_nic(client, vm_id, &req).await?;
             if !matches!(output, OutputFormat::Table) {

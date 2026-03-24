@@ -97,19 +97,29 @@ fn setup_loopback() {
     log("loopback interface up");
 }
 
-/// Parse `root=DEVICE` from /proc/cmdline.
-fn parse_root_device() -> Option<String> {
+fn parse_cmdline_param(key: &str) -> Option<String> {
     let cmdline = std::fs::read_to_string("/proc/cmdline").ok()?;
     cmdline
         .split_whitespace()
-        .find_map(|param| param.strip_prefix("root=").map(|dev| dev.to_string()))
+        .find_map(|param| param.strip_prefix(key).map(|value| value.to_string()))
+}
+
+/// Parse `root=DEVICE` from /proc/cmdline.
+fn parse_root_device() -> Option<String> {
+    parse_cmdline_param("root=")
+}
+
+/// Parse `rootfstype=TYPE` from /proc/cmdline, defaulting to ext4.
+fn parse_root_fstype() -> String {
+    parse_cmdline_param("rootfstype=").unwrap_or_else(|| "ext4".to_string())
 }
 
 /// When running from an initramfs, mount the root device and switch_root into it.
 /// Returns true if we switched root, false if already on the real rootfs.
 fn maybe_switch_root() -> bool {
-    // If /.qarax-config.json exists, we're already on the real rootfs
-    if std::path::Path::new("/.qarax-config.json").exists() {
+    // The test initramfs also carries /.qarax-config.json, so use the injected
+    // /.qarax-init marker to detect whether we're already on the real rootfs.
+    if std::path::Path::new("/.qarax-init").exists() {
         return false;
     }
 
@@ -120,8 +130,9 @@ fn maybe_switch_root() -> bool {
             return false;
         }
     };
+    let root_fstype = parse_root_fstype();
 
-    log(format!("switching root to {root_dev}"));
+    log(format!("switching root to {root_dev} ({root_fstype})"));
 
     // Create mount point
     let _ = std::fs::create_dir_all("/newroot");
@@ -130,11 +141,13 @@ fn maybe_switch_root() -> bool {
     if let Err(e) = mount(
         Some(root_dev.as_str()),
         "/newroot",
-        Some("ext4"),
+        Some(root_fstype.as_str()),
         MsFlags::empty(),
         None::<&str>,
     ) {
-        log(format!("failed to mount {root_dev} on /newroot: {e}"));
+        log(format!(
+            "failed to mount {root_dev} ({root_fstype}) on /newroot: {e}"
+        ));
         return false;
     }
 

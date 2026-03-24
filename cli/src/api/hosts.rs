@@ -12,6 +12,22 @@ pub async fn list(client: &Client, name: Option<&str>) -> anyhow::Result<Vec<Hos
     client.get(&path).await
 }
 
+/// Get a single host by name or UUID string.
+pub async fn get(client: &Client, name_or_id: &str) -> anyhow::Result<Host> {
+    if let Ok(id) = uuid::Uuid::parse_str(name_or_id) {
+        let hosts = list(client, None).await?;
+        return hosts
+            .into_iter()
+            .find(|h| h.id == id)
+            .ok_or_else(|| anyhow::anyhow!("no host with id {:?}", id));
+    }
+    let hosts = list(client, Some(name_or_id)).await?;
+    hosts
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("no host named {:?}", name_or_id))
+}
+
 /// Add a new host. Returns the new host's UUID as a plain-text string.
 pub async fn add(client: &Client, host: &NewHost) -> anyhow::Result<String> {
     client.post_text("/hosts", host).await
