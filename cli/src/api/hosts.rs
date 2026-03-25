@@ -49,6 +49,13 @@ pub async fn init(client: &Client, host_id: Uuid) -> anyhow::Result<Host> {
         .await
 }
 
+/// Trigger a node upgrade using the last deployed image and stored credentials (async, returns 202).
+pub async fn upgrade(client: &Client, host_id: Uuid) -> anyhow::Result<()> {
+    client
+        .post_empty(&format!("/hosts/{host_id}/upgrade"))
+        .await
+}
+
 /// List all GPUs on a host.
 pub async fn list_gpus(client: &Client, host_id: Uuid) -> anyhow::Result<Vec<HostGpu>> {
     client.get(&format!("/hosts/{host_id}/gpus")).await

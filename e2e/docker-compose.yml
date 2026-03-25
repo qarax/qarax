@@ -141,6 +141,26 @@ services:
       timeout: 5s
       retries: 10
 
+  bootc-vm:
+    build:
+      context: ..
+      dockerfile: e2e/Dockerfile.qemu-vm
+    privileged: true
+    devices:
+      - /dev/kvm:/dev/kvm
+    volumes:
+      - ./bootc-vm-overlay.qcow2:/disk/bootc-vm-overlay.qcow2
+      - ./bootc-vm-base.qcow2:/disk/bootc-vm-base.qcow2
+    depends_on:
+      registry:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD", "nc", "-z", "localhost", "50051" ]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 120s
+
 volumes:
   postgres_data:
   registry_data:

@@ -14,6 +14,21 @@ use crate::model::hosts::{self, Host, HostStatus};
 async fn handle_probe_result(pool: &PgPool, host: &Host, node_info: Result<NodeInfo>) {
     match node_info {
         Ok(info) => {
+            if let Err(e) = hosts::update_versions(
+                pool,
+                host.id,
+                &info.cloud_hypervisor_version,
+                &info.kernel_version,
+                &info.node_version,
+            )
+            .await
+            {
+                warn!(
+                    "Resource monitor: failed to update versions for host {}: {}",
+                    host.name, e
+                );
+            }
+
             if let Err(e) = hosts::update_resources(
                 pool,
                 host.id,
@@ -215,6 +230,7 @@ mod tests {
                 hostname: "node-1".to_string(),
                 cloud_hypervisor_version: "44.0".to_string(),
                 kernel_version: "6.12.0".to_string(),
+                node_version: "0.1.0".to_string(),
                 total_cpus: 8,
                 total_memory_bytes: 16 * 1024 * 1024,
                 available_memory_bytes: 8 * 1024 * 1024,

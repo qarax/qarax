@@ -1,0 +1,54 @@
+# Bootc container image for e2e upgrade tests.
+# Provides a real bootc-managed system for testing the full deploy/upgrade lifecycle
+# with actual bootc switch + systemctl reboot (not simulated).
+#
+# This image is converted to a qcow2 disk by bootc-image-builder and booted
+# by the bootc-vm QEMU service in the e2e Docker Compose stack.
+#
+# Registry access: the VM uses QEMU user-mode networking.  Connections to
+# 10.0.2.2 go to the QEMU container; socat there proxies port 5000 to the
+# compose registry service.  Images are referenced as 10.0.2.2:5000/... so
+# no hostname resolution is needed inside the VM.
+
+FROM quay.io/centos-bootc/centos-bootc:stream10
+
+# SSH: allow root login with password (for the deploy/upgrade test flow).
+RUN mkdir -p /etc/ssh/sshd_config.d && \
+    printf 'PermitRootLogin yes\nPasswordAuthentication yes\n' \
+        > /etc/ssh/sshd_config.d/01-qarax-test.conf && \
+    echo 'root:testpassword' | chpasswd
+
+# Trust the local registry over HTTP.
+# bootc switch uses 10.0.2.2:5000/... which socat forwards to the compose registry.
+RUN mkdir -p /etc/containers/registries.conf.d && \
+    printf '[[registry]]\nlocation = "10.0.2.2:5000"\ninsecure = true\n' \
+        > /etc/containers/registries.conf.d/01-local-test.conf
+
+# qarax-node binary (build context = project root).
+# CACHE_BUST: set to the binary hash so Docker rebuilds this layer when the
+# binary changes (mtime alone is unreliable with cross-builds).
+ARG CACHE_BUST=none
+COPY target/x86_64-unknown-linux-musl/release/qarax-node /usr/local/bin/qarax-node
+RUN chmod +x /usr/local/bin/qarax-node
+
+# Persistent directories.  In bootc /var is preserved across image switches;
+# tmpfiles.d entries ensure they exist on every boot.
+RUN printf '%s\n' \
+    'd /var/lib/qarax         0755 root root -' \
+    'd /var/lib/qarax/vms     0755 root root -' \
+    'd /var/lib/qarax/images  0755 root root -' \
+    'd /var/lib/qarax/disks   0755 root root -' \
+    'd /etc/qarax-node        0755 root root -' \
+    > /etc/tmpfiles.d/qarax.conf && \
+    mkdir -p /etc/qarax-node
+
+# Systemd service with EnvironmentFile support via drop-in.
+# The drop-in adds EnvironmentFile=-/etc/qarax-node/version.env so each
+# versioned image can set QARAX_NODE_VERSION without modifying the base unit.
+# The "-" prefix makes the file optional (ignored when absent).
+COPY deployments/qarax-node.service /etc/systemd/system/qarax-node.service
+RUN mkdir -p /etc/systemd/system/qarax-node.service.d && \
+    printf '[Service]\nEnvironmentFile=-/etc/qarax-node/version.env\n' \
+        > /etc/systemd/system/qarax-node.service.d/10-version.conf
+
+RUN systemctl enable sshd qarax-node

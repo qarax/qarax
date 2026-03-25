@@ -24,12 +24,15 @@ class Host:
         name (str):
         port (int):
         status (HostStatus):
+        update_available (bool): True when `node_version` differs from the control-plane version.
         available_memory_bytes (int | None | Unset):
         cloud_hypervisor_version (None | str | Unset):
         disk_available_bytes (int | None | Unset):
         disk_total_bytes (int | None | Unset):
         kernel_version (None | str | Unset):
+        last_deployed_image (None | str | Unset): Last bootc image deployed to this host via the `/deploy` endpoint.
         load_average (float | None | Unset):
+        node_version (None | str | Unset): Version of the qarax-node agent running on this host.
         resources_updated_at (datetime.datetime | None | Unset):
         total_cpus (int | None | Unset):
         total_memory_bytes (int | None | Unset):
@@ -41,12 +44,15 @@ class Host:
     name: str
     port: int
     status: HostStatus
+    update_available: bool
     available_memory_bytes: int | None | Unset = UNSET
     cloud_hypervisor_version: None | str | Unset = UNSET
     disk_available_bytes: int | None | Unset = UNSET
     disk_total_bytes: int | None | Unset = UNSET
     kernel_version: None | str | Unset = UNSET
+    last_deployed_image: None | str | Unset = UNSET
     load_average: float | None | Unset = UNSET
+    node_version: None | str | Unset = UNSET
     resources_updated_at: datetime.datetime | None | Unset = UNSET
     total_cpus: int | None | Unset = UNSET
     total_memory_bytes: int | None | Unset = UNSET
@@ -64,6 +70,8 @@ class Host:
         port = self.port
 
         status = self.status.value
+
+        update_available = self.update_available
 
         available_memory_bytes: int | None | Unset
         if isinstance(self.available_memory_bytes, Unset):
@@ -95,11 +103,23 @@ class Host:
         else:
             kernel_version = self.kernel_version
 
+        last_deployed_image: None | str | Unset
+        if isinstance(self.last_deployed_image, Unset):
+            last_deployed_image = UNSET
+        else:
+            last_deployed_image = self.last_deployed_image
+
         load_average: float | None | Unset
         if isinstance(self.load_average, Unset):
             load_average = UNSET
         else:
             load_average = self.load_average
+
+        node_version: None | str | Unset
+        if isinstance(self.node_version, Unset):
+            node_version = UNSET
+        else:
+            node_version = self.node_version
 
         resources_updated_at: None | str | Unset
         if isinstance(self.resources_updated_at, Unset):
@@ -131,6 +151,7 @@ class Host:
                 "name": name,
                 "port": port,
                 "status": status,
+                "update_available": update_available,
             }
         )
         if available_memory_bytes is not UNSET:
@@ -143,8 +164,12 @@ class Host:
             field_dict["disk_total_bytes"] = disk_total_bytes
         if kernel_version is not UNSET:
             field_dict["kernel_version"] = kernel_version
+        if last_deployed_image is not UNSET:
+            field_dict["last_deployed_image"] = last_deployed_image
         if load_average is not UNSET:
             field_dict["load_average"] = load_average
+        if node_version is not UNSET:
+            field_dict["node_version"] = node_version
         if resources_updated_at is not UNSET:
             field_dict["resources_updated_at"] = resources_updated_at
         if total_cpus is not UNSET:
@@ -168,6 +193,8 @@ class Host:
         port = d.pop("port")
 
         status = HostStatus(d.pop("status"))
+
+        update_available = d.pop("update_available")
 
         def _parse_available_memory_bytes(data: object) -> int | None | Unset:
             if data is None:
@@ -214,6 +241,15 @@ class Host:
 
         kernel_version = _parse_kernel_version(d.pop("kernel_version", UNSET))
 
+        def _parse_last_deployed_image(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        last_deployed_image = _parse_last_deployed_image(d.pop("last_deployed_image", UNSET))
+
         def _parse_load_average(data: object) -> float | None | Unset:
             if data is None:
                 return data
@@ -222,6 +258,15 @@ class Host:
             return cast(float | None | Unset, data)
 
         load_average = _parse_load_average(d.pop("load_average", UNSET))
+
+        def _parse_node_version(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        node_version = _parse_node_version(d.pop("node_version", UNSET))
 
         def _parse_resources_updated_at(data: object) -> datetime.datetime | None | Unset:
             if data is None:
@@ -265,12 +310,15 @@ class Host:
             name=name,
             port=port,
             status=status,
+            update_available=update_available,
             available_memory_bytes=available_memory_bytes,
             cloud_hypervisor_version=cloud_hypervisor_version,
             disk_available_bytes=disk_available_bytes,
             disk_total_bytes=disk_total_bytes,
             kernel_version=kernel_version,
+            last_deployed_image=last_deployed_image,
             load_average=load_average,
+            node_version=node_version,
             resources_updated_at=resources_updated_at,
             total_cpus=total_cpus,
             total_memory_bytes=total_memory_bytes,

@@ -619,6 +619,9 @@ impl VmService for VmServiceImpl {
             disk_total_bytes,
             disk_available_bytes,
             gpus,
+            // Used in e2e tests to simulate deploying a different version.
+            node_version: std::env::var("QARAX_NODE_VERSION")
+                .unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_string()),
         }))
     }
 

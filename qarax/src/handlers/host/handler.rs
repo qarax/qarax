@@ -11,8 +11,58 @@ use crate::{
 };
 use axum::{Extension, Json, extract::Path};
 use http::StatusCode;
+use sqlx::PgPool;
+use std::sync::Arc;
 use tracing::{error, info, instrument, warn};
 use uuid::Uuid;
+
+/// Spawns a background task to run a bootc deployment and update host status.
+fn spawn_deploy(
+    db_pool: Arc<PgPool>,
+    host: Host,
+    deploy_request: DeployHostRequest,
+    host_id: Uuid,
+) {
+    let image = deploy_request.image.clone();
+    tokio::spawn(async move {
+        match host_deployer::deploy_bootc_host(&host, &deploy_request).await {
+            Ok(_) => {
+                info!(host_id = %host_id, "Host deployment finished successfully");
+                if let Err(error) = hosts::set_last_deployed_image(&db_pool, host_id, &image).await
+                {
+                    error!(
+                        host_id = %host_id,
+                        error = %error,
+                        "Failed to store last deployed image"
+                    );
+                }
+                if let Err(error) = hosts::update_status(&db_pool, host_id, HostStatus::Up).await {
+                    error!(
+                        host_id = %host_id,
+                        error = %error,
+                        "Failed to mark host status as up after deployment"
+                    );
+                }
+            }
+            Err(deploy_error) => {
+                error!(
+                    host_id = %host_id,
+                    error = %deploy_error,
+                    "Host deployment failed"
+                );
+                if let Err(error) =
+                    hosts::update_status(&db_pool, host_id, HostStatus::InstallationFailed).await
+                {
+                    error!(
+                        host_id = %host_id,
+                        error = %error,
+                        "Failed to mark host status as installation_failed"
+                    );
+                }
+            }
+        }
+    });
+}
 
 #[utoipa::path(
     get,
@@ -111,37 +161,7 @@ pub async fn deploy(
     let host = hosts::require_by_id(env.pool(), host_id).await?;
     hosts::update_status(env.pool(), host_id, HostStatus::Installing).await?;
 
-    let db_pool = env.pool_arc();
-    tokio::spawn(async move {
-        match host_deployer::deploy_bootc_host(&host, &body).await {
-            Ok(_) => {
-                info!(host_id = %host_id, "Host deployment finished successfully");
-                if let Err(error) = hosts::update_status(&db_pool, host_id, HostStatus::Up).await {
-                    error!(
-                        host_id = %host_id,
-                        error = %error,
-                        "Failed to mark host status as up after deployment"
-                    );
-                }
-            }
-            Err(deploy_error) => {
-                error!(
-                    host_id = %host_id,
-                    error = %deploy_error,
-                    "Host deployment failed"
-                );
-                if let Err(error) =
-                    hosts::update_status(&db_pool, host_id, HostStatus::InstallationFailed).await
-                {
-                    error!(
-                        host_id = %host_id,
-                        error = %error,
-                        "Failed to mark host status as installation_failed"
-                    );
-                }
-            }
-        }
-    });
+    spawn_deploy(env.pool_arc(), host, body, host_id);
 
     Ok((StatusCode::ACCEPTED, "Host deployment started".to_string()))
 }
@@ -189,6 +209,7 @@ pub async fn init(
         host_id,
         &node_info.cloud_hypervisor_version,
         &node_info.kernel_version,
+        &node_info.node_version,
     )
     .await?;
 
@@ -251,6 +272,55 @@ pub async fn init(
         data: updated_host,
         code: StatusCode::OK,
     })
+}
+
+#[utoipa::path(
+    post,
+    path = "/hosts/{host_id}/upgrade",
+    params(
+        ("host_id" = uuid::Uuid, Path, description = "Host unique identifier")
+    ),
+    responses(
+        (status = 202, description = "Node upgrade accepted", body = String),
+        (status = 400, description = "No deployed image recorded for this host"),
+        (status = 404, description = "Host not found"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "hosts"
+)]
+#[instrument(skip(env))]
+pub async fn node_upgrade(
+    Extension(env): Extension<App>,
+    Path(host_id): Path<Uuid>,
+) -> Result<(StatusCode, String)> {
+    let host = hosts::require_by_id(env.pool(), host_id).await?;
+
+    let image = host.last_deployed_image.clone().ok_or_else(|| {
+        crate::errors::Error::UnprocessableEntity(
+            "no deployed image recorded for this host; run /deploy first".to_string(),
+        )
+    })?;
+
+    let password = String::from_utf8(host.password.clone()).unwrap_or_default();
+    let deploy_request = DeployHostRequest {
+        image,
+        ssh_port: None,
+        ssh_user: Some(host.host_user.clone()),
+        ssh_password: if password.is_empty() {
+            None
+        } else {
+            Some(password)
+        },
+        ssh_private_key_path: None,
+        install_bootc: Some(false),
+        reboot: Some(true),
+    };
+
+    hosts::update_status(env.pool(), host_id, HostStatus::Installing).await?;
+
+    spawn_deploy(env.pool_arc(), host, deploy_request, host_id);
+
+    Ok((StatusCode::ACCEPTED, "Node upgrade started".to_string()))
 }
 
 #[utoipa::path(

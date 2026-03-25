@@ -397,6 +397,32 @@ paths:
           description: Host not found
         '500':
           description: Internal server error
+  /hosts/{host_id}/upgrade:
+    post:
+      tags:
+      - hosts
+      operationId: node_upgrade
+      parameters:
+      - name: host_id
+        in: path
+        description: Host unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '202':
+          description: Node upgrade accepted
+          content:
+            text/plain:
+              schema:
+                type: string
+        '400':
+          description: No deployed image recorded for this host
+        '404':
+          description: Host not found
+        '500':
+          description: Internal server error
   /instance-types:
     get:
       tags:
@@ -1983,6 +2009,7 @@ components:
       - port
       - status
       - host_user
+      - update_available
       properties:
         address:
           type: string
@@ -2014,6 +2041,11 @@ components:
           type:
           - string
           - 'null'
+        last_deployed_image:
+          type:
+          - string
+          - 'null'
+          description: Last bootc image deployed to this host via the `/deploy` endpoint.
         load_average:
           type:
           - number
@@ -2021,6 +2053,11 @@ components:
           format: double
         name:
           type: string
+        node_version:
+          type:
+          - string
+          - 'null'
+          description: Version of the qarax-node agent running on this host.
         port:
           type: integer
           format: int32
@@ -2041,6 +2078,9 @@ components:
           - integer
           - 'null'
           format: int64
+        update_available:
+          type: boolean
+          description: True when `node_version` differs from the control-plane version.
     HostGpu:
       type: object
       required:

@@ -123,7 +123,7 @@ async def test_nfs_storage_pool_attach(client):
     async with client as c:
         hosts = await list_hosts.asyncio(client=c)
         assert hosts and len(hosts) > 0, "No hosts registered"
-        host = hosts[0]
+        host = next((h for h in hosts if h.name.startswith("e2e-node")), hosts[0])
 
         pool = NewStoragePool(
             name="e2e-nfs-pool",
@@ -155,7 +155,7 @@ async def test_nfs_storage_object_create(client):
     async with client as c:
         hosts = await list_hosts.asyncio(client=c)
         assert hosts and len(hosts) > 0, "No hosts registered"
-        host = hosts[0]
+        host = next((h for h in hosts if h.name.startswith("e2e-node")), hosts[0])
 
         pool = NewStoragePool(
             name="e2e-nfs-obj-pool",

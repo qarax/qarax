@@ -45,6 +45,7 @@ pub struct NameQuery {
         host::handler::update,
         host::handler::deploy,
         host::handler::init,
+        host::handler::node_upgrade,
         host::handler::list_gpus,
         instance_type::handler::list,
         instance_type::handler::get,
@@ -245,6 +246,10 @@ fn hosts() -> Router {
         .route("/hosts/{host_id}", patch(host::handler::update))
         .route("/hosts/{host_id}/deploy", post(host::handler::deploy))
         .route("/hosts/{host_id}/init", post(host::handler::init))
+        .route(
+            "/hosts/{host_id}/upgrade",
+            post(host::handler::node_upgrade),
+        )
         .route("/hosts/{host_id}/gpus", get(host::handler::list_gpus))
 }
 

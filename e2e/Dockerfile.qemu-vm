@@ -1,0 +1,22 @@
+# QEMU runner for the real-bootc e2e node.
+# Boots bootc-vm-overlay.qcow2 with KVM, forwarding SSH (22) and gRPC (50051)
+# from the host into the guest via QEMU user-mode networking.
+# socat proxies the compose registry (registry:5000) to the SLIRP gateway
+# (10.0.2.2:5000) so the VM can pull images for bootc switch.
+
+FROM fedora:43
+
+RUN dnf install -y \
+    qemu-system-x86_64 \
+    qemu-kvm \
+    socat \
+    nmap-ncat \
+    && dnf clean all
+
+COPY e2e/entrypoint-qemu-vm.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# SSH and gRPC ports (forwarded into the QEMU guest)
+EXPOSE 22 50051
+
+CMD ["/entrypoint.sh"]

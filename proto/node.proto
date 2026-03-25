@@ -309,6 +309,8 @@ message NodeInfo {
   int64 disk_available_bytes = 9;
   // GPU inventory (discovered via sysfs, only devices bound to vfio-pci)
   repeated GpuInfo gpus = 10;
+  // Version of the qarax-node binary
+  string node_version = 11;
 }
 
 // ============================================================================

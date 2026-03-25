@@ -75,6 +75,11 @@ enum HostCommand {
         /// Host name or ID
         host: String,
     },
+    /// Upgrade the node agent using the last deployed image and stored credentials
+    Upgrade {
+        /// Host name or ID
+        host: String,
+    },
     /// List GPUs on a host
     Gpus {
         /// Host name or ID
@@ -98,6 +103,8 @@ struct HostRow {
     host_user: String,
     #[tabled(rename = "CH Version")]
     ch_version: String,
+    #[tabled(rename = "Node Version")]
+    node_version: String,
     #[tabled(rename = "CPUs")]
     total_cpus: String,
     #[tabled(rename = "Memory")]
@@ -144,6 +151,14 @@ pub async fn run(args: HostArgs, client: &Client, output: OutputFormat) -> anyho
                             .cloud_hypervisor_version
                             .clone()
                             .unwrap_or_else(|| "-".to_string()),
+                        node_version: {
+                            let v = h.node_version.clone().unwrap_or_else(|| "-".to_string());
+                            if h.update_available {
+                                format!("{v} [outdated]")
+                            } else {
+                                v
+                            }
+                        },
                         total_cpus: h
                             .total_cpus
                             .map(|c| c.to_string())
@@ -175,6 +190,13 @@ pub async fn run(args: HostArgs, client: &Client, output: OutputFormat) -> anyho
                 println!("User:    {}", h.host_user);
                 if let Some(ch) = &h.cloud_hypervisor_version {
                     println!("CH:      {ch}");
+                }
+                if let Some(nv) = &h.node_version {
+                    if h.update_available {
+                        println!("Node:    {nv} [outdated - run 'host upgrade' to update]");
+                    } else {
+                        println!("Node:    {nv}");
+                    }
                 }
             }
         }
@@ -238,7 +260,16 @@ pub async fn run(args: HostArgs, client: &Client, output: OutputFormat) -> anyho
                 if let Some(k) = &host.kernel_version {
                     println!("  Kernel:           {k}");
                 }
+                if let Some(nv) = &host.node_version {
+                    println!("  Node:             {nv}");
+                }
             }
+        }
+
+        HostCommand::Upgrade { host } => {
+            let id = resolve_host_id(client, &host).await?;
+            api::hosts::upgrade(client, id).await?;
+            println!("Node upgrade started: {host}");
         }
 
         HostCommand::Gpus { host } => {

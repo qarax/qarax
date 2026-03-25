@@ -6,8 +6,15 @@ use validator::{Validate, ValidationError, ValidationErrors};
 
 use crate::errors;
 
+/// The version of the control-plane binary, used to detect out-of-date nodes.
+pub const CONTROL_PLANE_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 /// Build a Host from a sqlx Row containing all host columns.
 fn host_from_row(r: &sqlx::postgres::PgRow) -> Host {
+    let node_version: Option<String> = r.get("node_version");
+    let update_available = node_version
+        .as_deref()
+        .is_some_and(|v| v != CONTROL_PLANE_VERSION);
     Host {
         id: r.get("id"),
         name: r.get("name"),
@@ -18,6 +25,9 @@ fn host_from_row(r: &sqlx::postgres::PgRow) -> Host {
         status: r.get("status"),
         cloud_hypervisor_version: r.get("cloud_hypervisor_version"),
         kernel_version: r.get("kernel_version"),
+        node_version,
+        last_deployed_image: r.get("last_deployed_image"),
+        update_available,
         total_cpus: r.get("total_cpus"),
         total_memory_bytes: r.get("total_memory_bytes"),
         available_memory_bytes: r.get("available_memory_bytes"),
@@ -42,6 +52,12 @@ pub struct Host {
 
     pub cloud_hypervisor_version: Option<String>,
     pub kernel_version: Option<String>,
+    /// Version of the qarax-node agent running on this host.
+    pub node_version: Option<String>,
+    /// Last bootc image deployed to this host via the `/deploy` endpoint.
+    pub last_deployed_image: Option<String>,
+    /// True when `node_version` differs from the control-plane version.
+    pub update_available: bool,
 
     // Resource metrics
     pub total_cpus: Option<i32>,
@@ -177,7 +193,7 @@ impl NewHost {
 
 pub async fn list(pool: &PgPool, name_filter: Option<&str>) -> Result<Vec<Host>, sqlx::Error> {
     let rows = sqlx::query(
-        "SELECT id, name, address, port, host_user, password, status, cloud_hypervisor_version, kernel_version, total_cpus, total_memory_bytes, available_memory_bytes, load_average, disk_total_bytes, disk_available_bytes, resources_updated_at FROM hosts WHERE ($1::text IS NULL OR name = $1)",
+        "SELECT id, name, address, port, host_user, password, status, cloud_hypervisor_version, kernel_version, node_version, last_deployed_image, total_cpus, total_memory_bytes, available_memory_bytes, load_average, disk_total_bytes, disk_available_bytes, resources_updated_at FROM hosts WHERE ($1::text IS NULL OR name = $1)",
     )
     .bind(name_filter)
     .fetch_all(pool)
@@ -230,7 +246,7 @@ pub async fn require_by_id(pool: &PgPool, id: Uuid) -> Result<Host, crate::error
 /// Returns a host by id, if it exists.
 pub async fn get_by_id(pool: &PgPool, host_id: Uuid) -> Result<Option<Host>, sqlx::Error> {
     let row = sqlx::query(
-        "SELECT id, name, address, port, host_user, password, status, cloud_hypervisor_version, kernel_version, total_cpus, total_memory_bytes, available_memory_bytes, load_average, disk_total_bytes, disk_available_bytes, resources_updated_at FROM hosts WHERE id = $1",
+        "SELECT id, name, address, port, host_user, password, status, cloud_hypervisor_version, kernel_version, node_version, last_deployed_image, total_cpus, total_memory_bytes, available_memory_bytes, load_average, disk_total_bytes, disk_available_bytes, resources_updated_at FROM hosts WHERE id = $1",
     )
     .bind(host_id)
     .fetch_optional(pool)
@@ -252,6 +268,7 @@ pub async fn pick_up_host(
         r#"
 SELECT id, name, address, port, host_user, password,
        status, cloud_hypervisor_version, kernel_version,
+       node_version, last_deployed_image,
        total_cpus, total_memory_bytes, available_memory_bytes,
        load_average, disk_total_bytes, disk_available_bytes,
        resources_updated_at
@@ -279,6 +296,7 @@ pub async fn pick_up_host_for_pool(
         r#"
 SELECT h.id, h.name, h.address, h.port, h.host_user, h.password,
        h.status, h.cloud_hypervisor_version, h.kernel_version,
+       h.node_version, h.last_deployed_image,
        h.total_cpus, h.total_memory_bytes, h.available_memory_bytes,
        h.load_average, h.disk_total_bytes, h.disk_available_bytes,
        h.resources_updated_at
@@ -312,6 +330,7 @@ pub async fn pick_up_host_with_gpu(
         r#"
 SELECT h.id, h.name, h.address, h.port, h.host_user, h.password,
        h.status, h.cloud_hypervisor_version, h.kernel_version,
+       h.node_version, h.last_deployed_image,
        h.total_cpus, h.total_memory_bytes, h.available_memory_bytes,
        h.load_average, h.disk_total_bytes, h.disk_available_bytes,
        h.resources_updated_at
@@ -344,7 +363,7 @@ LIMIT 1
 /// Return all UP hosts.
 pub async fn list_up(pool: &PgPool) -> Result<Vec<Host>, sqlx::Error> {
     let rows = sqlx::query(
-        "SELECT id, name, address, port, host_user, password, status, cloud_hypervisor_version, kernel_version, total_cpus, total_memory_bytes, available_memory_bytes, load_average, disk_total_bytes, disk_available_bytes, resources_updated_at FROM hosts WHERE status = 'UP'",
+        "SELECT id, name, address, port, host_user, password, status, cloud_hypervisor_version, kernel_version, node_version, last_deployed_image, total_cpus, total_memory_bytes, available_memory_bytes, load_average, disk_total_bytes, disk_available_bytes, resources_updated_at FROM hosts WHERE status = 'UP'",
     )
     .fetch_all(pool)
     .await?;
@@ -358,15 +377,31 @@ pub async fn update_versions(
     id: Uuid,
     ch_version: &str,
     kernel_version: &str,
+    node_version: &str,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "UPDATE hosts SET cloud_hypervisor_version = $1, kernel_version = $2 WHERE id = $3",
+        "UPDATE hosts SET cloud_hypervisor_version = $1, kernel_version = $2, node_version = $3 WHERE id = $4",
     )
     .bind(ch_version)
     .bind(kernel_version)
+    .bind(node_version)
     .bind(id)
     .execute(pool)
     .await?;
+    Ok(())
+}
+
+/// Persist the last bootc image deployed to this host (called after a successful deploy).
+pub async fn set_last_deployed_image(
+    pool: &PgPool,
+    id: Uuid,
+    image: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE hosts SET last_deployed_image = $1 WHERE id = $2")
+        .bind(image)
+        .bind(id)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -410,7 +445,7 @@ WHERE id = $7
 // TODO: figure out how to not fetch the entire host. Maybe with SELECT exists()?
 pub async fn by_name(pool: &PgPool, name: &str) -> Result<Option<Host>, sqlx::Error> {
     let row = sqlx::query(
-        "SELECT id, name, address, port, host_user, password, status, cloud_hypervisor_version, kernel_version, total_cpus, total_memory_bytes, available_memory_bytes, load_average, disk_total_bytes, disk_available_bytes, resources_updated_at FROM hosts WHERE name = $1",
+        "SELECT id, name, address, port, host_user, password, status, cloud_hypervisor_version, kernel_version, node_version, last_deployed_image, total_cpus, total_memory_bytes, available_memory_bytes, load_average, disk_total_bytes, disk_available_bytes, resources_updated_at FROM hosts WHERE name = $1",
     )
     .bind(name)
     .fetch_optional(pool)
