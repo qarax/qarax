@@ -16,6 +16,66 @@ pub mod node {
     tonic::include_proto!("node");
 }
 
+// --- Trace context propagation for gRPC calls ---
+
+#[cfg(feature = "otel")]
+mod trace_propagation {
+    use tonic::metadata::{MetadataKey, MetadataMap};
+
+    /// Injects OpenTelemetry context into tonic metadata (W3C traceparent/tracestate).
+    pub struct MetadataInjector<'a>(pub &'a mut MetadataMap);
+
+    impl opentelemetry::propagation::Injector for MetadataInjector<'_> {
+        fn set(&mut self, key: &str, value: String) {
+            if let Ok(key) = MetadataKey::from_bytes(key.as_bytes())
+                && let Ok(val) = value.parse()
+            {
+                self.0.insert(key, val);
+            }
+        }
+    }
+
+    /// Tonic interceptor that injects the current span's trace context into
+    /// outgoing gRPC request metadata.
+    #[allow(clippy::result_large_err)]
+    pub fn inject_trace_context(
+        mut request: tonic::Request<()>,
+    ) -> std::result::Result<tonic::Request<()>, tonic::Status> {
+        use tracing_opentelemetry::OpenTelemetrySpanExt;
+
+        let context = tracing::Span::current().context();
+        opentelemetry::global::get_text_map_propagator(|propagator| {
+            propagator.inject_context(&context, &mut MetadataInjector(request.metadata_mut()));
+        });
+        Ok(request)
+    }
+}
+
+/// Type alias for the VM service client — intercepted when otel is enabled.
+#[cfg(feature = "otel")]
+type VmClient = node::vm_service_client::VmServiceClient<
+    tonic::service::interceptor::InterceptedService<
+        tonic::transport::Channel,
+        fn(tonic::Request<()>) -> std::result::Result<tonic::Request<()>, tonic::Status>,
+    >,
+>;
+
+#[cfg(not(feature = "otel"))]
+type VmClient = node::vm_service_client::VmServiceClient<tonic::transport::Channel>;
+
+/// Type alias for the file transfer service client.
+#[cfg(feature = "otel")]
+type FileTransferClient = node::file_transfer_service_client::FileTransferServiceClient<
+    tonic::service::interceptor::InterceptedService<
+        tonic::transport::Channel,
+        fn(tonic::Request<()>) -> std::result::Result<tonic::Request<()>, tonic::Status>,
+    >,
+>;
+
+#[cfg(not(feature = "otel"))]
+type FileTransferClient =
+    node::file_transfer_service_client::FileTransferServiceClient<tonic::transport::Channel>;
+
 use node::{
     AddDiskDeviceRequest, AddNetworkDeviceRequest, AttachNetworkRequest, AttachStoragePoolRequest,
     CloudInitConfig, ConsoleConfig, ConsoleInput, ConsoleLogResponse, CopyFileRequest, CpusConfig,
@@ -169,17 +229,51 @@ impl NodeClient {
         }
     }
 
-    async fn connect_vm_service(&self) -> Result<VmServiceClient<tonic::transport::Channel>> {
-        VmServiceClient::connect(self.address.clone())
+    async fn connect_vm_service(&self) -> Result<VmClient> {
+        let channel = tonic::transport::Channel::from_shared(self.address.clone())
+            .context("invalid qarax-node address")?
+            .connect()
             .await
-            .context("Failed to connect to qarax-node")
+            .context("Failed to connect to qarax-node")?;
+
+        #[cfg(feature = "otel")]
+        {
+            Ok(VmServiceClient::with_interceptor(
+                channel,
+                trace_propagation::inject_trace_context as fn(_) -> _,
+            ))
+        }
+        #[cfg(not(feature = "otel"))]
+        {
+            Ok(VmServiceClient::new(channel))
+        }
+    }
+
+    async fn connect_file_transfer_service(&self) -> Result<FileTransferClient> {
+        let channel = tonic::transport::Channel::from_shared(self.address.clone())
+            .context("invalid qarax-node address")?
+            .connect()
+            .await
+            .context("Failed to connect to qarax-node")?;
+
+        #[cfg(feature = "otel")]
+        {
+            Ok(FileTransferServiceClient::with_interceptor(
+                channel,
+                trace_propagation::inject_trace_context as fn(_) -> _,
+            ))
+        }
+        #[cfg(not(feature = "otel"))]
+        {
+            Ok(FileTransferServiceClient::new(channel))
+        }
     }
 
     async fn connect_vm_service_with_retry(
         &self,
         attempts: usize,
         delay: Duration,
-    ) -> Result<VmServiceClient<tonic::transport::Channel>> {
+    ) -> Result<VmClient> {
         let mut last_error = None;
 
         for attempt in 1..=attempts {
@@ -343,7 +437,7 @@ impl NodeClient {
     pub async fn stop_vm(&self, vm_id: Uuid) -> Result<()> {
         debug!("Stopping VM {} on node {}", vm_id, self.address);
 
-        let mut client = match VmServiceClient::connect(self.address.clone()).await {
+        let mut client = match self.connect_vm_service().await {
             Ok(c) => c,
             Err(_) => {
                 // Node is unreachable — treat as already stopped
@@ -374,7 +468,7 @@ impl NodeClient {
     pub async fn force_stop_vm(&self, vm_id: Uuid) -> Result<()> {
         debug!("Force stopping VM {} on node {}", vm_id, self.address);
 
-        let mut client = match VmServiceClient::connect(self.address.clone()).await {
+        let mut client = match self.connect_vm_service().await {
             Ok(c) => c,
             Err(_) => {
                 // Node is unreachable — treat as already stopped
@@ -404,9 +498,7 @@ impl NodeClient {
     pub async fn pause_vm(&self, vm_id: Uuid) -> Result<()> {
         debug!("Pausing VM {} on node {}", vm_id, self.address);
 
-        let mut client = VmServiceClient::connect(self.address.clone())
-            .await
-            .context("Failed to connect to qarax-node")?;
+        let mut client = self.connect_vm_service().await?;
 
         client
             .pause_vm(VmId {
@@ -424,9 +516,7 @@ impl NodeClient {
     pub async fn resume_vm(&self, vm_id: Uuid) -> Result<()> {
         debug!("Resuming VM {} on node {}", vm_id, self.address);
 
-        let mut client = VmServiceClient::connect(self.address.clone())
-            .await
-            .context("Failed to connect to qarax-node")?;
+        let mut client = self.connect_vm_service().await?;
 
         client
             .resume_vm(VmId {
@@ -442,9 +532,7 @@ impl NodeClient {
     /// Snapshot a VM on the qarax-node
     #[instrument(skip(self))]
     pub async fn snapshot_vm(&self, vm_id: Uuid, snapshot_url: &str) -> Result<()> {
-        let mut client = VmServiceClient::connect(self.address.clone())
-            .await
-            .context("Failed to connect to qarax-node")?;
+        let mut client = self.connect_vm_service().await?;
         client
             .snapshot_vm(SnapshotVmRequest {
                 vm_id: vm_id.to_string(),
@@ -458,9 +546,7 @@ impl NodeClient {
     /// Restore a VM on the qarax-node from a snapshot
     #[instrument(skip(self))]
     pub async fn restore_vm(&self, vm_id: Uuid, source_url: &str) -> Result<()> {
-        let mut client = VmServiceClient::connect(self.address.clone())
-            .await
-            .context("Failed to connect to qarax-node")?;
+        let mut client = self.connect_vm_service().await?;
         client
             .restore_vm(RestoreVmRequest {
                 vm_id: vm_id.to_string(),
@@ -476,9 +562,7 @@ impl NodeClient {
     pub async fn get_vm_info(&self, vm_id: Uuid) -> Result<VmState> {
         debug!("Getting VM info {} from node {}", vm_id, self.address);
 
-        let mut client = VmServiceClient::connect(self.address.clone())
-            .await
-            .context("Failed to connect to qarax-node")?;
+        let mut client = self.connect_vm_service().await?;
 
         let response = client
             .get_vm_info(VmId {
@@ -495,9 +579,7 @@ impl NodeClient {
     pub async fn get_vm_counters(&self, vm_id: Uuid) -> Result<VmCounters> {
         debug!("Getting VM counters {} from node {}", vm_id, self.address);
 
-        let mut client = VmServiceClient::connect(self.address.clone())
-            .await
-            .context("Failed to connect to qarax-node")?;
+        let mut client = self.connect_vm_service().await?;
 
         let response = client
             .get_vm_counters(VmId {
@@ -522,9 +604,7 @@ impl NodeClient {
             self.address, source_url, destination_path
         );
 
-        let mut client = FileTransferServiceClient::connect(self.address.clone())
-            .await
-            .context("Failed to connect to qarax-node")?;
+        let mut client = self.connect_file_transfer_service().await?;
 
         let response = client
             .download_file(DownloadFileRequest {
@@ -562,9 +642,7 @@ impl NodeClient {
             self.address, source_path, destination_path
         );
 
-        let mut client = FileTransferServiceClient::connect(self.address.clone())
-            .await
-            .context("Failed to connect to qarax-node")?;
+        let mut client = self.connect_file_transfer_service().await?;
 
         let response = client
             .copy_file(CopyFileRequest {
@@ -601,9 +679,7 @@ impl NodeClient {
             image_ref, registry_url, self.address
         );
 
-        let mut client = VmServiceClient::connect(self.address.clone())
-            .await
-            .context("Failed to connect to qarax-node")?;
+        let mut client = self.connect_vm_service().await?;
 
         let response = client
             .import_overlay_bd_image(ImportOverlayBdRequest {
@@ -627,9 +703,7 @@ impl NodeClient {
     pub async fn pull_image(&self, image_ref: &str) -> Result<OciImageResponse> {
         debug!("Pulling image {} on node {}", image_ref, self.address);
 
-        let mut client = VmServiceClient::connect(self.address.clone())
-            .await
-            .context("Failed to connect to qarax-node")?;
+        let mut client = self.connect_vm_service().await?;
 
         let response = client
             .pull_image(OciImageRequest {
@@ -646,9 +720,7 @@ impl NodeClient {
     pub async fn delete_vm(&self, vm_id: Uuid) -> Result<()> {
         debug!("Deleting VM {} on node {}", vm_id, self.address);
 
-        let mut client = VmServiceClient::connect(self.address.clone())
-            .await
-            .context("Failed to connect to qarax-node")?;
+        let mut client = self.connect_vm_service().await?;
 
         client
             .delete_vm(VmId {
@@ -683,9 +755,7 @@ impl NodeClient {
 
         let config_json = pool.config.to_string();
 
-        let mut client = VmServiceClient::connect(self.address.clone())
-            .await
-            .context("Failed to connect to qarax-node")?;
+        let mut client = self.connect_vm_service().await?;
 
         let response = client
             .attach_storage_pool(AttachStoragePoolRequest {
@@ -730,9 +800,7 @@ impl NodeClient {
             StoragePoolType::OverlayBd => StoragePoolKind::Overlaybd,
         };
 
-        let mut client = VmServiceClient::connect(self.address.clone())
-            .await
-            .context("Failed to connect to qarax-node")?;
+        let mut client = self.connect_vm_service().await?;
 
         client
             .detach_storage_pool(DetachStoragePoolRequest {
@@ -772,9 +840,7 @@ impl NodeClient {
             bridge_name, self.address
         );
 
-        let mut client = VmServiceClient::connect(self.address.clone())
-            .await
-            .context("Failed to connect to qarax-node")?;
+        let mut client = self.connect_vm_service().await?;
 
         client
             .attach_network(AttachNetworkRequest {
@@ -807,9 +873,7 @@ impl NodeClient {
             bridge_name, self.address
         );
 
-        let mut client = VmServiceClient::connect(self.address.clone())
-            .await
-            .context("Failed to connect to qarax-node")?;
+        let mut client = self.connect_vm_service().await?;
 
         client
             .detach_network(DetachNetworkRequest {
@@ -836,9 +900,7 @@ impl NodeClient {
             vm_id, self.address
         );
 
-        let mut client = VmServiceClient::connect(self.address.clone())
-            .await
-            .context("Failed to connect to qarax-node")?;
+        let mut client = self.connect_vm_service().await?;
 
         let response = client
             .read_console_log(VmId {
@@ -855,9 +917,7 @@ impl NodeClient {
     pub async fn get_node_info(&self) -> Result<NodeInfo> {
         debug!("Getting node info from {}", self.address);
 
-        let mut client = VmServiceClient::connect(self.address.clone())
-            .await
-            .context("Failed to connect to qarax-node")?;
+        let mut client = self.connect_vm_service().await?;
 
         let response = client
             .get_node_info(())
@@ -873,9 +933,7 @@ impl NodeClient {
     pub async fn attach_console(&self, vm_id: Uuid) -> Result<ConsoleChannel> {
         debug!("Attaching to console for VM {} via {}", vm_id, self.address);
 
-        let mut client = VmServiceClient::connect(self.address.clone())
-            .await
-            .context("Failed to connect to qarax-node")?;
+        let mut client = self.connect_vm_service().await?;
 
         // Create channels for bidirectional communication
         let (input_tx, mut input_rx) = mpsc::channel::<Vec<u8>>(128);
@@ -1038,10 +1096,7 @@ impl NodeClient {
         config: VmConfig,
         migration_port: u16,
     ) -> Result<String> {
-        let mut client = self
-            .connect_vm_service()
-            .await
-            .context("Failed to connect to destination qarax-node")?;
+        let mut client = self.connect_vm_service().await?;
 
         let response = client
             .receive_migration(ReceiveMigrationRequest {
@@ -1064,10 +1119,7 @@ impl NodeClient {
     /// pages and the VM is running on the destination.
     #[instrument(skip(self))]
     pub async fn send_migration(&self, vm_id: Uuid, destination_url: &str) -> Result<()> {
-        let mut client = self
-            .connect_vm_service()
-            .await
-            .context("Failed to connect to source qarax-node")?;
+        let mut client = self.connect_vm_service().await?;
 
         client
             .send_migration(SendMigrationRequest {

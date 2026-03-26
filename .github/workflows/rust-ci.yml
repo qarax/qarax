@@ -9,6 +9,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  OTEL_CARGO_FEATURES: "qarax/otel qarax-node/otel"
 
 jobs:
   fmt:
@@ -54,7 +55,7 @@ jobs:
           cargo sqlx prepare --workspace
         env:
           DATABASE_URL: postgres://postgres:password@localhost:5432/qarax
-      - run: cargo clippy --workspace -- -D warnings
+      - run: cargo clippy --workspace --features "${OTEL_CARGO_FEATURES}" -- -D warnings
         env:
           SQLX_OFFLINE: true
 
@@ -91,7 +92,7 @@ jobs:
         env:
           DATABASE_URL: postgres://postgres:password@localhost:5432/qarax
       - name: Build
-        run: cargo build --workspace --release
+        run: cargo build --workspace --release --features "${OTEL_CARGO_FEATURES}"
         env:
           SQLX_OFFLINE: true
       - name: Upload binaries
@@ -140,7 +141,7 @@ jobs:
         env:
           DATABASE_URL: postgres://postgres:password@localhost:5432/qarax
       - name: Run tests
-        run: cargo nextest run --workspace
+        run: cargo nextest run --workspace --features "${OTEL_CARGO_FEATURES}"
         env:
           SQLX_OFFLINE: true
           DATABASE_URL: postgres://postgres:password@localhost:5432/qarax
@@ -197,7 +198,7 @@ jobs:
         run: sudo apt-get install -y qemu-utils
 
       - name: Run E2E tests
-        run: SKIP_BUILD=1 bash e2e/run_e2e_tests.sh
+        run: SKIP_BUILD=1 ENABLE_OTEL=1 bash e2e/run_e2e_tests.sh
 
       - name: Cleanup
         if: always()

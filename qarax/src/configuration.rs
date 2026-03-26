@@ -17,11 +17,28 @@ pub struct VmDefaultsSettings {
     pub cmdline: String,
 }
 
+#[derive(serde::Deserialize, Debug, Default)]
+pub struct TelemetrySettings {
+    /// Enable OpenTelemetry export (requires the `otel` feature at compile time)
+    #[serde(default)]
+    pub otel_enabled: bool,
+    /// OTLP HTTP endpoint (default: http://localhost:4318).
+    /// Overridden by OTEL_EXPORTER_OTLP_ENDPOINT env var.
+    #[serde(default = "default_otlp_endpoint")]
+    pub otlp_endpoint: String,
+}
+
+fn default_otlp_endpoint() -> String {
+    "http://localhost:4318".to_string()
+}
+
 #[derive(serde::Deserialize, Debug)]
 pub struct Settings {
     pub database: DatabaseSettings,
     pub application: ApplicationSettings,
     pub vm_defaults: VmDefaultsSettings,
+    #[serde(default)]
+    pub telemetry: TelemetrySettings,
 }
 
 #[derive(serde::Deserialize, Debug)]
@@ -115,6 +132,17 @@ pub fn get_configuration() -> Result<Settings, config::ConfigError> {
         .set_override_option(
             "vm_defaults.firmware",
             std::env::var("VM_FIRMWARE").ok().filter(|s| !s.is_empty()),
+        )?
+        // Override telemetry settings from environment variables
+        .set_override_option(
+            "telemetry.otel_enabled",
+            std::env::var("OTEL_ENABLED").ok().filter(|s| !s.is_empty()),
+        )?
+        .set_override_option(
+            "telemetry.otlp_endpoint",
+            std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
+                .ok()
+                .filter(|s| !s.is_empty()),
         )?
         .build()?;
     settings.try_deserialize::<Settings>()

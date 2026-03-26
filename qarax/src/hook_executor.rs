@@ -23,6 +23,9 @@ pub async fn start_hook_executor(pool: Arc<PgPool>) {
     loop {
         ticker.tick().await;
 
+        #[cfg(feature = "otel")]
+        let _cycle_start = std::time::Instant::now();
+
         let pending = match lifecycle_hooks::fetch_pending_executions(&pool, 20).await {
             Ok(execs) => execs,
             Err(e) => {
@@ -38,6 +41,9 @@ pub async fn start_hook_executor(pool: Arc<PgPool>) {
                 deliver_hook(&pool, &client, execution).await;
             });
         }
+
+        #[cfg(feature = "otel")]
+        crate::vm_monitor::record_monitor_cycle("hook", _cycle_start);
     }
 }
 

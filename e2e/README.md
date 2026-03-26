@@ -61,6 +61,7 @@ This will:
 | `REBUILD` | Force rebuild of all images | - |
 | `KEEP` | Keep services running after tests | - |
 | `SKIP_BUILD` | Skip building qarax-node binary | - |
+| `ENABLE_OTEL` | Build qarax/qarax-node with `otel` and export to a host OTLP receiver | - |
 
 Examples:
 ```bash
@@ -72,6 +73,9 @@ REBUILD=1 ./run_e2e_tests.sh
 
 # Skip binary build (use existing)
 SKIP_BUILD=1 ./run_e2e_tests.sh
+
+# Run telemetry e2e coverage
+ENABLE_OTEL=1 ./run_e2e_tests.sh test_telemetry.py -m telemetry
 ```
 
 ## Debugging

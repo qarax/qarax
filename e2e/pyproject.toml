@@ -7,6 +7,8 @@ dependencies = [
     "pytest>=8.3.4",
     "pytest-asyncio>=0.25.2",
     "httpx>=0.28.1",
+    "protobuf>=5.29.3",
+    "opentelemetry-proto>=1.31.0",
     "python-dateutil>=2.9.0",
     "attrs>=25.4.0",
     "qarax-api-client",
@@ -37,4 +39,5 @@ addopts = [
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "integration: marks tests as integration tests",
+    "telemetry: marks tests that validate OTLP telemetry export",
 ]

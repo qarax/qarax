@@ -2,7 +2,9 @@ use clap::Parser;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tonic::transport::Server;
-use tracing::{Level, info};
+#[cfg(not(feature = "otel"))]
+use tracing::Level;
+use tracing::info;
 
 use qarax_node::cloud_hypervisor::VmManager;
 use qarax_node::image_store::ImageStoreManager;
@@ -51,14 +53,58 @@ pub struct Args {
     /// Directory for OverlayBD cache and per-VM config files
     #[clap(long, default_value = "/var/lib/qarax/overlaybd")]
     overlaybd_cache_dir: PathBuf,
+
+    /// Enable OpenTelemetry export
+    #[clap(long, default_value = "false", env = "OTEL_ENABLED")]
+    otel_enabled: bool,
+
+    /// OTLP HTTP endpoint
+    #[clap(
+        long,
+        default_value = "http://localhost:4318",
+        env = "OTEL_EXPORTER_OTLP_ENDPOINT"
+    )]
+    otel_endpoint: String,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize tracing
-    tracing_subscriber::fmt().with_max_level(Level::INFO).init();
-
     let args = Args::parse();
+
+    // Optionally initialize OpenTelemetry before tracing subscriber
+    #[cfg(feature = "otel")]
+    let _otel_guard = if args.otel_enabled {
+        let otel_config = common::otel::OtelConfig {
+            service_name: "qarax-node".to_string(),
+            service_version: env!("CARGO_PKG_VERSION").to_string(),
+            otlp_endpoint: args.otel_endpoint.clone(),
+        };
+        match common::otel::init_providers(otel_config) {
+            Ok(guard) => {
+                eprintln!("OpenTelemetry enabled, exporting to {}", args.otel_endpoint);
+                Some(guard)
+            }
+            Err(e) => {
+                eprintln!("Failed to initialize OpenTelemetry: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    // Initialize tracing (with OTel layer when enabled)
+    #[cfg(feature = "otel")]
+    {
+        let subscriber =
+            common::telemtry::get_subscriber("qarax-node".into(), "info".into(), std::io::stdout);
+        common::telemtry::init_subscriber(subscriber);
+    }
+    #[cfg(not(feature = "otel"))]
+    {
+        tracing_subscriber::fmt().with_max_level(Level::INFO).init();
+    }
+
     let addr = format!("0.0.0.0:{}", args.port).parse()?;
 
     info!("qarax-node starting on {}", addr);
@@ -142,12 +188,97 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let file_transfer_service = FileTransferServiceImpl::new();
 
-    // Start the gRPC server
-    Server::builder()
-        .add_service(VmServiceServer::new(vm_service))
-        .add_service(FileTransferServiceServer::new(file_transfer_service))
-        .serve(addr)
-        .await?;
+    // Start the gRPC server (with trace extraction layer when otel is enabled)
+    #[cfg(feature = "otel")]
+    {
+        Server::builder()
+            .layer(trace_extraction::OtelGrpcLayer)
+            .add_service(VmServiceServer::new(vm_service))
+            .add_service(FileTransferServiceServer::new(file_transfer_service))
+            .serve(addr)
+            .await?;
+    }
+
+    #[cfg(not(feature = "otel"))]
+    {
+        Server::builder()
+            .add_service(VmServiceServer::new(vm_service))
+            .add_service(FileTransferServiceServer::new(file_transfer_service))
+            .serve(addr)
+            .await?;
+    }
 
     Ok(())
+}
+
+/// Tower layer that extracts W3C trace context from incoming gRPC metadata
+/// and sets it as the parent context on the current tracing span.
+#[cfg(feature = "otel")]
+mod trace_extraction {
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+
+    use http::Request;
+    use tower::Layer;
+    use tower::Service;
+
+    /// Extracts OpenTelemetry context from HTTP headers.
+    pub struct HeaderExtractor<'a>(pub &'a http::HeaderMap);
+
+    impl opentelemetry::propagation::Extractor for HeaderExtractor<'_> {
+        fn get(&self, key: &str) -> Option<&str> {
+            self.0.get(key).and_then(|v| v.to_str().ok())
+        }
+
+        fn keys(&self) -> Vec<&str> {
+            self.0.keys().map(|k| k.as_str()).collect()
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct OtelGrpcLayer;
+
+    impl<S: Clone> Layer<S> for OtelGrpcLayer {
+        type Service = OtelGrpcService<S>;
+
+        fn layer(&self, inner: S) -> Self::Service {
+            OtelGrpcService { inner }
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct OtelGrpcService<S> {
+        inner: S,
+    }
+
+    impl<S, B> Service<Request<B>> for OtelGrpcService<S>
+    where
+        S: Service<Request<B>> + Clone + Send + 'static,
+        S::Future: Send + 'static,
+        B: Send + 'static,
+    {
+        type Response = S::Response;
+        type Error = S::Error;
+        type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+
+        fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+            self.inner.poll_ready(cx)
+        }
+
+        fn call(&mut self, request: Request<B>) -> Self::Future {
+            use tracing::Instrument;
+            use tracing_opentelemetry::OpenTelemetrySpanExt;
+
+            // Extract trace context from HTTP/gRPC headers
+            let parent_context = opentelemetry::global::get_text_map_propagator(|propagator| {
+                propagator.extract(&HeaderExtractor(request.headers()))
+            });
+
+            let span = tracing::info_span!("grpc.request");
+            let _ = span.set_parent(parent_context);
+
+            Box::pin(self.inner.call(request).instrument(span))
+        }
+    }
 }

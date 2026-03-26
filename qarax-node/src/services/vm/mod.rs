@@ -4,7 +4,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tonic::{Request, Response, Status};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, instrument, warn};
 
 use crate::cloud_hypervisor::VmManager;
 use crate::rpc::node::{
@@ -572,6 +572,7 @@ impl VmService for VmServiceImpl {
         }
     }
 
+    #[instrument(skip(self, _request))]
     async fn get_node_info(&self, _request: Request<()>) -> Result<Response<NodeInfo>, Status> {
         let hostname = gethostname::gethostname().to_string_lossy().into_owned();
 

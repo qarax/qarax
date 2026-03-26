@@ -16,17 +16,41 @@ use std::sync::Arc;
 
 use crate::configuration::VmDefaultsSettings;
 
-#[derive(Debug, Clone)]
+#[cfg(feature = "otel")]
+use common::metrics::Metrics;
+
+#[derive(Clone)]
 pub struct App {
     pool: Arc<PgPool>,
     vm_defaults: VmDefaultsSettings,
+    #[cfg(feature = "otel")]
+    metrics: Arc<Metrics>,
+}
+
+impl std::fmt::Debug for App {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("App")
+            .field("vm_defaults", &self.vm_defaults)
+            .finish()
+    }
 }
 
 impl App {
+    #[cfg(not(feature = "otel"))]
     pub fn new(pool: PgPool, vm_defaults: VmDefaultsSettings) -> Self {
         Self {
             pool: Arc::new(pool),
             vm_defaults,
+        }
+    }
+
+    #[cfg(feature = "otel")]
+    pub fn new(pool: PgPool, vm_defaults: VmDefaultsSettings) -> Self {
+        let meter = opentelemetry::global::meter("qarax");
+        Self {
+            pool: Arc::new(pool),
+            vm_defaults,
+            metrics: Arc::new(Metrics::new(&meter)),
         }
     }
 
@@ -40,5 +64,10 @@ impl App {
 
     pub fn vm_defaults(&self) -> &VmDefaultsSettings {
         &self.vm_defaults
+    }
+
+    #[cfg(feature = "otel")]
+    pub fn metrics(&self) -> &Metrics {
+        &self.metrics
     }
 }

@@ -21,6 +21,9 @@ pub async fn start_vm_monitor(pool: Arc<PgPool>) {
     loop {
         ticker.tick().await;
 
+        #[cfg(feature = "otel")]
+        let _cycle_start = std::time::Instant::now();
+
         let active_vms = match vms::list_active(&pool).await {
             Ok(vms) => vms,
             Err(e) => {
@@ -30,6 +33,8 @@ pub async fn start_vm_monitor(pool: Arc<PgPool>) {
         };
 
         if active_vms.is_empty() {
+            #[cfg(feature = "otel")]
+            record_monitor_cycle("vm", _cycle_start);
             continue;
         }
 
@@ -95,7 +100,27 @@ pub async fn start_vm_monitor(pool: Arc<PgPool>) {
                 }
             }
         }
+
+        #[cfg(feature = "otel")]
+        record_monitor_cycle("vm", _cycle_start);
     }
+}
+
+#[cfg(feature = "otel")]
+pub fn record_monitor_cycle(monitor: &str, start: std::time::Instant) {
+    use opentelemetry::KeyValue;
+
+    let meter = opentelemetry::global::meter("qarax");
+    let duration = start.elapsed().as_secs_f64();
+    meter
+        .f64_histogram("qarax.monitor.cycle.duration")
+        .with_unit("s")
+        .build()
+        .record(duration, &[KeyValue::new("monitor", monitor.to_string())]);
+    meter
+        .u64_counter("qarax.monitor.cycles.total")
+        .build()
+        .add(1, &[KeyValue::new("monitor", monitor.to_string())]);
 }
 
 fn proto_status_to_db(status: i32) -> VmStatus {

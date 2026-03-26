@@ -12,3 +12,6 @@ vm_defaults:
   firmware: ""
   initramfs: ""
   cmdline: "console=ttyS0 reboot=k panic=1 pci=off"
+telemetry:
+  otel_enabled: false
+  otlp_endpoint: "http://localhost:4318"

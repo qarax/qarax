@@ -89,6 +89,9 @@ pub async fn start_resource_monitor(pool: Arc<PgPool>) {
     loop {
         ticker.tick().await;
 
+        #[cfg(feature = "otel")]
+        let _cycle_start = std::time::Instant::now();
+
         let up_hosts = match hosts::list_up(&pool).await {
             Ok(h) => h,
             Err(e) => {
@@ -105,6 +108,9 @@ pub async fn start_resource_monitor(pool: Arc<PgPool>) {
             let client = NodeClient::new(&host.address, host.port as u16);
             handle_probe_result(&pool, &host, client.get_node_info().await).await;
         }
+
+        #[cfg(feature = "otel")]
+        crate::vm_monitor::record_monitor_cycle("resource", _cycle_start);
     }
 }
 

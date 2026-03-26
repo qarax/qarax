@@ -60,6 +60,10 @@ services:
     environment:
       OVERLAYBD_REGISTRY_URL: http://registry:5000
       INSECURE_REGISTRIES: registry:5000
+      OTEL_ENABLED: ${OTEL_ENABLED:-false}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://host.docker.internal:14318}
+      OTEL_BSP_SCHEDULE_DELAY: ${OTEL_BSP_SCHEDULE_DELAY:-5000}
+      OTEL_METRIC_EXPORT_INTERVAL: ${OTEL_METRIC_EXPORT_INTERVAL:-60000}
     ports:
       - "50052:50051"
     depends_on:
@@ -82,6 +86,10 @@ services:
       DATABASE_HOST: postgres
       APP_ENVIRONMENT: local
       QARAX_CONFIG_DIR: /app/configuration
+      OTEL_ENABLED: ${OTEL_ENABLED:-false}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://host.docker.internal:14318}
+      OTEL_BSP_SCHEDULE_DELAY: ${OTEL_BSP_SCHEDULE_DELAY:-5000}
+      OTEL_METRIC_EXPORT_INTERVAL: ${OTEL_METRIC_EXPORT_INTERVAL:-60000}
       # VM defaults - can be overridden from environment
       VM_KERNEL: ${VM_KERNEL:-/var/lib/qarax/images/vmlinux}
       VM_INITRAMFS: ${VM_INITRAMFS:-/var/lib/qarax/images/test-initramfs.gz}
@@ -128,6 +136,10 @@ services:
       OVERLAYBD_REGISTRY_URL: http://registry:5000
       # Allow HTTP pulls from the local test registry (oci-client defaults to HTTPS)
       INSECURE_REGISTRIES: registry:5000
+      OTEL_ENABLED: ${OTEL_ENABLED:-false}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://host.docker.internal:14318}
+      OTEL_BSP_SCHEDULE_DELAY: ${OTEL_BSP_SCHEDULE_DELAY:-5000}
+      OTEL_METRIC_EXPORT_INTERVAL: ${OTEL_METRIC_EXPORT_INTERVAL:-60000}
     ports:
       - "50051:50051"
     depends_on:

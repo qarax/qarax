@@ -6,10 +6,36 @@ use sqlx::PgPool;
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
+    let configuration = get_configuration().expect("Failed to read configuration.");
+
+    // Optionally initialize OpenTelemetry before the tracing subscriber
+    #[cfg(feature = "otel")]
+    let _otel_guard = if configuration.telemetry.otel_enabled {
+        let otel_config = common::otel::OtelConfig {
+            service_name: "qarax".to_string(),
+            service_version: env!("CARGO_PKG_VERSION").to_string(),
+            otlp_endpoint: configuration.telemetry.otlp_endpoint.clone(),
+        };
+        match common::otel::init_providers(otel_config) {
+            Ok(guard) => {
+                eprintln!(
+                    "OpenTelemetry enabled, exporting to {}",
+                    configuration.telemetry.otlp_endpoint
+                );
+                Some(guard)
+            }
+            Err(e) => {
+                eprintln!("Failed to initialize OpenTelemetry: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     let subscriber = get_subscriber("qarax".into(), "info".into(), std::io::stdout);
     init_subscriber(subscriber);
 
-    let configuration = get_configuration().expect("Failed to read configuration.");
     database::run_migrations(&configuration.database.connection_string())
         .await
         .expect("Failed to run migrations");
