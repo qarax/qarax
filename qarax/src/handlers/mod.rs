@@ -38,6 +38,14 @@ pub struct NameQuery {
     pub name: Option<String>,
 }
 
+#[derive(serde::Deserialize, utoipa::IntoParams, Debug)]
+pub struct VmListQuery {
+    /// Optional name filter
+    pub name: Option<String>,
+    /// Comma-separated list of tags; returned VMs must have all specified tags
+    pub tags: Option<String>,
+}
+
 #[derive(OpenApi)]
 #[openapi(
     paths(

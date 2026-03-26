@@ -27,7 +27,7 @@ pub async fn resolve_vm_id(client: &Client, name_or_id: &str) -> anyhow::Result<
     if let Ok(id) = Uuid::parse_str(name_or_id) {
         return Ok(id);
     }
-    let vms = api::vms::list(client, Some(name_or_id)).await?;
+    let vms = api::vms::list(client, Some(name_or_id), &[]).await?;
     vms.into_iter()
         .next()
         .map(|vm| vm.id)

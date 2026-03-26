@@ -31,7 +31,11 @@ pub struct VmArgs {
 #[allow(clippy::large_enum_variant)]
 enum VmCommand {
     /// List all VMs
-    List,
+    List {
+        /// Filter by tag (can be repeated; VMs must have all specified tags)
+        #[arg(long = "tag")]
+        tags: Vec<String>,
+    },
     /// Get details of a specific VM
     Get {
         /// VM name or ID
@@ -305,8 +309,8 @@ struct VmRow {
 
 pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow::Result<()> {
     match args.command {
-        VmCommand::List => {
-            let vms = api::vms::list(client, None).await?;
+        VmCommand::List { tags } => {
+            let vms = api::vms::list(client, None, &tags).await?;
             if !matches!(output, OutputFormat::Table) {
                 print_output(&vms, output)?;
             } else {

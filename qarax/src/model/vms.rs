@@ -567,7 +567,11 @@ pub async fn resolve_create_request(pool: &PgPool, request: NewVm) -> Result<Res
     })
 }
 
-pub async fn list(pool: &PgPool, name_filter: Option<&str>) -> Result<Vec<Vm>, sqlx::Error> {
+pub async fn list(
+    pool: &PgPool,
+    name_filter: Option<&str>,
+    tags_filter: &[String],
+) -> Result<Vec<Vm>, sqlx::Error> {
     let vms: Vec<VmRow> = sqlx::query_as!(
         VmRow,
         r#"
@@ -599,8 +603,10 @@ SELECT id,
         config as "config: _"
 FROM vms
 WHERE ($1::text IS NULL OR name = $1)
+  AND (cardinality($2::text[]) = 0 OR tags @> $2)
         "#,
-        name_filter
+        name_filter,
+        tags_filter
     )
     .fetch_all(pool)
     .await?;

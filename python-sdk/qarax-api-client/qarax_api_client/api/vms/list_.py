@@ -12,6 +12,7 @@ from ...types import UNSET, Response, Unset
 def _get_kwargs(
     *,
     name: None | str | Unset = UNSET,
+    tags: None | str | Unset = UNSET,
 ) -> dict[str, Any]:
     params: dict[str, Any] = {}
 
@@ -21,6 +22,13 @@ def _get_kwargs(
     else:
         json_name = name
     params["name"] = json_name
+
+    json_tags: None | str | Unset
+    if isinstance(tags, Unset):
+        json_tags = UNSET
+    else:
+        json_tags = tags
+    params["tags"] = json_tags
 
     params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
@@ -67,10 +75,12 @@ def sync_detailed(
     *,
     client: AuthenticatedClient | Client,
     name: None | str | Unset = UNSET,
+    tags: None | str | Unset = UNSET,
 ) -> Response[Any | list[Vm]]:
     """
     Args:
         name (None | str | Unset):
+        tags (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -82,6 +92,7 @@ def sync_detailed(
 
     kwargs = _get_kwargs(
         name=name,
+        tags=tags,
     )
 
     response = client.get_httpx_client().request(
@@ -95,10 +106,12 @@ def sync(
     *,
     client: AuthenticatedClient | Client,
     name: None | str | Unset = UNSET,
+    tags: None | str | Unset = UNSET,
 ) -> Any | list[Vm] | None:
     """
     Args:
         name (None | str | Unset):
+        tags (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -111,6 +124,7 @@ def sync(
     return sync_detailed(
         client=client,
         name=name,
+        tags=tags,
     ).parsed
 
 
@@ -118,10 +132,12 @@ async def asyncio_detailed(
     *,
     client: AuthenticatedClient | Client,
     name: None | str | Unset = UNSET,
+    tags: None | str | Unset = UNSET,
 ) -> Response[Any | list[Vm]]:
     """
     Args:
         name (None | str | Unset):
+        tags (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -133,6 +149,7 @@ async def asyncio_detailed(
 
     kwargs = _get_kwargs(
         name=name,
+        tags=tags,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -144,10 +161,12 @@ async def asyncio(
     *,
     client: AuthenticatedClient | Client,
     name: None | str | Unset = UNSET,
+    tags: None | str | Unset = UNSET,
 ) -> Any | list[Vm] | None:
     """
     Args:
         name (None | str | Unset):
+        tags (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -161,5 +180,6 @@ async def asyncio(
         await asyncio_detailed(
             client=client,
             name=name,
+            tags=tags,
         )
     ).parsed

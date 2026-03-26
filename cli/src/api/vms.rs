@@ -10,10 +10,18 @@ use super::models::{
     VmMigrateResponse, VmResizeRequest, VmStartResponse,
 };
 
-pub async fn list(client: &Client, name: Option<&str>) -> anyhow::Result<Vec<Vm>> {
-    let path = match name {
-        Some(n) => format!("/vms?name={n}"),
-        None => "/vms".to_string(),
+pub async fn list(client: &Client, name: Option<&str>, tags: &[String]) -> anyhow::Result<Vec<Vm>> {
+    let mut params = vec![];
+    if let Some(n) = name {
+        params.push(format!("name={}", urlencoding::encode(n)));
+    }
+    if !tags.is_empty() {
+        params.push(format!("tags={}", urlencoding::encode(&tags.join(","))));
+    }
+    let path = if params.is_empty() {
+        "/vms".to_string()
+    } else {
+        format!("/vms?{}", params.join("&"))
     };
     client.get(&path).await
 }

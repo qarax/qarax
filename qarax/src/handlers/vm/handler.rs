@@ -176,7 +176,7 @@ async fn host_for_vm(env: &App, vm_id: Uuid) -> Result<Host> {
 #[utoipa::path(
     get,
     path = "/vms",
-    params(crate::handlers::NameQuery),
+    params(crate::handlers::VmListQuery),
     responses(
         (status = 200, description = "List all VMs", body = Vec<Vm>),
         (status = 500, description = "Internal server error")
@@ -186,11 +186,19 @@ async fn host_for_vm(env: &App, vm_id: Uuid) -> Result<Host> {
 #[instrument(skip(env))]
 pub async fn list(
     Extension(env): Extension<App>,
-    axum::extract::Query(query): axum::extract::Query<crate::handlers::NameQuery>,
+    axum::extract::Query(query): axum::extract::Query<crate::handlers::VmListQuery>,
 ) -> Result<ApiResponse<Vec<Vm>>> {
-    let hosts = vms::list(env.pool(), query.name.as_deref()).await?;
+    let tags: Vec<String> = query
+        .tags
+        .as_deref()
+        .unwrap_or("")
+        .split(',')
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .collect();
+    let vms = vms::list(env.pool(), query.name.as_deref(), &tags).await?;
     Ok(ApiResponse {
-        data: hosts,
+        data: vms,
         code: StatusCode::OK,
     })
 }

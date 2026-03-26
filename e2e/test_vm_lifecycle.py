@@ -119,6 +119,60 @@ async def test_vm_create_and_list(client):
 
 
 @pytest.mark.asyncio
+async def test_vm_list_filter_by_tags(client):
+    """Test that GET /vms?tags=... returns only VMs that have all specified tags."""
+    async with client as c:
+        # Create two VMs with different tag sets
+        vm_a = NewVm(
+            name="test-vm-tags-a",
+            tags=["env:test", "team:platform"],
+            hypervisor=Hypervisor.CLOUD_HV,
+            boot_vcpus=1,
+            max_vcpus=1,
+            memory_size=256 * 1024 * 1024,
+        )
+        vm_b = NewVm(
+            name="test-vm-tags-b",
+            tags=["env:test"],
+            hypervisor=Hypervisor.CLOUD_HV,
+            boot_vcpus=1,
+            max_vcpus=1,
+            memory_size=256 * 1024 * 1024,
+        )
+
+        id_a = await call_api(create_vm, client=c, body=vm_a)
+        id_b = await call_api(create_vm, client=c, body=vm_b)
+
+        try:
+            str_a, str_b = str(id_a), str(id_b)
+
+            # Filter by single tag shared by both — both should appear
+            vms = await call_api(list_vms, client=c, tags="env:test")
+            assert vms is not None
+            ids = {str(v.id) for v in vms}
+            assert str_a in ids
+            assert str_b in ids
+
+            # Filter by both tags — only vm_a should appear
+            vms = await call_api(list_vms, client=c, tags="env:test,team:platform")
+            assert vms is not None
+            ids = {str(v.id) for v in vms}
+            assert str_a in ids
+            assert str_b not in ids
+
+            # Filter by a tag neither VM has — empty result (for our VMs at least)
+            vms = await call_api(list_vms, client=c, tags="env:prod")
+            assert vms is not None
+            ids = {str(v.id) for v in vms}
+            assert str_a not in ids
+            assert str_b not in ids
+
+        finally:
+            await call_api(delete_vm, client=c, vm_id=str(id_a))
+            await call_api(delete_vm, client=c, vm_id=str(id_b))
+
+
+@pytest.mark.asyncio
 async def test_vm_full_lifecycle(client):
     """Test the complete VM lifecycle with real Cloud Hypervisor VMs."""
     async with client as c:

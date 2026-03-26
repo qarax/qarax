@@ -1165,7 +1165,15 @@ paths:
       parameters:
       - name: name
         in: query
-        description: Optional name filter for list queries
+        description: Optional name filter
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      - name: tags
+        in: query
+        description: Comma-separated list of tags; returned VMs must have all specified tags
         required: false
         schema:
           type:
