@@ -41,6 +41,24 @@ is_truthy() {
 	esac
 }
 
+docker_build_image() {
+	local scope="$1"
+	shift
+
+	if is_truthy "${DOCKER_BUILDX:-}" || [ -n "${DOCKER_BUILD_CACHE_FROM:-}" ] || [ -n "${DOCKER_BUILD_CACHE_TO:-}" ]; then
+		local cmd=(docker buildx build --load)
+		if [ -n "${DOCKER_BUILD_CACHE_FROM:-}" ]; then
+			cmd+=(--cache-from "${DOCKER_BUILD_CACHE_FROM},scope=${scope}")
+		fi
+		if [ -n "${DOCKER_BUILD_CACHE_TO:-}" ]; then
+			cmd+=(--cache-to "${DOCKER_BUILD_CACHE_TO},scope=${scope}")
+		fi
+		"${cmd[@]}" "$@"
+	else
+		docker build "$@"
+	fi
+}
+
 cleanup() {
 	if [ -n "$KEEP" ]; then
 		echo ""
@@ -149,7 +167,7 @@ build_bootc_vm() {
 	echo -e "${YELLOW}Building bootc node image...${NC}"
 	local node_hash
 	node_hash=$(sha256sum "${NODE_BIN}" | cut -d' ' -f1)
-	docker build \
+	docker_build_image "e2e-bootc-node-base" \
 		--build-arg "CACHE_BUST=${node_hash}" \
 		-f Containerfile.bootc-node \
 		-t localhost:5001/qarax-node-bootc:base \
@@ -158,13 +176,13 @@ build_bootc_vm() {
 
 	# Push thin versioned images for bootc switch version tracking
 	echo -e "${YELLOW}Pushing versioned bootc node images...${NC}"
-	docker build -t localhost:5001/qarax-node-test:0.1.0 - <<'VEOF'
+	DOCKER_BUILDKIT=0 docker build -t localhost:5001/qarax-node-test:0.1.0 - <<'VEOF'
 FROM localhost:5001/qarax-node-bootc:base
 RUN mkdir -p /etc/qarax-node && printf 'QARAX_NODE_VERSION=0.1.0\n' > /etc/qarax-node/version.env
 VEOF
 	docker push localhost:5001/qarax-node-test:0.1.0
 
-	docker build -t localhost:5001/qarax-node-test:0.2.0-test - <<'VEOF'
+	DOCKER_BUILDKIT=0 docker build -t localhost:5001/qarax-node-test:0.2.0-test - <<'VEOF'
 FROM localhost:5001/qarax-node-bootc:base
 RUN mkdir -p /etc/qarax-node && printf 'QARAX_NODE_VERSION=0.2.0-test\n' > /etc/qarax-node/version.env
 VEOF

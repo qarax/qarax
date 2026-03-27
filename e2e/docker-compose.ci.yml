@@ -1,0 +1,40 @@
+services:
+  nfs-server:
+    image: qarax/e2e-nfs-server:ci
+    build:
+      cache_from:
+        - type=gha,scope=e2e-nfs-server
+      cache_to:
+        - type=gha,mode=max,scope=e2e-nfs-server
+
+  qarax-node:
+    image: qarax/e2e-qarax-node:ci
+    build:
+      cache_from:
+        - type=gha,scope=e2e-qarax-node
+      cache_to:
+        - type=gha,mode=max,scope=e2e-qarax-node
+
+  qarax-node-2:
+    image: qarax/e2e-qarax-node:ci
+    build:
+      cache_from:
+        - type=gha,scope=e2e-qarax-node
+      cache_to:
+        - type=gha,mode=max,scope=e2e-qarax-node
+
+  qarax:
+    image: qarax/e2e-qarax:ci
+    build:
+      cache_from:
+        - type=gha,scope=e2e-qarax
+      cache_to:
+        - type=gha,mode=max,scope=e2e-qarax
+
+  bootc-vm:
+    image: qarax/e2e-bootc-vm:ci
+    build:
+      cache_from:
+        - type=gha,scope=e2e-bootc-vm
+      cache_to:
+        - type=gha,mode=max,scope=e2e-bootc-vm

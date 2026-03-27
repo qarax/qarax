@@ -188,19 +188,37 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          install: true
+
+      - name: Expose GitHub runtime for BuildKit cache
+        uses: crazy-max/ghaction-github-runtime@v3
 
       - name: Install uv
         uses: astral-sh/setup-uv@v4
         with:
           version: "latest"
+          enable-cache: true
+          cache-dependency-glob: |
+            e2e/pyproject.toml
+            e2e/uv.lock
+            python-sdk/pyproject.toml
+            python-sdk/uv.lock
 
       - name: Install e2e dependencies
         run: sudo apt-get install -y qemu-utils
 
       - name: Run E2E tests
         run: SKIP_BUILD=1 ENABLE_OTEL=1 bash e2e/run_e2e_tests.sh
+        env:
+          COMPOSE_FILE: docker-compose.yml:docker-compose.ci.yml
+          DOCKER_BUILDX: 1
+          DOCKER_BUILD_CACHE_FROM: type=gha
+          DOCKER_BUILD_CACHE_TO: type=gha,mode=max
 
       - name: Cleanup
         if: always()
         working-directory: e2e
         run: docker compose down -v
+        env:
+          COMPOSE_FILE: docker-compose.yml:docker-compose.ci.yml

@@ -66,7 +66,6 @@ pub fn init_providers(config: OtelConfig) -> Result<OtelGuard, Box<dyn std::erro
         ])
         .build();
 
-    // --- Traces ---
     let span_exporter = SpanExporter::builder()
         .with_http()
         .with_endpoint(signal_endpoint(&config.otlp_endpoint, "traces"))
@@ -79,7 +78,6 @@ pub fn init_providers(config: OtelConfig) -> Result<OtelGuard, Box<dyn std::erro
 
     global::set_tracer_provider(tracer_provider.clone());
 
-    // --- Metrics ---
     let metric_exporter = MetricExporter::builder()
         .with_http()
         .with_endpoint(signal_endpoint(&config.otlp_endpoint, "metrics"))
