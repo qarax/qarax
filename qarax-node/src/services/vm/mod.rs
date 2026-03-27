@@ -26,22 +26,7 @@ pub struct VmServiceImpl {
 }
 
 impl VmServiceImpl {
-    /// Create a new VmServiceImpl with default paths (no Nydus support)
-    pub async fn new() -> Self {
-        Self::with_paths("/var/lib/qarax/vms", "/usr/local/bin/cloud-hypervisor").await
-    }
-
-    /// Create a new VmServiceImpl with custom paths (no Nydus support)
-    pub async fn with_paths(
-        runtime_dir: impl Into<std::path::PathBuf>,
-        ch_binary: impl Into<std::path::PathBuf>,
-    ) -> Self {
-        let manager = Arc::new(VmManager::new(runtime_dir, ch_binary, None));
-        manager.recover_vms().await;
-        Self { manager }
-    }
-
-    /// Create from an existing VmManager
+    /// Create a new VmServiceImpl from a VmManager
     pub fn from_manager(manager: Arc<VmManager>) -> Self {
         Self { manager }
     }

@@ -6,6 +6,10 @@ use tonic::transport::Server;
 use tracing::Level;
 use tracing::info;
 
+#[cfg(feature = "dhat-heap")]
+#[global_allocator]
+static ALLOC: dhat::Alloc = dhat::Alloc;
+
 use qarax_node::cloud_hypervisor::VmManager;
 use qarax_node::image_store::ImageStoreManager;
 use qarax_node::overlaybd::OverlayBdManager;
@@ -69,6 +73,9 @@ pub struct Args {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(feature = "dhat-heap")]
+    let _profiler = dhat::Profiler::new_heap();
+
     let args = Args::parse();
 
     // Optionally initialize OpenTelemetry before tracing subscriber
@@ -195,7 +202,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .layer(trace_extraction::OtelGrpcLayer)
             .add_service(VmServiceServer::new(vm_service))
             .add_service(FileTransferServiceServer::new(file_transfer_service))
-            .serve(addr)
+            .serve_with_shutdown(addr, shutdown_signal())
             .await?;
     }
 
@@ -204,11 +211,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Server::builder()
             .add_service(VmServiceServer::new(vm_service))
             .add_service(FileTransferServiceServer::new(file_transfer_service))
-            .serve(addr)
+            .serve_with_shutdown(addr, shutdown_signal())
             .await?;
     }
 
     Ok(())
+}
+
+async fn shutdown_signal() {
+    use tokio::signal::unix::{SignalKind, signal};
+    let mut sigterm = signal(SignalKind::terminate()).expect("failed to register SIGTERM handler");
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {},
+        _ = sigterm.recv() => {},
+    }
 }
 
 /// Tower layer that extracts W3C trace context from incoming gRPC metadata

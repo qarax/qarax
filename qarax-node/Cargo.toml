@@ -13,6 +13,7 @@ path = "src/main.rs"
 [features]
 default = []
 otel = ["common/otel", "dep:opentelemetry", "dep:tracing-opentelemetry", "dep:tower", "dep:http"]
+dhat-heap = ["dep:dhat"]
 
 [dependencies]
 prost = "0.12.3"
@@ -60,6 +61,9 @@ opentelemetry = { version = "0.31", optional = true }
 tracing-opentelemetry = { version = "0.32", optional = true }
 tower = { version = "0.4", optional = true }
 http = { version = "0.2", optional = true }
+
+# Heap profiling (behind "dhat-heap" feature — never enable in production builds)
+dhat = { version = "0.3", optional = true }
 
 [dev-dependencies]
 tokio-stream = { version = "0.1.14", features = ["net"] }

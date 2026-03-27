@@ -4,8 +4,14 @@ use common::telemtry::{get_subscriber, init_subscriber};
 use qarax::{configuration::get_configuration, database, startup::run};
 use sqlx::PgPool;
 
+#[cfg(feature = "dhat-heap")]
+#[global_allocator]
+static ALLOC: dhat::Alloc = dhat::Alloc;
+
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
+    #[cfg(feature = "dhat-heap")]
+    let _profiler = dhat::Profiler::new_heap();
     let configuration = get_configuration().expect("Failed to read configuration.");
 
     // Optionally initialize OpenTelemetry before the tracing subscriber
@@ -58,7 +64,10 @@ async fn main() -> std::io::Result<()> {
     );
     match run(listener, connection_pool, vm_defaults).await {
         Ok(server) => {
-            server.await.unwrap();
+            tokio::select! {
+                result = async { server.await } => result.unwrap(),
+                _ = shutdown_signal() => {}
+            }
         }
         Err(e) => {
             tracing::error!("Server failed to start: {}", e);
@@ -66,4 +75,13 @@ async fn main() -> std::io::Result<()> {
     }
 
     Ok(())
+}
+
+async fn shutdown_signal() {
+    use tokio::signal::unix::{SignalKind, signal};
+    let mut sigterm = signal(SignalKind::terminate()).expect("failed to register SIGTERM handler");
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {},
+        _ = sigterm.recv() => {},
+    }
 }

@@ -349,17 +349,24 @@ async fn create_with_image(env: App, vm: ResolvedNewVm) -> Result<axum::response
                     resolved.kernel_params,
                 )
             } else {
-                let vm_defaults = env.vm_defaults();
+                let d = env.vm_defaults();
                 (
-                    vm_defaults.kernel.clone(),
-                    vm_defaults.initramfs.clone().filter(|s| !s.is_empty()),
-                    vm_defaults.cmdline.clone(),
+                    d.kernel.as_ref().to_string(),
+                    d.initramfs
+                        .as_ref()
+                        .filter(|s| !s.is_empty())
+                        .map(|s| s.to_string()),
+                    d.cmdline.as_ref().to_string(),
                 )
             };
         }
         BootMode::Firmware => {
             let d = env.vm_defaults();
-            let firmware = d.firmware.clone().filter(|s| !s.is_empty());
+            let firmware = d
+                .firmware
+                .as_ref()
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string());
             if firmware.is_none() {
                 return Err(crate::errors::Error::UnprocessableEntity(
                     "firmware boot mode requires a firmware path (set vm_defaults.firmware or VM_FIRMWARE env var)".into(),
@@ -1531,7 +1538,7 @@ async fn build_create_vm_request(env: &App, vm: &Vm) -> Result<CreateVmRequest> 
     let (kernel, firmware, initramfs, default_cmdline) = match vm.boot_mode {
         BootMode::Firmware => {
             let d = env.vm_defaults();
-            let fw = d.firmware.clone().filter(|s| !s.is_empty()).ok_or_else(|| {
+            let fw = d.firmware.as_ref().filter(|s| !s.is_empty()).map(|s| s.to_string()).ok_or_else(|| {
                 crate::errors::Error::UnprocessableEntity(
                     "firmware boot mode requires a firmware path (set vm_defaults.firmware or VM_FIRMWARE env var)".into(),
                 )
@@ -1556,9 +1563,12 @@ async fn build_create_vm_request(env: &App, vm: &Vm) -> Result<CreateVmRequest> 
             } else {
                 let d = env.vm_defaults();
                 (
-                    d.kernel.clone(),
-                    d.initramfs.clone().filter(|s| !s.is_empty()),
-                    d.cmdline.clone(),
+                    d.kernel.as_ref().to_string(),
+                    d.initramfs
+                        .as_ref()
+                        .filter(|s| !s.is_empty())
+                        .map(|s| s.to_string()),
+                    d.cmdline.as_ref().to_string(),
                 )
             };
             (Some(k), None, i, Some(c))

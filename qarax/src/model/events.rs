@@ -4,7 +4,7 @@ use std::sync::OnceLock;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
-const CHANNEL_CAPACITY: usize = 1024;
+const CHANNEL_CAPACITY: usize = 128;
 
 static EVENT_TX: OnceLock<broadcast::Sender<VmStatusEvent>> = OnceLock::new();
 

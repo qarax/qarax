@@ -14,6 +14,7 @@ path = "src/bin/generate_openapi.rs"
 [features]
 default = []
 otel = ["common/otel", "dep:opentelemetry", "dep:tracing-opentelemetry"]
+dhat-heap = ["dep:dhat"]
 
 [dependencies]
 anyhow = "1.0.75"
@@ -56,6 +57,9 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 # OpenTelemetry (behind "otel" feature)
 opentelemetry = { version = "0.31", optional = true }
 tracing-opentelemetry = { version = "0.32", optional = true }
+
+# Heap profiling (behind "dhat-heap" feature — never enable in production builds)
+dhat = { version = "0.3", optional = true }
 
 [dev-dependencies]
 once_cell = "1.18.0"

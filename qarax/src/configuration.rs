@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::Arc;
 
 use secrecy::{ExposeSecret, Secret};
 use sqlx::postgres::{PgConnectOptions, PgSslMode};
@@ -9,12 +10,32 @@ pub struct ApplicationSettings {
     pub host: String,
 }
 
-#[derive(serde::Deserialize, Debug, Clone)]
-pub struct VmDefaultsSettings {
+#[derive(serde::Deserialize, Debug)]
+struct VmDefaultsSettingsRaw {
     pub kernel: String,
     pub firmware: Option<String>,
     pub initramfs: Option<String>,
     pub cmdline: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(from = "VmDefaultsSettingsRaw")]
+pub struct VmDefaultsSettings {
+    pub kernel: Arc<str>,
+    pub firmware: Option<Arc<str>>,
+    pub initramfs: Option<Arc<str>>,
+    pub cmdline: Arc<str>,
+}
+
+impl From<VmDefaultsSettingsRaw> for VmDefaultsSettings {
+    fn from(raw: VmDefaultsSettingsRaw) -> Self {
+        Self {
+            kernel: Arc::from(raw.kernel),
+            firmware: raw.firmware.map(Arc::from),
+            initramfs: raw.initramfs.map(Arc::from),
+            cmdline: Arc::from(raw.cmdline),
+        }
+    }
 }
 
 #[derive(serde::Deserialize, Debug, Default)]

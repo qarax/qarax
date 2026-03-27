@@ -26,3 +26,5 @@ e2e/*.log
 *.egg-info/
 
 .cache/
+
+heap-profiles/
