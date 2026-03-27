@@ -6,6 +6,7 @@ from .attach_host_request import AttachHostRequest
 from .attach_pool_host_request import AttachPoolHostRequest
 from .boot_mode import BootMode
 from .boot_source import BootSource
+from .create_sandbox_response import CreateSandboxResponse
 from .create_snapshot_request import CreateSnapshotRequest
 from .create_vm_response import CreateVmResponse
 from .create_vm_template_from_vm_request import CreateVmTemplateFromVmRequest
@@ -34,6 +35,7 @@ from .new_host import NewHost
 from .new_instance_type import NewInstanceType
 from .new_lifecycle_hook import NewLifecycleHook
 from .new_network import NewNetwork
+from .new_sandbox import NewSandbox
 from .new_storage_object import NewStorageObject
 from .new_storage_pool import NewStoragePool
 from .new_transfer import NewTransfer
@@ -43,6 +45,8 @@ from .new_vm_network import NewVmNetwork
 from .new_vm_template import NewVmTemplate
 from .rate_limiter_config import RateLimiterConfig
 from .restore_request import RestoreRequest
+from .sandbox import Sandbox
+from .sandbox_status import SandboxStatus
 from .snapshot import Snapshot
 from .snapshot_status import SnapshotStatus
 from .storage_object import StorageObject
@@ -77,6 +81,7 @@ __all__ = (
     "AttachPoolHostRequest",
     "BootMode",
     "BootSource",
+    "CreateSandboxResponse",
     "CreateSnapshotRequest",
     "CreateVmResponse",
     "CreateVmTemplateFromVmRequest",
@@ -105,6 +110,7 @@ __all__ = (
     "NewInstanceType",
     "NewLifecycleHook",
     "NewNetwork",
+    "NewSandbox",
     "NewStorageObject",
     "NewStoragePool",
     "NewTransfer",
@@ -114,6 +120,8 @@ __all__ = (
     "NewVmTemplate",
     "RateLimiterConfig",
     "RestoreRequest",
+    "Sandbox",
+    "SandboxStatus",
     "Snapshot",
     "SnapshotStatus",
     "StorageObject",

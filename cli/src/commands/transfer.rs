@@ -45,6 +45,9 @@ enum TransferCommand {
         /// Object type (disk, kernel, initrd, iso, snapshot, oci_image)
         #[arg(long, value_name = "TYPE")]
         object_type: String,
+        /// Block until the transfer completes
+        #[arg(short, long)]
+        wait: bool,
     },
 }
 
@@ -114,6 +117,7 @@ pub async fn run(args: TransferArgs, client: &Client, output: OutputFormat) -> a
             name,
             source,
             object_type,
+            wait,
         } => {
             let pool_id = resolve_pool_id(client, &pool).await?;
             let new_transfer = NewTransfer {
@@ -122,6 +126,9 @@ pub async fn run(args: TransferArgs, client: &Client, output: OutputFormat) -> a
                 object_type,
             };
             let transfer = api::transfers::create(client, pool_id, &new_transfer).await?;
+            if wait {
+                crate::wait::wait_for_transfer(client, pool_id, transfer.id).await?;
+            }
             if !matches!(output, OutputFormat::Table) {
                 print_output(&transfer, output)?;
             } else {

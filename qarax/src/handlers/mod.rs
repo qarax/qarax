@@ -24,6 +24,7 @@ mod instance_type;
 mod job;
 mod lifecycle_hook;
 mod network;
+mod sandbox;
 mod storage_object;
 mod storage_pool;
 mod transfer;
@@ -118,6 +119,10 @@ pub struct VmListQuery {
         lifecycle_hook::handler::update,
         lifecycle_hook::handler::delete,
         lifecycle_hook::handler::list_executions,
+        sandbox::handler::create,
+        sandbox::handler::list,
+        sandbox::handler::get,
+        sandbox::handler::delete,
     ),
     components(
         schemas(
@@ -186,6 +191,10 @@ pub struct VmListQuery {
             crate::model::lifecycle_hooks::HookExecution,
             crate::model::lifecycle_hooks::HookScope,
             crate::model::lifecycle_hooks::HookExecutionStatus,
+            crate::model::sandboxes::Sandbox,
+            crate::model::sandboxes::NewSandbox,
+            crate::model::sandboxes::SandboxStatus,
+            crate::model::sandboxes::CreateSandboxResponse,
         )
     ),
     tags(
@@ -199,7 +208,8 @@ pub struct VmListQuery {
         (name = "transfers", description = "File transfer management endpoints"),
         (name = "jobs", description = "Async job management endpoints"),
         (name = "networks", description = "Network management endpoints"),
-        (name = "hooks", description = "Lifecycle hook management endpoints")
+        (name = "hooks", description = "Lifecycle hook management endpoints"),
+        (name = "sandboxes", description = "Ephemeral sandbox environments for AI agents")
     ),
     info(
         title = "Qarax API",
@@ -224,6 +234,7 @@ pub fn app(env: App) -> Router {
         .merge(jobs())
         .merge(networks())
         .merge(hooks())
+        .merge(sandboxes())
         .merge(event_stream())
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .layer(
@@ -434,6 +445,18 @@ fn boot_sources() -> Router {
         .route(
             "/boot-sources/{boot_source_id}",
             get(boot_source::handler::get).delete(boot_source::handler::delete),
+        )
+}
+
+fn sandboxes() -> Router {
+    Router::new()
+        .route(
+            "/sandboxes",
+            get(sandbox::handler::list).post(sandbox::handler::create),
+        )
+        .route(
+            "/sandboxes/{sandbox_id}",
+            get(sandbox::handler::get).delete(sandbox::handler::delete),
         )
 }
 

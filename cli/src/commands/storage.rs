@@ -14,6 +14,12 @@ use super::{
     OutputFormat, format_bytes, print_output, resolve_host_id, resolve_object_id, resolve_pool_id,
 };
 
+fn active_hosts(hosts: &[api::models::Host]) -> impl Iterator<Item = &api::models::Host> {
+    hosts
+        .iter()
+        .filter(|host| host.status.eq_ignore_ascii_case("up"))
+}
+
 // ─── Storage pools ────────────────────────────────────────────────────────────
 
 #[derive(Args)]
@@ -45,6 +51,9 @@ enum StoragePoolCommand {
         /// Pool config as JSON (e.g. '{"url":"http://registry:5000"}' for overlaybd)
         #[arg(long, value_name = "JSON")]
         config: Option<String>,
+        /// Automatically attach all active hosts to this pool
+        #[arg(long)]
+        attach_all_hosts: bool,
     },
     /// Delete a storage pool
     Delete {
@@ -55,8 +64,11 @@ enum StoragePoolCommand {
     AttachHost {
         /// Pool name or ID
         pool: String,
-        /// Host name or ID
-        host: String,
+        /// Host name or ID (optional if --all is used)
+        host: Option<String>,
+        /// Attach all active hosts
+        #[arg(long)]
+        all: bool,
     },
     /// Detach a host from a storage pool
     DetachHost {
@@ -157,6 +169,7 @@ pub async fn run_pool(
             pool_type,
             capacity,
             config,
+            attach_all_hosts,
         } => {
             let config = match config {
                 Some(s) => serde_json::from_str(&s)
@@ -175,6 +188,23 @@ pub async fn run_pool(
             } else {
                 println!("Created storage pool: {id}");
             }
+
+            if attach_all_hosts {
+                let pool_uuid = uuid::Uuid::parse_str(&id)
+                    .map_err(|e| anyhow::anyhow!("Invalid pool UUID: {}", e))?;
+                let hosts = api::hosts::list(client, None).await?;
+                for h in active_hosts(&hosts) {
+                    if let Err(e) = api::storage::attach_host_to_pool(client, pool_uuid, h.id).await
+                    {
+                        eprintln!(
+                            "Warning: Failed to attach host {} ({}): {}",
+                            h.name, h.id, e
+                        );
+                    } else if matches!(output, OutputFormat::Table) {
+                        println!("Attached host: {}", h.name);
+                    }
+                }
+            }
         }
 
         StoragePoolCommand::Delete { pool } => {
@@ -183,17 +213,33 @@ pub async fn run_pool(
             println!("Deleted storage pool: {id}");
         }
 
-        StoragePoolCommand::AttachHost { pool, host } => {
+        StoragePoolCommand::AttachHost { pool, host, all } => {
             let pool_id = resolve_pool_id(client, &pool).await?;
-            let host_id = resolve_host_id(client, &host).await?;
-            api::storage::attach_host_to_pool(client, pool_id, host_id).await?;
-            if !matches!(output, OutputFormat::Table) {
-                print_output(
-                    &serde_json::json!({ "pool_id": pool_id, "host_id": host_id }),
-                    output,
-                )?;
+            if all {
+                let hosts = api::hosts::list(client, None).await?;
+                for h in active_hosts(&hosts) {
+                    if let Err(e) = api::storage::attach_host_to_pool(client, pool_id, h.id).await {
+                        eprintln!(
+                            "Warning: Failed to attach host {} ({}): {}",
+                            h.name, h.id, e
+                        );
+                    } else if matches!(output, OutputFormat::Table) {
+                        println!("Attached host: {}", h.name);
+                    }
+                }
+            } else if let Some(host_name) = host {
+                let host_id = resolve_host_id(client, &host_name).await?;
+                api::storage::attach_host_to_pool(client, pool_id, host_id).await?;
+                if !matches!(output, OutputFormat::Table) {
+                    print_output(
+                        &serde_json::json!({ "pool_id": pool_id, "host_id": host_id }),
+                        output,
+                    )?;
+                } else {
+                    println!("Attached host {host_name} to pool {pool}");
+                }
             } else {
-                println!("Attached host {host} to pool {pool}");
+                return Err(anyhow::anyhow!("Must provide either [HOST] or --all"));
             }
         }
 

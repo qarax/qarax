@@ -2,8 +2,6 @@ use serde::{Deserialize, Serialize};
 use serde_with::rust::double_option;
 use uuid::Uuid;
 
-// ─── VMs ────────────────────────────────────────────────────────────────────
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Vm {
     pub id: Uuid,
@@ -177,8 +175,6 @@ pub struct VmMigrateResponse {
     pub job_id: Uuid,
 }
 
-// ─── Hosts ───────────────────────────────────────────────────────────────────
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Host {
     pub id: Uuid,
@@ -239,8 +235,6 @@ pub struct HostGpu {
     pub vm_id: Option<Uuid>,
 }
 
-// ─── Storage ─────────────────────────────────────────────────────────────────
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StoragePool {
     pub id: Uuid,
@@ -286,8 +280,6 @@ pub struct NewStorageObject {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<Uuid>,
 }
-
-// ─── Transfers ───────────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Transfer {
@@ -513,6 +505,42 @@ pub struct ImportToPoolRequest {
 pub struct ImportToPoolResponse {
     pub job_id: Uuid,
     pub storage_object_id: Uuid,
+}
+
+// ─── Sandboxes ───────────────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Sandbox {
+    pub id: Uuid,
+    pub vm_id: Uuid,
+    pub vm_template_id: Option<Uuid>,
+    pub name: String,
+    pub status: String,
+    pub idle_timeout_secs: i32,
+    pub last_activity_at: String,
+    pub error_message: Option<String>,
+    pub created_at: String,
+    pub ip_address: Option<String>,
+    pub vm_status: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct NewSandbox {
+    pub name: String,
+    pub vm_template_id: Uuid,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub idle_timeout_secs: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instance_type_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub network_id: Option<Uuid>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CreateSandboxResponse {
+    pub id: Uuid,
+    pub vm_id: Uuid,
+    pub job_id: Uuid,
 }
 
 // ─── Lifecycle Hooks ────────────────────────────────────────────────────────

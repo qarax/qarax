@@ -133,21 +133,33 @@ enum VmCommand {
     Stop {
         /// VM name or ID
         vm: String,
+        /// Block until the VM successfully stops
+        #[arg(short, long)]
+        wait: bool,
     },
     /// Force stop (hard power-off) a VM
     ForceStop {
         /// VM name or ID
         vm: String,
+        /// Block until the VM successfully stops
+        #[arg(short, long)]
+        wait: bool,
     },
     /// Pause a VM
     Pause {
         /// VM name or ID
         vm: String,
+        /// Block until the VM successfully pauses
+        #[arg(short, long)]
+        wait: bool,
     },
     /// Resume a paused VM
     Resume {
         /// VM name or ID
         vm: String,
+        /// Block until the VM successfully resumes
+        #[arg(short, long)]
+        wait: bool,
     },
     /// Print the VM's console log
     Console {
@@ -538,28 +550,44 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
             }
         }
 
-        VmCommand::Stop { vm } => {
+        VmCommand::Stop { vm, wait } => {
             let id = resolve_vm_id(client, &vm).await?;
             api::vms::stop(client, id).await?;
-            println!("Stopped VM: {vm}");
+            if wait {
+                crate::wait::wait_for_vm_status(client, id, "shutdown").await?;
+            } else {
+                println!("Stopped VM: {vm}");
+            }
         }
 
-        VmCommand::ForceStop { vm } => {
+        VmCommand::ForceStop { vm, wait } => {
             let id = resolve_vm_id(client, &vm).await?;
             api::vms::force_stop(client, id).await?;
-            println!("Force stopped VM: {vm}");
+            if wait {
+                crate::wait::wait_for_vm_status(client, id, "shutdown").await?;
+            } else {
+                println!("Force stopped VM: {vm}");
+            }
         }
 
-        VmCommand::Pause { vm } => {
+        VmCommand::Pause { vm, wait } => {
             let id = resolve_vm_id(client, &vm).await?;
             api::vms::pause(client, id).await?;
-            println!("Paused VM: {vm}");
+            if wait {
+                crate::wait::wait_for_vm_status(client, id, "paused").await?;
+            } else {
+                println!("Paused VM: {vm}");
+            }
         }
 
-        VmCommand::Resume { vm } => {
+        VmCommand::Resume { vm, wait } => {
             let id = resolve_vm_id(client, &vm).await?;
             api::vms::resume(client, id).await?;
-            println!("Resumed VM: {vm}");
+            if wait {
+                crate::wait::wait_for_vm_status(client, id, "running").await?;
+            } else {
+                println!("Resumed VM: {vm}");
+            }
         }
 
         VmCommand::Console { vm } => {

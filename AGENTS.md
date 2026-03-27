@@ -172,6 +172,13 @@ Key component versions are pinned in `Makefile` (`CLOUD_HYPERVISOR_VERSION`) and
 - **Never embed credentials, secrets, or personal data in source code.** Use environment variables or config files excluded from version control.
 - **When the user redirects or interrupts, stop immediately.** Do not continue the previous approach. Ask a clarifying question if the new direction is unclear.
 
+## General Guidelines
+
+- Always push to 'upstream' remote, not 'origin', unless explicitly told otherwise.
+- When fixing CI/test failures, carefully check ALL required fields and parameters in a single pass rather than fixing one at a time. Review the full struct/function signature before submitting.
+- Read existing codebase conventions (demo structure, file locations, patterns) before creating new files. Do not assume conventions - use Grep/Read to discover them first.
+
+
 ## Skills
 
 - Use `.claude/skills/cloud-hypervisor/SKILL.md` when you need Cloud Hypervisor capabilities or implementation details.

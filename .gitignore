@@ -24,3 +24,5 @@ e2e/venv/
 e2e/*.log
 
 *.egg-info/
+
+.cache/

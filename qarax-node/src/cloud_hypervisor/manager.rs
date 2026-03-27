@@ -18,7 +18,7 @@ use cloud_hypervisor_sdk::client::TokioIo;
 use cloud_hypervisor_sdk::machine::{Machine, MachineConfig, VM};
 use cloud_hypervisor_sdk::models::{
     self, CpusConfig, FsConfig, MemoryConfig, PayloadConfig, VmConfig,
-    console_config::Mode as ConsoleMode,
+    console_config::Mode as ConsoleMode, disk_config::ImageType,
 };
 use futures::stream::StreamExt;
 use http_body_util::{Empty, Full, combinators::BoxBody};
@@ -1835,9 +1835,9 @@ impl VmManager {
             // which breaks ext4 superblock updates on raw images.
             image_type: Some(
                 if disk.path.as_deref().map(Self::is_qcow2).unwrap_or(false) {
-                    models::DiskImageType::Qcow2
+                    ImageType::Qcow2
                 } else {
-                    models::DiskImageType::Raw
+                    ImageType::Raw
                 },
             ),
             sparse: None,

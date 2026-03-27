@@ -33,7 +33,7 @@ help:
 	@echo "  make stop-local      - Stop and remove the local Docker stack and volumes"
 
 build:
-	cargo build $(CARGO_TARGET)
+	cargo build --workspace $(CARGO_TARGET)
 	cargo run $(CARGO_TARGET) -p qarax --bin generate-openapi
 
 openapi:

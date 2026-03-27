@@ -5,6 +5,7 @@ pub mod host;
 pub mod instance_type;
 pub mod job;
 pub mod network;
+pub mod sandbox;
 pub mod storage;
 pub mod transfer;
 pub mod vm;

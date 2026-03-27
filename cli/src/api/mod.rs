@@ -5,6 +5,7 @@ pub mod instance_types;
 pub mod jobs;
 pub mod models;
 pub mod networks;
+pub mod sandboxes;
 pub mod storage;
 pub mod transfers;
 pub mod vm_templates;

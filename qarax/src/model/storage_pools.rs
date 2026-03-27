@@ -246,10 +246,13 @@ pub async fn detach_host(pool: &PgPool, pool_id: Uuid, host_id: Uuid) -> Result<
     Ok(())
 }
 
-/// Return the ID of any host attached to the given pool (used by filesystem transfer executor).
 pub async fn find_host_for_pool(pool: &PgPool, pool_id: Uuid) -> Result<Option<Uuid>, sqlx::Error> {
     let row = sqlx::query_as::<_, (Uuid,)>(
-        "SELECT host_id FROM host_storage_pools WHERE storage_pool_id = $1 LIMIT 1",
+        "SELECT hsp.host_id FROM host_storage_pools hsp \
+         JOIN hosts h ON h.id = hsp.host_id \
+         WHERE hsp.storage_pool_id = $1 \
+         ORDER BY CASE WHEN h.status = 'UP' THEN 0 ELSE 1 END, h.load_average ASC NULLS LAST \
+         LIMIT 1",
     )
     .bind(pool_id)
     .fetch_optional(pool)

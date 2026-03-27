@@ -34,7 +34,7 @@
 #   sudo ./demos/hyperconverged/run.sh --with-nfs --nfs-url server:/export  # Also create an NFS pool
 #   sudo ./demos/hyperconverged/run.sh --with-local-vm  # Also boot a firmware VM with cloud image
 #   sudo ./demos/hyperconverged/run.sh --with-db-vm    # Also boot an OCI PostgreSQL VM
-#   sudo ./demos/hyperconverged/run.sh --network-backend passt  # Use passt-backed VM networking
+#   sudo ./demos/hyperconverged/run.sh --network-backend bridge # Use bridged VM networking instead of default passt
 
 set -euo pipefail
 
@@ -54,7 +54,7 @@ fi
 
 # Configuration
 CP_VM_CPUS=4
-CP_VM_MEMORY=$((4 * 1024 * 1024 * 1024))  # 4 GiB in bytes
+CP_VM_MEMORY=$((4 * 1024 * 1024 * 1024)) # 4 GiB in bytes
 CP_VM_IP="192.168.100.10"
 HOST_TAP_IP="192.168.100.1"
 TAP_NAME="qarax-cp-tap0"
@@ -138,7 +138,7 @@ while [[ $# -gt 0 ]]; do
 		;;
 	--with-local-vm)
 		WITH_LOCAL_VM=1
-		WITH_LOCAL=1  # local VM needs a local pool for the cloud image
+		WITH_LOCAL=1 # local VM needs a local pool for the cloud image
 		shift
 		;;
 	--with-db-vm)
@@ -174,7 +174,7 @@ if [[ "$WITH_NFS" -eq 1 && -z "$NFS_URL" ]]; then
 	exit 1
 fi
 
-NETWORK_BACKEND="${NETWORK_BACKEND:-bridge}"
+NETWORK_BACKEND="${NETWORK_BACKEND:-passt}"
 
 if [[ "$NETWORK_BACKEND" != "bridge" && "$NETWORK_BACKEND" != "passt" ]]; then
 	echo -e "${RED}--network-backend must be 'bridge' or 'passt'${NC}"
@@ -235,8 +235,8 @@ else
 fi
 
 for bin in qarax qarax-node qarax-init; do
-	[[ -f "${REPO_ROOT}/target/${MUSL_TARGET}/release/${bin}" ]] \
-		|| die "Binary not found: target/${MUSL_TARGET}/release/${bin} — run without SKIP_BUILD to build first."
+	[[ -f "${REPO_ROOT}/target/${MUSL_TARGET}/release/${bin}" ]] ||
+		die "Binary not found: target/${MUSL_TARGET}/release/${bin} — run without SKIP_BUILD to build first."
 done
 
 echo "Building control plane OCI image..."
@@ -262,9 +262,11 @@ LOOP_DEV=$(losetup --find --show -P "$CP_ROOTFS")
 ESP_DEV="${LOOP_DEV}p1"
 ROOT_DEV="${LOOP_DEV}p2"
 
-timeout=5; elapsed=0
+timeout=5
+elapsed=0
 while [[ ! -b "$ROOT_DEV" && $elapsed -lt $timeout ]]; do
-	sleep 0.5; elapsed=$((elapsed + 1))
+	sleep 0.5
+	elapsed=$((elapsed + 1))
 done
 partprobe "$LOOP_DEV" 2>/dev/null || true
 
@@ -307,11 +309,11 @@ echo "Copied vmlinuz-${KVER} to ESP"
 
 mkdir -p "${ROOTFS_MOUNT}/boot/loader/entries"
 
-cat > "${ROOTFS_MOUNT}/boot/loader/loader.conf" << EOF
+cat >"${ROOTFS_MOUNT}/boot/loader/loader.conf" <<EOF
 default qarax
 EOF
 
-cat > "${ROOTFS_MOUNT}/boot/loader/entries/qarax.conf" << EOF
+cat >"${ROOTFS_MOUNT}/boot/loader/entries/qarax.conf" <<EOF
 title   qarax Control Plane
 linux   /vmlinuz-${KVER}
 options root=/dev/vda2 rw console=ttyS0 systemd.unified_cgroup_hierarchy=1 net.ifnames=0 biosdevname=0
@@ -342,7 +344,13 @@ echo ""
 echo -e "${YELLOW}Phase 2: Start local OCI registry${NC}"
 
 if podman container exists "$REGISTRY_CONTAINER_NAME" 2>/dev/null; then
-	echo "Registry container already exists, reusing"
+	registry_state=$(podman inspect "$REGISTRY_CONTAINER_NAME" --format '{{.State.Status}}' 2>/dev/null || true)
+	if [[ "$registry_state" == "running" ]]; then
+		echo "Registry container already exists, reusing"
+	else
+		echo "Registry container exists but is not running, starting it..."
+		podman start "$REGISTRY_CONTAINER_NAME" >/dev/null
+	fi
 else
 	echo "Starting local registry on port ${REGISTRY_PORT}..."
 	podman run -d --name "$REGISTRY_CONTAINER_NAME" \
@@ -351,14 +359,17 @@ else
 fi
 
 echo -n "Waiting for registry"
-timeout=15; elapsed=0
+timeout=15
+elapsed=0
 while [[ $elapsed -lt $timeout ]]; do
 	if curl -sf "http://localhost:${REGISTRY_PORT}/v2/" -o /dev/null 2>/dev/null; then
 		echo ""
 		echo -e "${GREEN}Local registry is ready on port ${REGISTRY_PORT}${NC}"
 		break
 	fi
-	echo -n "."; sleep 1; elapsed=$((elapsed + 1))
+	echo -n "."
+	sleep 1
+	elapsed=$((elapsed + 1))
 done
 
 if [[ $elapsed -ge $timeout ]]; then
@@ -398,21 +409,24 @@ echo "Launching Cloud Hypervisor VM..."
 	--serial file="$CP_CONSOLE_LOG" \
 	--console off &
 CH_PID=$!
-echo "$CH_PID" > /tmp/qarax-cp-ch.pid
+echo "$CH_PID" >/tmp/qarax-cp-ch.pid
 
 echo "Cloud Hypervisor PID: ${CH_PID}"
 echo "Console log: ${CP_CONSOLE_LOG}"
 echo ""
 
 echo -n "Waiting for qarax API at http://${CP_VM_IP}:8000/"
-timeout=120; elapsed=0
+timeout=120
+elapsed=0
 while [[ $elapsed -lt $timeout ]]; do
 	if curl -sf "http://${CP_VM_IP}:8000/" -o /dev/null 2>/dev/null; then
 		echo ""
 		echo -e "${GREEN}qarax API is ready!${NC}"
 		break
 	fi
-	echo -n "."; sleep 2; elapsed=$((elapsed + 2))
+	echo -n "."
+	sleep 2
+	elapsed=$((elapsed + 2))
 
 	if ! kill -0 "$CH_PID" 2>/dev/null; then
 		echo ""
@@ -465,23 +479,25 @@ echo -e "${YELLOW}Phase 5: Create storage pools and workload VMs${NC}"
 
 DEMO_IMAGE="${DEMO_IMAGE:-public.ecr.aws/docker/library/alpine:latest}"
 DEMO_VM_NAME="alpine-vm"
-DEMO_VM_MEMORY=268435456  # 256 MiB
+DEMO_VM_MEMORY=268435456 # 256 MiB
 
 export QARAX_SERVER="${QARAX_API}"
 
-echo "Creating default network (192.168.100.0/24)..."
+echo "Creating default ${NETWORK_BACKEND} network (192.168.100.0/24)..."
 "$QARAX_CLI" network create --name default --subnet 192.168.100.0/24 --gateway 192.168.100.1 --network-type "$NETWORK_BACKEND"
 
-echo "Attaching network to host (bridged to eth0)..."
-"$QARAX_CLI" network attach-host --network default --host local-node --bridge-name qbr0 --parent-interface eth0
+if [[ "$NETWORK_BACKEND" == "passt" ]]; then
+	echo "Registering passt-backed network on host..."
+	"$QARAX_CLI" network attach-host --network default --host local-node --bridge-name passt0
+else
+	echo "Attaching bridged network to host (bridged to eth0)..."
+	"$QARAX_CLI" network attach-host --network default --host local-node --bridge-name qbr0 --parent-interface eth0
+fi
 echo ""
 
 echo "Creating overlaybd storage pool..."
 "$QARAX_CLI" storage-pool create --name overlaybd-pool --pool-type overlaybd \
-	--config '{"url":"http://'"${HOST_TAP_IP}"':'"${REGISTRY_PORT}"'"}'
-
-echo "Attaching overlaybd pool to host..."
-"$QARAX_CLI" storage-pool attach-host overlaybd-pool local-node
+	--config '{"url":"http://'"${HOST_TAP_IP}"':'"${REGISTRY_PORT}"'"}' --attach-all-hosts
 
 echo "Importing OCI image: ${DEMO_IMAGE}..."
 "$QARAX_CLI" storage-pool import --pool overlaybd-pool \
@@ -501,8 +517,7 @@ echo ""
 if [[ "$WITH_LOCAL" -eq 1 ]]; then
 	echo "Creating local storage pool..."
 	"$QARAX_CLI" storage-pool create --name local-pool --pool-type local \
-		--config '{"path":"'"${LOCAL_POOL_PATH}"'"}'
-	"$QARAX_CLI" storage-pool attach-host local-pool local-node
+		--config '{"path":"'"${LOCAL_POOL_PATH}"'"}' --attach-all-hosts
 	echo -e "${GREEN}Local storage pool 'local-pool' created (path: ${LOCAL_POOL_PATH})${NC}"
 	echo ""
 fi
@@ -510,8 +525,7 @@ fi
 if [[ "$WITH_NFS" -eq 1 ]]; then
 	echo "Creating NFS storage pool..."
 	"$QARAX_CLI" storage-pool create --name nfs-pool --pool-type nfs \
-		--config '{"url":"'"${NFS_URL}"'"}'
-	"$QARAX_CLI" storage-pool attach-host nfs-pool local-node
+		--config '{"url":"'"${NFS_URL}"'"}' --attach-all-hosts
 	echo -e "${GREEN}NFS storage pool 'nfs-pool' created (url: ${NFS_URL})${NC}"
 	echo ""
 fi
@@ -539,11 +553,11 @@ fi
 
 if [[ "$WITH_DB_VM" -eq 1 ]]; then
 	DB_VM_NAME="db-vm"
-	DB_VM_MEMORY=536870912  # 512 MiB
+	DB_VM_MEMORY=536870912 # 512 MiB
 
 	if [[ "$DB_IMAGE" == "docker.io/library/postgres:17-alpine" ]]; then
 		echo "Building custom Postgres image with POSTGRES_HOST_AUTH_METHOD=trust..."
-		cat <<EOF > /tmp/Containerfile.postgres
+		cat <<EOF >/tmp/Containerfile.postgres
 FROM ${DB_IMAGE}
 ENV POSTGRES_PASSWORD=postgres
 ENV POSTGRES_HOST_AUTH_METHOD=trust
@@ -565,9 +579,9 @@ EOF
 try:
     print(json.loads(sys.stdin.read()).get("id",""))
 except Exception:
-    print("")' <<< "${DB_VM_JSON}")
+    print("")' <<<"${DB_VM_JSON}")
 	DB_VM_IP=""
-	if [[ -n "${DB_VM_ID}" ]]; then
+	if [[ "$NETWORK_BACKEND" == "bridge" && -n "${DB_VM_ID}" ]]; then
 		DB_VM_IPS_JSON=$("$QARAX_CLI" network list-ips default --json 2>/dev/null || true)
 		DB_VM_IP=$(python3 -c 'import json,sys
 vmid=sys.argv[1]
@@ -578,7 +592,7 @@ except Exception:
 for item in items:
     if item.get("vm_id")==vmid:
         print((item.get("ip_address","") or "").split("/",1)[0])
-        break' "${DB_VM_ID}" <<< "${DB_VM_IPS_JSON}")
+        break' "${DB_VM_ID}" <<<"${DB_VM_IPS_JSON}")
 	fi
 
 	echo -e "${GREEN}OCI database VM '${DB_VM_NAME}' started (image: ${DB_IMAGE})${NC}"
@@ -588,6 +602,8 @@ for item in items:
 	echo "  psql -U postgres                # inside the VM"
 	if [[ -n "${DB_VM_IP}" ]]; then
 		echo "  psql -h ${DB_VM_IP} -U postgres # from the host"
+	elif [[ "$NETWORK_BACKEND" == "passt" ]]; then
+		echo "  Host-side direct DB access is not advertised in passt mode."
 	fi
 	echo ""
 fi
@@ -605,11 +621,11 @@ echo ""
 echo "Storage pools:"
 echo "  overlaybd-pool   (overlaybd, registry: http://${HOST_TAP_IP}:${REGISTRY_PORT})"
 [[ "$WITH_LOCAL" -eq 1 ]] && echo "  local-pool        (local, path: ${LOCAL_POOL_PATH})"
-[[ "$WITH_NFS"   -eq 1 ]] && echo "  nfs-pool          (nfs, url: ${NFS_URL})"
+[[ "$WITH_NFS" -eq 1 ]] && echo "  nfs-pool          (nfs, url: ${NFS_URL})"
 echo ""
 echo "Workload VMs:"
 echo "  ${DEMO_VM_NAME}         (OCI: ${DEMO_IMAGE})"
-[[ "$WITH_DB_VM"    -eq 1 ]] && echo "  db-vm             (OCI: ${DB_IMAGE}, PostgreSQL)"
+[[ "$WITH_DB_VM" -eq 1 ]] && echo "  db-vm             (OCI: ${DB_IMAGE}, PostgreSQL)"
 [[ "$WITH_LOCAL_VM" -eq 1 ]] && echo "  cloud-vm          (firmware boot, cloud image)"
 echo ""
 echo "Set server for CLI commands:"
@@ -618,7 +634,7 @@ echo ""
 echo "Interact with VMs:"
 echo "  qarax vm list"
 echo "  qarax vm attach ${DEMO_VM_NAME}"
-[[ "$WITH_DB_VM"    -eq 1 ]] && echo "  qarax vm attach db-vm"
+[[ "$WITH_DB_VM" -eq 1 ]] && echo "  qarax vm attach db-vm"
 [[ "$WITH_LOCAL_VM" -eq 1 ]] && echo "  qarax vm attach cloud-vm"
 echo ""
 echo "Cleanup:"

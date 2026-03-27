@@ -7,6 +7,7 @@ mod client;
 mod commands;
 mod config;
 mod console;
+mod wait;
 
 const DEFAULT_SERVER: &str = "http://localhost:8000";
 
@@ -94,6 +95,8 @@ pub enum Commands {
     Network(commands::network::NetworkArgs),
     /// Async job operations
     Job(commands::job::JobArgs),
+    /// Sandbox operations (ephemeral microVM environments for AI agents)
+    Sandbox(commands::sandbox::SandboxArgs),
     /// Configure the CLI (server URL, etc.)
     Configure(commands::configure::ConfigureArgs),
 }
@@ -127,6 +130,7 @@ async fn main() -> Result<()> {
         Commands::VmTemplate(args) => commands::vm_template::run(args, &client, cli.output).await,
         Commands::Hook(args) => commands::hook::run(args, &client, cli.output).await,
         Commands::Job(args) => commands::job::run(args, &client, cli.output).await,
+        Commands::Sandbox(args) => commands::sandbox::run(args, &client, cli.output).await,
         Commands::Configure(_) => unreachable!(),
     }
 }

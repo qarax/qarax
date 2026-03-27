@@ -21,7 +21,9 @@ use crate::{
         jobs::{self, JobType, NewJob},
         lifecycle_hooks,
         network_interfaces::{self, NetworkInterface},
-        networks, snapshots,
+        networks,
+        sandboxes::{self, SandboxStatus},
+        snapshots,
         snapshots::{NewSnapshot, Snapshot, SnapshotStatus},
         storage_objects::{self, NewStorageObject, StorageObjectType},
         storage_pools::{self, OverlayBdPoolConfig},
@@ -252,52 +254,50 @@ pub async fn create(
         return create_with_image(env, vm).await;
     }
 
+    let id = create_vm_internal(&env, vm).await?;
+    Ok(ApiResponse {
+        data: id.to_string(),
+        code: StatusCode::CREATED,
+    }
+    .into_response())
+}
+
+/// Create a VM from a resolved config: pick host, write DB records, allocate network.
+/// Does NOT contact the node. Node provisioning is deferred to VM start.
+pub(crate) async fn create_vm_internal(env: &App, vm: ResolvedNewVm) -> Result<Uuid> {
     let accel_config = vm
         .accelerator_config
         .as_ref()
         .and_then(host_gpus::AcceleratorConfig::from_value);
-    let host = pick_host(&env, vm.memory_size, accel_config.as_ref()).await?;
+    let host = pick_host(env, vm.memory_size, accel_config.as_ref()).await?;
     if let Some(root_disk_object_id) = vm.root_disk_object_id {
-        validate_root_disk_for_host(&env, host.id, root_disk_object_id).await?;
+        validate_root_disk_for_host(env, host.id, root_disk_object_id).await?;
     }
 
-    // Synchronous path (no image_ref): only write to DB, pick host, store networks.
-    // The node is NOT contacted here. create_vm will be called lazily at vm start.
     let mut tx = env.pool().begin().await?;
     let id = vms::create_tx(&mut tx, &vm).await?;
     if let Some(root_disk_object_id) = vm.root_disk_object_id {
         create_root_disk_record(&mut tx, id, root_disk_object_id).await?;
     }
 
-    // Store network interfaces in DB (inside tx, so rolls back if any insert fails)
     for net in vm.networks.as_deref().unwrap_or(&[]) {
         network_interfaces::create(&mut tx, id, net).await?;
     }
 
-    // Allocate GPUs atomically inside the transaction
     if let Some(ref accel) = accel_config {
         allocate_vm_gpus(&mut tx, host.id, id, accel).await?;
     }
 
     tx.commit().await?;
 
-    // For any explicit networks with a static IP + network_id, register in IPAM so
-    // the IP is tracked and won't be re-allocated to another VM.
     register_static_ips(env.pool(), id, vm.networks.as_deref()).await?;
-
-    // Record the chosen host
     let _ = vms::update_host_id(env.pool(), id, host.id).await;
 
-    // If network_id is provided, allocate an IP and create a default network interface
     if let Some(network_id) = vm.network_id {
         create_managed_network_interface(env.pool(), id, network_id).await?;
     }
 
-    Ok(ApiResponse {
-        data: id.to_string(),
-        code: StatusCode::CREATED,
-    }
-    .into_response())
+    Ok(id)
 }
 
 /// Async path: pull OCI image and create VM in a background job, return 202 immediately.
@@ -662,6 +662,18 @@ pub async fn start(
     Extension(env): Extension<App>,
     Path(vm_id): Path<Uuid>,
 ) -> Result<axum::response::Response> {
+    let job_id = start_vm_internal(&env, vm_id).await?;
+    use axum::response::IntoResponse as _;
+    Ok(ApiResponse {
+        data: VmStartResponse { job_id },
+        code: StatusCode::ACCEPTED,
+    }
+    .into_response())
+}
+
+/// Kick off an async VM start: validate state, build CreateVmRequest, spawn background task.
+/// Returns the job ID.
+pub(crate) async fn start_vm_internal(env: &App, vm_id: Uuid) -> Result<Uuid> {
     let vm = vms::get(env.pool(), vm_id).await?;
     let original_status = vm.status.clone();
 
@@ -691,14 +703,14 @@ pub async fn start(
         }
     }
 
-    let host = host_for_vm(&env, vm_id).await?;
+    let host = host_for_vm(env, vm_id).await?;
 
     // Set VM status to Pending to prevent double-start
     vms::update_status(env.pool(), vm_id, VmStatus::Pending).await?;
 
     // Build create request eagerly (before spawning) so we can return errors synchronously
     let create_req = if original_status == VmStatus::Created {
-        Some(build_create_vm_request(&env, &vm).await.map_err(|e| {
+        Some(build_create_vm_request(env, &vm).await.map_err(|e| {
             tracing::error!("Failed to build CreateVmRequest for {}: {}", vm_id, e);
             e
         })?)
@@ -731,6 +743,14 @@ pub async fn start(
 
         let node_client = NodeClient::new(&host.address, host.port as u16);
 
+        match ensure_vm_start_allowed(&db_pool, vm_id).await {
+            Ok(()) => {}
+            Err(msg) => {
+                let _ = jobs::mark_failed(&db_pool, job_id, &msg).await;
+                return;
+            }
+        }
+
         // For a VM in Created state, call create_vm first
         if let Some(req) = create_req {
             if let Err(e) = node_client.create_vm(req).await {
@@ -740,7 +760,21 @@ pub async fn start(
                 let _ = vms::update_status(&db_pool, vm_id, original_status).await;
                 return;
             }
+
+            if let Err(msg) = ensure_vm_start_allowed(&db_pool, vm_id).await {
+                let _ = jobs::mark_failed(&db_pool, job_id, &msg).await;
+                let _ = node_client.delete_vm(vm_id).await;
+                let _ = vms::update_status(&db_pool, vm_id, original_status).await;
+                return;
+            }
+
             let _ = jobs::update_progress(&db_pool, job_id, 50).await;
+        }
+
+        if let Err(msg) = ensure_vm_start_allowed(&db_pool, vm_id).await {
+            let _ = jobs::mark_failed(&db_pool, job_id, &msg).await;
+            let _ = vms::update_status(&db_pool, vm_id, original_status).await;
+            return;
         }
 
         if let Err(e) = node_client.start_vm(vm_id).await {
@@ -757,12 +791,26 @@ pub async fn start(
         tracing::info!(vm_id = %vm_id, job_id = %job_id, "VM start job completed");
     });
 
-    use axum::response::IntoResponse as _;
-    Ok(ApiResponse {
-        data: VmStartResponse { job_id },
-        code: StatusCode::ACCEPTED,
+    Ok(job_id)
+}
+
+async fn ensure_vm_start_allowed(
+    pool: &sqlx::PgPool,
+    vm_id: Uuid,
+) -> std::result::Result<(), String> {
+    match vms::get(pool, vm_id).await {
+        Ok(_) => {}
+        Err(sqlx::Error::RowNotFound) => return Err("VM was deleted before start".to_string()),
+        Err(e) => return Err(format!("failed to reload VM before start: {e}")),
     }
-    .into_response())
+
+    match sandboxes::get_by_vm(pool, vm_id).await {
+        Ok(Some(sandbox)) if sandbox.status == SandboxStatus::Destroying => {
+            Err(format!("sandbox {} is being deleted", sandbox.id))
+        }
+        Ok(_) => Ok(()),
+        Err(e) => Err(format!("failed to reload sandbox before start: {e}")),
+    }
 }
 
 #[utoipa::path(

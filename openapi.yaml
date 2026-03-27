@@ -708,6 +708,86 @@ paths:
                   $ref: '#/components/schemas/IpAllocation'
         '500':
           description: Internal server error
+  /sandboxes:
+    get:
+      tags:
+      - sandboxes
+      operationId: list
+      responses:
+        '200':
+          description: List all sandboxes
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Sandbox'
+        '500':
+          description: Internal server error
+    post:
+      tags:
+      - sandboxes
+      operationId: create
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewSandbox'
+        required: true
+      responses:
+        '202':
+          description: Sandbox creation started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateSandboxResponse'
+        '422':
+          description: Invalid input or no available hosts
+        '500':
+          description: Internal server error
+  /sandboxes/{sandbox_id}:
+    get:
+      tags:
+      - sandboxes
+      operationId: get
+      parameters:
+      - name: sandbox_id
+        in: path
+        description: Sandbox unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Sandbox details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Sandbox'
+        '404':
+          description: Sandbox not found
+        '500':
+          description: Internal server error
+    delete:
+      tags:
+      - sandboxes
+      operationId: delete
+      parameters:
+      - name: sandbox_id
+        in: path
+        description: Sandbox unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '204':
+          description: Sandbox deleted
+        '404':
+          description: Sandbox not found
+        '500':
+          description: Internal server error
   /storage-objects:
     get:
       tags:
@@ -1856,6 +1936,22 @@ components:
           - 'null'
         name:
           type: string
+    CreateSandboxResponse:
+      type: object
+      required:
+      - id
+      - vm_id
+      - job_id
+      properties:
+        id:
+          type: string
+          format: uuid
+        job_id:
+          type: string
+          format: uuid
+        vm_id:
+          type: string
+          format: uuid
     CreateSnapshotRequest:
       type: object
       properties:
@@ -2638,6 +2734,32 @@ components:
           type:
           - string
           - 'null'
+    NewSandbox:
+      type: object
+      required:
+      - name
+      - vm_template_id
+      properties:
+        idle_timeout_secs:
+          type:
+          - integer
+          - 'null'
+          format: int32
+        instance_type_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        name:
+          type: string
+        network_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        vm_template_id:
+          type: string
+          format: uuid
     NewStorageObject:
       type: object
       required:
@@ -3103,6 +3225,60 @@ components:
         snapshot_id:
           type: string
           format: uuid
+    Sandbox:
+      type: object
+      required:
+      - id
+      - vm_id
+      - name
+      - status
+      - idle_timeout_secs
+      - last_activity_at
+      - created_at
+      properties:
+        created_at:
+          type: string
+          format: date-time
+        error_message:
+          type:
+          - string
+          - 'null'
+        id:
+          type: string
+          format: uuid
+        idle_timeout_secs:
+          type: integer
+          format: int32
+        ip_address:
+          type:
+          - string
+          - 'null'
+        last_activity_at:
+          type: string
+          format: date-time
+        name:
+          type: string
+        status:
+          $ref: '#/components/schemas/SandboxStatus'
+        vm_id:
+          type: string
+          format: uuid
+        vm_status:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/VmStatus'
+        vm_template_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+    SandboxStatus:
+      type: string
+      enum:
+      - provisioning
+      - ready
+      - error
+      - destroying
     Snapshot:
       type: object
       required:
@@ -3769,3 +3945,5 @@ tags:
   description: Network management endpoints
 - name: hooks
   description: Lifecycle hook management endpoints
+- name: sandboxes
+  description: Ephemeral sandbox environments for AI agents

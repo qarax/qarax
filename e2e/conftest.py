@@ -31,6 +31,20 @@ QARAX_NODE_PORT = int(os.getenv("QARAX_NODE_PORT", "50051"))
 OTEL_TEST_PORT = int(os.getenv("OTEL_TEST_PORT", "14318"))
 
 
+def _candidate_node_hosts() -> list[str]:
+    configured = [QARAX_NODE_HOST]
+    fallbacks = os.getenv("QARAX_NODE_HOST_FALLBACKS", "127.0.0.1,localhost")
+    configured.extend(host.strip() for host in fallbacks.split(",") if host.strip())
+
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for host in configured:
+        if host not in seen:
+            seen.add(host)
+            ordered.append(host)
+    return ordered
+
+
 def _is_truthy(value: str | None) -> bool:
     return (value or "").lower() in {"1", "true", "yes", "on"}
 
@@ -61,7 +75,10 @@ class _TelemetryStore:
         request.ParseFromString(payload)
         trace_rows = []
         for resource_spans in request.resource_spans:
-            service_name = _resource_attribute(resource_spans.resource, "service.name") or "unknown"
+            service_name = (
+                _resource_attribute(resource_spans.resource, "service.name")
+                or "unknown"
+            )
             for scope_spans in resource_spans.scope_spans:
                 for span in scope_spans.spans:
                     trace_rows.append(
@@ -80,7 +97,10 @@ class _TelemetryStore:
         request.ParseFromString(payload)
         metric_rows = []
         for resource_metrics in request.resource_metrics:
-            service_name = _resource_attribute(resource_metrics.resource, "service.name") or "unknown"
+            service_name = (
+                _resource_attribute(resource_metrics.resource, "service.name")
+                or "unknown"
+            )
             for scope_metrics in resource_metrics.scope_metrics:
                 for metric in scope_metrics.metrics:
                     metric_rows.append(
@@ -96,16 +116,22 @@ class _TelemetryStore:
         with self._lock:
             self.errors.append(error)
 
-    def wait_for_shared_trace(self, services: set[str], timeout: float = 20.0) -> set[str]:
+    def wait_for_shared_trace(
+        self, services: set[str], timeout: float = 20.0
+    ) -> set[str]:
         deadline = time.time() + timeout
         while time.time() < deadline:
             with self._lock:
                 if self.errors:
-                    raise AssertionError(f"Telemetry collector failed: {self.errors[0]}")
+                    raise AssertionError(
+                        f"Telemetry collector failed: {self.errors[0]}"
+                    )
                 traces = list(self.traces)
             trace_services: dict[str, set[str]] = {}
             for trace in traces:
-                trace_services.setdefault(trace["trace_id"], set()).add(trace["service_name"])
+                trace_services.setdefault(trace["trace_id"], set()).add(
+                    trace["service_name"]
+                )
             shared = {
                 trace_id
                 for trace_id, seen_services in trace_services.items()
@@ -114,7 +140,9 @@ class _TelemetryStore:
             if shared:
                 return shared
             time.sleep(0.25)
-        raise AssertionError(f"Did not observe a shared trace for services {sorted(services)}")
+        raise AssertionError(
+            f"Did not observe a shared trace for services {sorted(services)}"
+        )
 
     def wait_for_metric_names(
         self, service_name: str, expected_names: set[str], timeout: float = 20.0
@@ -123,7 +151,9 @@ class _TelemetryStore:
         while time.time() < deadline:
             with self._lock:
                 if self.errors:
-                    raise AssertionError(f"Telemetry collector failed: {self.errors[0]}")
+                    raise AssertionError(
+                        f"Telemetry collector failed: {self.errors[0]}"
+                    )
                 metric_names = {
                     metric["name"]
                     for metric in self.metrics
@@ -197,35 +227,46 @@ def ensure_host_registered():
     if hosts is None:
         raise RuntimeError("Failed to list hosts")
 
-    selected_host = next((h for h in hosts if h.address == QARAX_NODE_HOST), None)
-    host_id = selected_host.id if selected_host is not None else None
+    last_error: str | None = None
+    for address in _candidate_node_hosts():
+        selected_host = next((h for h in hosts if h.address == address), None)
+        host_id = selected_host.id if selected_host is not None else None
 
-    if host_id is None:
-        # Not registered yet — register it now
-        new_host = NewHost(
-            name="e2e-node",
-            address=QARAX_NODE_HOST,
-            port=QARAX_NODE_PORT,
-            host_user="root",
-            password="",
+        if host_id is None:
+            new_host = NewHost(
+                name=f"e2e-node-{address.replace('.', '-').replace(':', '-')}",
+                address=address,
+                port=QARAX_NODE_PORT,
+                host_user="root",
+                password="",
+            )
+            result = add_host.sync_detailed(client=client, body=new_host)
+            if result.status_code.value == 201:
+                host_id = uuid.UUID(result.parsed.strip())
+            else:
+                hosts = list_hosts.sync(client=client)
+                if hosts is None:
+                    raise RuntimeError(
+                        "Failed to list hosts after registration attempt"
+                    )
+                selected_host = next((h for h in hosts if h.address == address), None)
+                host_id = selected_host.id if selected_host is not None else None
+
+        if host_id is None:
+            last_error = (
+                f"Could not register or find a host at {address}:{QARAX_NODE_PORT}"
+            )
+            continue
+
+        result = init_host.sync_detailed(host_id=host_id, client=client)
+        if result.status_code.value == 200:
+            return
+
+        last_error = (
+            f"Failed to initialize host {host_id} at {address}:{QARAX_NODE_PORT}: "
+            f"HTTP {result.status_code}"
         )
-        result = add_host.sync_detailed(client=client, body=new_host)
-        if result.status_code.value == 201:
-            host_id = uuid.UUID(result.parsed.strip())
-        else:
-            # Could be a 409/422/500 due to stale DB state; re-fetch to find it
-            hosts = list_hosts.sync(client=client)
-            if hosts is None:
-                raise RuntimeError("Failed to list hosts after registration attempt")
-            selected_host = next((h for h in hosts if h.address == QARAX_NODE_HOST), None)
-            host_id = selected_host.id if selected_host is not None else None
 
-    if host_id is None:
-        raise RuntimeError(
-            f"Could not register or find a host at {QARAX_NODE_HOST}:{QARAX_NODE_PORT}"
-        )
-
-    # Initialize the selected host so the scheduler sees a reachable UP host.
-    result = init_host.sync_detailed(host_id=host_id, client=client)
-    if result.status_code.value != 200:
-        raise RuntimeError(f"Failed to initialize host {host_id}: HTTP {result.status_code}")
+    raise RuntimeError(
+        last_error or "Failed to initialize any candidate qarax-node host"
+    )

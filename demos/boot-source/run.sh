@@ -127,9 +127,9 @@ echo ""
 
 # Step 1: Create a local storage pool (idempotent — reuses if exists)
 echo "--- Step 1: Create local storage pool ---"
-echo "\$ qarax storage-pool create --name $POOL_NAME --pool-type local --config '{\"path\":\"$POOL_PATH\"}'"
+echo "\$ qarax storage-pool create --name $POOL_NAME --pool-type local --config '{\"path\":\"$POOL_PATH\"}' --attach-all-hosts"
 $QARAX storage-pool create --name "$POOL_NAME" --pool-type local \
-	--config "{\"path\":\"$POOL_PATH\"}" 2>/dev/null || echo "(pool may already exist, continuing)"
+	--config "{\"path\":\"$POOL_PATH\"}" --attach-all-hosts 2>/dev/null || echo "(pool may already exist, continuing)"
 echo ""
 
 # Step 2: Transfer kernel into the pool

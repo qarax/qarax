@@ -25,7 +25,7 @@ Host (bare metal)
 ## Usage
 
 ```bash
-# Full build + run
+# Full build + run (defaults to passt-backed workload VM networking)
 sudo ./demos/hyperconverged/run.sh
 
 # Skip cargo build (use existing binaries)
@@ -36,7 +36,7 @@ sudo ./demos/hyperconverged/run.sh --with-local         # also create a local st
 sudo ./demos/hyperconverged/run.sh --with-nfs --nfs-url server:/export
 sudo ./demos/hyperconverged/run.sh --with-local-vm      # boot a firmware VM with cloud image
 sudo ./demos/hyperconverged/run.sh --with-db-vm         # boot an OCI PostgreSQL VM
-sudo ./demos/hyperconverged/run.sh --network-backend passt
+sudo ./demos/hyperconverged/run.sh --network-backend bridge
 
 # Tear down
 sudo ./demos/hyperconverged/run.sh --cleanup
@@ -49,6 +49,11 @@ export QARAX_SERVER=http://192.168.100.10:8000
 qarax vm list
 qarax vm attach alpine-vm
 ```
+
+`passt` is the default backend for workload VMs in this demo because it avoids
+per-network bridge, DHCP, and NAT setup inside the nested node. Use
+`--network-backend bridge` if you specifically want bridged Qarax-managed guest
+networking instead.
 
 ## Files
 

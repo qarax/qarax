@@ -10,7 +10,8 @@ Each demo lives in its own directory with a `run.sh` and a `README.md`.
 | [etcd-cluster/](etcd-cluster/) | Self-contained 3-node etcd cluster, each node as a VM | Docker + podman + KVM |
 | [k8s-cluster/](k8s-cluster/) | Upstream 3-node Kubernetes cluster via kubeadm on VMs | Docker + podman + KVM |
 | [gpu-passthrough/](gpu-passthrough/) | GPU passthrough via VFIO to an OCI-booted VM | `make run-local` + VFIO GPU |
-| [hyperconverged/](hyperconverged/) | Control plane running inside a Cloud Hypervisor VM on bare metal | KVM + podman + root |
+| [hyperconverged/](hyperconverged/) | Control plane running inside a Cloud Hypervisor VM on bare metal (defaults to `passt` for workload VMs) | KVM + podman + root |
+| [sandbox/](sandbox/) | Ephemeral VMs from templates with idle-timeout auto-reap | `./hack/run-local.sh` |
 
 ## Quick start
 
@@ -24,6 +25,13 @@ Each demo lives in its own directory with a `run.sh` and a `README.md`.
 # Run the hooks demo
 ./demos/hooks/run.sh
 ```
+
+Networking note:
+
+- `demos/hyperconverged/` now defaults to `passt` for its workload VMs to avoid
+  extra bridge/DHCP/NAT setup in the nested environment.
+- `demos/etcd-cluster/` and `demos/k8s-cluster/` still use bridged Qarax-managed
+  networks because they depend on multi-VM reachability and static guest IPs.
 
 ## Cleanup
 
