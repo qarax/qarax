@@ -5,9 +5,18 @@ use axum::{
     response::{self, IntoResponse, Response},
     routing::{get, patch, post},
 };
+#[cfg(feature = "otel")]
+use axum::{
+    extract::MatchedPath,
+    middleware::{self, Next},
+};
 use http::{Request, StatusCode, header::HeaderName};
+#[cfg(feature = "otel")]
+use opentelemetry::KeyValue;
 use serde::Serialize;
 use serde_with::DisplayFromStr;
+#[cfg(feature = "otel")]
+use std::time::Instant;
 use tower::ServiceBuilder;
 use tower_http::{
     request_id::{MakeRequestUuid, PropagateRequestIdLayer, RequestId, SetRequestIdLayer},
@@ -219,9 +228,39 @@ pub struct VmListQuery {
 )]
 pub struct ApiDoc;
 
+#[cfg(feature = "otel")]
+async fn record_http_metrics(
+    axum::extract::State(env): axum::extract::State<App>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    let method = request.method().to_string();
+    let route = request
+        .extensions()
+        .get::<MatchedPath>()
+        .map(MatchedPath::as_str)
+        .unwrap_or("unmatched")
+        .to_string();
+    let start = Instant::now();
+    let response = next.run(request).await;
+    let duration = start.elapsed().as_secs_f64();
+    let status_code = response.status().as_u16().to_string();
+
+    env.metrics().http_request_duration_seconds.record(
+        duration,
+        &[
+            KeyValue::new("method", method),
+            KeyValue::new("route", route),
+            KeyValue::new("status_code", status_code),
+        ],
+    );
+
+    response
+}
+
 pub fn app(env: App) -> Router {
     let x_request_id = HeaderName::from_static("x-request-id");
-    Router::new()
+    let router = Router::new()
         .route("/", get(|| async { "hello" }))
         .merge(hosts())
         .merge(instance_types())
@@ -258,7 +297,12 @@ pub fn app(env: App) -> Router {
                     }),
                 ),
         )
-        .layer(Extension(env))
+        .layer(Extension(env.clone()));
+
+    #[cfg(feature = "otel")]
+    let router = router.layer(middleware::from_fn_with_state(env, record_http_metrics));
+
+    router
 }
 
 fn hosts() -> Router {

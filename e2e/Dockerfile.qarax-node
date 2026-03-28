@@ -3,7 +3,7 @@
 
 FROM fedora:43
 
-ARG CLOUD_HYPERVISOR_VERSION=v51.0
+ARG CLOUD_HYPERVISOR_VERSION
 ARG OVERLAYBD_VERSION=1.0.16
 ARG OVERLAYBD_RPM_SUFFIX=20250818.4601fb2
 ARG OVERLAYBD_RPM_DIST=azurelinux.3.0
@@ -35,7 +35,7 @@ RUN dnf install -y \
 
 # Install Cloud Hypervisor (static binary)
 RUN curl ${CURL_RETRY_ARGS} \
-    "https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/${CLOUD_HYPERVISOR_VERSION}/cloud-hypervisor-static" \
+    "https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/${CLOUD_HYPERVISOR_VERSION:?set CLOUD_HYPERVISOR_VERSION}/cloud-hypervisor-static" \
     -o /usr/local/bin/cloud-hypervisor && \
     chmod +x /usr/local/bin/cloud-hypervisor && \
     cloud-hypervisor --version

@@ -46,6 +46,8 @@ services:
     build:
       context: ..
       dockerfile: e2e/Dockerfile.qarax-node
+      args:
+        CLOUD_HYPERVISOR_VERSION: ${CLOUD_HYPERVISOR_VERSION}
     privileged: true
     devices:
       - /dev/kvm:/dev/kvm
@@ -115,6 +117,8 @@ services:
     build:
       context: ..
       dockerfile: e2e/Dockerfile.qarax-node
+      args:
+        CLOUD_HYPERVISOR_VERSION: ${CLOUD_HYPERVISOR_VERSION}
     privileged: true
     devices:
       - /dev/kvm:/dev/kvm

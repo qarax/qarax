@@ -15,7 +15,7 @@ on:
       cloud_hypervisor_version:
         description: "Cloud Hypervisor version build arg"
         required: false
-        default: "v38.0"
+        default: ""
         type: string
       push_latest:
         description: "Also publish the latest tag"
@@ -87,7 +87,7 @@ jobs:
 
           cloud_hv="${{ inputs.cloud_hypervisor_version }}"
           if [ -z "${cloud_hv}" ]; then
-            cloud_hv="v38.0"
+            cloud_hv="$(tr -d '\n' < versions/cloud-hypervisor-version)"
           fi
 
           echo "image_tag=${image_tag}" >> "${GITHUB_OUTPUT}"

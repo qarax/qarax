@@ -8,10 +8,6 @@ use uuid::Uuid;
 
 use super::vms::Vm;
 
-// ---------------------------------------------------------------------------
-// Enums
-// ---------------------------------------------------------------------------
-
 #[derive(
     Deserialize, Serialize, Debug, Clone, Eq, PartialEq, Type, EnumString, Display, ToSchema,
 )]
@@ -37,10 +33,6 @@ pub enum HookExecutionStatus {
     Delivered,
     Failed,
 }
-
-// ---------------------------------------------------------------------------
-// Domain models
-// ---------------------------------------------------------------------------
 
 #[derive(Serialize, Deserialize, Debug, Clone, ToSchema, sqlx::FromRow)]
 pub struct LifecycleHook {

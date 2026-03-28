@@ -12,7 +12,8 @@ CONTAINER_ENGINE ?= docker
 APPLIANCE_IMAGE ?= ghcr.io/yourorg/qarax-vmm-host
 APPLIANCE_TAG ?= dev
 APPLIANCE_TARGET ?= x86_64-unknown-linux-musl
-CLOUD_HYPERVISOR_VERSION ?= v50.0
+CLOUD_HYPERVISOR_VERSION_FILE ?= versions/cloud-hypervisor-version
+CLOUD_HYPERVISOR_VERSION ?= $(shell tr -d '\n' < $(CLOUD_HYPERVISOR_VERSION_FILE))
 
 help:
 	@echo "Available targets:"

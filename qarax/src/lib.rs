@@ -71,4 +71,9 @@ impl App {
     pub fn metrics(&self) -> &Metrics {
         &self.metrics
     }
+
+    #[cfg(feature = "otel")]
+    pub fn metrics_arc(&self) -> Arc<Metrics> {
+        self.metrics.clone()
+    }
 }

@@ -4,7 +4,11 @@ use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::{Extension, Json, extract::Path, response::IntoResponse};
 use futures::{SinkExt, StreamExt};
 use http::StatusCode;
+#[cfg(feature = "otel")]
+use opentelemetry::KeyValue;
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "otel")]
+use std::time::Instant;
 use tracing::{error, info, instrument, warn};
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -683,6 +687,10 @@ pub async fn start(
 pub(crate) async fn start_vm_internal(env: &App, vm_id: Uuid) -> Result<Uuid> {
     let vm = vms::get(env.pool(), vm_id).await?;
     let original_status = vm.status.clone();
+    #[cfg(feature = "otel")]
+    let metrics = env.metrics_arc();
+    #[cfg(feature = "otel")]
+    let initial_status_label = original_status.to_string();
 
     match vm.status {
         VmStatus::Running => {
@@ -742,6 +750,20 @@ pub(crate) async fn start_vm_internal(env: &App, vm_id: Uuid) -> Result<Uuid> {
 
     tokio::spawn(async move {
         tracing::info!(vm_id = %vm_id, job_id = %job_id, "Starting async VM start");
+        #[cfg(feature = "otel")]
+        let start_time = Instant::now();
+        #[cfg(feature = "otel")]
+        let record_vm_start_metric = |result: &str| {
+            let duration = start_time.elapsed().as_secs_f64();
+            let attrs = [
+                KeyValue::new("result", result.to_string()),
+                KeyValue::new("initial_status", initial_status_label.clone()),
+            ];
+            metrics
+                .vm_start_job_duration_seconds
+                .record(duration, &attrs);
+            metrics.vm_start_jobs_total.add(1, &attrs);
+        };
 
         if let Err(e) = jobs::mark_running(&db_pool, job_id).await {
             tracing::error!(job_id = %job_id, error = %e, "Failed to mark job as running");
@@ -754,6 +776,8 @@ pub(crate) async fn start_vm_internal(env: &App, vm_id: Uuid) -> Result<Uuid> {
             Ok(()) => {}
             Err(msg) => {
                 let _ = jobs::mark_failed(&db_pool, job_id, &msg).await;
+                #[cfg(feature = "otel")]
+                record_vm_start_metric("failed");
                 return;
             }
         }
@@ -765,6 +789,8 @@ pub(crate) async fn start_vm_internal(env: &App, vm_id: Uuid) -> Result<Uuid> {
                 tracing::error!(vm_id = %vm_id, job_id = %job_id, error = %msg);
                 let _ = jobs::mark_failed(&db_pool, job_id, &msg).await;
                 let _ = vms::update_status(&db_pool, vm_id, original_status).await;
+                #[cfg(feature = "otel")]
+                record_vm_start_metric("failed");
                 return;
             }
 
@@ -772,6 +798,8 @@ pub(crate) async fn start_vm_internal(env: &App, vm_id: Uuid) -> Result<Uuid> {
                 let _ = jobs::mark_failed(&db_pool, job_id, &msg).await;
                 let _ = node_client.delete_vm(vm_id).await;
                 let _ = vms::update_status(&db_pool, vm_id, original_status).await;
+                #[cfg(feature = "otel")]
+                record_vm_start_metric("failed");
                 return;
             }
 
@@ -781,6 +809,8 @@ pub(crate) async fn start_vm_internal(env: &App, vm_id: Uuid) -> Result<Uuid> {
         if let Err(msg) = ensure_vm_start_allowed(&db_pool, vm_id).await {
             let _ = jobs::mark_failed(&db_pool, job_id, &msg).await;
             let _ = vms::update_status(&db_pool, vm_id, original_status).await;
+            #[cfg(feature = "otel")]
+            record_vm_start_metric("failed");
             return;
         }
 
@@ -789,11 +819,15 @@ pub(crate) async fn start_vm_internal(env: &App, vm_id: Uuid) -> Result<Uuid> {
             tracing::error!(vm_id = %vm_id, job_id = %job_id, error = %msg);
             let _ = jobs::mark_failed(&db_pool, job_id, &msg).await;
             let _ = vms::update_status(&db_pool, vm_id, original_status).await;
+            #[cfg(feature = "otel")]
+            record_vm_start_metric("failed");
             return;
         }
 
         let _ = vms::update_status(&db_pool, vm_id, VmStatus::Running).await;
         let _ = jobs::mark_completed(&db_pool, job_id, None).await;
+        #[cfg(feature = "otel")]
+        record_vm_start_metric("success");
 
         tracing::info!(vm_id = %vm_id, job_id = %job_id, "VM start job completed");
     });

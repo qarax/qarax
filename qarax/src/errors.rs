@@ -60,7 +60,10 @@ impl From<sqlx::Error> for Error {
                 let msg = unique_violation_message(db_err.as_ref());
                 Error::Conflict(msg)
             }
-            _ => Error::Sqlx(err),
+            _ => {
+                tracing::error!(error = %err, error.debug = ?err, "database error");
+                Error::Sqlx(err)
+            }
         }
     }
 }

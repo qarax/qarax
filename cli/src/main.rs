@@ -9,7 +9,7 @@ mod config;
 mod console;
 mod wait;
 
-const DEFAULT_SERVER: &str = "http://localhost:8000";
+const DEFAULT_SERVER: &str = "http://127.0.0.1:8000";
 
 pub fn resolve_server(flag: Option<String>, cfg: &config::Config) -> String {
     flag.or_else(|| cfg.server.clone())

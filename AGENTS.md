@@ -152,7 +152,7 @@ GitHub Actions (`rust-ci.yml`): fmt check (nightly) → clippy → build (musl) 
 
 ## Versioning
 
-Key component versions are pinned in `Makefile` (`CLOUD_HYPERVISOR_VERSION`) and `deployments/Containerfile.qarax-vmm` (Cloud Hypervisor, OverlayBD). Cloud Hypervisor SDK version is pinned via git tag in `qarax-node/Cargo.toml`. After bumping the SDK tag, always run `cargo build -p qarax-node` — minor releases can rename/move types (e.g., `DiskImageType` → `disk_config::ImageType` in v51.1).
+Cloud Hypervisor version is pinned globally in `versions/cloud-hypervisor-version` and threaded into builds by the Makefile/scripts; keep callers in sync with that file. OverlayBD versions remain pinned in containerfiles. Cloud Hypervisor SDK version is pinned via git tag in `qarax-node/Cargo.toml`. After bumping the SDK tag, always run `cargo build -p qarax-node` — minor releases can rename/move types (e.g., `DiskImageType` → `disk_config::ImageType` in v51.1).
 
 ## E2E Test Patterns
 

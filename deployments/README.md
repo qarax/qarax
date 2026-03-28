@@ -258,7 +258,7 @@ RUN dnf install -y \
 
 ```bash
 podman build \
-  --build-arg CLOUD_HYPERVISOR_VERSION=v39.0 \
+  --build-arg CLOUD_HYPERVISOR_VERSION="$(cat versions/cloud-hypervisor-version)" \
   -f deployments/Containerfile.qarax-vmm \
   -t quay.io/yourorg/qarax-vmm-host:v1.1.0 \
   .

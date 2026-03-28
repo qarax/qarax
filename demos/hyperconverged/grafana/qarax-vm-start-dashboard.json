@@ -1,0 +1,80 @@
+{
+  "uid": "qarax-vm-start",
+  "title": "Qarax VM Start Analysis",
+  "tags": ["qarax", "demo", "vm"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "VM start latency by initial status",
+      "datasource": { "type": "prometheus", "uid": "__PROM_UID__" },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, initial_status) (rate(qarax_vm_start_job_duration_seconds_bucket{result=\"success\"}[$__rate_interval])))",
+          "legendFormat": "{{initial_status}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "VM start average duration by result",
+      "datasource": { "type": "prometheus", "uid": "__PROM_UID__" },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        {
+          "expr": "sum by (result) (rate(qarax_vm_start_job_duration_seconds_sum[$__rate_interval])) / sum by (result) (rate(qarax_vm_start_job_duration_seconds_count[$__rate_interval]))",
+          "legendFormat": "{{result}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "VM start completions by result",
+      "datasource": { "type": "prometheus", "uid": "__PROM_UID__" },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 9 },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        {
+          "expr": "sum by (result) (rate(qarax_vm_start_jobs_total[$__rate_interval]))",
+          "legendFormat": "{{result}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "HTTP latency for VM start endpoint",
+      "datasource": { "type": "prometheus", "uid": "__PROM_UID__" },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 9 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, method) (rate(qarax_http_request_duration_seconds_bucket{route=\"/vms/{vm_id}/start\"}[$__rate_interval])))",
+          "legendFormat": "p95 {{method}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(qarax_http_request_duration_seconds_sum{route=\"/vms/{vm_id}/start\"}[$__rate_interval])) / sum(rate(qarax_http_request_duration_seconds_count{route=\"/vms/{vm_id}/start\"}[$__rate_interval]))",
+          "legendFormat": "avg",
+          "refId": "B"
+        }
+      ]
+    }
+  ]
+}

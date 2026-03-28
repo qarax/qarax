@@ -20,6 +20,8 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+CH_VERSION_FILE="${REPO_ROOT}/versions/cloud-hypervisor-version"
+export CLOUD_HYPERVISOR_VERSION="${CLOUD_HYPERVISOR_VERSION:-$(tr -d '\n' <"$CH_VERSION_FILE")}"
 
 API_URL="${API_URL:-http://localhost:8000}"
 VM_NAME="${VM_NAME:-qarax-deploy-test}"
@@ -230,7 +232,7 @@ RUN curl -fsSL \
 
 # Install Cloud Hypervisor (static binary)
 RUN curl -fsSL \
-    "https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/v50.0/cloud-hypervisor-static" \
+    "https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/${CLOUD_HYPERVISOR_VERSION}/cloud-hypervisor-static" \
     -o /usr/local/bin/cloud-hypervisor && \
     chmod +x /usr/local/bin/cloud-hypervisor && \
     cloud-hypervisor --version
