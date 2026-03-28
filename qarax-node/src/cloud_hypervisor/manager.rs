@@ -29,6 +29,7 @@ use prost::Message;
 
 use crate::image_store::ImageStoreManager;
 use crate::overlaybd::OverlayBdManager;
+use crate::rpc::node::StoragePoolKind;
 use crate::rpc::node::{
     ConsoleConfig as ProtoConsoleConfig, ConsoleMode as ProtoConsoleMode,
     CpuTopology as ProtoCpuTopology, CpusConfig as ProtoCpusConfig, DiskConfig as ProtoDiskConfig,
@@ -38,6 +39,7 @@ use crate::rpc::node::{
     VfioDeviceConfig as ProtoVfioDeviceConfig, VhostMode as ProtoVhostMode,
     VmConfig as ProtoVmConfig, VmState, VmStatus,
 };
+use crate::storage::StorageBackendRegistry;
 
 #[derive(Debug, Error)]
 pub enum VmManagerError {
@@ -67,6 +69,9 @@ pub enum VmManagerError {
 
     #[error("Migration error: {0}")]
     MigrationError(String),
+
+    #[error("Storage backend error: {0}")]
+    StorageError(String),
 }
 
 /// Represents a running VM instance
@@ -89,8 +94,9 @@ struct VmInstance {
     serial_pty_path: Option<String>,
     /// PTY path for console device (if PTY mode is enabled)
     console_pty_path: Option<String>,
-    /// Whether this VM uses an OverlayBD block device (needs cleanup on delete)
-    has_overlaybd: bool,
+    /// Which storage backend mapped a disk for this VM (if any).
+    /// Used by delete_vm to call the correct backend's unmap().
+    storage_backend_kind: Option<StoragePoolKind>,
 }
 
 impl VmInstance {
@@ -113,10 +119,11 @@ pub struct VmManager {
     vms: Arc<Mutex<HashMap<String, VmInstance>>>,
     /// Optional image store manager for OCI image boot support (virtiofs path)
     image_store_manager: Option<Arc<ImageStoreManager>>,
-    /// Optional OverlayBD manager for lazy block-level OCI image boot
+    /// Storage backend registry for attach/detach/map/unmap operations
+    storage_backends: StorageBackendRegistry,
+    /// Direct reference to OverlayBdManager for import operations
+    /// (shared Arc with the OverlayBD storage backend)
     overlaybd_manager: Option<Arc<OverlayBdManager>>,
-    /// Path to the qarax-init binary (injected into OverlayBD-backed VMs)
-    qarax_init_binary: Option<PathBuf>,
 }
 
 impl VmManager {
@@ -126,16 +133,22 @@ impl VmManager {
         ch_binary: impl Into<PathBuf>,
         image_store_manager: Option<Arc<ImageStoreManager>>,
     ) -> Self {
-        Self::with_overlaybd(runtime_dir, ch_binary, image_store_manager, None, None)
+        Self::with_storage(
+            runtime_dir,
+            ch_binary,
+            image_store_manager,
+            StorageBackendRegistry::new(),
+            None,
+        )
     }
 
-    /// Create a new VM manager with optional OverlayBD support
-    pub fn with_overlaybd(
+    /// Create a new VM manager with storage backends
+    pub fn with_storage(
         runtime_dir: impl Into<PathBuf>,
         ch_binary: impl Into<PathBuf>,
         image_store_manager: Option<Arc<ImageStoreManager>>,
+        storage_backends: StorageBackendRegistry,
         overlaybd_manager: Option<Arc<OverlayBdManager>>,
-        qarax_init_binary: Option<PathBuf>,
     ) -> Self {
         let runtime_dir = runtime_dir.into();
         let ch_binary = ch_binary.into();
@@ -151,8 +164,8 @@ impl VmManager {
             ch_binary,
             vms: Arc::new(Mutex::new(HashMap::new())),
             image_store_manager,
+            storage_backends,
             overlaybd_manager,
-            qarax_init_binary,
         }
     }
 
@@ -161,9 +174,17 @@ impl VmManager {
         self.image_store_manager.as_ref()
     }
 
-    /// Get the OverlayBD manager if configured
+    /// Get the OverlayBD manager if configured (used for import operations)
     pub fn overlaybd_manager(&self) -> Option<&Arc<OverlayBdManager>> {
         self.overlaybd_manager.as_ref()
+    }
+
+    /// Get a storage backend by kind
+    pub fn storage_backend(
+        &self,
+        kind: StoragePoolKind,
+    ) -> Option<&Arc<dyn crate::storage::StorageBackend>> {
+        self.storage_backends.get(kind)
     }
 
     /// Get the runtime directory path
@@ -332,7 +353,7 @@ impl VmManager {
                 passt_processes: Vec::new(),
                 serial_pty_path: None,
                 console_pty_path: None,
-                has_overlaybd: false, // Recovery doesn't restore OverlayBD state
+                storage_backend_kind: None, // Recovery doesn't restore OverlayBD state
             };
 
             let mut vms = self.vms.lock().await;
@@ -512,45 +533,36 @@ impl VmManager {
             }
         }
 
-        // Resolve OverlayBD disks: mount each disk that has oci_image_ref set and replace
-        // the path with the resulting block device.
-        let mut has_overlaybd = false;
-        if let Some(obd_manager) = &self.overlaybd_manager {
-            for disk in config.disks.iter_mut() {
-                if let (Some(image_ref), Some(registry_url)) =
-                    (disk.oci_image_ref.clone(), disk.registry_url.clone())
-                {
-                    let mounted = obd_manager.mount(&vm_id, &image_ref, &registry_url).await?;
-                    let device_path = mounted.device_path.clone();
-                    disk.path = Some(mounted.device_path);
-                    disk.oci_image_ref = None;
-                    disk.registry_url = None;
-                    has_overlaybd = true;
+        // Resolve storage-backed disks: map each disk that has oci_image_ref set
+        // through the appropriate storage backend.
+        let mut storage_backend_kind = None;
+        for disk in config.disks.iter_mut() {
+            if let (Some(image_ref), Some(registry_url)) =
+                (disk.oci_image_ref.clone(), disk.registry_url.clone())
+            {
+                let backend = self
+                    .storage_backends
+                    .get(StoragePoolKind::Overlaybd)
+                    .ok_or_else(|| {
+                        VmManagerError::StorageError(format!(
+                            "Disk {} requests OverlayBD but no OverlayBD backend is configured",
+                            disk.id
+                        ))
+                    })?;
 
-                    // Inject qarax-init into the mounted block device so the VM
-                    // boots with our init binary as PID 1.
-                    if let Some(init_binary) = &self.qarax_init_binary {
-                        obd_manager
-                            .inject_init(
-                                &vm_id,
-                                &device_path,
-                                &image_ref,
-                                &registry_url,
-                                init_binary,
-                            )
-                            .await?;
-                    }
-                }
-            }
-        } else {
-            // No OverlayBD manager — log a warning if any disks request it
-            for disk in &config.disks {
-                if disk.oci_image_ref.is_some() {
-                    warn!(
-                        "Disk {} requests OverlayBD but no OverlayBD manager is configured",
-                        disk.id
-                    );
-                }
+                let disk_config = serde_json::json!({
+                    "image_ref": image_ref,
+                    "registry_url": registry_url,
+                });
+                let mapped = backend
+                    .map(&vm_id, &disk_config)
+                    .await
+                    .map_err(|e| VmManagerError::StorageError(e.to_string()))?;
+
+                disk.path = Some(mapped.device_path);
+                disk.oci_image_ref = None;
+                disk.registry_url = None;
+                storage_backend_kind = Some(StoragePoolKind::Overlaybd);
             }
         }
 
@@ -766,7 +778,7 @@ impl VmManager {
             passt_processes,
             serial_pty_path: serial_pty,
             console_pty_path: console_pty,
-            has_overlaybd,
+            storage_backend_kind,
         };
 
         let state = instance.to_vm_state();
@@ -1087,7 +1099,7 @@ impl VmManager {
             passt_processes: vec![],
             serial_pty_path: serial_pty,
             console_pty_path: console_pty,
-            has_overlaybd: false,
+            storage_backend_kind: None,
         };
 
         {
@@ -1170,6 +1182,40 @@ impl VmManager {
                 }
                 net.tap = Some(tap_name.clone());
                 tap_devices.push(tap_name);
+            }
+        }
+
+        // Resolve storage-backed disks before spawning CH — the OverlayBD
+        // backend needs to mount a TCMU device on this host for the same image
+        // the source node was using.
+        let mut storage_backend_kind = None;
+        for disk in mutable_config.disks.iter_mut() {
+            if let (Some(image_ref), Some(registry_url)) =
+                (disk.oci_image_ref.clone(), disk.registry_url.clone())
+            {
+                let backend = self
+                    .storage_backends
+                    .get(StoragePoolKind::Overlaybd)
+                    .ok_or_else(|| {
+                        VmManagerError::StorageError(format!(
+                            "Disk {} requests OverlayBD but no OverlayBD backend is configured",
+                            disk.id
+                        ))
+                    })?;
+
+                let disk_config = serde_json::json!({
+                    "image_ref": image_ref,
+                    "registry_url": registry_url,
+                });
+                let mapped = backend
+                    .map(vm_id, &disk_config)
+                    .await
+                    .map_err(|e| VmManagerError::StorageError(e.to_string()))?;
+
+                disk.path = Some(mapped.device_path);
+                disk.oci_image_ref = None;
+                disk.registry_url = None;
+                storage_backend_kind = Some(StoragePoolKind::Overlaybd);
             }
         }
 
@@ -1271,7 +1317,7 @@ impl VmManager {
             passt_processes: Vec::new(),
             serial_pty_path: None,
             console_pty_path: None,
-            has_overlaybd: false,
+            storage_backend_kind,
         };
 
         {
@@ -1413,11 +1459,12 @@ impl VmManager {
             }
         }
 
-        // Unmount OverlayBD device if this VM used one
-        if instance.has_overlaybd
-            && let Some(obd_manager) = &self.overlaybd_manager
+        // Unmap storage backend device if this VM used one
+        if let Some(kind) = instance.storage_backend_kind
+            && let Some(backend) = self.storage_backends.get(kind)
+            && let Err(e) = backend.unmap(vm_id).await
         {
-            obd_manager.unmount(vm_id).await;
+            warn!("Failed to unmap storage for VM {}: {}", vm_id, e);
         }
 
         info!("VM {} deleted successfully", vm_id);

@@ -13,10 +13,15 @@ static ALLOC: dhat::Alloc = dhat::Alloc;
 use qarax_node::cloud_hypervisor::VmManager;
 use qarax_node::image_store::ImageStoreManager;
 use qarax_node::overlaybd::OverlayBdManager;
+use qarax_node::rpc::node::StoragePoolKind;
 use qarax_node::rpc::node::file_transfer_service_server::FileTransferServiceServer;
 use qarax_node::rpc::node::vm_service_server::VmServiceServer;
 use qarax_node::services::file_transfer::FileTransferServiceImpl;
 use qarax_node::services::vm::VmServiceImpl;
+use qarax_node::storage::StorageBackendRegistry;
+use qarax_node::storage::local::LocalBackend;
+use qarax_node::storage::nfs::NfsBackend;
+use qarax_node::storage::overlaybd::OverlayBdBackend;
 
 #[derive(Parser, Debug)]
 #[clap(
@@ -168,7 +173,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
 
-    // Build VmManager with optional ImageStoreManager and OverlayBdManager
+    // Build storage backend registry
     let qarax_init_binary = if args.qarax_init_binary.exists() {
         Some(args.qarax_init_binary.clone())
     } else {
@@ -179,12 +184,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
 
-    let vm_manager = Arc::new(VmManager::with_overlaybd(
+    let mut storage_backends = StorageBackendRegistry::new();
+    storage_backends.register(StoragePoolKind::Local, Arc::new(LocalBackend));
+    storage_backends.register(StoragePoolKind::Nfs, Arc::new(NfsBackend));
+    if let Some(ref obd) = overlaybd_manager {
+        storage_backends.register(
+            StoragePoolKind::Overlaybd,
+            Arc::new(OverlayBdBackend::new(Arc::clone(obd), qarax_init_binary)),
+        );
+    }
+
+    let vm_manager = Arc::new(VmManager::with_storage(
         &args.runtime_dir,
         &args.cloud_hypervisor_binary,
         image_store_manager,
+        storage_backends,
         overlaybd_manager,
-        qarax_init_binary,
     ));
     vm_manager.recover_vms().await;
 

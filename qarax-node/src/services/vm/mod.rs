@@ -1,4 +1,3 @@
-use anyhow::Result as AnyhowResult;
 use futures::Stream;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -820,20 +819,14 @@ impl VmService for VmServiceImpl {
     ) -> Result<Response<AttachStoragePoolResponse>, Status> {
         let req = request.into_inner();
         let pool_id = &req.pool_id;
-        info!(
-            "Attaching storage pool {} (kind={:?})",
-            pool_id, req.pool_kind
-        );
-
         let kind = StoragePoolKind::try_from(req.pool_kind).unwrap_or(StoragePoolKind::Local);
+        info!("Attaching storage pool {} (kind={:?})", pool_id, kind);
 
-        let result = match kind {
-            StoragePoolKind::Local => attach_local_pool(pool_id, &req.config_json).await,
-            StoragePoolKind::Nfs => attach_nfs_pool(pool_id, &req.config_json).await,
-            StoragePoolKind::Overlaybd => check_overlaybd_registry(&req.config_json).await,
-        };
+        let backend = self.manager.storage_backend(kind).ok_or_else(|| {
+            Status::unimplemented(format!("{:?} storage backend not configured", kind))
+        })?;
 
-        match result {
+        match backend.attach(pool_id, &req.config_json).await {
             Ok(msg) => {
                 info!("Storage pool {} attached: {}", pool_id, msg);
                 Ok(Response::new(AttachStoragePoolResponse {
@@ -943,20 +936,17 @@ impl VmService for VmServiceImpl {
     ) -> Result<Response<()>, Status> {
         let req = request.into_inner();
         let pool_id = &req.pool_id;
-        info!(
-            "Detaching storage pool {} (kind={:?})",
-            pool_id, req.pool_kind
-        );
-
         let kind = StoragePoolKind::try_from(req.pool_kind).unwrap_or(StoragePoolKind::Local);
+        info!("Detaching storage pool {} (kind={:?})", pool_id, kind);
 
-        if kind == StoragePoolKind::Nfs {
-            // Local and OverlayBD: nothing to undo on detach
-            if let Err(e) = detach_nfs_pool(pool_id).await {
-                error!("Failed to unmount NFS pool {}: {}", pool_id, e);
-                return Err(Status::internal(format!("NFS umount failed: {}", e)));
-            }
-        }
+        let backend = self.manager.storage_backend(kind).ok_or_else(|| {
+            Status::unimplemented(format!("{:?} storage backend not configured", kind))
+        })?;
+
+        backend.detach(pool_id).await.map_err(|e| {
+            error!("Failed to detach storage pool {}: {}", pool_id, e);
+            Status::internal(format!("Detach failed: {}", e))
+        })?;
 
         Ok(Response::new(()))
     }
@@ -1022,130 +1012,6 @@ impl VmService for VmServiceImpl {
     type AttachConsoleStream =
         Pin<Box<dyn Stream<Item = Result<ConsoleOutput, Status>> + Send + 'static>>;
 }
-// ─── Storage pool attachment helpers ─────────────────────────────────────────
-
-/// Ensure the local directory for this pool exists.
-async fn attach_local_pool(pool_id: &str, config_json: &str) -> AnyhowResult<String> {
-    let cfg: serde_json::Value =
-        serde_json::from_str(config_json).unwrap_or_else(|_| serde_json::json!({}));
-
-    // Fall back to a standard per-pool directory if config has no path.
-    let path_str = cfg.get("path").and_then(|v| v.as_str()).unwrap_or_default();
-
-    let dir = if path_str.is_empty() {
-        std::path::PathBuf::from(format!("/var/lib/qarax/pools/{}", pool_id))
-    } else {
-        std::path::PathBuf::from(path_str)
-    };
-
-    tokio::fs::create_dir_all(&dir).await?;
-    Ok(format!("local dir {} ready", dir.display()))
-}
-
-/// Mount an NFS export for this pool.
-/// Validate an NFS URL of the form `host:/path`.
-///
-/// Rejects blank values, missing colon-slash separator, and shell-injectable
-/// characters that have no place in a hostname or export path.
-fn validate_nfs_url(url: &str) -> AnyhowResult<()> {
-    let (host, path) = url
-        .split_once(':')
-        .ok_or_else(|| anyhow::anyhow!("Invalid NFS URL {url:?}: expected 'host:/path'"))?;
-
-    if host.is_empty() {
-        anyhow::bail!("Invalid NFS URL {url:?}: host is empty");
-    }
-    if !path.starts_with('/') {
-        anyhow::bail!("Invalid NFS URL {url:?}: path must start with '/'");
-    }
-
-    let bad = |c: char| matches!(c, '\0' | '\n' | '\r' | ';' | '&' | '|' | '`' | '$' | '\\');
-    if host.chars().any(bad) || path.chars().any(bad) {
-        anyhow::bail!("Invalid NFS URL {url:?}: contains illegal characters");
-    }
-
-    Ok(())
-}
-
-async fn attach_nfs_pool(pool_id: &str, config_json: &str) -> AnyhowResult<String> {
-    let cfg: serde_json::Value = serde_json::from_str(config_json)
-        .map_err(|e| anyhow::anyhow!("Invalid NFS pool config JSON: {}", e))?;
-
-    let url = cfg
-        .get("url")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("NFS pool config missing 'url' field"))?;
-
-    validate_nfs_url(url)?;
-
-    let mount_point = format!("/var/lib/qarax/pools/{}", pool_id);
-    tokio::fs::create_dir_all(&mount_point).await?;
-
-    let output = tokio::process::Command::new("mount")
-        .args(["-t", "nfs", "-o", "nolock", url, &mount_point])
-        .output()
-        .await?;
-
-    if output.status.success() {
-        Ok(format!("NFS {} mounted at {}", url, mount_point))
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(anyhow::anyhow!("mount failed: {}", stderr.trim()))
-    }
-}
-
-/// Unmount the NFS export for this pool.
-async fn detach_nfs_pool(pool_id: &str) -> AnyhowResult<()> {
-    let mount_point = format!("/var/lib/qarax/pools/{}", pool_id);
-
-    let output = tokio::process::Command::new("umount")
-        .arg(&mount_point)
-        .output()
-        .await?;
-
-    if output.status.success() {
-        Ok(())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(anyhow::anyhow!("umount failed: {}", stderr.trim()))
-    }
-}
-
-/// Verify that an OverlayBD registry is reachable at the configured URL.
-async fn check_overlaybd_registry(config_json: &str) -> AnyhowResult<String> {
-    let cfg: serde_json::Value = serde_json::from_str(config_json)
-        .map_err(|e| anyhow::anyhow!("Invalid OverlayBD pool config JSON: {}", e))?;
-
-    let url = cfg
-        .get("url")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("OverlayBD pool config missing 'url' field"))?;
-
-    // Probe the OCI registry v2 endpoint.
-    let probe = format!("{}/v2/", url.trim_end_matches('/'));
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(|e| anyhow::anyhow!("Failed to build HTTP client: {}", e))?;
-    let response = client
-        .get(&probe)
-        .send()
-        .await
-        .map_err(|e| anyhow::anyhow!("Cannot reach registry at {}: {}", probe, e))?;
-
-    // A v2 registry returns 200 or 401 (auth required); both mean it is alive.
-    let status = response.status();
-    if status.is_success() || status.as_u16() == 401 {
-        Ok(format!("OverlayBD registry {} reachable ({})", url, status))
-    } else {
-        Err(anyhow::anyhow!(
-            "OverlayBD registry {} returned unexpected status {}",
-            url,
-            status
-        ))
-    }
-}
-
 /// Discover GPUs bound to vfio-pci by scanning /sys/bus/pci/devices.
 // PCI class codes for display controllers
 const PCI_CLASS_VGA: &str = "0x030000"; // VGA compatible controller
@@ -1331,5 +1197,6 @@ fn map_manager_error(e: crate::cloud_hypervisor::VmManagerError) -> Status {
         VmManagerError::MigrationError(msg) => {
             Status::internal(format!("Migration error: {}", msg))
         }
+        VmManagerError::StorageError(msg) => Status::internal(format!("Storage error: {}", msg)),
     }
 }

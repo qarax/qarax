@@ -2390,9 +2390,10 @@ pub async fn migrate(
         ));
     }
 
-    // Live migration requires all disks to be on NFS storage pools so that
-    // both hosts can access the same data without copying.  Local and
-    // OverlayBD-backed disks are not supported for migration.
+    // Live migration requires all disks to be on shared storage pools.
+    // NFS pools share the same filesystem path; OverlayBD pools share
+    // the same OCI registry (the destination mounts a fresh TCMU device).
+    // Local pools are node-local and cannot be migrated.
     let db_disks = vm_disks::list_by_vm(env.pool(), vm_id).await?;
     let so_ids: Vec<Uuid> = db_disks
         .iter()
@@ -2418,8 +2419,8 @@ pub async fn migrate(
                 storage_pools::host_has_pool(env.pool(), target_host.id, pool.id).await?;
             if !dest_has_pool {
                 return Err(crate::errors::Error::UnprocessableEntity(format!(
-                    "destination host {} does not have NFS pool '{}' attached",
-                    target_host.id, pool.name
+                    "destination host {} does not have pool '{}' ({:?}) attached",
+                    target_host.id, pool.name, pool.pool_type
                 )));
             }
         }
