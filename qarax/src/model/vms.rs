@@ -282,6 +282,12 @@ pub struct NewVm {
     /// is used instead and this field is ignored.
     pub numa_config: Option<serde_json::Value>,
 
+    /// When set alongside `image_ref`, the OverlayBD upper layer (upper.data +
+    /// upper.index) is stored as a persistent `OverlaybdUpper` StorageObject on
+    /// this pool instead of being ephemeral. The pool must be Local or NFS and
+    /// must be attached to the host running the VM.
+    pub persistent_upper_pool_id: Option<Uuid>,
+
     #[serde(default = "default_vm_config")]
     pub config: serde_json::Value,
 }
@@ -315,6 +321,7 @@ pub struct ResolvedNewVm {
     pub networks: Option<Vec<NewVmNetwork>>,
     pub accelerator_config: Option<serde_json::Value>,
     pub numa_config: Option<serde_json::Value>,
+    pub persistent_upper_pool_id: Option<Uuid>,
     pub config: serde_json::Value,
 }
 
@@ -369,6 +376,7 @@ pub async fn resolve_create_request(pool: &PgPool, request: NewVm) -> Result<Res
         networks,
         accelerator_config,
         numa_config,
+        persistent_upper_pool_id,
         config,
     } = request;
 
@@ -570,6 +578,7 @@ pub async fn resolve_create_request(pool: &PgPool, request: NewVm) -> Result<Res
                 .and_then(|it| it.numa_config.clone())
                 .filter(|v| !v.is_null())
         }),
+        persistent_upper_pool_id,
         // NOTE: numa_config is intentionally not merged into `config` here;
         // the handler merges it in create_vm_internal before persisting.
         config: merge_config(

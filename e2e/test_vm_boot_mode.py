@@ -15,18 +15,32 @@ from qarax_api_client import Client
 from qarax_api_client.api.hosts import list_ as list_hosts
 from qarax_api_client.api.storage_objects import (
     create as create_storage_object,
+)
+from qarax_api_client.api.storage_objects import (
     delete as delete_storage_object,
 )
 from qarax_api_client.api.storage_pools import (
     attach_host as attach_pool_host,
+)
+from qarax_api_client.api.storage_pools import (
     create as create_pool,
+)
+from qarax_api_client.api.storage_pools import (
     delete as delete_pool,
 )
 from qarax_api_client.api.vms import (
     attach_disk as attach_disk_api,
+)
+from qarax_api_client.api.vms import (
     create as create_vm,
+)
+from qarax_api_client.api.vms import (
     delete as delete_vm,
+)
+from qarax_api_client.api.vms import (
     get as get_vm,
+)
+from qarax_api_client.api.vms import (
     list_ as list_vms,
 )
 from qarax_api_client.models import (
@@ -49,7 +63,7 @@ def client():
     return Client(base_url=QARAX_URL)
 
 
-# ── boot_mode tests ─────────────────────────────────────────────────────
+# boot_mode tests
 
 
 @pytest.mark.asyncio
@@ -117,7 +131,10 @@ async def test_list_vms_boot_mode(client):
     async with client as c:
         # Create two VMs with different boot modes
         vm_ids = []
-        for name, mode in [("e2e-list-kernel", None), ("e2e-list-firmware", BootMode.FIRMWARE)]:
+        for name, mode in [
+            ("e2e-list-kernel", None),
+            ("e2e-list-firmware", BootMode.FIRMWARE),
+        ]:
             new_vm = NewVm(
                 name=name,
                 hypervisor=Hypervisor.CLOUD_HV,
@@ -149,7 +166,7 @@ async def test_list_vms_boot_mode(client):
                 await delete_vm.asyncio_detailed(client=c, vm_id=UUID(vid))
 
 
-# ── disk attachment with logical_name ────────────────────────────────────
+# disk attachment with logical_name
 
 
 @pytest.fixture
@@ -170,6 +187,7 @@ async def storage_pool_and_objects(client):
         pool_id = str(pool_id_raw).strip('"')
 
         from uuid import UUID
+
         await attach_pool_host.asyncio_detailed(
             client=c,
             pool_id=UUID(pool_id),
@@ -222,9 +240,7 @@ async def test_attach_disk_auto_logical_name(storage_pool_and_objects):
         from uuid import UUID
 
         req = AttachDiskRequest(storage_object_id=UUID(object_ids[0]))
-        disk = await attach_disk_api.asyncio(
-            client=c, vm_id=UUID(vm_id_str), body=req
-        )
+        disk = await attach_disk_api.asyncio(client=c, vm_id=UUID(vm_id_str), body=req)
         assert disk is not None
         assert disk.logical_name == "disk0"
         assert disk.device_path == "/dev/disk0"
@@ -256,9 +272,7 @@ async def test_attach_disk_explicit_logical_name(storage_pool_and_objects):
             storage_object_id=UUID(object_ids[0]),
             logical_name="rootfs",
         )
-        disk = await attach_disk_api.asyncio(
-            client=c, vm_id=UUID(vm_id_str), body=req
-        )
+        disk = await attach_disk_api.asyncio(client=c, vm_id=UUID(vm_id_str), body=req)
         assert disk is not None
         assert disk.logical_name == "rootfs"
         assert disk.device_path == "/dev/rootfs"

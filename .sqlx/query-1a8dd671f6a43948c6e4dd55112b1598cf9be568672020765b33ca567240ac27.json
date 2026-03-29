@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\nSELECT id,\n        vm_id,\n        storage_object_id as \"storage_object_id?\",\n        logical_name,\n        device_path,\n        boot_order as \"boot_order?\",\n        read_only as \"read_only!\",\n        direct as \"direct!\",\n        vhost_user as \"vhost_user!\",\n        vhost_socket as \"vhost_socket?\",\n        num_queues as \"num_queues!\",\n        queue_size as \"queue_size!\",\n        rate_limiter as \"rate_limiter: _\",\n        rate_limit_group as \"rate_limit_group?\",\n        pci_segment as \"pci_segment!\",\n        serial_number as \"serial_number?\",\n        config as \"config: _\"\nFROM vm_disks\nWHERE id = $1\n        ",
+  "query": "\nSELECT id,\n        vm_id,\n        storage_object_id as \"storage_object_id?\",\n        logical_name,\n        device_path,\n        boot_order as \"boot_order?\",\n        read_only as \"read_only!\",\n        direct as \"direct!\",\n        vhost_user as \"vhost_user!\",\n        vhost_socket as \"vhost_socket?\",\n        num_queues as \"num_queues!\",\n        queue_size as \"queue_size!\",\n        rate_limiter as \"rate_limiter: _\",\n        rate_limit_group as \"rate_limit_group?\",\n        pci_segment as \"pci_segment!\",\n        serial_number as \"serial_number?\",\n        config as \"config: _\",\n        upper_storage_object_id as \"upper_storage_object_id?\"\nFROM vm_disks\n        ",
   "describe": {
     "columns": [
       {
@@ -87,12 +87,15 @@
         "ordinal": 16,
         "name": "config: _",
         "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 17,
+        "name": "upper_storage_object_id?",
+        "type_info": "Uuid"
       }
     ],
     "parameters": {
-      "Left": [
-        "Uuid"
-      ]
+      "Left": []
     },
     "nullable": [
       false,
@@ -111,8 +114,9 @@
       true,
       true,
       true,
-      false
+      false,
+      true
     ]
   },
-  "hash": "b6bcc079a244d504ed0fdbaea3349deaf2f40a374540a80817f7917ec9a7a17c"
+  "hash": "1a8dd671f6a43948c6e4dd55112b1598cf9be568672020765b33ca567240ac27"
 }

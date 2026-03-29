@@ -138,8 +138,6 @@ async fn create_vm(client: &reqwest::Client, address: &str, body: serde_json::Va
     res.json().await.unwrap()
 }
 
-// ── VM creation with boot_mode ──────────────────────────────────────────
-
 #[tokio::test]
 async fn test_create_vm_default_boot_mode() {
     let app = spawn_app().await;
@@ -361,8 +359,6 @@ async fn test_list_vms_includes_tags() {
     let untagged_vm = vms.iter().find(|v| v["name"] == "vm-untagged").unwrap();
     assert_eq!(untagged_vm["tags"], json!([]));
 }
-
-// ── Disk attachment with logical_name ───────────────────────────────────
 
 /// Helper: create a local storage pool and storage object, and attach pool to host.
 async fn create_test_storage_object(

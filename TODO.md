@@ -24,3 +24,36 @@ VM Lifecycle
   - Snapshot-based fast restore
   - Concurrency limits / autoscaling
   - E2E tests (added after the exec endpoint exists)
+
+
+OCI / Persistent Storage
+
+  - Full clone (OCI → raw disk): convert an OCI image to a flat raw disk file
+    at VM creation time. Stores as StorageObject(type=Disk) on Local/NFS pool.
+    Fully portable, resizable, migratable — no registry dependency after creation.
+    Default size: max(sum_of_uncompressed_layers * 2, 4 GiB), user-overridable.
+
+  - Resize persistent OverlayBD upper layer: overlaybd-create sets a fixed
+    virtual size. To support resize, expose the size parameter at creation and
+    implement re-creation of the upper layer with a larger size (offline).
+
+  - Disk resize for OverlayBD persistent VMs: extend resize_disk to support
+    resizing the OverlayBD upper layer (currently Local/NFS raw files only).
+
+  - Snapshot of persistent OverlayBD VMs: copy upper.data + upper.index into
+    a new OverlaybdUpper StorageObject (parent = current upper SO).
+
+  - Ephemeral upper layer size: make configurable at VM creation time
+    (currently hardcoded to 64 GiB virtual in overlaybd-create).
+
+
+Platform
+
+  - Web UI — full management interface with console, graphs, VM lifecycle
+  - RBAC / Auth — users, groups, roles, LDAP, API tokens, 2FA
+  - High Availability — automatic failover, fencing, cluster config replication
+  - Audit log — record all API mutations with actor and before/after state
+  - Resource pools — group VMs/hosts for delegation, billing, quotas
+  - Scheduled backups — cron-based snapshot scheduling with retention policies
+  - Memory ballooning — virtio-balloon API for memory reclaim
+  - TPM support — vTPM via swtpm

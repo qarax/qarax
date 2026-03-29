@@ -100,7 +100,7 @@ impl From<IpAllocationRow> for IpAllocation {
     }
 }
 
-// ─── CRUD ─────────────────────────────────────────────────────────────────────
+// CRUD
 
 pub async fn list(pool: &PgPool, name_filter: Option<&str>) -> Result<Vec<Network>, sqlx::Error> {
     let rows: Vec<NetworkRow> = sqlx::query_as::<_, NetworkRow>(
@@ -178,7 +178,7 @@ pub async fn delete(pool: &PgPool, network_id: Uuid) -> Result<(), sqlx::Error> 
     Ok(())
 }
 
-// ─── Host binding ─────────────────────────────────────────────────────────────
+// Host binding
 
 pub async fn attach_host(
     pool: &PgPool,
@@ -249,7 +249,7 @@ pub async fn get_host_bridge(
     Ok(row.map(|(name,)| name))
 }
 
-// ─── IPAM ─────────────────────────────────────────────────────────────────────
+// IPAM
 
 pub async fn allocate_ip(
     pool: &PgPool,

@@ -1479,6 +1479,44 @@ paths:
           description: VM not in Created, Running, or Shutdown state
         '500':
           description: Internal server error
+  /vms/{vm_id}/disks/{disk_id}/resize:
+    put:
+      tags:
+      - vms
+      operationId: resize_disk
+      parameters:
+      - name: vm_id
+        in: path
+        description: VM unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: disk_id
+        in: path
+        description: Logical disk name (e.g. "rootfs", "disk0")
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DiskResizeRequest'
+        required: true
+      responses:
+        '200':
+          description: Disk resized successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorageObject'
+        '404':
+          description: VM or disk not found
+        '422':
+          description: VM not stopped, disk not resizable, or size invalid
+        '500':
+          description: Internal server error
   /vms/{vm_id}/force-stop:
     post:
       tags:
@@ -2060,6 +2098,16 @@ components:
           - string
           - 'null'
           description: SSH user override. Defaults to the host's registered `host_user`.
+    DiskResizeRequest:
+      type: object
+      description: Request body for `PUT /vms/{vm_id}/disks/{disk_id}/resize`.
+      required:
+      - new_size_bytes
+      properties:
+        new_size_bytes:
+          type: integer
+          format: int64
+          description: New disk size in bytes. Must be larger than the current size and a multiple of 1 MiB.
     HookExecution:
       type: object
       required:
@@ -3015,6 +3063,16 @@ components:
             NUMA configuration. When set, the VM is pinned to the specified NUMA node.
             If accelerator_config has prefer_local_numa=true (the default), GPU-local NUMA
             is used instead and this field is ignored.
+        persistent_upper_pool_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+          description: |-
+            When set alongside `image_ref`, the OverlayBD upper layer (upper.data +
+            upper.index) is stored as a persistent `OverlaybdUpper` StorageObject on
+            this pool instead of being ephemeral. The pool must be Local or NFS and
+            must be attached to the host running the VM.
         root_disk_object_id:
           type:
           - string
@@ -3424,6 +3482,7 @@ components:
       - iso
       - snapshot
       - oci_image
+      - overlaybd_upper
     StoragePool:
       type: object
       required:
@@ -3753,6 +3812,15 @@ components:
           - string
           - 'null'
           format: uuid
+        upper_storage_object_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+          description: |-
+            For OverlayBD disks: ID of the OverlaybdUpper StorageObject holding the
+            persistent upper layer (upper.data + upper.index) on a Local or NFS pool.
+            None = ephemeral (deleted on VM stop); Some = persistent across VM delete.
         vhost_socket:
           type:
           - string

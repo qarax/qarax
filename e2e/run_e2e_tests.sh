@@ -132,7 +132,7 @@ elif is_truthy "${ENABLE_OTEL:-}"; then
 	echo -e "${YELLOW}SKIP_BUILD=1 set; make sure existing binaries were built with ENABLE_OTEL=1${NC}"
 fi
 
-# ── Bootc VM disk (real bootc upgrade e2e tests) ─────────────────────────────
+# Bootc VM disk (real bootc upgrade e2e tests)─────────
 BOOTC_BASE_DISK="${PWD}/bootc-vm-base.qcow2"
 NODE_BIN="../target/${MUSL_TARGET}/release/qarax-node"
 

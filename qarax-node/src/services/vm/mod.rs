@@ -13,9 +13,9 @@ use crate::rpc::node::{
     ConsolePtyPathResponse, DetachNetworkRequest, DetachNetworkResponse, DetachStoragePoolRequest,
     DeviceCounters, GpuInfo, ImportOverlayBdRequest, ImportOverlayBdResponse, NodeInfo, NumaNode,
     OciImageRequest, OciImageResponse, ReceiveMigrationRequest, ReceiveMigrationResponse,
-    RemoveDeviceRequest, ResizeVmRequest, RestoreVmRequest, SendMigrationRequest,
-    SnapshotVmRequest, StoragePoolKind, VmConfig, VmCounters, VmId, VmList, VmState,
-    vm_service_server::VmService,
+    RemoveDeviceRequest, ResizeDiskRequest, ResizeVmRequest, RestoreVmRequest,
+    SendMigrationRequest, SnapshotVmRequest, StoragePoolKind, VmConfig, VmCounters, VmId, VmList,
+    VmState, vm_service_server::VmService,
 };
 use common::cpu_list::expand_cpu_list;
 
@@ -404,6 +404,32 @@ impl VmService for VmServiceImpl {
                     "Failed to remove VFIO device {} from VM {}: {}",
                     req.device_id, req.vm_id, e
                 );
+                Err(map_manager_error(e))
+            }
+        }
+    }
+
+    async fn resize_disk(
+        &self,
+        request: Request<ResizeDiskRequest>,
+    ) -> Result<Response<()>, Status> {
+        let req = request.into_inner();
+        info!(
+            "Resizing disk {} for VM {}: path={} new_size={}",
+            req.disk_id, req.vm_id, req.path, req.new_size
+        );
+
+        match self
+            .manager
+            .resize_disk(&req.vm_id, &req.disk_id, &req.path, req.new_size)
+            .await
+        {
+            Ok(()) => {
+                info!("Disk {} resized successfully", req.disk_id);
+                Ok(Response::new(()))
+            }
+            Err(e) => {
+                error!("Failed to resize disk {}: {}", req.disk_id, e);
                 Err(map_manager_error(e))
             }
         }

@@ -68,7 +68,8 @@
                 "INITRD",
                 "ISO",
                 "SNAPSHOT",
-                "OCI_IMAGE"
+                "OCI_IMAGE",
+                "OVERLAYBD_UPPER"
               ]
             }
           }
@@ -142,7 +143,8 @@
                 "INITRD",
                 "ISO",
                 "SNAPSHOT",
-                "OCI_IMAGE"
+                "OCI_IMAGE",
+                "OVERLAYBD_UPPER"
               ]
             }
           }

@@ -7,6 +7,7 @@ class StorageObjectType(str, Enum):
     ISO = "iso"
     KERNEL = "kernel"
     OCI_IMAGE = "oci_image"
+    OVERLAYBD_UPPER = "overlaybd_upper"
     SNAPSHOT = "snapshot"
 
     def __str__(self) -> str:

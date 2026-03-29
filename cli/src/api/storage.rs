@@ -7,7 +7,7 @@ use super::models::{
     NewStoragePool, StorageObject, StoragePool,
 };
 
-// ─── Storage pools ────────────────────────────────────────────────────────────
+// Storage pools
 
 pub async fn list_pools(client: &Client, name: Option<&str>) -> anyhow::Result<Vec<StoragePool>> {
     let path = match name {
@@ -54,7 +54,7 @@ pub async fn detach_host_from_pool(
         .await
 }
 
-// ─── Storage objects ──────────────────────────────────────────────────────────
+// Storage objects
 
 pub async fn list_objects(
     client: &Client,

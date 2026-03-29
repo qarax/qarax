@@ -74,7 +74,19 @@ impl StorageBackend for OverlayBdBackend {
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("OverlayBD disk config missing 'registry_url'"))?;
 
-        let mounted = self.manager.mount(vm_id, image_ref, registry_url).await?;
+        let upper_data_path = config.get("upper_data_path").and_then(|v| v.as_str());
+        let upper_index_path = config.get("upper_index_path").and_then(|v| v.as_str());
+
+        let mounted = self
+            .manager
+            .mount(
+                vm_id,
+                image_ref,
+                registry_url,
+                upper_data_path,
+                upper_index_path,
+            )
+            .await?;
         let device_path = mounted.device_path.clone();
 
         // Inject qarax-init into the mounted block device so the VM

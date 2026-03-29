@@ -8,8 +8,6 @@ use rtnetlink::{Handle, IpVersion};
 use std::net::{IpAddr, Ipv4Addr};
 use tracing::{debug, info};
 
-// ── Netlink helpers ───────────────────────────────────────────────────────────
-
 async fn netlink_handle() -> Result<Handle> {
     let (conn, handle, _) =
         rtnetlink::new_connection().context("Failed to open netlink connection")?;
@@ -164,8 +162,6 @@ fn parse_cidr(cidr: &str) -> Result<(Ipv4Addr, u8)> {
     ))
 }
 
-// ── Public API ────────────────────────────────────────────────────────────────
-
 /// Create a Linux bridge device and bring it up.
 pub async fn create_bridge(name: &str) -> Result<()> {
     info!("Creating bridge: {name}");
@@ -254,7 +250,7 @@ pub async fn bridge_interface(bridge_name: &str, parent_iface: &str) -> Result<(
     info!("Bridging interface {parent_iface} onto bridge {bridge_name}");
     let handle = netlink_handle().await?;
 
-    // ── Gather state from parent NIC ─────────────────────────────────────
+    // Gather state from parent NIC
     let parent_link = link_message(&handle, parent_iface).await?;
     let parent_idx = parent_link.header.index;
 
@@ -277,7 +273,7 @@ pub async fn bridge_interface(bridge_name: &str, parent_iface: &str) -> Result<(
     let default_gw = default_gateway_via(&handle, parent_idx).await?;
     let ip_cidr = format!("{parent_ip}/{parent_prefix}");
 
-    // ── Write networkd overrides (if applicable) BEFORE migrating ────────
+    // Write networkd overrides (if applicable) BEFORE migrating
     let use_networkd = is_networkd_running().await;
     if use_networkd {
         info!("systemd-networkd detected — writing bridge networkd configs");
@@ -290,7 +286,7 @@ pub async fn bridge_interface(bridge_name: &str, parent_iface: &str) -> Result<(
         .await?;
     }
 
-    // ── Create bridge with parent's MAC ──────────────────────────────────
+    // Create bridge with parent's MAC
     handle
         .link()
         .add()
@@ -310,7 +306,7 @@ pub async fn bridge_interface(bridge_name: &str, parent_iface: &str) -> Result<(
         .await
         .with_context(|| format!("Failed to set MAC and bring up bridge {bridge_name}"))?;
 
-    // ── Migrate IP: parent → bridge ──────────────────────────────────────
+    // Migrate IP: parent → bridge
     // Add to bridge first; enslaving then moves L3 processing there, so
     // there's zero window without an address on the bridge.
     handle
@@ -333,7 +329,6 @@ pub async fn bridge_interface(bridge_name: &str, parent_iface: &str) -> Result<(
         .await
         .ok();
 
-    // ── Restore default route via bridge ─────────────────────────────────
     if let Some(gw) = default_gw {
         // Use replace semantics (NLM_F_REPLACE|NLM_F_CREATE) so this works
         // whether or not the old route was auto-removed when parent was enslaved.
@@ -349,7 +344,6 @@ pub async fn bridge_interface(bridge_name: &str, parent_iface: &str) -> Result<(
             .context("Failed to restore default route")?;
     }
 
-    // ── Sync networkd so it doesn't fight later ──────────────────────────
     if use_networkd {
         let br = bridge_name.to_string();
         tokio::spawn(async move {
@@ -458,8 +452,6 @@ pub async fn is_bridged_interface(bridge_name: &str) -> bool {
     };
     find_bridge_member(&handle, bridge_name).await.is_ok()
 }
-
-// ── Internal helpers ──────────────────────────────────────────────────────────
 
 async fn is_networkd_running() -> bool {
     tokio::process::Command::new("systemctl")

@@ -247,14 +247,22 @@ impl OverlayBdManager {
         vm_id: &str,
         image_ref: &str,
         registry_url: &str,
+        upper_data_path: Option<&str>,
+        upper_index_path: Option<&str>,
     ) -> Result<MountedDevice, OverlayBdError> {
         let config_dir = self.cache_dir.join(vm_id);
         tokio::fs::create_dir_all(&config_dir).await.map_err(|e| {
             OverlayBdError::MountFailed(format!("create cache dir {}: {}", config_dir.display(), e))
         })?;
 
-        let upper_index = config_dir.join("upper.index");
-        let upper_data = config_dir.join("upper.data");
+        // Use caller-supplied persistent paths when provided; otherwise fall
+        // back to ephemeral paths inside the config_dir (deleted on unmount).
+        let upper_index = upper_index_path
+            .map(PathBuf::from)
+            .unwrap_or_else(|| config_dir.join("upper.index"));
+        let upper_data = upper_data_path
+            .map(PathBuf::from)
+            .unwrap_or_else(|| config_dir.join("upper.data"));
         let config_file = config_dir.join("config.json");
 
         // Build the registry blob URL used by overlaybd to fetch image data lazily.
@@ -267,6 +275,17 @@ impl OverlayBdManager {
 
         // 1. Create the writable upper layer (idempotent: skip if already exists).
         if !upper_data.exists() {
+            // For persistent upper layers the parent directory (pool path) may
+            // not exist yet on this host — create it if needed.
+            if let Some(parent) = upper_data.parent() {
+                tokio::fs::create_dir_all(parent).await.map_err(|e| {
+                    OverlayBdError::MountFailed(format!(
+                        "create upper layer dir {}: {}",
+                        parent.display(),
+                        e
+                    ))
+                })?;
+            }
             info!(
                 "Creating OverlayBD upper layer for VM {} ({} GB sparse)",
                 vm_id, DISK_SIZE_GB
@@ -691,8 +710,6 @@ impl OverlayBdManager {
         Ok(oci_config.config)
     }
 
-    // ── Private helpers ───────────────────────────────────────────────────────
-
     /// Ensure /dev/uioN nodes exist for all UIO devices visible in /sys/class/uio/,
     /// plus one extra slot for the device the kernel is about to allocate.
     ///
@@ -1053,8 +1070,6 @@ impl OverlayBdManager {
         (tcmu_name, wwn)
     }
 }
-
-// ── Free functions ────────────────────────────────────────────────────────────
 
 /// Build the target image reference in the local registry.
 /// e.g. image_ref = "public.ecr.aws/docker/library/ubuntu:22.04",

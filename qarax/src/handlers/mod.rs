@@ -93,6 +93,7 @@ pub struct VmListQuery {
         vm::handler::add_nic,
         vm::handler::remove_nic,
         vm::handler::resize_vm,
+        vm::handler::resize_disk,
         storage_object::handler::list,
         storage_object::handler::get,
         storage_object::handler::create,
@@ -189,6 +190,7 @@ pub struct VmListQuery {
             crate::handlers::vm::handler::VmMigrateRequest,
             crate::handlers::vm::handler::VmMigrateResponse,
             crate::handlers::vm::handler::VmResizeRequest,
+            crate::handlers::vm::handler::DiskResizeRequest,
             crate::handlers::storage_pool::handler::ImportToPoolRequest,
             crate::handlers::storage_pool::handler::ImportToPoolResponse,
             crate::model::networks::Network,
@@ -362,6 +364,10 @@ fn vms() -> Router {
         .route(
             "/vms/{vm_id}/resize",
             axum::routing::put(vm::handler::resize_vm),
+        )
+        .route(
+            "/vms/{vm_id}/disks/{disk_id}/resize",
+            axum::routing::put(vm::handler::resize_disk),
         )
 }
 

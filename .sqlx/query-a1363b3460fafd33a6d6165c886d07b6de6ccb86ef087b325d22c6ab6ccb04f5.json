@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\nSELECT id,\n        vm_id,\n        storage_object_id as \"storage_object_id?\",\n        logical_name,\n        device_path,\n        boot_order as \"boot_order?\",\n        read_only as \"read_only!\",\n        direct as \"direct!\",\n        vhost_user as \"vhost_user!\",\n        vhost_socket as \"vhost_socket?\",\n        num_queues as \"num_queues!\",\n        queue_size as \"queue_size!\",\n        rate_limiter as \"rate_limiter: _\",\n        rate_limit_group as \"rate_limit_group?\",\n        pci_segment as \"pci_segment!\",\n        serial_number as \"serial_number?\",\n        config as \"config: _\"\nFROM vm_disks\nWHERE vm_id = $1 AND logical_name = $2\n        ",
+  "query": "\nSELECT id,\n        vm_id,\n        storage_object_id as \"storage_object_id?\",\n        logical_name,\n        device_path,\n        boot_order as \"boot_order?\",\n        read_only as \"read_only!\",\n        direct as \"direct!\",\n        vhost_user as \"vhost_user!\",\n        vhost_socket as \"vhost_socket?\",\n        num_queues as \"num_queues!\",\n        queue_size as \"queue_size!\",\n        rate_limiter as \"rate_limiter: _\",\n        rate_limit_group as \"rate_limit_group?\",\n        pci_segment as \"pci_segment!\",\n        serial_number as \"serial_number?\",\n        config as \"config: _\",\n        upper_storage_object_id as \"upper_storage_object_id?\"\nFROM vm_disks\nWHERE vm_id = $1 AND logical_name = $2\n        ",
   "describe": {
     "columns": [
       {
@@ -87,6 +87,11 @@
         "ordinal": 16,
         "name": "config: _",
         "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 17,
+        "name": "upper_storage_object_id?",
+        "type_info": "Uuid"
       }
     ],
     "parameters": {
@@ -112,8 +117,9 @@
       true,
       true,
       true,
-      false
+      false,
+      true
     ]
   },
-  "hash": "2a1412337d8d541e17f08a63add8d4a4aa0d75d0b94092c8c2637c7f165cf353"
+  "hash": "a1363b3460fafd33a6d6165c886d07b6de6ccb86ef087b325d22c6ab6ccb04f5"
 }

@@ -11,6 +11,7 @@ import asyncio
 import os
 import subprocess
 import time
+import uuid
 from uuid import UUID
 
 import pytest
@@ -20,6 +21,7 @@ from qarax_api_client.api.jobs import get as get_job
 from qarax_api_client.api.storage_objects import (
     create as create_storage_object,
     delete as delete_storage_object,
+    list_ as list_storage_objects,
 )
 from qarax_api_client.api.storage_pools import (
     attach_host as attach_pool_host,
@@ -30,10 +32,12 @@ from qarax_api_client.api.vms import (
     create as create_vm,
     delete as delete_vm,
     get as get_vm,
+    resize_disk,
 )
 from qarax_api_client.models import Hypervisor, NewStoragePool, NewVm, StoragePoolType
 from qarax_api_client.models.attach_pool_host_request import AttachPoolHostRequest
 from qarax_api_client.models.create_vm_response import CreateVmResponse
+from qarax_api_client.models.disk_resize_request import DiskResizeRequest
 from qarax_api_client.models.job_status import JobStatus
 from qarax_api_client.models.new_storage_object import NewStorageObject
 from qarax_api_client.models.storage_object_type import StorageObjectType
@@ -75,13 +79,17 @@ async def wait_for_job(c, job_id, timeout=JOB_TIMEOUT):
 def oci_image_ref():
     """Push a minimal image to the local test registry; return its internal ref."""
     tag = f"{REGISTRY_PUSH_URL}/test/busybox:latest"
-    subprocess.run(["docker", "pull", "busybox:latest"], check=True, capture_output=True)
-    subprocess.run(["docker", "tag", "busybox:latest", tag], check=True, capture_output=True)
+    subprocess.run(
+        ["docker", "pull", "busybox:latest"], check=True, capture_output=True
+    )
+    subprocess.run(
+        ["docker", "tag", "busybox:latest", tag], check=True, capture_output=True
+    )
     subprocess.run(["docker", "push", tag], check=True, capture_output=True)
     return f"{REGISTRY_INTERNAL_URL}/test/busybox:latest"
 
 
-# ── OCI image tests ──────────────────────────────────────────────────────
+# OCI image tests
 
 
 @pytest.mark.asyncio
@@ -114,7 +122,120 @@ async def test_create_vm_with_oci_image(client, oci_image_ref):
             await delete_vm.asyncio_detailed(client=c, vm_id=UUID(str(vm_id)))
 
 
-# ── NFS storage pool tests ───────────────────────────────────────────────
+@pytest.mark.asyncio
+async def test_create_vm_with_persistent_overlaybd_upper_has_storage_object(
+    client, oci_image_ref
+):
+    """Persistent OverlayBD upper layers should be provisioned on the requested pool and resize should fail explicitly."""
+    test_id = str(uuid.uuid4())[:8]
+    async with client as c:
+        hosts = await list_hosts.asyncio(client=c)
+        assert hosts, "No hosts registered"
+
+        upper_pool = NewStoragePool(
+            name=f"e2e-overlaybd-upper-{test_id}",
+            pool_type=StoragePoolType.LOCAL,
+            config={"path": f"/var/lib/qarax/e2e-overlaybd-upper-{test_id}"},
+        )
+        upper_pool_id_raw = await create_pool.asyncio(client=c, body=upper_pool)
+        upper_pool_id = UUID(str(upper_pool_id_raw).strip('"'))
+
+        overlaybd_pool = NewStoragePool(
+            name=f"e2e-overlaybd-{test_id}",
+            pool_type=StoragePoolType.OVERLAY_BD,
+            config={"url": f"http://{REGISTRY_INTERNAL_URL}"},
+        )
+        overlaybd_pool_id_raw = await create_pool.asyncio(client=c, body=overlaybd_pool)
+        overlaybd_pool_id = UUID(str(overlaybd_pool_id_raw).strip('"'))
+
+        vm_id = None
+        created_object_names: list[str] = []
+        try:
+            for host in hosts:
+                upper_attach_resp = await attach_pool_host.asyncio_detailed(
+                    client=c,
+                    pool_id=upper_pool_id,
+                    body=AttachPoolHostRequest(host_id=host.id),
+                )
+                assert upper_attach_resp.status_code in (200, 201, 204), (
+                    f"Attach upper pool host failed: HTTP {upper_attach_resp.status_code}"
+                )
+
+                overlaybd_attach_resp = await attach_pool_host.asyncio_detailed(
+                    client=c,
+                    pool_id=overlaybd_pool_id,
+                    body=AttachPoolHostRequest(host_id=host.id),
+                )
+                if (
+                    overlaybd_attach_resp.status_code == 422
+                    and "Overlaybd storage backend not configured"
+                    in overlaybd_attach_resp.content.decode()
+                ):
+                    pytest.skip("OverlayBD backend not configured on this e2e node")
+                assert overlaybd_attach_resp.status_code in (200, 201, 204), (
+                    f"Attach OverlayBD pool host failed: HTTP {overlaybd_attach_resp.status_code}"
+                )
+
+            new_vm = NewVm(
+                name=f"e2e-oci-persistent-upper-{test_id}",
+                hypervisor=Hypervisor.CLOUD_HV,
+                boot_vcpus=1,
+                max_vcpus=1,
+                memory_size=268435456,
+                image_ref=oci_image_ref,
+                persistent_upper_pool_id=upper_pool_id,
+            )
+            result = await create_vm.asyncio(client=c, body=new_vm)
+            assert isinstance(result, CreateVmResponse), (
+                f"Expected CreateVmResponse (202) for OCI VM, got {type(result)}"
+            )
+            vm_id = UUID(str(result.vm_id))
+            await wait_for_job(c, result.job_id)
+
+            upper_name = f"overlaybd-upper-{vm_id}"
+            image_name = f"overlaybd-{vm_id}"
+            created_object_names.extend([upper_name, image_name])
+
+            upper_objects = await list_storage_objects.asyncio(
+                client=c, name=upper_name
+            )
+            assert upper_objects is not None and len(upper_objects) == 1, (
+                f"Expected one persistent upper storage object named {upper_name}"
+            )
+            upper_object = upper_objects[0]
+            assert upper_object.object_type == StorageObjectType.OVERLAYBD_UPPER
+            assert upper_object.config["upper_data"].endswith(".upper.data")
+            assert upper_object.config["upper_index"].endswith(".upper.index")
+            assert upper_object.config["upper_data"].startswith(
+                f"/var/lib/qarax/e2e-overlaybd-upper-{test_id}/"
+            )
+
+            resize_resp = await resize_disk.asyncio_detailed(
+                client=c,
+                vm_id=vm_id,
+                disk_id="disk0",
+                body=DiskResizeRequest(new_size_bytes=512 * 1024 * 1024),
+            )
+            assert resize_resp.status_code == 422, (
+                f"Expected 422 for persistent OverlayBD resize, got {resize_resp.status_code}"
+            )
+            assert "OverlayBD" in resize_resp.content.decode(), (
+                resize_resp.content.decode()
+            )
+        finally:
+            if vm_id is not None:
+                await delete_vm.asyncio_detailed(client=c, vm_id=vm_id)
+            for object_name in created_object_names:
+                objects = await list_storage_objects.asyncio(client=c, name=object_name)
+                for obj in objects or []:
+                    await delete_storage_object.asyncio_detailed(
+                        client=c, object_id=obj.id
+                    )
+            await delete_pool.asyncio_detailed(client=c, pool_id=overlaybd_pool_id)
+            await delete_pool.asyncio_detailed(client=c, pool_id=upper_pool_id)
+
+
+# NFS storage pool tests
 
 
 @pytest.mark.asyncio

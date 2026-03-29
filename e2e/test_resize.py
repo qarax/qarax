@@ -79,7 +79,7 @@ async def _make_resize_vm(c, test_id):
     return UUID(str(vm_id_raw).strip('"'))
 
 
-# ─── Negative tests (no boot required) ────────────────────────────────────────
+# Negative tests (no boot required)
 
 
 @pytest.mark.asyncio
@@ -181,7 +181,7 @@ async def test_resize_ram_out_of_range_returns_422(client):
                 await delete_vm.asyncio_detailed(client=c, vm_id=vm_id)
 
 
-# ─── Running-VM resize tests (require real Cloud Hypervisor) ──────────────────
+# Running-VM resize tests (require real Cloud Hypervisor)
 
 
 @pytest.mark.asyncio
@@ -214,7 +214,9 @@ async def test_resize_vcpus_running_vm(client):
             )
 
             vm = await get_vm.asyncio(client=c, vm_id=vm_id)
-            assert vm.status == VmStatus.RUNNING, "VM should still be running after CPU resize"
+            assert vm.status == VmStatus.RUNNING, (
+                "VM should still be running after CPU resize"
+            )
             assert vm.boot_vcpus == 2
 
             await stop_vm.asyncio_detailed(client=c, vm_id=vm_id)
@@ -254,7 +256,9 @@ async def test_resize_memory_running_vm(client):
             )
 
             vm = await get_vm.asyncio(client=c, vm_id=vm_id)
-            assert vm.status == VmStatus.RUNNING, "VM should still be running after memory resize"
+            assert vm.status == VmStatus.RUNNING, (
+                "VM should still be running after memory resize"
+            )
             assert vm.memory_size == new_ram
 
             await stop_vm.asyncio_detailed(client=c, vm_id=vm_id)
@@ -276,7 +280,9 @@ async def test_resize_memory_invalid_hotplug_increment_returns_422(client):
             await start_vm.asyncio_detailed(client=c, vm_id=vm_id)
             await wait_for_status(c, vm_id, VmStatus.RUNNING)
 
-            invalid_ram = MEMORY_SIZE + 64 * 1024 * 1024  # +64 MiB is not a valid ACPI hotplug step
+            invalid_ram = (
+                MEMORY_SIZE + 64 * 1024 * 1024
+            )  # +64 MiB is not a valid ACPI hotplug step
             resp = await resize_vm.asyncio_detailed(
                 client=c,
                 vm_id=vm_id,

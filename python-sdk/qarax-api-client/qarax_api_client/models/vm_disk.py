@@ -31,6 +31,10 @@ class VmDisk:
         rate_limiter (Any | Unset):
         serial_number (None | str | Unset):
         storage_object_id (None | Unset | UUID):
+        upper_storage_object_id (None | Unset | UUID): For OverlayBD disks: ID of the OverlaybdUpper StorageObject
+            holding the
+            persistent upper layer (upper.data + upper.index) on a Local or NFS pool.
+            None = ephemeral (deleted on VM stop); Some = persistent across VM delete.
         vhost_socket (None | str | Unset):
     """
 
@@ -50,6 +54,7 @@ class VmDisk:
     rate_limiter: Any | Unset = UNSET
     serial_number: None | str | Unset = UNSET
     storage_object_id: None | Unset | UUID = UNSET
+    upper_storage_object_id: None | Unset | UUID = UNSET
     vhost_socket: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -104,6 +109,14 @@ class VmDisk:
         else:
             storage_object_id = self.storage_object_id
 
+        upper_storage_object_id: None | str | Unset
+        if isinstance(self.upper_storage_object_id, Unset):
+            upper_storage_object_id = UNSET
+        elif isinstance(self.upper_storage_object_id, UUID):
+            upper_storage_object_id = str(self.upper_storage_object_id)
+        else:
+            upper_storage_object_id = self.upper_storage_object_id
+
         vhost_socket: None | str | Unset
         if isinstance(self.vhost_socket, Unset):
             vhost_socket = UNSET
@@ -137,6 +150,8 @@ class VmDisk:
             field_dict["serial_number"] = serial_number
         if storage_object_id is not UNSET:
             field_dict["storage_object_id"] = storage_object_id
+        if upper_storage_object_id is not UNSET:
+            field_dict["upper_storage_object_id"] = upper_storage_object_id
         if vhost_socket is not UNSET:
             field_dict["vhost_socket"] = vhost_socket
 
@@ -213,6 +228,23 @@ class VmDisk:
 
         storage_object_id = _parse_storage_object_id(d.pop("storage_object_id", UNSET))
 
+        def _parse_upper_storage_object_id(data: object) -> None | Unset | UUID:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                upper_storage_object_id_type_0 = UUID(data)
+
+                return upper_storage_object_id_type_0
+            except (TypeError, ValueError, AttributeError, KeyError):
+                pass
+            return cast(None | Unset | UUID, data)
+
+        upper_storage_object_id = _parse_upper_storage_object_id(d.pop("upper_storage_object_id", UNSET))
+
         def _parse_vhost_socket(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -239,6 +271,7 @@ class VmDisk:
             rate_limiter=rate_limiter,
             serial_number=serial_number,
             storage_object_id=storage_object_id,
+            upper_storage_object_id=upper_storage_object_id,
             vhost_socket=vhost_socket,
         )
 

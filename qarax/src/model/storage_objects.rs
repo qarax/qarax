@@ -56,6 +56,10 @@ pub enum StorageObjectType {
     Iso,
     Snapshot,
     OciImage,
+    /// Persistent writable upper layer (upper.data + upper.index) for a
+    /// linked-persistent OverlayBD VM. Stored on a Local or NFS pool.
+    /// Config JSON: {"upper_data": "/path/to/uuid.upper.data", "upper_index": "/path/to/uuid.upper.index"}
+    OverlaybdUpper,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
@@ -214,7 +218,34 @@ pub async fn create(pool: &PgPool, new_object: NewStorageObject) -> Result<Uuid,
     // pool layout rather than requiring the caller to know the node's
     // filesystem structure. The object UUID is used as the filename so the
     // path is always safe — no user-supplied name reaches the filesystem.
-    let config = if (new_object.object_type == StorageObjectType::Disk
+    let config = if new_object.object_type == StorageObjectType::OverlaybdUpper
+        && new_object.config.get("upper_data").is_none()
+    {
+        // Derive upper.data / upper.index paths from pool layout.
+        if let Ok(storage_pool) = storage_pools::get(pool, pool_id).await {
+            let base_path = match storage_pool.pool_type {
+                storage_pools::StoragePoolType::Local => storage_pool
+                    .config
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .map(|base| format!("{}/{}", base, id)),
+                storage_pools::StoragePoolType::Nfs => {
+                    Some(format!("/var/lib/qarax/pools/{}/{}", pool_id, id))
+                }
+                _ => None,
+            };
+            if let Some(base) = base_path {
+                serde_json::json!({
+                    "upper_data":  format!("{}.upper.data",  base),
+                    "upper_index": format!("{}.upper.index", base),
+                })
+            } else {
+                new_object.config
+            }
+        } else {
+            new_object.config
+        }
+    } else if (new_object.object_type == StorageObjectType::Disk
         || new_object.object_type == StorageObjectType::Snapshot)
         && new_object.config.get("path").is_none()
     {
@@ -282,6 +313,19 @@ pub async fn update_config(
 ) -> Result<(), sqlx::Error> {
     sqlx::query("UPDATE storage_objects SET config = $1 WHERE id = $2")
         .bind(sqlx::types::Json(config))
+        .bind(object_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn update_size_bytes(
+    pool: &PgPool,
+    object_id: Uuid,
+    size_bytes: i64,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE storage_objects SET size_bytes = $1 WHERE id = $2")
+        .bind(size_bytes)
         .bind(object_id)
         .execute(pool)
         .await?;

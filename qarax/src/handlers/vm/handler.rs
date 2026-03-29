@@ -433,6 +433,53 @@ async fn create_with_image(env: App, vm: ResolvedNewVm) -> Result<axum::response
     .await?;
     let job_id = job.id;
 
+    // Validate persistent_upper_pool_id if provided: must be Local/NFS, Active,
+    // and already attached to the selected host.
+    let persistent_upper_pool_id = vm.persistent_upper_pool_id;
+    if let Some(upper_pool_id) = persistent_upper_pool_id {
+        let upper_pool = storage_pools::get(env.pool(), upper_pool_id)
+            .await
+            .map_err(|e| match e {
+                sqlx::Error::RowNotFound => crate::errors::Error::UnprocessableEntity(format!(
+                    "persistent_upper_pool_id {} not found",
+                    upper_pool_id
+                )),
+                _ => {
+                    tracing::error!("Failed to get storage pool {}: {}", upper_pool_id, e);
+                    crate::errors::Error::InternalServerError
+                }
+            })?;
+
+        if upper_pool.status != storage_pools::StoragePoolStatus::Active {
+            return Err(crate::errors::Error::UnprocessableEntity(format!(
+                "persistent_upper_pool_id {} is not active",
+                upper_pool_id
+            )));
+        }
+
+        match upper_pool.pool_type {
+            storage_pools::StoragePoolType::Local | storage_pools::StoragePoolType::Nfs => {}
+            _ => {
+                return Err(crate::errors::Error::UnprocessableEntity(
+                    "persistent_upper_pool_id must be a Local or NFS pool".into(),
+                ));
+            }
+        }
+
+        let attached = storage_pools::host_has_pool(env.pool(), host.id, upper_pool_id)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to check pool attachment: {}", e);
+                crate::errors::Error::InternalServerError
+            })?;
+        if !attached {
+            return Err(crate::errors::Error::UnprocessableEntity(format!(
+                "persistent_upper_pool_id {} is not attached to the selected host",
+                upper_pool_id
+            )));
+        }
+    }
+
     // Spawn background task
     let db_pool = env.pool_arc();
 
@@ -456,6 +503,7 @@ async fn create_with_image(env: App, vm: ResolvedNewVm) -> Result<axum::response
                 &image_ref,
                 &pool.config,
                 pool.id,
+                persistent_upper_pool_id,
             )
             .await;
         } else {
@@ -564,6 +612,7 @@ async fn run_overlaybd_create(
     image_ref: &str,
     pool_config: &serde_json::Value,
     storage_pool_id: uuid::Uuid,
+    persistent_upper_pool_id: Option<uuid::Uuid>,
 ) {
     // Extract registry URL from pool config
     let registry_url = match OverlayBdPoolConfig::from_value(pool_config) {
@@ -636,6 +685,38 @@ async fn run_overlaybd_create(
     };
     let logical_name = next_disk_id(&existing_disks);
 
+    // Optionally create a persistent OverlaybdUpper StorageObject on the
+    // caller-supplied pool so that writes survive VM deletion.
+    let upper_so_id = if let Some(upper_pool_id) = persistent_upper_pool_id {
+        match storage_objects::create(
+            db_pool,
+            storage_objects::NewStorageObject {
+                name: format!("overlaybd-upper-{}", vm_id),
+                storage_pool_id: Some(upper_pool_id),
+                object_type: storage_objects::StorageObjectType::OverlaybdUpper,
+                size_bytes: 0,
+                config: serde_json::Value::Object(serde_json::Map::new()),
+                parent_id: None,
+            },
+        )
+        .await
+        {
+            Ok(id) => Some(id),
+            Err(e) => {
+                let msg = format!("Failed to create OverlaybdUpper storage object: {}", e);
+                tracing::error!(vm_id = %vm_id, job_id = %job_id, error = %msg);
+                if let Err(cleanup_err) = storage_objects::delete(db_pool, so_id).await {
+                    tracing::warn!(vm_id = %vm_id, storage_object_id = %so_id, error = %cleanup_err, "Failed to clean up orphaned OciImage storage object");
+                }
+                let _ = jobs::mark_failed(db_pool, job_id, &msg).await;
+                let _ = vms::update_status(db_pool, vm_id, VmStatus::Unknown).await;
+                return;
+            }
+        }
+    } else {
+        None
+    };
+
     let disk_record = NewVmDisk {
         vm_id,
         storage_object_id: Some(so_id),
@@ -643,6 +724,7 @@ async fn run_overlaybd_create(
         device_path: format!("/dev/{}", logical_name),
         boot_order: Some(0),
         read_only: Some(false),
+        upper_storage_object_id: upper_so_id,
         ..Default::default()
     };
     if let Err(e) = vm_disks::create(db_pool, &disk_record).await {
@@ -650,6 +732,11 @@ async fn run_overlaybd_create(
         tracing::error!(vm_id = %vm_id, job_id = %job_id, error = %msg);
         if let Err(cleanup_err) = storage_objects::delete(db_pool, so_id).await {
             tracing::warn!(vm_id = %vm_id, storage_object_id = %so_id, error = %cleanup_err, "Failed to clean up orphaned storage object");
+        }
+        if let Some(upper_id) = upper_so_id
+            && let Err(cleanup_err) = storage_objects::delete(db_pool, upper_id).await
+        {
+            tracing::warn!(vm_id = %vm_id, storage_object_id = %upper_id, error = %cleanup_err, "Failed to clean up orphaned OverlaybdUpper storage object");
         }
         let _ = jobs::mark_failed(db_pool, job_id, &msg).await;
         let _ = vms::update_status(db_pool, vm_id, VmStatus::Unknown).await;
@@ -1676,10 +1763,17 @@ async fn build_create_vm_request(env: &App, vm: &Vm) -> Result<CreateVmRequest> 
         }
     }
 
-    // Batch-fetch storage objects and pools to avoid N+1 queries
+    // Batch-fetch storage objects and pools to avoid N+1 queries.
+    // Include both primary (storage_object_id) and upper layer (upper_storage_object_id) SOs.
     let so_ids: Vec<Uuid> = db_disks
         .iter()
-        .filter_map(|d| d.storage_object_id)
+        .flat_map(|d| {
+            [d.storage_object_id, d.upper_storage_object_id]
+                .into_iter()
+                .flatten()
+        })
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
         .collect();
 
     let objects = storage_objects::get_batch(env.pool(), &so_ids).await?;
@@ -1738,17 +1832,25 @@ async fn build_create_vm_request(env: &App, vm: &Vm) -> Result<CreateVmRequest> 
                         .and_then(|v| v.as_str())
                         .unwrap_or_default()
                         .to_string();
+
+                    let upper_object = disk
+                        .upper_storage_object_id
+                        .and_then(|uid| objects_map.get(&uid));
+                    let (upper_data_path, upper_index_path) = overlaybd_upper_paths(upper_object);
+
                     resolved_disks.push(disk_to_disk_config(
                         disk,
                         None,
                         Some(image_ref),
                         Some(registry_url),
+                        upper_data_path,
+                        upper_index_path,
                     ));
                     has_overlaybd_boot = true;
                 }
                 storage_pools::StoragePoolType::Local | storage_pools::StoragePoolType::Nfs => {
                     let path = storage_objects::get_path_from_config(&obj.config);
-                    resolved_disks.push(disk_to_disk_config(disk, path, None, None));
+                    resolved_disks.push(disk_to_disk_config(disk, path, None, None, None, None));
                 }
             }
         }
@@ -2067,7 +2169,11 @@ pub async fn attach_disk(
     // so add-disk works on both running and stopped VMs.
     if matches!(vm.status, VmStatus::Running | VmStatus::Shutdown) {
         let host = host_for_vm(&env, vm_id).await?;
-        let disk_config = disk_config_for_hotplug(&disk, &obj, &pool);
+        let upper_object = match disk.upper_storage_object_id {
+            Some(object_id) => Some(storage_objects::get(env.pool(), object_id).await?),
+            None => None,
+        };
+        let disk_config = disk_config_for_hotplug(&disk, &obj, &pool, upper_object.as_ref());
         if let Err(e) = NodeClient::new(&host.address, host.port as u16)
             .add_disk_device(vm_id, disk_config)
             .await
@@ -2095,6 +2201,7 @@ fn disk_config_for_hotplug(
     disk: &vm_disks::VmDisk,
     obj: &storage_objects::StorageObject,
     pool: &storage_pools::StoragePool,
+    upper_object: Option<&storage_objects::StorageObject>,
 ) -> DiskConfig {
     match pool.pool_type {
         storage_pools::StoragePoolType::OverlayBd => {
@@ -2110,11 +2217,78 @@ fn disk_config_for_hotplug(
                 .and_then(|v| v.as_str())
                 .unwrap_or_default()
                 .to_string();
-            disk_to_disk_config(disk, None, Some(image_ref), Some(registry_url))
+            let (upper_data_path, upper_index_path) = overlaybd_upper_paths(upper_object);
+            disk_to_disk_config(
+                disk,
+                None,
+                Some(image_ref),
+                Some(registry_url),
+                upper_data_path,
+                upper_index_path,
+            )
         }
         storage_pools::StoragePoolType::Local | storage_pools::StoragePoolType::Nfs => {
             let path = storage_objects::get_path_from_config(&obj.config);
-            disk_to_disk_config(disk, path, None, None)
+            disk_to_disk_config(disk, path, None, None, None, None)
+        }
+    }
+}
+
+fn overlaybd_upper_paths(
+    upper_object: Option<&storage_objects::StorageObject>,
+) -> (Option<String>, Option<String>) {
+    let upper_data_path = upper_object
+        .and_then(|obj| obj.config.get("upper_data"))
+        .and_then(|value| value.as_str())
+        .map(str::to_owned);
+    let upper_index_path = upper_object
+        .and_then(|obj| obj.config.get("upper_index"))
+        .and_then(|value| value.as_str())
+        .map(str::to_owned);
+    (upper_data_path, upper_index_path)
+}
+
+#[derive(Debug)]
+struct DiskResizeTarget {
+    storage_object_id: Uuid,
+    path: String,
+}
+
+fn resolve_disk_resize_target(
+    disk: &vm_disks::VmDisk,
+    object: &storage_objects::StorageObject,
+    pool: &storage_pools::StoragePool,
+) -> Result<DiskResizeTarget> {
+    match (&pool.pool_type, &object.object_type) {
+        (
+            storage_pools::StoragePoolType::Local | storage_pools::StoragePoolType::Nfs,
+            StorageObjectType::Disk | StorageObjectType::Snapshot,
+        ) => {
+            let path = storage_objects::get_path_from_config(&object.config).ok_or_else(|| {
+                crate::errors::Error::UnprocessableEntity("disk has no resolvable host path".into())
+            })?;
+            Ok(DiskResizeTarget {
+                storage_object_id: object.id,
+                path,
+            })
+        }
+        (storage_pools::StoragePoolType::OverlayBd, StorageObjectType::OciImage) => {
+            let reason = if disk.upper_storage_object_id.is_some() {
+                "persistent OverlayBD disk resize is not supported yet"
+            } else {
+                "ephemeral OverlayBD disks cannot be resized"
+            };
+            Err(crate::errors::Error::UnprocessableEntity(reason.into()))
+        }
+        (storage_pools::StoragePoolType::OverlayBd, _) => {
+            Err(crate::errors::Error::UnprocessableEntity(
+                "disk resize is not supported for this OverlayBD storage object".into(),
+            ))
+        }
+        (storage_pools::StoragePoolType::Local | storage_pools::StoragePoolType::Nfs, _) => {
+            Err(crate::errors::Error::UnprocessableEntity(
+                "disk resize is only supported for disk and snapshot storage objects".into(),
+            ))
         }
     }
 }
@@ -2125,6 +2299,8 @@ fn disk_to_disk_config(
     path: Option<String>,
     oci_image_ref: Option<String>,
     registry_url: Option<String>,
+    upper_data_path: Option<String>,
+    upper_index_path: Option<String>,
 ) -> DiskConfig {
     DiskConfig {
         id: disk.logical_name.clone(),
@@ -2141,6 +2317,8 @@ fn disk_to_disk_config(
         serial: disk.serial_number.clone(),
         oci_image_ref,
         registry_url,
+        upper_data_path,
+        upper_index_path,
     }
 }
 
@@ -2500,6 +2678,8 @@ pub async fn migrate(
     // the same OCI registry (the destination mounts a fresh TCMU device).
     // Local pools are node-local and cannot be migrated.
     let db_disks = vm_disks::list_by_vm(env.pool(), vm_id).await?;
+
+    // Check primary storage objects.
     let so_ids: Vec<Uuid> = db_disks
         .iter()
         .filter_map(|d| d.storage_object_id)
@@ -2526,6 +2706,39 @@ pub async fn migrate(
                 return Err(crate::errors::Error::UnprocessableEntity(format!(
                     "destination host {} does not have pool '{}' ({:?}) attached",
                     target_host.id, pool.name, pool.pool_type
+                )));
+            }
+        }
+    }
+
+    // Check upper layer storage objects (persistent OverlayBD).
+    // Local upper layers cannot be live-migrated; NFS upper layers can.
+    let upper_so_ids: Vec<Uuid> = db_disks
+        .iter()
+        .filter_map(|d| d.upper_storage_object_id)
+        .collect();
+    if !upper_so_ids.is_empty() {
+        let upper_objects = storage_objects::get_batch(env.pool(), &upper_so_ids).await?;
+        let upper_pool_ids: Vec<Uuid> = upper_objects
+            .iter()
+            .map(|o| o.storage_pool_id)
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+        let upper_pools = storage_pools::get_batch(env.pool(), &upper_pool_ids).await?;
+        for pool in &upper_pools {
+            if !pool.pool_type.supports_live_migration() {
+                return Err(crate::errors::Error::UnprocessableEntity(format!(
+                    "live migration is not supported: persistent upper layer is on local pool '{}'",
+                    pool.name
+                )));
+            }
+            let dest_has_pool =
+                storage_pools::host_has_pool(env.pool(), target_host.id, pool.id).await?;
+            if !dest_has_pool {
+                return Err(crate::errors::Error::UnprocessableEntity(format!(
+                    "destination host {} does not have upper layer pool '{}' attached",
+                    target_host.id, pool.name
                 )));
             }
         }
@@ -2796,10 +3009,107 @@ pub async fn resize_vm(
     .into_response())
 }
 
+/// Request body for `PUT /vms/{vm_id}/disks/{disk_id}/resize`.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct DiskResizeRequest {
+    /// New disk size in bytes. Must be larger than the current size and a multiple of 1 MiB.
+    pub new_size_bytes: i64,
+}
+
+#[utoipa::path(
+    put,
+    path = "/vms/{vm_id}/disks/{disk_id}/resize",
+    params(
+        ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier"),
+        ("disk_id" = String, Path, description = "Logical disk name (e.g. \"rootfs\", \"disk0\")")
+    ),
+    request_body = DiskResizeRequest,
+    responses(
+        (status = 200, description = "Disk resized successfully", body = crate::model::storage_objects::StorageObject),
+        (status = 404, description = "VM or disk not found"),
+        (status = 422, description = "VM not stopped, disk not resizable, or size invalid"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "vms"
+)]
+#[instrument(skip(env))]
+pub async fn resize_disk(
+    Extension(env): Extension<App>,
+    Path((vm_id, disk_id)): Path<(Uuid, String)>,
+    Json(req): Json<DiskResizeRequest>,
+) -> Result<axum::response::Response> {
+    use axum::response::IntoResponse as _;
+    const MIB: i64 = 1024 * 1024;
+
+    let vm = vms::get(env.pool(), vm_id).await?;
+    match vm.status {
+        VmStatus::Created | VmStatus::Shutdown => {}
+        _ => {
+            return Err(crate::errors::Error::UnprocessableEntity(
+                "VM must be stopped (Created or Shutdown) to resize a disk".into(),
+            ));
+        }
+    }
+
+    let disk = vm_disks::get_by_logical_name(env.pool(), vm_id, &disk_id)
+        .await?
+        .ok_or(crate::errors::Error::NotFound)?;
+
+    if disk.vhost_user {
+        return Err(crate::errors::Error::UnprocessableEntity(
+            "vhost-user disks cannot be resized".into(),
+        ));
+    }
+
+    let so_id = disk.storage_object_id.ok_or_else(|| {
+        crate::errors::Error::UnprocessableEntity("disk has no backing storage object".into())
+    })?;
+
+    let obj = storage_objects::get(env.pool(), so_id).await?;
+    let pool_record = storage_pools::get(env.pool(), obj.storage_pool_id).await?;
+    let target = resolve_disk_resize_target(&disk, &obj, &pool_record)?;
+
+    if req.new_size_bytes <= obj.size_bytes {
+        return Err(crate::errors::Error::UnprocessableEntity(format!(
+            "new_size_bytes {} must be greater than current size {}",
+            req.new_size_bytes, obj.size_bytes
+        )));
+    }
+    if req.new_size_bytes % MIB != 0 {
+        return Err(crate::errors::Error::UnprocessableEntity(format!(
+            "new_size_bytes {} must be a multiple of 1 MiB ({})",
+            req.new_size_bytes, MIB
+        )));
+    }
+
+    let host = host_for_vm(&env, vm_id).await?;
+    NodeClient::new(&host.address, host.port as u16)
+        .resize_disk(vm_id, &disk.logical_name, &target.path, req.new_size_bytes)
+        .await
+        .map_err(|e| {
+            error!("Failed to resize disk {} for VM {}: {}", disk_id, vm_id, e);
+            crate::errors::Error::InternalServerError
+        })?;
+
+    storage_objects::update_size_bytes(env.pool(), target.storage_object_id, req.new_size_bytes)
+        .await?;
+    let updated_obj = storage_objects::get(env.pool(), target.storage_object_id).await?;
+
+    Ok(ApiResponse {
+        data: updated_obj,
+        code: StatusCode::OK,
+    }
+    .into_response())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::vm_disks::VmDisk;
+    use crate::model::{
+        storage_objects::StorageObject,
+        storage_pools::{StoragePool, StoragePoolStatus, StoragePoolType},
+        vm_disks::VmDisk,
+    };
     use uuid::Uuid;
 
     fn make_disk(logical_name: &str) -> VmDisk {
@@ -2821,6 +3131,34 @@ mod tests {
             pci_segment: 0,
             serial_number: None,
             config: serde_json::json!({}),
+            upper_storage_object_id: None,
+        }
+    }
+
+    fn make_storage_object(
+        object_type: StorageObjectType,
+        config: serde_json::Value,
+    ) -> StorageObject {
+        StorageObject {
+            id: Uuid::new_v4(),
+            name: "obj".to_string(),
+            storage_pool_id: Uuid::new_v4(),
+            object_type,
+            size_bytes: 1024,
+            config,
+            parent_id: None,
+        }
+    }
+
+    fn make_storage_pool(pool_type: StoragePoolType) -> StoragePool {
+        StoragePool {
+            id: Uuid::new_v4(),
+            name: "pool".to_string(),
+            pool_type,
+            status: StoragePoolStatus::Active,
+            config: serde_json::json!({}),
+            capacity_bytes: None,
+            allocated_bytes: None,
         }
     }
 
@@ -2865,5 +3203,62 @@ mod tests {
         assert_eq!(json, r#""kernel""#);
         let parsed: BootMode = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, BootMode::Kernel);
+    }
+
+    #[test]
+    fn overlaybd_upper_paths_reads_config() {
+        let upper_object = make_storage_object(
+            StorageObjectType::OverlaybdUpper,
+            serde_json::json!({
+                "upper_data": "/var/lib/qarax/pools/upper.data",
+                "upper_index": "/var/lib/qarax/pools/upper.index"
+            }),
+        );
+
+        let (upper_data_path, upper_index_path) = overlaybd_upper_paths(Some(&upper_object));
+
+        assert_eq!(
+            upper_data_path.as_deref(),
+            Some("/var/lib/qarax/pools/upper.data")
+        );
+        assert_eq!(
+            upper_index_path.as_deref(),
+            Some("/var/lib/qarax/pools/upper.index")
+        );
+    }
+
+    #[test]
+    fn resolve_disk_resize_target_accepts_local_disk() {
+        let disk = make_disk("disk0");
+        let object = make_storage_object(
+            StorageObjectType::Disk,
+            serde_json::json!({ "path": "/var/lib/qarax/disk.raw" }),
+        );
+        let pool = make_storage_pool(StoragePoolType::Local);
+
+        let target = resolve_disk_resize_target(&disk, &object, &pool).unwrap();
+
+        assert_eq!(target.storage_object_id, object.id);
+        assert_eq!(target.path, "/var/lib/qarax/disk.raw");
+    }
+
+    #[test]
+    fn resolve_disk_resize_target_rejects_persistent_overlaybd() {
+        let mut disk = make_disk("disk0");
+        disk.upper_storage_object_id = Some(Uuid::new_v4());
+        let object = make_storage_object(
+            StorageObjectType::OciImage,
+            serde_json::json!({
+                "image_ref": "registry:5000/test/busybox:latest",
+                "registry_url": "http://registry:5000"
+            }),
+        );
+        let pool = make_storage_pool(StoragePoolType::OverlayBd);
+
+        let err = resolve_disk_resize_target(&disk, &object, &pool).unwrap_err();
+
+        assert!(
+            matches!(err, crate::errors::Error::UnprocessableEntity(message) if message == "persistent OverlayBD disk resize is not supported yet")
+        );
     }
 }

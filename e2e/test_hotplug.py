@@ -151,7 +151,7 @@ async def _make_vm(c, test_id):
     return UUID(str(vm_id_raw).strip('"'))
 
 
-# ─── Created-state tests (no VM boot required) ────────────────────────────────
+# Created-state tests (no VM boot required)
 
 
 @pytest.mark.asyncio
@@ -182,7 +182,9 @@ async def test_attach_disk_to_created_vm(client):
             if vm_id:
                 await delete_vm.asyncio_detailed(client=c, vm_id=vm_id)
             if disk_id:
-                await delete_storage_object.asyncio_detailed(client=c, object_id=disk_id)
+                await delete_storage_object.asyncio_detailed(
+                    client=c, object_id=disk_id
+                )
             if pool_id:
                 await delete_pool.asyncio_detailed(client=c, pool_id=pool_id)
 
@@ -220,7 +222,9 @@ async def test_remove_disk_from_created_vm(client):
             if vm_id:
                 await delete_vm.asyncio_detailed(client=c, vm_id=vm_id)
             if disk_id:
-                await delete_storage_object.asyncio_detailed(client=c, object_id=disk_id)
+                await delete_storage_object.asyncio_detailed(
+                    client=c, object_id=disk_id
+                )
             if pool_id:
                 await delete_pool.asyncio_detailed(client=c, pool_id=pool_id)
 
@@ -268,7 +272,7 @@ async def test_add_remove_nic_created_vm(client):
                 await delete_vm.asyncio_detailed(client=c, vm_id=vm_id)
 
 
-# ─── Negative tests ───────────────────────────────────────────────────────────
+# Negative tests
 
 
 @pytest.mark.asyncio
@@ -343,7 +347,9 @@ async def test_attach_remove_disk_shutdown_vm(client):
                 await delete_vm.asyncio_detailed(client=c, vm_id=vm_id)
             if disk_id:
                 try:
-                    await delete_storage_object.asyncio_detailed(client=c, object_id=disk_id)
+                    await delete_storage_object.asyncio_detailed(
+                        client=c, object_id=disk_id
+                    )
                 except Exception as e:
                     print(f"Ignoring error during disk cleanup: {e}")
             if pool_id:
@@ -364,9 +370,7 @@ async def test_remove_disk_not_found_returns_404(client):
             resp = await remove_disk.asyncio_detailed(
                 client=c, vm_id=vm_id, device_id="nonexistent"
             )
-            assert resp.status_code == 404, (
-                f"Expected 404, got {resp.status_code}"
-            )
+            assert resp.status_code == 404, f"Expected 404, got {resp.status_code}"
         finally:
             if vm_id:
                 await delete_vm.asyncio_detailed(client=c, vm_id=vm_id)
@@ -408,15 +412,13 @@ async def test_remove_nic_not_found_returns_404(client):
             resp = await remove_nic.asyncio_detailed(
                 client=c, vm_id=vm_id, device_id="net99"
             )
-            assert resp.status_code == 404, (
-                f"Expected 404, got {resp.status_code}"
-            )
+            assert resp.status_code == 404, f"Expected 404, got {resp.status_code}"
         finally:
             if vm_id:
                 await delete_vm.asyncio_detailed(client=c, vm_id=vm_id)
 
 
-# ─── Running-VM hotplug tests (require real Cloud Hypervisor) ────────────────
+# Running-VM hotplug tests (require real Cloud Hypervisor)
 
 
 @pytest.mark.asyncio
@@ -486,7 +488,9 @@ async def test_disk_hotplug_running_vm(client):
             device_id = attach_resp.parsed.logical_name
 
             vm = await get_vm.asyncio(client=c, vm_id=vm_id)
-            assert vm.status == VmStatus.RUNNING, "VM should still be running after disk hotplug"
+            assert vm.status == VmStatus.RUNNING, (
+                "VM should still be running after disk hotplug"
+            )
 
             # Hotunplug
             rm_resp = await remove_disk.asyncio_detailed(
@@ -507,7 +511,9 @@ async def test_disk_hotplug_running_vm(client):
                 await delete_vm.asyncio_detailed(client=c, vm_id=vm_id)
             if disk_id:
                 try:
-                    await delete_storage_object.asyncio_detailed(client=c, object_id=disk_id)
+                    await delete_storage_object.asyncio_detailed(
+                        client=c, object_id=disk_id
+                    )
                 except Exception:
                     pass
             if pool_id:
@@ -574,7 +580,9 @@ async def test_nic_hotplug_running_vm(client):
             assert nic.ip_address is not None, "Expected an IP to be allocated"
 
             vm = await get_vm.asyncio(client=c, vm_id=vm_id)
-            assert vm.status == VmStatus.RUNNING, "VM should still be running after NIC hotplug"
+            assert vm.status == VmStatus.RUNNING, (
+                "VM should still be running after NIC hotplug"
+            )
 
             # Hotunplug
             rm_resp = await remove_nic.asyncio_detailed(
@@ -602,6 +610,8 @@ async def test_nic_hotplug_running_vm(client):
                     pass
             if net_id_str:
                 try:
-                    await delete_network.asyncio_detailed(client=c, network_id=net_id_str)
+                    await delete_network.asyncio_detailed(
+                        client=c, network_id=net_id_str
+                    )
                 except Exception:
                     pass

@@ -80,7 +80,9 @@ def _register_and_init_host(client, address, port, name):
     if existing is not None:
         host_id = existing.id
     else:
-        new_host = NewHost(name=name, address=address, port=port, host_user="root", password="")
+        new_host = NewHost(
+            name=name, address=address, port=port, host_user="root", password=""
+        )
         result = add_host.sync_detailed(client=client, body=new_host)
         if result.status_code.value == 201:
             host_id = UUID(result.parsed.strip())
@@ -93,7 +95,9 @@ def _register_and_init_host(client, address, port, name):
 
     result = init_host.sync_detailed(host_id=host_id, client=client)
     if result.status_code.value != 200:
-        raise RuntimeError(f"Failed to initialize host {host_id}: HTTP {result.status_code}")
+        raise RuntimeError(
+            f"Failed to initialize host {host_id}: HTTP {result.status_code}"
+        )
     return host_id
 
 
@@ -101,8 +105,12 @@ def _register_and_init_host(client, address, port, name):
 def two_hosts():
     """Ensure both qarax-node instances are registered and initialized. Returns (host1_id, host2_id)."""
     c = Client(base_url=QARAX_URL)
-    host1_id = _register_and_init_host(c, QARAX_NODE_HOST, QARAX_NODE_PORT, "e2e-node-1")
-    host2_id = _register_and_init_host(c, QARAX_NODE_2_HOST, QARAX_NODE_2_PORT, "e2e-node-2")
+    host1_id = _register_and_init_host(
+        c, QARAX_NODE_HOST, QARAX_NODE_PORT, "e2e-node-1"
+    )
+    host2_id = _register_and_init_host(
+        c, QARAX_NODE_2_HOST, QARAX_NODE_2_PORT, "e2e-node-2"
+    )
     return host1_id, host2_id
 
 
@@ -134,7 +142,7 @@ async def _wait_for_job(c, job_id, timeout=MIGRATION_TIMEOUT):
     raise TimeoutError(f"Migration job {job_id} did not complete within {timeout}s")
 
 
-# ── Negative tests (no VM boot required) ────────────────────────────────────
+# Negative tests (no VM boot required)────────
 
 
 @pytest.mark.asyncio
@@ -171,7 +179,9 @@ async def test_migrate_stopped_vm_returns_422(client, two_hosts):
                 vm_id=vm_id,
                 body=VmMigrateRequest(target_host_id=host2_id),
             )
-            assert resp.status_code == 422, f"Expected 422 for stopped VM, got {resp.status_code}"
+            assert resp.status_code == 422, (
+                f"Expected 422 for stopped VM, got {resp.status_code}"
+            )
         finally:
             await delete_vm.asyncio_detailed(client=c, vm_id=vm_id)
 
@@ -211,7 +221,7 @@ async def test_migrate_to_same_host_returns_422(client, two_hosts):
             await delete_vm.asyncio_detailed(client=c, vm_id=vm_id)
 
 
-# ── Full live migration test ─────────────────────────────────────────────────
+# Full live migration test────────
 
 
 @pytest.mark.asyncio
@@ -306,7 +316,9 @@ async def test_live_migration(client, two_hosts):
                 await delete_vm.asyncio_detailed(client=c, vm_id=vm_id)
             if disk_id is not None:
                 try:
-                    await delete_storage_object.asyncio_detailed(client=c, object_id=disk_id)
+                    await delete_storage_object.asyncio_detailed(
+                        client=c, object_id=disk_id
+                    )
                 except Exception:
                     pass
             if pool_id is not None:

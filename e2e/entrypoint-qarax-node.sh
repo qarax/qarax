@@ -4,11 +4,11 @@
 # then runs qarax-node.
 set -e
 
-# ── Kernel modules ────────────────────────────────────────────────────────────
+# Kernel modules──────────
 modprobe target_core_user 2>/dev/null || true
 modprobe tcm_loop 2>/dev/null || true
 
-# ── UIO device nodes ──────────────────────────────────────────────────────────
+# UIO device nodes──────────
 UIO_MAJOR=$(awk '/[[:space:]]uio$/{print $1}' /proc/devices 2>/dev/null | head -1)
 if [ -n "$UIO_MAJOR" ]; then
 	echo "Creating UIO device nodes (major=${UIO_MAJOR})"
@@ -19,7 +19,7 @@ else
 	echo "WARNING: could not determine UIO major; overlaybd-tcmu may fail"
 fi
 
-# ── overlaybd-tcmu ────────────────────────────────────────────────────────────
+# overlaybd-tcmu──────────
 if [ -x /opt/overlaybd/bin/overlaybd-tcmu ]; then
 	echo "Starting overlaybd-tcmu..."
 	/opt/overlaybd/bin/overlaybd-tcmu &

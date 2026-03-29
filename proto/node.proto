@@ -155,6 +155,12 @@ message DiskConfig {
   // OverlayBD lazy-loading support
   optional string oci_image_ref = 13;  // OCI image ref in local registry
   optional string registry_url  = 14;  // e.g. "http://my-registry:5000"
+
+  // Persistent upper layer paths (linked-persistent OverlayBD VMs).
+  // When set, the overlaybd manager uses these paths instead of deriving
+  // ephemeral paths inside the cache directory (which would be deleted on stop).
+  optional string upper_data_path  = 15;
+  optional string upper_index_path = 16;
 }
 
 // ============================================================================
@@ -443,6 +449,9 @@ service VmService {
   // CPU and memory hotplug (resize running VM)
   rpc ResizeVm(ResizeVmRequest) returns (google.protobuf.Empty) {}
 
+  // Disk resize (extend backing file; VM must be stopped)
+  rpc ResizeDisk(ResizeDiskRequest) returns (google.protobuf.Empty) {}
+
   // OCI image management
   rpc PullImage(OciImageRequest) returns (OciImageResponse) {}
   rpc GetImageStatus(OciImageRequest) returns (OciImageResponse) {}
@@ -520,6 +529,13 @@ message ResizeVmRequest {
   string vm_id = 1;
   optional int32 desired_vcpus = 2;  // Target vCPU count (must be within boot_vcpus..max_vcpus)
   optional int64 desired_ram = 3;    // Target memory in bytes (must be within size..size+hotplug_size)
+}
+
+message ResizeDiskRequest {
+  string vm_id    = 1;
+  string disk_id  = 2;   // logical_name of the disk (e.g. "rootfs", "disk0")
+  string path     = 3;   // absolute host path to the backing raw file
+  int64  new_size = 4;   // target size in bytes (must be > current size)
 }
 
 // ============================================================================

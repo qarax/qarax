@@ -29,7 +29,7 @@ source "${REPO_ROOT}/demos/lib.sh"
 
 cd "$REPO_ROOT"
 
-# ── Configuration ────────────────────────────────────────────────────────────
+# Configuration
 
 NETWORK_NAME="etcd-net"
 SUBNET="10.100.0.0/24"
@@ -55,7 +55,7 @@ step() { echo -e "\n${CYAN}=== $* ===${NC}"; }
 ok()   { echo -e "${GREEN}✓ $*${NC}"; }
 info() { echo -e "${YELLOW}$*${NC}"; }
 
-# ── Locate qarax CLI ─────────────────────────────────────────────────────────
+# Locate qarax CLI
 
 if [[ -z "$(find_qarax_bin)" ]]; then
     echo "qarax CLI not found — building..."
@@ -66,7 +66,7 @@ QARAX_BIN="$(find_qarax_bin)"
 [[ -n "$QARAX_BIN" ]] || die "qarax CLI not found even after build"
 QARAX="$QARAX_BIN --server $SERVER"
 
-# ── Cleanup ──────────────────────────────────────────────────────────────────
+# Cleanup
 
 cleanup() {
     step "Cleaning up etcd cluster demo"
@@ -93,7 +93,7 @@ if [[ "${1:-}" == "--cleanup" ]]; then
     exit 0
 fi
 
-# ── Preflight ────────────────────────────────────────────────────────────────
+# Preflight
 
 step "Preflight checks"
 
@@ -109,7 +109,7 @@ fi
 
 ok "Preflight passed"
 
-# ── Build qarax binaries ─────────────────────────────────────────────────────
+# Build qarax binaries
 
 step "Building qarax binaries (musl)"
 
@@ -129,7 +129,7 @@ QARAX="$(find_qarax_bin) --server $SERVER"
 [[ -n "$(find_qarax_bin)" ]] || die "qarax CLI binary not found after build"
 ok "Binaries ready"
 
-# ── Start docker-compose stack ───────────────────────────────────────────────
+# Start docker-compose stack
 
 step "Starting qarax stack (docker-compose)"
 
@@ -158,7 +158,7 @@ fi
 
 cd "$REPO_ROOT"
 
-# ── Set up overlaybd storage pool ────────────────────────────────────────────
+# Set up overlaybd storage pool
 
 step "Setting up overlaybd storage pool"
 
@@ -186,7 +186,7 @@ else
     ok "overlaybd pool created"
 fi
 
-# ── Build and push etcd node image ───────────────────────────────────────────
+# Build and push etcd node image
 
 step "Building etcd node OCI image"
 
@@ -210,7 +210,7 @@ $CONVERTOR \
     --plain
 ok "OverlayBD conversion complete (registry:5000/etcd-node:latest)"
 
-# ── Demo ─────────────────────────────────────────────────────────────────────
+# Demo
 
 echo ""
 echo "╔══════════════════════════════════════════════╗"

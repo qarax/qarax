@@ -7,8 +7,9 @@ use crate::{
     api::{
         self,
         models::{
-            AttachDiskRequest, CreateSnapshotRequest, CreateVmResult, HotplugNicRequest, NewVm,
-            NewVmNetwork, RestoreRequest, VmMigrateRequest, VmResizeRequest,
+            AttachDiskRequest, CreateSnapshotRequest, CreateVmResult, DiskResizeRequest,
+            HotplugNicRequest, NewVm, NewVmNetwork, RestoreRequest, VmMigrateRequest,
+            VmResizeRequest,
         },
     },
     client::Client,
@@ -18,7 +19,7 @@ use crate::{
 use super::{
     OutputFormat, build_accelerator_config, format_bytes, print_output, resolve_boot_source_id,
     resolve_host_id, resolve_instance_type_id, resolve_network_id, resolve_object_id,
-    resolve_vm_id, resolve_vm_template_id,
+    resolve_pool_id, resolve_vm_id, resolve_vm_template_id,
 };
 
 #[derive(Args)]
@@ -122,6 +123,11 @@ enum VmCommand {
         /// (GPU-local NUMA is used automatically in that case).
         #[arg(long)]
         numa_node: Option<i32>,
+        /// Storage pool name or ID for persistent OverlayBD upper layer (requires --image-ref).
+        /// When set, writes to the OCI-booted root disk survive VM deletion.
+        /// Pool must be Local or NFS and attached to the host running the VM.
+        #[arg(long, requires = "image_ref")]
+        persistent_upper_pool: Option<String>,
     },
     /// Delete a VM
     Delete {
@@ -236,6 +242,17 @@ enum VmCommand {
         /// NIC device ID to remove (e.g. "net0")
         #[arg(long)]
         device_id: String,
+    },
+    /// Resize a disk attached to a stopped VM
+    ResizeDisk {
+        /// VM name or ID
+        vm: String,
+        /// Logical disk name (e.g. "rootfs" or "disk0")
+        #[arg(long)]
+        disk: String,
+        /// New size in bytes (must be larger than current size and a multiple of 1 MiB)
+        #[arg(long)]
+        size: i64,
     },
     /// Resize vCPUs and/or memory of a running VM (hotplug)
     Resize {
@@ -415,6 +432,7 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
             gpu_model,
             min_vram,
             numa_node,
+            persistent_upper_pool,
         } => {
             let vm_template_id = match template {
                 Some(ref template) => Some(resolve_vm_template_id(client, template).await?),
@@ -492,6 +510,11 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
 
             let numa_config = numa_node.map(|n| serde_json::json!({ "numa_node": n }));
 
+            let persistent_upper_pool_id = match persistent_upper_pool {
+                Some(ref p) => Some(resolve_pool_id(client, p).await?),
+                None => None,
+            };
+
             let new_vm = NewVm {
                 name,
                 tags: (!tags.is_empty()).then_some(tags),
@@ -514,6 +537,7 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
                 config: Some(serde_json::json!({})),
                 accelerator_config,
                 numa_config,
+                persistent_upper_pool_id,
             };
 
             let result = api::vms::create(client, &new_vm).await?;
@@ -682,6 +706,22 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
             let vm_id = resolve_vm_id(client, &vm).await?;
             api::vms::remove_nic(client, vm_id, &device_id).await?;
             println!("Removed NIC {device_id} from VM {vm}");
+        }
+
+        VmCommand::ResizeDisk { vm, disk, size } => {
+            let vm_id = resolve_vm_id(client, &vm).await?;
+            let req = DiskResizeRequest {
+                new_size_bytes: size,
+            };
+            let updated = api::vms::resize_disk(client, vm_id, &disk, &req).await?;
+            if !matches!(output, OutputFormat::Table) {
+                print_output(&updated, output)?;
+            } else {
+                println!(
+                    "Resized disk {disk} on VM {vm}: new size = {}",
+                    format_bytes(updated.size_bytes)
+                );
+            }
         }
 
         VmCommand::Resize { vm, vcpus, ram } => {

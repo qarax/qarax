@@ -786,7 +786,7 @@ until curl -sk --connect-timeout 3 --max-time 5 "https://${API_HOST}:${API_PORT}
 done
 ok "Kubernetes API server is up (${elapsed}s)"
 
-# ── Fetch kubeconfig ──────────────────────────────────────────────────────────
+# Fetch kubeconfig
 
 step "Fetching kubeconfig"
 info "Waiting for control-plane HTTP server to serve kubeconfig..."

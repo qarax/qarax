@@ -550,10 +550,17 @@ impl VmManager {
                         ))
                     })?;
 
-                let disk_config = serde_json::json!({
+                let mut disk_config = serde_json::json!({
                     "image_ref": image_ref,
                     "registry_url": registry_url,
                 });
+                if let Some(ref upper_data) = disk.upper_data_path {
+                    disk_config["upper_data_path"] = serde_json::Value::String(upper_data.clone());
+                }
+                if let Some(ref upper_index) = disk.upper_index_path {
+                    disk_config["upper_index_path"] =
+                        serde_json::Value::String(upper_index.clone());
+                }
                 let mapped = backend
                     .map(&vm_id, &disk_config)
                     .await
@@ -1203,10 +1210,17 @@ impl VmManager {
                         ))
                     })?;
 
-                let disk_config = serde_json::json!({
+                let mut disk_config = serde_json::json!({
                     "image_ref": image_ref,
                     "registry_url": registry_url,
                 });
+                if let Some(ref upper_data) = disk.upper_data_path {
+                    disk_config["upper_data_path"] = serde_json::Value::String(upper_data.clone());
+                }
+                if let Some(ref upper_index) = disk.upper_index_path {
+                    disk_config["upper_index_path"] =
+                        serde_json::Value::String(upper_index.clone());
+                }
                 let mapped = backend
                     .map(vm_id, &disk_config)
                     .await
@@ -1651,6 +1665,54 @@ impl VmManager {
         .map_err(|e| VmManagerError::InvalidConfig(e.to_string()))?;
 
         Self::send_api_request(&socket_path, "PUT", "/api/v1/vm.resize", Some(&body)).await?;
+
+        Ok(())
+    }
+
+    /// Resize the backing file for a disk (VM must be stopped).
+    /// Uses fallocate to extend the file without filling it; falls back to truncate on NFS.
+    pub async fn resize_disk(
+        &self,
+        _vm_id: &str,
+        _disk_id: &str,
+        path: &str,
+        new_size: i64,
+    ) -> Result<(), VmManagerError> {
+        if path.is_empty() || path.contains('\0') {
+            return Err(VmManagerError::InvalidConfig(
+                "disk path is empty or contains null bytes".into(),
+            ));
+        }
+
+        let metadata = tokio::fs::metadata(path)
+            .await
+            .map_err(|e| VmManagerError::StorageError(format!("stat {path}: {e}")))?;
+        let current_size = metadata.len() as i64;
+        if new_size <= current_size {
+            return Err(VmManagerError::InvalidConfig(format!(
+                "new_size {new_size} must be greater than current size {current_size}"
+            )));
+        }
+
+        let status = tokio::process::Command::new("fallocate")
+            .args(["-l", &new_size.to_string(), path])
+            .status()
+            .await
+            .map_err(|e| VmManagerError::StorageError(e.to_string()))?;
+
+        if !status.success() {
+            // Fallback: truncate (always works, may create sparse regions)
+            let status = tokio::process::Command::new("truncate")
+                .args(["-s", &new_size.to_string(), path])
+                .status()
+                .await
+                .map_err(|e| VmManagerError::StorageError(e.to_string()))?;
+            if !status.success() {
+                return Err(VmManagerError::StorageError(format!(
+                    "both fallocate and truncate failed on {path}"
+                )));
+            }
+        }
 
         Ok(())
     }

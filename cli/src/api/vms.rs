@@ -5,9 +5,9 @@ use uuid::Uuid;
 use crate::client::Client;
 
 use super::models::{
-    AttachDiskRequest, CreateSnapshotRequest, CreateVmResponse, CreateVmResult, HotplugNicRequest,
-    NetworkInterface, NewVm, RestoreRequest, Snapshot, Vm, VmDisk, VmMigrateRequest,
-    VmMigrateResponse, VmResizeRequest, VmStartResponse,
+    AttachDiskRequest, CreateSnapshotRequest, CreateVmResponse, CreateVmResult, DiskResizeRequest,
+    HotplugNicRequest, NetworkInterface, NewVm, RestoreRequest, Snapshot, StorageObject, Vm,
+    VmDisk, VmMigrateRequest, VmMigrateResponse, VmResizeRequest, VmStartResponse,
 };
 
 pub async fn list(client: &Client, name: Option<&str>, tags: &[String]) -> anyhow::Result<Vec<Vm>> {
@@ -145,4 +145,15 @@ pub async fn migrate(
 
 pub async fn resize(client: &Client, vm_id: Uuid, req: &VmResizeRequest) -> anyhow::Result<Vm> {
     client.put(&format!("/vms/{vm_id}/resize"), req).await
+}
+
+pub async fn resize_disk(
+    client: &Client,
+    vm_id: Uuid,
+    disk_id: &str,
+    req: &DiskResizeRequest,
+) -> anyhow::Result<StorageObject> {
+    client
+        .put(&format!("/vms/{vm_id}/disks/{disk_id}/resize"), req)
+        .await
 }

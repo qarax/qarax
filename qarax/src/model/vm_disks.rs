@@ -34,6 +34,11 @@ pub struct VmDisk {
 
     // Legacy config
     pub config: serde_json::Value,
+
+    /// For OverlayBD disks: ID of the OverlaybdUpper StorageObject holding the
+    /// persistent upper layer (upper.data + upper.index) on a Local or NFS pool.
+    /// None = ephemeral (deleted on VM stop); Some = persistent across VM delete.
+    pub upper_storage_object_id: Option<Uuid>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -55,6 +60,7 @@ pub struct VmDiskRow {
     pub pci_segment: i32,
     pub serial_number: Option<String>,
     pub config: Json<serde_json::Value>,
+    pub upper_storage_object_id: Option<Uuid>,
 }
 
 impl From<VmDiskRow> for VmDisk {
@@ -77,6 +83,7 @@ impl From<VmDiskRow> for VmDisk {
             pci_segment: row.pci_segment,
             serial_number: row.serial_number,
             config: row.config.0,
+            upper_storage_object_id: row.upper_storage_object_id,
         }
     }
 }
@@ -101,6 +108,8 @@ pub struct NewVmDisk {
 
     #[serde(default)]
     pub config: serde_json::Value,
+
+    pub upper_storage_object_id: Option<Uuid>,
 }
 
 pub async fn list(pool: &PgPool) -> Result<Vec<VmDisk>, sqlx::Error> {
@@ -123,7 +132,8 @@ SELECT id,
         rate_limit_group as "rate_limit_group?",
         pci_segment as "pci_segment!",
         serial_number as "serial_number?",
-        config as "config: _"
+        config as "config: _",
+        upper_storage_object_id as "upper_storage_object_id?"
 FROM vm_disks
         "#
     )
@@ -157,7 +167,8 @@ SELECT id,
         rate_limit_group as "rate_limit_group?",
         pci_segment as "pci_segment!",
         serial_number as "serial_number?",
-        config as "config: _"
+        config as "config: _",
+        upper_storage_object_id as "upper_storage_object_id?"
 FROM vm_disks
 WHERE id = $1
         "#,
@@ -189,7 +200,8 @@ SELECT id,
         rate_limit_group as "rate_limit_group?",
         pci_segment as "pci_segment!",
         serial_number as "serial_number?",
-        config as "config: _"
+        config as "config: _",
+        upper_storage_object_id as "upper_storage_object_id?"
 FROM vm_disks
 WHERE vm_id = $1
 ORDER BY boot_order NULLS LAST, device_path
@@ -248,9 +260,9 @@ INSERT INTO vm_disks (
     id, vm_id, storage_object_id, logical_name, device_path, boot_order,
     read_only, direct, vhost_user, vhost_socket,
     num_queues, queue_size, rate_limiter, rate_limit_group,
-    pci_segment, serial_number, config
+    pci_segment, serial_number, config, upper_storage_object_id
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
         "#,
     )
     .bind(id)
@@ -270,6 +282,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $
     .bind(disk.pci_segment.unwrap_or(0))
     .bind(&disk.serial_number)
     .bind(sqlx::types::Json(&disk.config))
+    .bind(disk.upper_storage_object_id)
 }
 
 pub async fn delete_by_vm(pool: &PgPool, vm_id: Uuid) -> Result<(), sqlx::Error> {
@@ -312,7 +325,8 @@ SELECT id,
         rate_limit_group as "rate_limit_group?",
         pci_segment as "pci_segment!",
         serial_number as "serial_number?",
-        config as "config: _"
+        config as "config: _",
+        upper_storage_object_id as "upper_storage_object_id?"
 FROM vm_disks
 WHERE vm_id = $1 AND logical_name = $2
         "#,

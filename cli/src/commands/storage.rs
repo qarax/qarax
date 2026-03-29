@@ -20,7 +20,7 @@ fn active_hosts(hosts: &[api::models::Host]) -> impl Iterator<Item = &api::model
         .filter(|host| host.status.eq_ignore_ascii_case("up"))
 }
 
-// ─── Storage pools ────────────────────────────────────────────────────────────
+// Storage pools
 
 #[derive(Args)]
 pub struct StoragePoolArgs {
@@ -301,7 +301,7 @@ pub async fn run_pool(
     Ok(())
 }
 
-// ─── Storage objects ──────────────────────────────────────────────────────────
+// Storage objects
 
 #[derive(Args)]
 pub struct StorageObjectArgs {

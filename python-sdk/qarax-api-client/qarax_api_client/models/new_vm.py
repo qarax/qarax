@@ -61,6 +61,11 @@ class NewVm:
         numa_config (Any | Unset): NUMA configuration. When set, the VM is pinned to the specified NUMA node.
             If accelerator_config has prefer_local_numa=true (the default), GPU-local NUMA
             is used instead and this field is ignored.
+        persistent_upper_pool_id (None | Unset | UUID): When set alongside `image_ref`, the OverlayBD upper layer
+            (upper.data +
+            upper.index) is stored as a persistent `OverlaybdUpper` StorageObject on
+            this pool instead of being ephemeral. The pool must be Local or NFS and
+            must be attached to the host running the VM.
         root_disk_object_id (None | Unset | UUID):
         tags (list[str] | None | Unset):
         vm_template_id (None | Unset | UUID):
@@ -93,6 +98,7 @@ class NewVm:
     network_id: None | Unset | UUID = UNSET
     networks: list[NewVmNetwork] | None | Unset = UNSET
     numa_config: Any | Unset = UNSET
+    persistent_upper_pool_id: None | Unset | UUID = UNSET
     root_disk_object_id: None | Unset | UUID = UNSET
     tags: list[str] | None | Unset = UNSET
     vm_template_id: None | Unset | UUID = UNSET
@@ -257,6 +263,14 @@ class NewVm:
 
         numa_config = self.numa_config
 
+        persistent_upper_pool_id: None | str | Unset
+        if isinstance(self.persistent_upper_pool_id, Unset):
+            persistent_upper_pool_id = UNSET
+        elif isinstance(self.persistent_upper_pool_id, UUID):
+            persistent_upper_pool_id = str(self.persistent_upper_pool_id)
+        else:
+            persistent_upper_pool_id = self.persistent_upper_pool_id
+
         root_disk_object_id: None | str | Unset
         if isinstance(self.root_disk_object_id, Unset):
             root_disk_object_id = UNSET
@@ -341,6 +355,8 @@ class NewVm:
             field_dict["networks"] = networks
         if numa_config is not UNSET:
             field_dict["numa_config"] = numa_config
+        if persistent_upper_pool_id is not UNSET:
+            field_dict["persistent_upper_pool_id"] = persistent_upper_pool_id
         if root_disk_object_id is not UNSET:
             field_dict["root_disk_object_id"] = root_disk_object_id
         if tags is not UNSET:
@@ -616,6 +632,23 @@ class NewVm:
 
         numa_config = d.pop("numa_config", UNSET)
 
+        def _parse_persistent_upper_pool_id(data: object) -> None | Unset | UUID:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                persistent_upper_pool_id_type_0 = UUID(data)
+
+                return persistent_upper_pool_id_type_0
+            except (TypeError, ValueError, AttributeError, KeyError):
+                pass
+            return cast(None | Unset | UUID, data)
+
+        persistent_upper_pool_id = _parse_persistent_upper_pool_id(d.pop("persistent_upper_pool_id", UNSET))
+
         def _parse_root_disk_object_id(data: object) -> None | Unset | UUID:
             if data is None:
                 return data
@@ -695,6 +728,7 @@ class NewVm:
             network_id=network_id,
             networks=networks,
             numa_config=numa_config,
+            persistent_upper_pool_id=persistent_upper_pool_id,
             root_disk_object_id=root_disk_object_id,
             tags=tags,
             vm_template_id=vm_template_id,

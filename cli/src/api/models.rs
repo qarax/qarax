@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use serde_with::rust::double_option;
 use uuid::Uuid;
 
+// VMs
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Vm {
     pub id: Uuid,
@@ -77,6 +79,8 @@ pub struct NewVm {
     pub accelerator_config: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub numa_config: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub persistent_upper_pool_id: Option<Uuid>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -178,6 +182,8 @@ pub struct VmMigrateRequest {
 pub struct VmMigrateResponse {
     pub job_id: Uuid,
 }
+
+// Hosts
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Host {
@@ -308,7 +314,7 @@ pub struct NewTransfer {
     pub object_type: String,
 }
 
-// ─── Boot sources ─────────────────────────────────────────────────────────────
+// Boot sources
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BootSource {
@@ -332,7 +338,7 @@ pub struct NewBootSource {
     pub initrd_image_id: Option<Uuid>,
 }
 
-// ─── Networks ─────────────────────────────────────────────────────────────────
+// Networks
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Network {
@@ -375,7 +381,7 @@ pub struct IpAllocation {
     pub allocated_at: String,
 }
 
-// ─── Jobs ─────────────────────────────────────────────────────────────────────
+// Jobs
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Job {
@@ -390,7 +396,7 @@ pub struct Job {
     pub updated_at: String,
 }
 
-// ─── VM resize ────────────────────────────────────────────────────────────────
+// VM resize
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct VmResizeRequest {
@@ -400,7 +406,14 @@ pub struct VmResizeRequest {
     pub desired_ram: Option<i64>,
 }
 
-// ─── VM disks ─────────────────────────────────────────────────────────────────
+// Disk resize
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DiskResizeRequest {
+    pub new_size_bytes: i64,
+}
+
+// VM disks
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AttachDiskRequest {
@@ -430,7 +443,7 @@ pub struct VmDisk {
     pub config: serde_json::Value,
 }
 
-// ─── Network interfaces ────────────────────────────────────────────────────────
+// Network interfaces
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NetworkInterface {
@@ -472,7 +485,7 @@ pub struct HotplugNicRequest {
     pub offload_csum: Option<bool>,
 }
 
-// ─── Snapshots ────────────────────────────────────────────────────────────────
+// Snapshots
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Snapshot {
@@ -497,7 +510,7 @@ pub struct RestoreRequest {
     pub snapshot_id: Uuid,
 }
 
-// ─── Storage pool import ──────────────────────────────────────────────────────
+// Storage pool import
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ImportToPoolRequest {
@@ -511,7 +524,7 @@ pub struct ImportToPoolResponse {
     pub storage_object_id: Uuid,
 }
 
-// ─── Sandboxes ───────────────────────────────────────────────────────────────
+// Sandboxes
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Sandbox {
@@ -547,7 +560,7 @@ pub struct CreateSandboxResponse {
     pub job_id: Uuid,
 }
 
-// ─── Lifecycle Hooks ────────────────────────────────────────────────────────
+// Lifecycle Hooks
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LifecycleHook {

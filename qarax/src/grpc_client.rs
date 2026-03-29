@@ -82,9 +82,10 @@ use node::{
     DetachNetworkRequest, DetachStoragePoolRequest, DiskConfig, DownloadFileRequest, FsConfig,
     ImportOverlayBdRequest, ImportOverlayBdResponse, MemoryConfig, NetConfig, NodeInfo,
     NumaPlacement, OciImageRequest, OciImageResponse, PayloadConfig, ReceiveMigrationRequest,
-    RemoveDeviceRequest, ResizeVmRequest, RestoreVmRequest, SendMigrationRequest,
-    SnapshotVmRequest, StoragePoolKind, VfioDeviceConfig, VmConfig, VmCounters, VmId, VmState,
-    file_transfer_service_client::FileTransferServiceClient, vm_service_client::VmServiceClient,
+    RemoveDeviceRequest, ResizeDiskRequest, ResizeVmRequest, RestoreVmRequest,
+    SendMigrationRequest, SnapshotVmRequest, StoragePoolKind, VfioDeviceConfig, VmConfig,
+    VmCounters, VmId, VmState, file_transfer_service_client::FileTransferServiceClient,
+    vm_service_client::VmServiceClient,
 };
 
 /// Client for communicating with qarax-node via gRPC
@@ -354,6 +355,8 @@ impl NodeClient {
                 serial: None,
                 oci_image_ref: None,
                 registry_url: None,
+                upper_data_path: None,
+                upper_index_path: None,
             });
         }
 
@@ -1085,6 +1088,32 @@ impl NodeClient {
             })
             .await
             .context("Failed to resize VM on qarax-node")?;
+        Ok(())
+    }
+
+    /// Resize the backing file for a disk on the node (VM must be stopped).
+    #[instrument(skip(self))]
+    pub async fn resize_disk(
+        &self,
+        vm_id: Uuid,
+        disk_id: &str,
+        path: &str,
+        new_size: i64,
+    ) -> Result<()> {
+        debug!(
+            "Resizing disk {} for VM {} on node {}: path={} new_size={}",
+            disk_id, vm_id, self.address, path, new_size
+        );
+        let mut client = self.connect_vm_service().await?;
+        client
+            .resize_disk(ResizeDiskRequest {
+                vm_id: vm_id.to_string(),
+                disk_id: disk_id.to_string(),
+                path: path.to_string(),
+                new_size,
+            })
+            .await
+            .context("Failed to resize disk on qarax-node")?;
         Ok(())
     }
 
