@@ -16,6 +16,7 @@ from .hook_execution_status import HookExecutionStatus
 from .hook_scope import HookScope
 from .host import Host
 from .host_gpu import HostGpu
+from .host_numa_node import HostNumaNode
 from .host_status import HostStatus
 from .hypervisor import Hypervisor
 from .import_to_pool_request import ImportToPoolRequest
@@ -91,6 +92,7 @@ __all__ = (
     "HookScope",
     "Host",
     "HostGpu",
+    "HostNumaNode",
     "HostStatus",
     "Hypervisor",
     "ImportToPoolRequest",

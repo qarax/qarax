@@ -1,6 +1,7 @@
 pub mod boot_sources;
 pub mod events;
 pub mod host_gpus;
+pub mod host_numa;
 pub mod hosts;
 pub mod instance_types;
 pub mod jobs;

@@ -13,14 +13,16 @@ use tracing::{error, info, instrument, warn};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+use common::cpu_list::expand_cpu_list;
+
 use crate::{
     App,
     grpc_client::{
         CreateVmRequest, NodeClient, net_configs_from_db,
-        node::{DiskConfig, FsConfig, NetConfig, VhostMode},
+        node::{CpuPinning, DiskConfig, FsConfig, NetConfig, NumaPlacement, VhostMode},
     },
     model::{
-        boot_sources, host_gpus, hosts,
+        boot_sources, host_gpus, host_numa, hosts,
         hosts::Host,
         jobs::{self, JobType, NewJob},
         lifecycle_hooks,
@@ -276,6 +278,14 @@ pub(crate) async fn create_vm_internal(env: &App, vm: ResolvedNewVm) -> Result<U
     let host = pick_host(env, vm.memory_size, accel_config.as_ref()).await?;
     if let Some(root_disk_object_id) = vm.root_disk_object_id {
         validate_root_disk_for_host(env, host.id, root_disk_object_id).await?;
+    }
+
+    // Merge numa_config into vm.config so it's available at start time.
+    let mut vm = vm;
+    if let Some(nc) = vm.numa_config.clone()
+        && let serde_json::Value::Object(map) = &mut vm.config
+    {
+        map.insert("numa_config".to_string(), nc);
     }
 
     let mut tx = env.pool().begin().await?;
@@ -1819,6 +1829,9 @@ async fn build_create_vm_request(env: &App, vm: &Vm) -> Result<CreateVmRequest> 
         })
         .collect();
 
+    // Compute NUMA placement if applicable
+    let numa_placement = compute_numa_placement(env, vm, &allocated_gpus).await;
+
     Ok(CreateVmRequest {
         vm_id,
         boot_vcpus: vm.boot_vcpus,
@@ -1838,6 +1851,98 @@ async fn build_create_vm_request(env: &App, vm: &Vm) -> Result<CreateVmRequest> 
         cloud_init_meta_data,
         cloud_init_network_config: vm.cloud_init_network_config.clone(),
         devices,
+        numa_placement,
+    })
+}
+
+/// Compute NUMA placement for a VM at start time.
+///
+/// Priority:
+/// 1. GPU-local NUMA: if the VM has allocated GPUs with known NUMA nodes, pin to those nodes.
+/// 2. Explicit NUMA: if `numa_config.numa_node` is set in `vm.config`, pin to that node.
+/// 3. None: no NUMA pinning.
+async fn compute_numa_placement(
+    env: &App,
+    vm: &Vm,
+    allocated_gpus: &[host_gpus::HostGpu],
+) -> Option<NumaPlacement> {
+    let host_id = vm.host_id?;
+
+    // Determine which NUMA node(s) to target
+    let target_node_ids: Vec<i32> = if !allocated_gpus.is_empty() {
+        // Collect distinct NUMA nodes from the allocated GPUs (excluding -1 = unknown)
+        let mut node_ids: Vec<i32> = allocated_gpus
+            .iter()
+            .map(|g| g.numa_node)
+            .filter(|&n| n >= 0)
+            .collect();
+        node_ids.sort_unstable();
+        node_ids.dedup();
+        node_ids
+    } else {
+        // Check for explicit numa_config stored in vm.config at creation time
+        let numa_cfg = vm
+            .config
+            .get("numa_config")
+            .and_then(host_gpus::NumaConfig::from_value);
+        if let Some(cfg) = numa_cfg {
+            cfg.numa_node.map(|n| vec![n]).unwrap_or_default()
+        } else {
+            vec![]
+        }
+    };
+
+    if target_node_ids.is_empty() {
+        return None;
+    }
+
+    // Load the NUMA nodes for this host from DB
+    let host_nodes = match host_numa::list_by_host(env.pool(), host_id).await {
+        Ok(nodes) => nodes,
+        Err(e) => {
+            warn!(
+                vm_id = %vm.id,
+                "Failed to load NUMA topology for host {}: {}",
+                host_id, e
+            );
+            return None;
+        }
+    };
+
+    if host_nodes.is_empty() {
+        return None;
+    }
+
+    // Collect all host CPUs belonging to the target NUMA nodes
+    let host_cpus: Vec<i32> = host_nodes
+        .iter()
+        .filter(|n| target_node_ids.contains(&n.node_id))
+        .flat_map(|n| expand_cpu_list(&n.cpu_list))
+        .collect();
+
+    if host_cpus.is_empty() {
+        return None;
+    }
+
+    // Build per-vCPU pinning: all vCPUs share the same host CPU set
+    let cpu_pinning: Vec<CpuPinning> = (0..vm.boot_vcpus)
+        .map(|vcpu| CpuPinning {
+            vcpu,
+            host_cpus: host_cpus.clone(),
+        })
+        .collect();
+
+    // Memory zone IDs — one per NUMA node
+    let memory_zone_ids: Vec<String> = target_node_ids
+        .iter()
+        .enumerate()
+        .map(|(i, _)| format!("zone{}", i))
+        .collect();
+
+    Some(NumaPlacement {
+        host_numa_node_ids: target_node_ids,
+        cpu_pinning,
+        memory_zone_ids,
     })
 }
 
@@ -2519,6 +2624,9 @@ pub async fn migrate(
                 }
             }),
             devices: create_req.devices,
+            // NUMA placement is not carried across migration — the destination node
+            // will handle its own NUMA topology.
+            numa_placement: None,
         };
 
         // Step 1: Prepare the destination node.

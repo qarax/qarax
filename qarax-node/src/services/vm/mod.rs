@@ -11,12 +11,13 @@ use crate::rpc::node::{
     AttachNetworkRequest, AttachNetworkResponse, AttachStoragePoolRequest,
     AttachStoragePoolResponse, ConsoleInput, ConsoleLogResponse, ConsoleOutput,
     ConsolePtyPathResponse, DetachNetworkRequest, DetachNetworkResponse, DetachStoragePoolRequest,
-    DeviceCounters, GpuInfo, ImportOverlayBdRequest, ImportOverlayBdResponse, NodeInfo,
+    DeviceCounters, GpuInfo, ImportOverlayBdRequest, ImportOverlayBdResponse, NodeInfo, NumaNode,
     OciImageRequest, OciImageResponse, ReceiveMigrationRequest, ReceiveMigrationResponse,
     RemoveDeviceRequest, ResizeVmRequest, RestoreVmRequest, SendMigrationRequest,
     SnapshotVmRequest, StoragePoolKind, VmConfig, VmCounters, VmId, VmList, VmState,
     vm_service_server::VmService,
 };
+use common::cpu_list::expand_cpu_list;
 
 /// Implementation of VmService using Cloud Hypervisor
 #[derive(Clone)]
@@ -592,6 +593,7 @@ impl VmService for VmServiceImpl {
         let (disk_total_bytes, disk_available_bytes) = disk_usage(self.manager.runtime_dir());
 
         let gpus = discover_gpus().await;
+        let numa_nodes = discover_numa_topology("/sys/devices/system/node").await;
 
         Ok(Response::new(NodeInfo {
             hostname,
@@ -607,6 +609,7 @@ impl VmService for VmServiceImpl {
             // Used in e2e tests to simulate deploying a different version.
             node_version: std::env::var("QARAX_NODE_VERSION")
                 .unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_string()),
+            numa_nodes,
         }))
     }
 
@@ -1093,16 +1096,101 @@ async fn discover_gpus() -> Vec<GpuInfo> {
         // Estimate VRAM from BAR sizes in the resource file
         let vram_bytes = estimate_vram(&dev_path).await;
 
+        // Read NUMA node affinity from sysfs (-1 if not available or unknown)
+        let numa_node = tokio::fs::read_to_string(dev_path.join("numa_node"))
+            .await
+            .ok()
+            .and_then(|s| s.trim().parse::<i32>().ok())
+            .unwrap_or(-1);
+
         gpus.push(GpuInfo {
             pci_address,
             model,
             vendor,
             vram_bytes,
             iommu_group,
+            numa_node,
         });
     }
 
     gpus
+}
+
+/// Discover NUMA topology by reading sysfs. `base_path` should be "/sys/devices/system/node"
+/// in production; it is parameterised for unit testing with a mock directory.
+pub(crate) async fn discover_numa_topology(base_path: &str) -> Vec<NumaNode> {
+    let base = std::path::Path::new(base_path);
+    let mut entries = match tokio::fs::read_dir(base).await {
+        Ok(e) => e,
+        Err(_) => return vec![],
+    };
+
+    let mut nodes = Vec::new();
+
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+
+        // Only process directories named "nodeN"
+        let node_id: i32 = match name_str.strip_prefix("node") {
+            Some(rest) => match rest.parse() {
+                Ok(n) => n,
+                Err(_) => continue,
+            },
+            None => continue,
+        };
+
+        let node_path = entry.path();
+
+        // Read CPU list (e.g. "0-11" or "0-5,12-17")
+        let cpu_list = tokio::fs::read_to_string(node_path.join("cpulist"))
+            .await
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+
+        let cpus = expand_cpu_list(&cpu_list);
+
+        // Parse MemTotal from meminfo
+        let memory_bytes = parse_node_meminfo(&node_path).await;
+
+        // Parse distance list (space-separated integers)
+        let distances = tokio::fs::read_to_string(node_path.join("distance"))
+            .await
+            .unwrap_or_default()
+            .split_whitespace()
+            .filter_map(|s| s.parse::<i32>().ok())
+            .collect();
+
+        nodes.push(NumaNode {
+            id: node_id,
+            cpus,
+            memory_bytes: memory_bytes.unwrap_or(0),
+            distances,
+        });
+    }
+
+    nodes.sort_by_key(|n| n.id);
+    nodes
+}
+
+/// Parse MemTotal from a NUMA node's meminfo file.
+async fn parse_node_meminfo(node_path: &std::path::Path) -> Option<i64> {
+    let content = tokio::fs::read_to_string(node_path.join("meminfo"))
+        .await
+        .ok()?;
+    for line in content.lines() {
+        // Format: "Node 0 MemTotal:       32505856 kB"
+        if line.contains("MemTotal:") {
+            let kb = line
+                .split_whitespace()
+                .rev()
+                .nth(1)
+                .and_then(|s| s.parse::<i64>().ok())?;
+            return Some(kb * 1024);
+        }
+    }
+    None
 }
 
 /// Estimate GPU VRAM by summing large BARs from the PCI resource file.
@@ -1198,5 +1286,84 @@ fn map_manager_error(e: crate::cloud_hypervisor::VmManagerError) -> Status {
             Status::internal(format!("Migration error: {}", msg))
         }
         VmManagerError::StorageError(msg) => Status::internal(format!("Storage error: {}", msg)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn make_numa_dir(dir: &TempDir, node_id: u32, cpulist: &str, mem_kb: u64, distances: &str) {
+        let node_dir = dir.path().join(format!("node{}", node_id));
+        std::fs::create_dir(&node_dir).unwrap();
+        std::fs::write(node_dir.join("cpulist"), cpulist).unwrap();
+        let meminfo = format!("Node {} MemTotal:       {} kB\n", node_id, mem_kb);
+        std::fs::write(node_dir.join("meminfo"), meminfo).unwrap();
+        std::fs::write(node_dir.join("distance"), distances).unwrap();
+    }
+
+    #[tokio::test]
+    async fn discover_numa_topology_single_node() {
+        let dir = TempDir::new().unwrap();
+        make_numa_dir(&dir, 0, "0-11", 32505856, "10");
+
+        let nodes = discover_numa_topology(dir.path().to_str().unwrap()).await;
+
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].id, 0);
+        assert_eq!(nodes[0].cpus, (0..=11).collect::<Vec<_>>());
+        assert_eq!(nodes[0].memory_bytes, 32505856 * 1024);
+        assert_eq!(nodes[0].distances, vec![10]);
+    }
+
+    #[tokio::test]
+    async fn discover_numa_topology_two_nodes() {
+        let dir = TempDir::new().unwrap();
+        make_numa_dir(&dir, 0, "0-5", 16384000, "10 20");
+        make_numa_dir(&dir, 1, "6-11", 16384000, "20 10");
+        // Add a non-node directory that should be ignored
+        std::fs::create_dir(dir.path().join("huge")).unwrap();
+
+        let nodes = discover_numa_topology(dir.path().to_str().unwrap()).await;
+
+        assert_eq!(nodes.len(), 2);
+        assert_eq!(nodes[0].id, 0);
+        assert_eq!(nodes[0].cpus, (0..=5).collect::<Vec<_>>());
+        assert_eq!(nodes[1].id, 1);
+        assert_eq!(nodes[1].cpus, (6..=11).collect::<Vec<_>>());
+    }
+
+    #[tokio::test]
+    async fn discover_numa_topology_empty_dir() {
+        let dir = TempDir::new().unwrap();
+        let nodes = discover_numa_topology(dir.path().to_str().unwrap()).await;
+        assert!(nodes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn discover_numa_topology_missing_dir() {
+        let nodes = discover_numa_topology("/nonexistent/path").await;
+        assert!(nodes.is_empty());
+    }
+
+    #[test]
+    fn expand_cpu_list_range() {
+        assert_eq!(expand_cpu_list("0-3"), vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn expand_cpu_list_mixed() {
+        assert_eq!(expand_cpu_list("0-2,5,8-9"), vec![0, 1, 2, 5, 8, 9]);
+    }
+
+    #[test]
+    fn expand_cpu_list_single() {
+        assert_eq!(expand_cpu_list("7"), vec![7]);
+    }
+
+    #[test]
+    fn expand_cpu_list_empty() {
+        assert!(expand_cpu_list("").is_empty());
     }
 }

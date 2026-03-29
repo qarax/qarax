@@ -9,6 +9,7 @@ use tracing::warn;
 
 use crate::grpc_client::{NodeClient, node::NodeInfo};
 use crate::model::host_gpus::{self, GpuDiscovery};
+use crate::model::host_numa::{self, NumaNodeDiscovery};
 use crate::model::hosts::{self, Host, HostStatus};
 
 async fn handle_probe_result(pool: &PgPool, host: &Host, node_info: Result<NodeInfo>) {
@@ -57,11 +58,34 @@ async fn handle_probe_result(pool: &PgPool, host: &Host, node_info: Result<NodeI
                     vendor: g.vendor.clone(),
                     vram_bytes: g.vram_bytes,
                     iommu_group: g.iommu_group,
+                    numa_node: g.numa_node,
                 })
                 .collect();
             if let Err(e) = host_gpus::sync_gpus(pool, host.id, &gpu_discoveries).await {
                 warn!(
                     "Resource monitor: failed to sync GPUs for host {}: {}",
+                    host.name, e
+                );
+            }
+
+            // Sync NUMA topology
+            let numa_discoveries: Vec<NumaNodeDiscovery> = info
+                .numa_nodes
+                .iter()
+                .map(|n| NumaNodeDiscovery {
+                    node_id: n.id,
+                    cpu_list: host_numa::expand_cpu_list_to_string(&n.cpus),
+                    memory_bytes: if n.memory_bytes > 0 {
+                        Some(n.memory_bytes)
+                    } else {
+                        None
+                    },
+                    distances: n.distances.clone(),
+                })
+                .collect();
+            if let Err(e) = host_numa::sync_numa_nodes(pool, host.id, &numa_discoveries).await {
+                warn!(
+                    "Resource monitor: failed to sync NUMA topology for host {}: {}",
                     host.name, e
                 );
             }
@@ -244,6 +268,7 @@ mod tests {
                 disk_total_bytes: 100 * 1024 * 1024,
                 disk_available_bytes: 60 * 1024 * 1024,
                 gpus: vec![],
+                numa_nodes: vec![],
             }),
         )
         .await;

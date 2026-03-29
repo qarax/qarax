@@ -68,3 +68,4 @@ dhat = { version = "0.3", optional = true }
 [dev-dependencies]
 tokio-stream = { version = "0.1.14", features = ["net"] }
 once_cell = "1.18.0"
+tempfile = "3"

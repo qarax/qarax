@@ -64,6 +64,7 @@ pub async fn create(
         network_id: req.network_id,
         networks: None,
         accelerator_config: None,
+        numa_config: None,
         config: serde_json::json!({}),
     };
 

@@ -20,6 +20,7 @@ class HostGpu:
         host_id (UUID):
         id (UUID):
         iommu_group (int):
+        numa_node (int):
         pci_address (str):
         discovered_at (datetime.datetime | None | Unset):
         model (None | str | Unset):
@@ -32,6 +33,7 @@ class HostGpu:
     host_id: UUID
     id: UUID
     iommu_group: int
+    numa_node: int
     pci_address: str
     discovered_at: datetime.datetime | None | Unset = UNSET
     model: None | str | Unset = UNSET
@@ -47,6 +49,8 @@ class HostGpu:
         id = str(self.id)
 
         iommu_group = self.iommu_group
+
+        numa_node = self.numa_node
 
         pci_address = self.pci_address
 
@@ -99,6 +103,7 @@ class HostGpu:
                 "host_id": host_id,
                 "id": id,
                 "iommu_group": iommu_group,
+                "numa_node": numa_node,
                 "pci_address": pci_address,
             }
         )
@@ -125,6 +130,8 @@ class HostGpu:
         id = UUID(d.pop("id"))
 
         iommu_group = d.pop("iommu_group")
+
+        numa_node = d.pop("numa_node")
 
         pci_address = d.pop("pci_address")
 
@@ -210,6 +217,7 @@ class HostGpu:
             host_id=host_id,
             id=id,
             iommu_group=iommu_group,
+            numa_node=numa_node,
             pci_address=pci_address,
             discovered_at=discovered_at,
             model=model,

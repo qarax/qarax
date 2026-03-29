@@ -19,12 +19,15 @@ class AcceleratorConfig:
         gpu_model (None | str | Unset):
         gpu_vendor (None | str | Unset):
         min_vram_bytes (int | None | Unset):
+        prefer_local_numa (bool | Unset): When true (default), pin the VM to the NUMA node(s) local to its allocated
+            GPU(s).
     """
 
     gpu_count: int
     gpu_model: None | str | Unset = UNSET
     gpu_vendor: None | str | Unset = UNSET
     min_vram_bytes: int | None | Unset = UNSET
+    prefer_local_numa: bool | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -48,6 +51,8 @@ class AcceleratorConfig:
         else:
             min_vram_bytes = self.min_vram_bytes
 
+        prefer_local_numa = self.prefer_local_numa
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -61,6 +66,8 @@ class AcceleratorConfig:
             field_dict["gpu_vendor"] = gpu_vendor
         if min_vram_bytes is not UNSET:
             field_dict["min_vram_bytes"] = min_vram_bytes
+        if prefer_local_numa is not UNSET:
+            field_dict["prefer_local_numa"] = prefer_local_numa
 
         return field_dict
 
@@ -96,11 +103,14 @@ class AcceleratorConfig:
 
         min_vram_bytes = _parse_min_vram_bytes(d.pop("min_vram_bytes", UNSET))
 
+        prefer_local_numa = d.pop("prefer_local_numa", UNSET)
+
         accelerator_config = cls(
             gpu_count=gpu_count,
             gpu_model=gpu_model,
             gpu_vendor=gpu_vendor,
             min_vram_bytes=min_vram_bytes,
+            prefer_local_numa=prefer_local_numa,
         )
 
         accelerator_config.additional_properties = d

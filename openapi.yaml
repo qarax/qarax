@@ -397,6 +397,32 @@ paths:
           description: Host not found
         '500':
           description: Internal server error
+  /hosts/{host_id}/numa:
+    get:
+      tags:
+      - hosts
+      operationId: list_numa_nodes
+      parameters:
+      - name: host_id
+        in: path
+        description: Host unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: List NUMA nodes discovered on the host
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/HostNumaNode'
+        '404':
+          description: Host not found
+        '500':
+          description: Internal server error
   /hosts/{host_id}/upgrade:
     post:
       tags:
@@ -1860,6 +1886,9 @@ components:
           - integer
           - 'null'
           format: int64
+        prefer_local_numa:
+          type: boolean
+          description: When true (default), pin the VM to the NUMA node(s) local to its allocated GPU(s).
     AttachDiskRequest:
       type: object
       required:
@@ -2192,6 +2221,7 @@ components:
       - host_id
       - pci_address
       - iommu_group
+      - numa_node
       properties:
         discovered_at:
           type:
@@ -2211,6 +2241,9 @@ components:
           type:
           - string
           - 'null'
+        numa_node:
+          type: integer
+          format: int32
         pci_address:
           type: string
         updated_at:
@@ -2232,6 +2265,41 @@ components:
           - integer
           - 'null'
           format: int64
+    HostNumaNode:
+      type: object
+      required:
+      - id
+      - host_id
+      - node_id
+      - cpu_list
+      - distances
+      properties:
+        cpu_list:
+          type: string
+        distances:
+          type: array
+          items:
+            type: integer
+            format: int32
+        host_id:
+          type: string
+          format: uuid
+        id:
+          type: string
+          format: uuid
+        memory_bytes:
+          type:
+          - integer
+          - 'null'
+          format: int64
+        node_id:
+          type: integer
+          format: int32
+        updated_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
     HostStatus:
       type: string
       enum:
@@ -2333,6 +2401,7 @@ components:
           - 'null'
         name:
           type: string
+        numa_config: {}
     InterfaceType:
       type: string
       enum:
@@ -2688,6 +2757,7 @@ components:
           - 'null'
         name:
           type: string
+        numa_config: {}
     NewLifecycleHook:
       type: object
       required:
@@ -2940,6 +3010,11 @@ components:
           items:
             $ref: '#/components/schemas/NewVmNetwork'
           description: Optional network interfaces to attach at create time (passed to qarax-node).
+        numa_config:
+          description: |-
+            NUMA configuration. When set, the VM is pinned to the specified NUMA node.
+            If accelerator_config has prefer_local_numa=true (the default), GPU-local NUMA
+            is used instead and this field is ignored.
         root_disk_object_id:
           type:
           - string

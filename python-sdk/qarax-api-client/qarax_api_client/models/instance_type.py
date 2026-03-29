@@ -31,6 +31,7 @@ class InstanceType:
         memory_prefault (bool | None | Unset):
         memory_shared (bool | None | Unset):
         memory_thp (bool | None | Unset):
+        numa_config (Any | Unset):
     """
 
     accelerator_config: Any
@@ -49,6 +50,7 @@ class InstanceType:
     memory_prefault: bool | None | Unset = UNSET
     memory_shared: bool | None | Unset = UNSET
     memory_thp: bool | None | Unset = UNSET
+    numa_config: Any | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -120,6 +122,8 @@ class InstanceType:
         else:
             memory_thp = self.memory_thp
 
+        numa_config = self.numa_config
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -152,6 +156,8 @@ class InstanceType:
             field_dict["memory_shared"] = memory_shared
         if memory_thp is not UNSET:
             field_dict["memory_thp"] = memory_thp
+        if numa_config is not UNSET:
+            field_dict["numa_config"] = numa_config
 
         return field_dict
 
@@ -253,6 +259,8 @@ class InstanceType:
 
         memory_thp = _parse_memory_thp(d.pop("memory_thp", UNSET))
 
+        numa_config = d.pop("numa_config", UNSET)
+
         instance_type = cls(
             accelerator_config=accelerator_config,
             boot_vcpus=boot_vcpus,
@@ -270,6 +278,7 @@ class InstanceType:
             memory_prefault=memory_prefault,
             memory_shared=memory_shared,
             memory_thp=memory_thp,
+            numa_config=numa_config,
         )
 
         instance_type.additional_properties = d

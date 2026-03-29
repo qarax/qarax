@@ -66,6 +66,7 @@ pub struct VmListQuery {
         host::handler::init,
         host::handler::node_upgrade,
         host::handler::list_gpus,
+        host::handler::list_numa_nodes,
         instance_type::handler::list,
         instance_type::handler::get,
         instance_type::handler::create,
@@ -142,6 +143,7 @@ pub struct VmListQuery {
             crate::model::hosts::HostStatus,
             crate::model::host_gpus::HostGpu,
             crate::model::host_gpus::AcceleratorConfig,
+            crate::model::host_numa::HostNumaNode,
             crate::model::instance_types::InstanceType,
             crate::model::instance_types::NewInstanceType,
             crate::model::vms::Vm,
@@ -316,6 +318,7 @@ fn hosts() -> Router {
             post(host::handler::node_upgrade),
         )
         .route("/hosts/{host_id}/gpus", get(host::handler::list_gpus))
+        .route("/hosts/{host_id}/numa", get(host::handler::list_numa_nodes))
 }
 
 fn vms() -> Router {

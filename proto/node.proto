@@ -57,6 +57,9 @@ message VmConfig {
 
   // VFIO device passthrough (GPU, etc.)
   repeated VfioDeviceConfig devices = 13;
+
+  // NUMA placement (optional; set by control plane for GPU-local or explicit NUMA pinning)
+  optional NumaPlacement numa_placement = 14;
 }
 
 // ============================================================================
@@ -311,6 +314,8 @@ message NodeInfo {
   repeated GpuInfo gpus = 10;
   // Version of the qarax-node binary
   string node_version = 11;
+  // NUMA topology of the host
+  repeated NumaNode numa_nodes = 12;
 }
 
 // ============================================================================
@@ -330,6 +335,29 @@ message GpuInfo {
   string vendor = 3;
   int64 vram_bytes = 4;
   int32 iommu_group = 5;
+  int32 numa_node = 6;            // NUMA node this GPU is local to (-1 if unknown)
+}
+
+// ============================================================================
+// NUMA Topology
+// ============================================================================
+
+message NumaNode {
+  int32 id = 1;
+  repeated int32 cpus = 2;        // host CPU IDs belonging to this NUMA node
+  int64 memory_bytes = 3;         // total memory on this NUMA node
+  repeated int32 distances = 4;   // SLIT row: distances[i] = distance to node i
+}
+
+message CpuPinning {
+  int32 vcpu = 1;
+  repeated int32 host_cpus = 2;   // host CPU IDs this vCPU may run on
+}
+
+message NumaPlacement {
+  repeated int32 host_numa_node_ids = 1;   // host NUMA nodes this VM is pinned to
+  repeated CpuPinning cpu_pinning = 2;     // per-vCPU host CPU affinity
+  repeated string memory_zone_ids = 3;     // CH memory zone IDs (e.g. "zone0")
 }
 
 // ============================================================================

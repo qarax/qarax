@@ -12,6 +12,7 @@ pub struct HostGpu {
     pub vendor: Option<String>,
     pub vram_bytes: Option<i64>,
     pub iommu_group: i32,
+    pub numa_node: i32,
     pub vm_id: Option<Uuid>,
     pub discovered_at: Option<chrono::DateTime<chrono::Utc>>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -24,6 +25,7 @@ pub struct GpuDiscovery {
     pub vendor: String,
     pub vram_bytes: i64,
     pub iommu_group: i32,
+    pub numa_node: i32,
 }
 
 /// Typed accelerator_config from instance types / VM requests
@@ -36,6 +38,30 @@ pub struct AcceleratorConfig {
     pub gpu_model: Option<String>,
     #[serde(default)]
     pub min_vram_bytes: Option<i64>,
+    /// When true (default), pin the VM to the NUMA node(s) local to its allocated GPU(s).
+    #[serde(default = "default_true")]
+    pub prefer_local_numa: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// Typed numa_config from instance types / VM requests
+#[derive(Serialize, Deserialize, Debug, Clone, Default, ToSchema)]
+pub struct NumaConfig {
+    /// Explicitly request a specific host NUMA node (0-indexed). Overrides GPU-local NUMA.
+    #[serde(default)]
+    pub numa_node: Option<i32>,
+}
+
+impl NumaConfig {
+    pub fn from_value(value: &serde_json::Value) -> Option<Self> {
+        if value.is_null() || value.as_object().map(|o| o.is_empty()).unwrap_or(true) {
+            return None;
+        }
+        serde_json::from_value(value.clone()).ok()
+    }
 }
 
 impl AcceleratorConfig {
@@ -50,7 +76,7 @@ impl AcceleratorConfig {
 /// List all GPUs on a host.
 pub async fn list_by_host(pool: &PgPool, host_id: Uuid) -> Result<Vec<HostGpu>, sqlx::Error> {
     sqlx::query_as::<_, HostGpu>(
-        "SELECT id, host_id, pci_address, model, vendor, vram_bytes, iommu_group, vm_id, discovered_at, updated_at FROM host_gpus WHERE host_id = $1 ORDER BY pci_address",
+        "SELECT id, host_id, pci_address, model, vendor, vram_bytes, iommu_group, numa_node, vm_id, discovered_at, updated_at FROM host_gpus WHERE host_id = $1 ORDER BY pci_address",
     )
     .bind(host_id)
     .fetch_all(pool)
@@ -60,7 +86,7 @@ pub async fn list_by_host(pool: &PgPool, host_id: Uuid) -> Result<Vec<HostGpu>, 
 /// List all GPUs allocated to a VM.
 pub async fn list_by_vm(pool: &PgPool, vm_id: Uuid) -> Result<Vec<HostGpu>, sqlx::Error> {
     sqlx::query_as::<_, HostGpu>(
-        "SELECT id, host_id, pci_address, model, vendor, vram_bytes, iommu_group, vm_id, discovered_at, updated_at FROM host_gpus WHERE vm_id = $1 ORDER BY pci_address",
+        "SELECT id, host_id, pci_address, model, vendor, vram_bytes, iommu_group, numa_node, vm_id, discovered_at, updated_at FROM host_gpus WHERE vm_id = $1 ORDER BY pci_address",
     )
     .bind(vm_id)
     .fetch_all(pool)
@@ -78,13 +104,14 @@ pub async fn sync_gpus(
     for gpu in gpus {
         sqlx::query(
             r#"
-INSERT INTO host_gpus (host_id, pci_address, model, vendor, vram_bytes, iommu_group, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, NOW())
+INSERT INTO host_gpus (host_id, pci_address, model, vendor, vram_bytes, iommu_group, numa_node, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
 ON CONFLICT (host_id, pci_address)
 DO UPDATE SET model = EXCLUDED.model,
               vendor = EXCLUDED.vendor,
               vram_bytes = EXCLUDED.vram_bytes,
               iommu_group = EXCLUDED.iommu_group,
+              numa_node = EXCLUDED.numa_node,
               updated_at = NOW()
             "#,
         )
@@ -94,6 +121,7 @@ DO UPDATE SET model = EXCLUDED.model,
         .bind(&gpu.vendor)
         .bind(gpu.vram_bytes)
         .bind(gpu.iommu_group)
+        .bind(gpu.numa_node)
         .execute(tx.as_mut())
         .await?;
     }
@@ -143,7 +171,7 @@ WHERE id IN (
     FOR UPDATE SKIP LOCKED
     LIMIT $6
 )
-RETURNING id, host_id, pci_address, model, vendor, vram_bytes, iommu_group, vm_id, discovered_at, updated_at
+RETURNING id, host_id, pci_address, model, vendor, vram_bytes, iommu_group, numa_node, vm_id, discovered_at, updated_at
         "#,
     )
     .bind(vm_id)

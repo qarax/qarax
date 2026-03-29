@@ -277,6 +277,11 @@ pub struct NewVm {
     /// devices are attached to the VM.
     pub accelerator_config: Option<serde_json::Value>,
 
+    /// NUMA configuration. When set, the VM is pinned to the specified NUMA node.
+    /// If accelerator_config has prefer_local_numa=true (the default), GPU-local NUMA
+    /// is used instead and this field is ignored.
+    pub numa_config: Option<serde_json::Value>,
+
     #[serde(default = "default_vm_config")]
     pub config: serde_json::Value,
 }
@@ -309,6 +314,7 @@ pub struct ResolvedNewVm {
     pub network_id: Option<Uuid>,
     pub networks: Option<Vec<NewVmNetwork>>,
     pub accelerator_config: Option<serde_json::Value>,
+    pub numa_config: Option<serde_json::Value>,
     pub config: serde_json::Value,
 }
 
@@ -362,6 +368,7 @@ pub async fn resolve_create_request(pool: &PgPool, request: NewVm) -> Result<Res
         network_id,
         networks,
         accelerator_config,
+        numa_config,
         config,
     } = request;
 
@@ -557,6 +564,14 @@ pub async fn resolve_create_request(pool: &PgPool, request: NewVm) -> Result<Res
                 }
             })
         }),
+        numa_config: numa_config.or_else(|| {
+            instance_type
+                .as_ref()
+                .and_then(|it| it.numa_config.clone())
+                .filter(|v| !v.is_null())
+        }),
+        // NOTE: numa_config is intentionally not merged into `config` here;
+        // the handler merges it in create_vm_internal before persisting.
         config: merge_config(
             vm_template
                 .as_ref()

@@ -58,6 +58,9 @@ class NewVm:
         network_id (None | Unset | UUID): Network ID to attach the VM to (triggers IPAM allocation).
         networks (list[NewVmNetwork] | None | Unset): Optional network interfaces to attach at create time (passed to
             qarax-node).
+        numa_config (Any | Unset): NUMA configuration. When set, the VM is pinned to the specified NUMA node.
+            If accelerator_config has prefer_local_numa=true (the default), GPU-local NUMA
+            is used instead and this field is ignored.
         root_disk_object_id (None | Unset | UUID):
         tags (list[str] | None | Unset):
         vm_template_id (None | Unset | UUID):
@@ -89,6 +92,7 @@ class NewVm:
     memory_thp: bool | None | Unset = UNSET
     network_id: None | Unset | UUID = UNSET
     networks: list[NewVmNetwork] | None | Unset = UNSET
+    numa_config: Any | Unset = UNSET
     root_disk_object_id: None | Unset | UUID = UNSET
     tags: list[str] | None | Unset = UNSET
     vm_template_id: None | Unset | UUID = UNSET
@@ -251,6 +255,8 @@ class NewVm:
         else:
             networks = self.networks
 
+        numa_config = self.numa_config
+
         root_disk_object_id: None | str | Unset
         if isinstance(self.root_disk_object_id, Unset):
             root_disk_object_id = UNSET
@@ -333,6 +339,8 @@ class NewVm:
             field_dict["network_id"] = network_id
         if networks is not UNSET:
             field_dict["networks"] = networks
+        if numa_config is not UNSET:
+            field_dict["numa_config"] = numa_config
         if root_disk_object_id is not UNSET:
             field_dict["root_disk_object_id"] = root_disk_object_id
         if tags is not UNSET:
@@ -606,6 +614,8 @@ class NewVm:
 
         networks = _parse_networks(d.pop("networks", UNSET))
 
+        numa_config = d.pop("numa_config", UNSET)
+
         def _parse_root_disk_object_id(data: object) -> None | Unset | UUID:
             if data is None:
                 return data
@@ -684,6 +694,7 @@ class NewVm:
             memory_thp=memory_thp,
             network_id=network_id,
             networks=networks,
+            numa_config=numa_config,
             root_disk_object_id=root_disk_object_id,
             tags=tags,
             vm_template_id=vm_template_id,

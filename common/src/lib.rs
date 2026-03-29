@@ -1,3 +1,4 @@
+pub mod cpu_list;
 pub mod telemtry;
 
 #[cfg(feature = "otel")]

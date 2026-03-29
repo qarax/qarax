@@ -25,6 +25,7 @@ pub struct InstanceType {
     pub memory_prefault: Option<bool>,
     pub memory_thp: Option<bool>,
     pub accelerator_config: serde_json::Value,
+    pub numa_config: Option<serde_json::Value>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -45,6 +46,7 @@ struct InstanceTypeRow {
     pub memory_prefault: Option<bool>,
     pub memory_thp: Option<bool>,
     pub accelerator_config: Json<serde_json::Value>,
+    pub numa_config: Option<Json<serde_json::Value>>,
 }
 
 impl From<InstanceTypeRow> for InstanceType {
@@ -66,6 +68,7 @@ impl From<InstanceTypeRow> for InstanceType {
             memory_prefault: row.memory_prefault,
             memory_thp: row.memory_thp,
             accelerator_config: row.accelerator_config.0,
+            numa_config: row.numa_config.map(|v| v.0),
         }
     }
 }
@@ -88,6 +91,7 @@ pub struct NewInstanceType {
     pub memory_thp: Option<bool>,
     #[serde(default = "empty_json_object")]
     pub accelerator_config: serde_json::Value,
+    pub numa_config: Option<serde_json::Value>,
 }
 
 pub async fn list(
@@ -111,7 +115,8 @@ SELECT id,
        memory_hugepage_size,
        memory_prefault,
        memory_thp,
-       accelerator_config
+       accelerator_config,
+       numa_config
 FROM instance_types
 WHERE ($1::text IS NULL OR name = $1)
 ORDER BY name
@@ -142,7 +147,8 @@ SELECT id,
        memory_hugepage_size,
        memory_prefault,
        memory_thp,
-       accelerator_config
+       accelerator_config,
+       numa_config
 FROM instance_types
 WHERE id = $1
         "#,
@@ -172,7 +178,8 @@ SELECT id,
        memory_hugepage_size,
        memory_prefault,
        memory_thp,
-       accelerator_config
+       accelerator_config,
+       numa_config
 FROM instance_types
 WHERE name = $1
         "#,
@@ -191,6 +198,7 @@ pub async fn create(
     let id = Uuid::new_v4();
     let cpu_topology = new_instance_type.cpu_topology.map(Json);
     let accelerator_config = Json(new_instance_type.accelerator_config);
+    let numa_config = new_instance_type.numa_config.map(Json);
 
     sqlx::query(
         r#"
@@ -210,11 +218,12 @@ INSERT INTO instance_types (
     memory_hugepage_size,
     memory_prefault,
     memory_thp,
-    accelerator_config
+    accelerator_config,
+    numa_config
 )
 VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8,
-    $9, $10, $11, $12, $13, $14, $15, $16
+    $9, $10, $11, $12, $13, $14, $15, $16, $17
 )
         "#,
     )
@@ -234,6 +243,7 @@ VALUES (
     .bind(new_instance_type.memory_prefault)
     .bind(new_instance_type.memory_thp)
     .bind(accelerator_config)
+    .bind(numa_config)
     .execute(pool)
     .await?;
 

@@ -5,6 +5,7 @@ use crate::{
     host_deployer,
     model::{
         host_gpus::{self, HostGpu},
+        host_numa::{self, HostNumaNode},
         hosts::{self, DeployHostRequest, Host, HostStatus, NewHost, UpdateHostRequest},
         storage_pools,
     },
@@ -346,6 +347,34 @@ pub async fn list_gpus(
     let gpus = host_gpus::list_by_host(env.pool(), host_id).await?;
     Ok(ApiResponse {
         data: gpus,
+        code: StatusCode::OK,
+    })
+}
+
+#[utoipa::path(
+    get,
+    path = "/hosts/{host_id}/numa",
+    params(
+        ("host_id" = uuid::Uuid, Path, description = "Host unique identifier")
+    ),
+    responses(
+        (status = 200, description = "List NUMA nodes discovered on the host", body = Vec<HostNumaNode>),
+        (status = 404, description = "Host not found"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "hosts"
+)]
+#[instrument(skip(env))]
+pub async fn list_numa_nodes(
+    Extension(env): Extension<App>,
+    Path(host_id): Path<Uuid>,
+) -> Result<ApiResponse<Vec<HostNumaNode>>> {
+    hosts::require_by_id(env.pool(), host_id).await?;
+    let nodes = host_numa::list_by_host(env.pool(), host_id)
+        .await
+        .map_err(crate::errors::Error::Sqlx)?;
+    Ok(ApiResponse {
+        data: nodes,
         code: StatusCode::OK,
     })
 }

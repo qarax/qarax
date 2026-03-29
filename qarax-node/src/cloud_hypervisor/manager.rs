@@ -17,8 +17,8 @@ use bytes::Bytes;
 use cloud_hypervisor_sdk::client::TokioIo;
 use cloud_hypervisor_sdk::machine::{Machine, MachineConfig, VM};
 use cloud_hypervisor_sdk::models::{
-    self, CpusConfig, FsConfig, MemoryConfig, PayloadConfig, VmConfig,
-    console_config::Mode as ConsoleMode, disk_config::ImageType,
+    self, CpuAffinity, CpusConfig, FsConfig, MemoryConfig, MemoryZoneConfig, NumaConfig,
+    PayloadConfig, VmConfig, console_config::Mode as ConsoleMode, disk_config::ImageType,
 };
 use futures::stream::StreamExt;
 use http_body_util::{Empty, Full, combinators::BoxBody};
@@ -34,10 +34,10 @@ use crate::rpc::node::{
     ConsoleConfig as ProtoConsoleConfig, ConsoleMode as ProtoConsoleMode,
     CpuTopology as ProtoCpuTopology, CpusConfig as ProtoCpusConfig, DiskConfig as ProtoDiskConfig,
     FsConfig as ProtoFsConfig, MemoryConfig as ProtoMemoryConfig, NetConfig as ProtoNetConfig,
-    PayloadConfig as ProtoPayloadConfig, RateLimiterConfig as ProtoRateLimiterConfig,
-    RngConfig as ProtoRngConfig, TokenBucket as ProtoTokenBucket,
-    VfioDeviceConfig as ProtoVfioDeviceConfig, VhostMode as ProtoVhostMode,
-    VmConfig as ProtoVmConfig, VmState, VmStatus,
+    NumaPlacement as ProtoNumaPlacement, PayloadConfig as ProtoPayloadConfig,
+    RateLimiterConfig as ProtoRateLimiterConfig, RngConfig as ProtoRngConfig,
+    TokenBucket as ProtoTokenBucket, VfioDeviceConfig as ProtoVfioDeviceConfig,
+    VhostMode as ProtoVhostMode, VmConfig as ProtoVmConfig, VmState, VmStatus,
 };
 use crate::storage::StorageBackendRegistry;
 
@@ -1790,7 +1790,120 @@ impl VmManager {
             );
         }
 
+        // NUMA placement (optional)
+        if let Some(placement) = &config.numa_placement {
+            Self::apply_numa_placement(&mut sdk_config, placement);
+        }
+
         Ok(sdk_config)
+    }
+
+    /// Apply NUMA placement constraints to the SDK VmConfig.
+    ///
+    /// Sets up:
+    /// - `cpus.affinity`: per-vCPU host CPU pinning
+    /// - `memory.zones`: one zone per NUMA node pinned to the correct host node
+    /// - `numa`: single guest NUMA node 0 owning all vCPUs and memory zones
+    fn apply_numa_placement(sdk_config: &mut VmConfig, placement: &ProtoNumaPlacement) {
+        // CPU affinity
+        if !placement.cpu_pinning.is_empty() {
+            let cpus = sdk_config.cpus.get_or_insert_with(|| {
+                Box::new(CpusConfig {
+                    boot_vcpus: 1,
+                    max_vcpus: 1,
+                    topology: None,
+                    kvm_hyperv: None,
+                    max_phys_bits: None,
+                    affinity: None,
+                    features: None,
+                    nested: None,
+                })
+            });
+            cpus.affinity = Some(
+                placement
+                    .cpu_pinning
+                    .iter()
+                    .map(|p| CpuAffinity {
+                        vcpu: p.vcpu,
+                        host_cpus: p.host_cpus.clone(),
+                    })
+                    .collect(),
+            );
+        }
+
+        // Memory zones pinned to the NUMA node(s)
+        if !placement.host_numa_node_ids.is_empty() {
+            let memory = sdk_config.memory.get_or_insert_with(|| {
+                Box::new(MemoryConfig {
+                    size: 0,
+                    hotplug_size: None,
+                    hotplugged_size: None,
+                    mergeable: None,
+                    hotplug_method: None,
+                    shared: None,
+                    hugepages: None,
+                    hugepage_size: None,
+                    prefault: None,
+                    thp: None,
+                    zones: None,
+                })
+            });
+
+            let total_size = memory.size;
+            let n = placement.host_numa_node_ids.len() as i64;
+            let (zone_size, remainder) = if n > 0 {
+                (total_size / n, total_size % n)
+            } else {
+                (total_size, 0)
+            };
+
+            // Preserve memory flags from base config
+            let shared = memory.shared;
+            let hugepages = memory.hugepages;
+            let hugepage_size = memory.hugepage_size;
+
+            let zones: Vec<MemoryZoneConfig> = placement
+                .host_numa_node_ids
+                .iter()
+                .enumerate()
+                .map(|(i, &node_id)| MemoryZoneConfig {
+                    id: format!("zone{}", i),
+                    size: if i == 0 {
+                        zone_size + remainder
+                    } else {
+                        zone_size
+                    },
+                    host_numa_node: Some(node_id),
+                    shared,
+                    hugepages,
+                    hugepage_size,
+                    ..Default::default()
+                })
+                .collect();
+
+            // When zones are used, CH expects memory.size = 0 and zones provide the total.
+            memory.size = 0;
+            memory.zones = Some(zones);
+        }
+
+        // Guest NUMA topology: advertise a single node 0 containing all vCPUs
+        if !placement.memory_zone_ids.is_empty() || !placement.cpu_pinning.is_empty() {
+            let boot_vcpus = sdk_config.cpus.as_ref().map(|c| c.boot_vcpus).unwrap_or(1);
+            let zone_ids = placement.memory_zone_ids.clone();
+
+            sdk_config.numa = Some(vec![NumaConfig {
+                guest_numa_id: 0,
+                cpus: Some((0..boot_vcpus).collect()),
+                memory_zones: if zone_ids.is_empty() {
+                    None
+                } else {
+                    Some(zone_ids)
+                },
+                distances: None,
+                pci_segments: None,
+                device_id: None,
+            }]);
+        }
     }
 
     fn proto_cpus_to_sdk(cpus: &ProtoCpusConfig) -> CpusConfig {
@@ -2265,5 +2378,154 @@ impl VmManager {
 impl Drop for VmManager {
     fn drop(&mut self) {
         info!("VmManager dropped, all VMs will be terminated");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rpc::node::{CpuPinning as ProtoCpuPinning, NumaPlacement as ProtoNumaPlacement};
+
+    fn base_vm_config(memory_size: i64, boot_vcpus: i32) -> VmConfig {
+        VmConfig {
+            cpus: Some(Box::new(CpusConfig {
+                boot_vcpus,
+                max_vcpus: boot_vcpus,
+                topology: None,
+                kvm_hyperv: None,
+                max_phys_bits: None,
+                affinity: None,
+                features: None,
+                nested: None,
+            })),
+            memory: Some(Box::new(MemoryConfig {
+                size: memory_size,
+                hotplug_size: None,
+                hotplugged_size: None,
+                mergeable: None,
+                hotplug_method: None,
+                shared: None,
+                hugepages: None,
+                hugepage_size: None,
+                prefault: None,
+                thp: None,
+                zones: None,
+            })),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn apply_numa_placement_sets_cpu_affinity() {
+        let mut config = base_vm_config(512 * 1024 * 1024, 2);
+        let placement = ProtoNumaPlacement {
+            host_numa_node_ids: vec![],
+            cpu_pinning: vec![
+                ProtoCpuPinning {
+                    vcpu: 0,
+                    host_cpus: vec![0, 1],
+                },
+                ProtoCpuPinning {
+                    vcpu: 1,
+                    host_cpus: vec![2, 3],
+                },
+            ],
+            memory_zone_ids: vec![],
+        };
+
+        VmManager::apply_numa_placement(&mut config, &placement);
+
+        let affinity = config.cpus.as_ref().unwrap().affinity.as_ref().unwrap();
+        assert_eq!(affinity.len(), 2);
+        assert_eq!(affinity[0].vcpu, 0);
+        assert_eq!(affinity[0].host_cpus, vec![0, 1]);
+        assert_eq!(affinity[1].vcpu, 1);
+        assert_eq!(affinity[1].host_cpus, vec![2, 3]);
+    }
+
+    #[test]
+    fn apply_numa_placement_creates_memory_zones() {
+        let mut config = base_vm_config(1024 * 1024 * 1024, 4);
+        let placement = ProtoNumaPlacement {
+            host_numa_node_ids: vec![0],
+            cpu_pinning: vec![],
+            memory_zone_ids: vec!["zone0".to_string()],
+        };
+
+        VmManager::apply_numa_placement(&mut config, &placement);
+
+        let memory = config.memory.as_ref().unwrap();
+        // When zones are set, size must be 0
+        assert_eq!(memory.size, 0);
+        let zones = memory.zones.as_ref().unwrap();
+        assert_eq!(zones.len(), 1);
+        assert_eq!(zones[0].id, "zone0");
+        assert_eq!(zones[0].host_numa_node, Some(0));
+    }
+
+    #[test]
+    fn apply_numa_placement_preserves_memory_remainder() {
+        let mut config = base_vm_config(1025, 4);
+        let placement = ProtoNumaPlacement {
+            host_numa_node_ids: vec![0, 1],
+            cpu_pinning: vec![],
+            memory_zone_ids: vec!["zone0".to_string(), "zone1".to_string()],
+        };
+
+        VmManager::apply_numa_placement(&mut config, &placement);
+
+        let memory = config.memory.as_ref().unwrap();
+        assert_eq!(memory.size, 0);
+        let zones = memory.zones.as_ref().unwrap();
+        assert_eq!(zones.len(), 2);
+        assert_eq!(zones[0].size, 513);
+        assert_eq!(zones[1].size, 512);
+    }
+
+    #[test]
+    fn apply_numa_placement_sets_guest_numa_topology() {
+        let mut config = base_vm_config(512 * 1024 * 1024, 2);
+        let placement = ProtoNumaPlacement {
+            host_numa_node_ids: vec![0],
+            cpu_pinning: vec![
+                ProtoCpuPinning {
+                    vcpu: 0,
+                    host_cpus: vec![0],
+                },
+                ProtoCpuPinning {
+                    vcpu: 1,
+                    host_cpus: vec![1],
+                },
+            ],
+            memory_zone_ids: vec!["zone0".to_string()],
+        };
+
+        VmManager::apply_numa_placement(&mut config, &placement);
+
+        let numa = config.numa.as_ref().unwrap();
+        assert_eq!(numa.len(), 1);
+        assert_eq!(numa[0].guest_numa_id, 0);
+        // All vCPUs (0..boot_vcpus) assigned to guest node 0
+        assert_eq!(numa[0].cpus, Some(vec![0, 1]));
+        assert_eq!(numa[0].memory_zones, Some(vec!["zone0".to_string()]));
+    }
+
+    #[test]
+    fn apply_numa_placement_empty_is_noop() {
+        let mut config = base_vm_config(512 * 1024 * 1024, 1);
+        let original_size = config.memory.as_ref().unwrap().size;
+        let placement = ProtoNumaPlacement {
+            host_numa_node_ids: vec![],
+            cpu_pinning: vec![],
+            memory_zone_ids: vec![],
+        };
+
+        VmManager::apply_numa_placement(&mut config, &placement);
+
+        // Nothing should have changed
+        assert!(config.cpus.as_ref().unwrap().affinity.is_none());
+        assert!(config.memory.as_ref().unwrap().zones.is_none());
+        assert_eq!(config.memory.as_ref().unwrap().size, original_size);
+        assert!(config.numa.is_none());
     }
 }

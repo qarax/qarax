@@ -118,6 +118,10 @@ enum VmCommand {
         /// Minimum GPU VRAM in bytes
         #[arg(long, requires = "gpu_count")]
         min_vram: Option<i64>,
+        /// Pin VM to a specific host NUMA node (0-indexed). Ignored when --gpu-count is set
+        /// (GPU-local NUMA is used automatically in that case).
+        #[arg(long)]
+        numa_node: Option<i32>,
     },
     /// Delete a VM
     Delete {
@@ -410,6 +414,7 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
             gpu_vendor,
             gpu_model,
             min_vram,
+            numa_node,
         } => {
             let vm_template_id = match template {
                 Some(ref template) => Some(resolve_vm_template_id(client, template).await?),
@@ -485,6 +490,8 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
             let accelerator_config =
                 build_accelerator_config(gpu_count, &gpu_vendor, &gpu_model, min_vram);
 
+            let numa_config = numa_node.map(|n| serde_json::json!({ "numa_node": n }));
+
             let new_vm = NewVm {
                 name,
                 tags: (!tags.is_empty()).then_some(tags),
@@ -506,6 +513,7 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
                 cloud_init_network_config: ci_network_config,
                 config: Some(serde_json::json!({})),
                 accelerator_config,
+                numa_config,
             };
 
             let result = api::vms::create(client, &new_vm).await?;

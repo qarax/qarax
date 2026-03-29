@@ -54,6 +54,9 @@ enum InstanceTypeCommand {
         /// Minimum GPU VRAM in bytes
         #[arg(long, requires = "gpu_count")]
         min_vram: Option<i64>,
+        /// Pin VMs of this type to the NUMA node local to their allocated GPU (default: true when gpu_count > 0)
+        #[arg(long, requires = "gpu_count")]
+        prefer_local_numa: Option<bool>,
     },
     /// Delete an instance type
     Delete {
@@ -125,9 +128,23 @@ pub async fn run(
             gpu_vendor,
             gpu_model,
             min_vram,
+            prefer_local_numa,
         } => {
             let accelerator_config =
                 build_accelerator_config(gpu_count, &gpu_vendor, &gpu_model, min_vram);
+            // Embed prefer_local_numa into accelerator_config if provided
+            let accelerator_config = match (accelerator_config, prefer_local_numa) {
+                (Some(mut ac), Some(pln)) => {
+                    if let serde_json::Value::Object(ref mut map) = ac {
+                        map.insert(
+                            "prefer_local_numa".to_string(),
+                            serde_json::Value::Bool(pln),
+                        );
+                    }
+                    Some(ac)
+                }
+                (ac, _) => ac,
+            };
             let new_instance_type = NewInstanceType {
                 name,
                 description,
@@ -135,6 +152,7 @@ pub async fn run(
                 max_vcpus: max_vcpus.unwrap_or(vcpus),
                 memory_size: memory,
                 accelerator_config,
+                numa_config: None,
             };
             let id = api::instance_types::create(client, &new_instance_type).await?;
             if !matches!(output, OutputFormat::Table) {
