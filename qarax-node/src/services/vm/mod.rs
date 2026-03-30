@@ -586,6 +586,7 @@ impl VmService for VmServiceImpl {
     #[instrument(skip(self, _request))]
     async fn get_node_info(&self, _request: Request<()>) -> Result<Response<NodeInfo>, Status> {
         let hostname = gethostname::gethostname().to_string_lossy().into_owned();
+        let architecture = detect_architecture().await;
 
         // Get Cloud Hypervisor version
         let ch_version = match tokio::process::Command::new(self.manager.ch_binary())
@@ -636,6 +637,7 @@ impl VmService for VmServiceImpl {
             node_version: std::env::var("QARAX_NODE_VERSION")
                 .unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_string()),
             numa_nodes,
+            architecture,
         }))
     }
 
@@ -1242,6 +1244,26 @@ async fn estimate_vram(dev_path: &std::path::Path) -> i64 {
         }
     }
     max_bar
+}
+
+async fn detect_architecture() -> String {
+    let uname_arch = tokio::process::Command::new("uname")
+        .arg("-m")
+        .output()
+        .await
+        .ok()
+        .and_then(|output| {
+            if output.status.success() {
+                Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+            } else {
+                None
+            }
+        });
+
+    uname_arch
+        .as_deref()
+        .and_then(common::architecture::normalize_architecture)
+        .unwrap_or_else(common::architecture::current_architecture)
 }
 
 /// Parse /proc/meminfo to get total and available memory in bytes.

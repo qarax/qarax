@@ -2,12 +2,27 @@ use uuid::Uuid;
 
 use crate::client::Client;
 
-use super::models::{DeployHostRequest, Host, HostGpu, NewHost};
+use super::models::{DeployHostRequest, Host, HostGpu, HostResourceCapacity, NewHost};
 
-pub async fn list(client: &Client, name: Option<&str>) -> anyhow::Result<Vec<Host>> {
-    let path = match name {
-        Some(n) => format!("/hosts?name={n}"),
-        None => "/hosts".to_string(),
+pub async fn list(
+    client: &Client,
+    name: Option<&str>,
+    architecture: Option<&str>,
+) -> anyhow::Result<Vec<Host>> {
+    let mut params = vec![];
+    if let Some(name) = name {
+        params.push(format!("name={}", urlencoding::encode(name)));
+    }
+    if let Some(architecture) = architecture {
+        params.push(format!(
+            "architecture={}",
+            urlencoding::encode(architecture)
+        ));
+    }
+    let path = if params.is_empty() {
+        "/hosts".to_string()
+    } else {
+        format!("/hosts?{}", params.join("&"))
     };
     client.get(&path).await
 }
@@ -15,13 +30,13 @@ pub async fn list(client: &Client, name: Option<&str>) -> anyhow::Result<Vec<Hos
 /// Get a single host by name or UUID string.
 pub async fn get(client: &Client, name_or_id: &str) -> anyhow::Result<Host> {
     if let Ok(id) = uuid::Uuid::parse_str(name_or_id) {
-        let hosts = list(client, None).await?;
+        let hosts = list(client, None, None).await?;
         return hosts
             .into_iter()
             .find(|h| h.id == id)
             .ok_or_else(|| anyhow::anyhow!("no host with id {:?}", id));
     }
-    let hosts = list(client, Some(name_or_id)).await?;
+    let hosts = list(client, Some(name_or_id), None).await?;
     hosts
         .into_iter()
         .next()
@@ -59,4 +74,8 @@ pub async fn upgrade(client: &Client, host_id: Uuid) -> anyhow::Result<()> {
 /// List all GPUs on a host.
 pub async fn list_gpus(client: &Client, host_id: Uuid) -> anyhow::Result<Vec<HostGpu>> {
     client.get(&format!("/hosts/{host_id}/gpus")).await
+}
+
+pub async fn resources(client: &Client, host_id: Uuid) -> anyhow::Result<HostResourceCapacity> {
+    client.get(&format!("/hosts/{host_id}/resources")).await
 }

@@ -15,7 +15,7 @@ pub mod vm_monitor;
 use sqlx::PgPool;
 use std::sync::Arc;
 
-use crate::configuration::VmDefaultsSettings;
+use crate::configuration::{SchedulingSettings, VmDefaultsSettings};
 
 #[cfg(feature = "otel")]
 use common::metrics::Metrics;
@@ -24,6 +24,8 @@ use common::metrics::Metrics;
 pub struct App {
     pool: Arc<PgPool>,
     vm_defaults: VmDefaultsSettings,
+    scheduling: SchedulingSettings,
+    control_plane_architecture: Arc<str>,
     #[cfg(feature = "otel")]
     metrics: Arc<Metrics>,
 }
@@ -32,25 +34,44 @@ impl std::fmt::Debug for App {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("App")
             .field("vm_defaults", &self.vm_defaults)
+            .field("scheduling", &self.scheduling)
+            .field(
+                "control_plane_architecture",
+                &self.control_plane_architecture,
+            )
             .finish()
     }
 }
 
 impl App {
     #[cfg(not(feature = "otel"))]
-    pub fn new(pool: PgPool, vm_defaults: VmDefaultsSettings) -> Self {
+    pub fn new(
+        pool: PgPool,
+        vm_defaults: VmDefaultsSettings,
+        scheduling: SchedulingSettings,
+        control_plane_architecture: String,
+    ) -> Self {
         Self {
             pool: Arc::new(pool),
             vm_defaults,
+            scheduling,
+            control_plane_architecture: Arc::from(control_plane_architecture),
         }
     }
 
     #[cfg(feature = "otel")]
-    pub fn new(pool: PgPool, vm_defaults: VmDefaultsSettings) -> Self {
+    pub fn new(
+        pool: PgPool,
+        vm_defaults: VmDefaultsSettings,
+        scheduling: SchedulingSettings,
+        control_plane_architecture: String,
+    ) -> Self {
         let meter = opentelemetry::global::meter("qarax");
         Self {
             pool: Arc::new(pool),
             vm_defaults,
+            scheduling,
+            control_plane_architecture: Arc::from(control_plane_architecture),
             metrics: Arc::new(Metrics::new(&meter)),
         }
     }
@@ -65,6 +86,14 @@ impl App {
 
     pub fn vm_defaults(&self) -> &VmDefaultsSettings {
         &self.vm_defaults
+    }
+
+    pub fn scheduling(&self) -> &SchedulingSettings {
+        &self.scheduling
+    }
+
+    pub fn control_plane_architecture(&self) -> &str {
+        &self.control_plane_architecture
     }
 
     #[cfg(feature = "otel")]

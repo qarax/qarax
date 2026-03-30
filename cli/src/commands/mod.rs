@@ -40,7 +40,7 @@ pub async fn resolve_host_id(client: &Client, name_or_id: &str) -> anyhow::Resul
     if let Ok(id) = Uuid::parse_str(name_or_id) {
         return Ok(id);
     }
-    let hosts = api::hosts::list(client, Some(name_or_id)).await?;
+    let hosts = api::hosts::list(client, Some(name_or_id), None).await?;
     hosts
         .into_iter()
         .next()

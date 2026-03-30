@@ -322,6 +322,7 @@ message NodeInfo {
   string node_version = 11;
   // NUMA topology of the host
   repeated NumaNode numa_nodes = 12;
+  string architecture = 13;
 }
 
 // ============================================================================

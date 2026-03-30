@@ -25,6 +25,7 @@ class NewVm:
         accelerator_config (Any | Unset): Accelerator (GPU) configuration. When set, GPU-aware scheduling picks a
             host with available GPUs matching these filters, and VFIO passthrough
             devices are attached to the VM.
+        architecture (None | str | Unset):
         boot_mode (BootMode | None | Unset):
         boot_source_id (None | Unset | UUID):
         boot_vcpus (int | None | Unset):
@@ -73,6 +74,7 @@ class NewVm:
 
     name: str
     accelerator_config: Any | Unset = UNSET
+    architecture: None | str | Unset = UNSET
     boot_mode: BootMode | None | Unset = UNSET
     boot_source_id: None | Unset | UUID = UNSET
     boot_vcpus: int | None | Unset = UNSET
@@ -108,6 +110,12 @@ class NewVm:
         name = self.name
 
         accelerator_config = self.accelerator_config
+
+        architecture: None | str | Unset
+        if isinstance(self.architecture, Unset):
+            architecture = UNSET
+        else:
+            architecture = self.architecture
 
         boot_mode: None | str | Unset
         if isinstance(self.boot_mode, Unset):
@@ -305,6 +313,8 @@ class NewVm:
         )
         if accelerator_config is not UNSET:
             field_dict["accelerator_config"] = accelerator_config
+        if architecture is not UNSET:
+            field_dict["architecture"] = architecture
         if boot_mode is not UNSET:
             field_dict["boot_mode"] = boot_mode
         if boot_source_id is not UNSET:
@@ -374,6 +384,15 @@ class NewVm:
         name = d.pop("name")
 
         accelerator_config = d.pop("accelerator_config", UNSET)
+
+        def _parse_architecture(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        architecture = _parse_architecture(d.pop("architecture", UNSET))
 
         def _parse_boot_mode(data: object) -> BootMode | None | Unset:
             if data is None:
@@ -703,6 +722,7 @@ class NewVm:
         new_vm = cls(
             name=name,
             accelerator_config=accelerator_config,
+            architecture=architecture,
             boot_mode=boot_mode,
             boot_source_id=boot_source_id,
             boot_vcpus=boot_vcpus,

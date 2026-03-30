@@ -34,6 +34,7 @@ mod job;
 mod lifecycle_hook;
 mod network;
 mod sandbox;
+mod scheduling;
 mod storage_object;
 mod storage_pool;
 mod transfer;
@@ -46,6 +47,14 @@ pub type Result<T, E = Error> = ::std::result::Result<T, E>;
 pub struct NameQuery {
     /// Optional name filter for list queries
     pub name: Option<String>,
+}
+
+#[derive(serde::Deserialize, utoipa::IntoParams, Debug)]
+pub struct HostListQuery {
+    /// Optional name filter for list queries
+    pub name: Option<String>,
+    /// Optional architecture filter
+    pub architecture: Option<String>,
 }
 
 #[derive(serde::Deserialize, utoipa::IntoParams, Debug)]
@@ -67,6 +76,7 @@ pub struct VmListQuery {
         host::handler::node_upgrade,
         host::handler::list_gpus,
         host::handler::list_numa_nodes,
+        host::handler::resources,
         instance_type::handler::list,
         instance_type::handler::get,
         instance_type::handler::create,
@@ -134,6 +144,7 @@ pub struct VmListQuery {
         sandbox::handler::list,
         sandbox::handler::get,
         sandbox::handler::delete,
+        scheduling::handler::config,
     ),
     components(
         schemas(
@@ -145,6 +156,7 @@ pub struct VmListQuery {
             crate::model::host_gpus::HostGpu,
             crate::model::host_gpus::AcceleratorConfig,
             crate::model::host_numa::HostNumaNode,
+            crate::model::hosts::HostResourceCapacity,
             crate::model::instance_types::InstanceType,
             crate::model::instance_types::NewInstanceType,
             crate::model::vms::Vm,
@@ -208,6 +220,7 @@ pub struct VmListQuery {
             crate::model::sandboxes::NewSandbox,
             crate::model::sandboxes::SandboxStatus,
             crate::model::sandboxes::CreateSandboxResponse,
+            crate::configuration::SchedulingSettings,
         )
     ),
     tags(
@@ -222,7 +235,8 @@ pub struct VmListQuery {
         (name = "jobs", description = "Async job management endpoints"),
         (name = "networks", description = "Network management endpoints"),
         (name = "hooks", description = "Lifecycle hook management endpoints"),
-        (name = "sandboxes", description = "Ephemeral sandbox environments for AI agents")
+        (name = "sandboxes", description = "Ephemeral sandbox environments for AI agents"),
+        (name = "scheduling", description = "Scheduling observability endpoints")
     ),
     info(
         title = "Qarax API",
@@ -278,6 +292,7 @@ pub fn app(env: App) -> Router {
         .merge(networks())
         .merge(hooks())
         .merge(sandboxes())
+        .merge(scheduling())
         .merge(event_stream())
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .layer(
@@ -321,6 +336,7 @@ fn hosts() -> Router {
         )
         .route("/hosts/{host_id}/gpus", get(host::handler::list_gpus))
         .route("/hosts/{host_id}/numa", get(host::handler::list_numa_nodes))
+        .route("/hosts/{host_id}/resources", get(host::handler::resources))
 }
 
 fn vms() -> Router {
@@ -511,6 +527,10 @@ fn sandboxes() -> Router {
             "/sandboxes/{sandbox_id}",
             get(sandbox::handler::get).delete(sandbox::handler::delete),
         )
+}
+
+fn scheduling() -> Router {
+    Router::new().route("/scheduling/config", get(scheduling::handler::config))
 }
 
 fn event_stream() -> Router {

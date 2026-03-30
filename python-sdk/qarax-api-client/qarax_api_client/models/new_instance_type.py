@@ -19,6 +19,7 @@ class NewInstanceType:
         memory_size (int):
         name (str):
         accelerator_config (Any | Unset):
+        architecture (None | str | Unset):
         cpu_topology (Any | Unset):
         description (None | str | Unset):
         kvm_hyperv (bool | None | Unset):
@@ -37,6 +38,7 @@ class NewInstanceType:
     memory_size: int
     name: str
     accelerator_config: Any | Unset = UNSET
+    architecture: None | str | Unset = UNSET
     cpu_topology: Any | Unset = UNSET
     description: None | str | Unset = UNSET
     kvm_hyperv: bool | None | Unset = UNSET
@@ -60,6 +62,12 @@ class NewInstanceType:
         name = self.name
 
         accelerator_config = self.accelerator_config
+
+        architecture: None | str | Unset
+        if isinstance(self.architecture, Unset):
+            architecture = UNSET
+        else:
+            architecture = self.architecture
 
         cpu_topology = self.cpu_topology
 
@@ -131,6 +139,8 @@ class NewInstanceType:
         )
         if accelerator_config is not UNSET:
             field_dict["accelerator_config"] = accelerator_config
+        if architecture is not UNSET:
+            field_dict["architecture"] = architecture
         if cpu_topology is not UNSET:
             field_dict["cpu_topology"] = cpu_topology
         if description is not UNSET:
@@ -168,6 +178,15 @@ class NewInstanceType:
         name = d.pop("name")
 
         accelerator_config = d.pop("accelerator_config", UNSET)
+
+        def _parse_architecture(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        architecture = _parse_architecture(d.pop("architecture", UNSET))
 
         cpu_topology = d.pop("cpu_topology", UNSET)
 
@@ -260,6 +279,7 @@ class NewInstanceType:
             memory_size=memory_size,
             name=name,
             accelerator_config=accelerator_config,
+            architecture=architecture,
             cpu_topology=cpu_topology,
             description=description,
             kvm_hyperv=kvm_hyperv,

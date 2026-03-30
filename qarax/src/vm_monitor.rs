@@ -64,11 +64,12 @@ pub async fn start_vm_monitor(pool: Arc<PgPool>) {
             for vm in vms {
                 match client.get_vm_info(vm.id).await {
                     Ok(state) => {
-                        let live_status = proto_status_to_db(state.status);
-                        if live_status != vm.status {
+                        let previous_status = vm.status.clone();
+                        let live_status = proto_status_to_db(state.status, previous_status.clone());
+                        if live_status != previous_status {
                             info!(
                                 "VM monitor: VM {} status changed from {:?} to {:?}",
-                                vm.id, vm.status, live_status
+                                vm.id, previous_status, live_status
                             );
                             if let Err(e) = vms::update_status(&pool, vm.id, live_status).await {
                                 warn!("VM monitor: failed to update VM {} status: {}", vm.id, e);
@@ -123,15 +124,46 @@ pub fn record_monitor_cycle(monitor: &str, start: std::time::Instant) {
         .add(1, &[KeyValue::new("monitor", monitor.to_string())]);
 }
 
-fn proto_status_to_db(status: i32) -> VmStatus {
+fn proto_status_to_db(status: i32, previous_status: VmStatus) -> VmStatus {
     // Proto VmStatus values:
     // VM_STATUS_UNKNOWN = 0, VM_STATUS_CREATED = 1, VM_STATUS_RUNNING = 2,
     // VM_STATUS_PAUSED = 3, VM_STATUS_SHUTDOWN = 4
     match status {
+        // Cloud Hypervisor can report a stopped-but-still-defined VM as "Created".
+        // Preserve the user-visible stopped state when we already knew this VM had
+        // progressed past initial creation.
+        1 if matches!(
+            previous_status,
+            VmStatus::Running | VmStatus::Paused | VmStatus::Shutdown
+        ) =>
+        {
+            VmStatus::Shutdown
+        }
         1 => VmStatus::Created,
         2 => VmStatus::Running,
         3 => VmStatus::Paused,
         4 => VmStatus::Shutdown,
         _ => VmStatus::Unknown,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::proto_status_to_db;
+    use crate::model::vms::VmStatus;
+
+    #[test]
+    fn created_state_stays_created_for_never_started_vms() {
+        assert_eq!(proto_status_to_db(1, VmStatus::Created), VmStatus::Created);
+    }
+
+    #[test]
+    fn created_state_normalizes_to_shutdown_after_stop() {
+        assert_eq!(proto_status_to_db(1, VmStatus::Running), VmStatus::Shutdown);
+        assert_eq!(proto_status_to_db(1, VmStatus::Paused), VmStatus::Shutdown);
+        assert_eq!(
+            proto_status_to_db(1, VmStatus::Shutdown),
+            VmStatus::Shutdown
+        );
     }
 }

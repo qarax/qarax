@@ -68,7 +68,7 @@ fn spawn_deploy(
 #[utoipa::path(
     get,
     path = "/hosts",
-    params(crate::handlers::NameQuery),
+    params(crate::handlers::HostListQuery),
     responses(
         (status = 200, description = "List all hosts", body = Vec<Host>),
         (status = 500, description = "Internal server error")
@@ -78,9 +78,13 @@ fn spawn_deploy(
 #[instrument(skip(env))]
 pub async fn list(
     Extension(env): Extension<App>,
-    axum::extract::Query(query): axum::extract::Query<crate::handlers::NameQuery>,
+    axum::extract::Query(query): axum::extract::Query<crate::handlers::HostListQuery>,
 ) -> Result<ApiResponse<Vec<Host>>> {
-    let hosts = hosts::list(env.pool(), query.name.as_deref()).await?;
+    let architecture = query
+        .architecture
+        .as_deref()
+        .and_then(common::architecture::normalize_architecture);
+    let hosts = hosts::list(env.pool(), query.name.as_deref(), architecture.as_deref()).await?;
     Ok(ApiResponse {
         data: hosts,
         code: StatusCode::OK,
@@ -217,6 +221,7 @@ pub async fn init(
     hosts::update_resources(
         env.pool(),
         host_id,
+        Some(&node_info.architecture),
         node_info.total_cpus,
         node_info.total_memory_bytes,
         node_info.available_memory_bytes,
@@ -375,6 +380,33 @@ pub async fn list_numa_nodes(
         .map_err(crate::errors::Error::Sqlx)?;
     Ok(ApiResponse {
         data: nodes,
+        code: StatusCode::OK,
+    })
+}
+
+#[utoipa::path(
+    get,
+    path = "/hosts/{host_id}/resources",
+    params(
+        ("host_id" = uuid::Uuid, Path, description = "Host unique identifier")
+    ),
+    responses(
+        (status = 200, description = "Computed host resource ledger", body = crate::model::hosts::HostResourceCapacity),
+        (status = 404, description = "Host not found")
+    ),
+    tag = "hosts"
+)]
+#[instrument(skip(env))]
+pub async fn resources(
+    Extension(env): Extension<App>,
+    Path(host_id): Path<Uuid>,
+) -> Result<ApiResponse<crate::model::hosts::HostResourceCapacity>> {
+    hosts::require_by_id(env.pool(), host_id).await?;
+    let resources = hosts::get_resource_capacity(env.pool(), host_id)
+        .await?
+        .ok_or(crate::errors::Error::NotFound)?;
+    Ok(ApiResponse {
+        data: resources,
         code: StatusCode::OK,
     })
 }

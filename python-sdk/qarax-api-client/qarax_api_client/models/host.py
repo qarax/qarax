@@ -25,6 +25,7 @@ class Host:
         port (int):
         status (HostStatus):
         update_available (bool): True when `node_version` differs from the control-plane version.
+        architecture (None | str | Unset):
         available_memory_bytes (int | None | Unset):
         cloud_hypervisor_version (None | str | Unset):
         disk_available_bytes (int | None | Unset):
@@ -45,6 +46,7 @@ class Host:
     port: int
     status: HostStatus
     update_available: bool
+    architecture: None | str | Unset = UNSET
     available_memory_bytes: int | None | Unset = UNSET
     cloud_hypervisor_version: None | str | Unset = UNSET
     disk_available_bytes: int | None | Unset = UNSET
@@ -72,6 +74,12 @@ class Host:
         status = self.status.value
 
         update_available = self.update_available
+
+        architecture: None | str | Unset
+        if isinstance(self.architecture, Unset):
+            architecture = UNSET
+        else:
+            architecture = self.architecture
 
         available_memory_bytes: int | None | Unset
         if isinstance(self.available_memory_bytes, Unset):
@@ -154,6 +162,8 @@ class Host:
                 "update_available": update_available,
             }
         )
+        if architecture is not UNSET:
+            field_dict["architecture"] = architecture
         if available_memory_bytes is not UNSET:
             field_dict["available_memory_bytes"] = available_memory_bytes
         if cloud_hypervisor_version is not UNSET:
@@ -195,6 +205,15 @@ class Host:
         status = HostStatus(d.pop("status"))
 
         update_available = d.pop("update_available")
+
+        def _parse_architecture(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        architecture = _parse_architecture(d.pop("architecture", UNSET))
 
         def _parse_available_memory_bytes(data: object) -> int | None | Unset:
             if data is None:
@@ -311,6 +330,7 @@ class Host:
             port=port,
             status=status,
             update_available=update_available,
+            architecture=architecture,
             available_memory_bytes=available_memory_bytes,
             cloud_hypervisor_version=cloud_hypervisor_version,
             disk_available_bytes=disk_available_bytes,

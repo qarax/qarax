@@ -33,6 +33,7 @@ async fn handle_probe_result(pool: &PgPool, host: &Host, node_info: Result<NodeI
             if let Err(e) = hosts::update_resources(
                 pool,
                 host.id,
+                Some(&info.architecture),
                 info.total_cpus,
                 info.total_memory_bytes,
                 info.available_memory_bytes,
@@ -269,6 +270,7 @@ mod tests {
                 disk_available_bytes: 60 * 1024 * 1024,
                 gpus: vec![],
                 numa_nodes: vec![],
+                architecture: "x86_64".to_string(),
             }),
         )
         .await;
@@ -278,6 +280,7 @@ mod tests {
             .expect("Failed to fetch updated host")
             .expect("Updated host not found");
         assert_eq!(updated.status, HostStatus::Up);
+        assert_eq!(updated.architecture.as_deref(), Some("x86_64"));
         assert_eq!(updated.total_cpus, Some(8));
         assert_eq!(updated.available_memory_bytes, Some(8 * 1024 * 1024));
     }

@@ -41,6 +41,7 @@ pub async fn create(
         vm_template_id: Some(req.vm_template_id),
         instance_type_id: req.instance_type_id,
         hypervisor: None,
+        architecture: None,
         boot_vcpus: None,
         max_vcpus: None,
         cpu_topology: None,

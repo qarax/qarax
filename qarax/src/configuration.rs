@@ -1,6 +1,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use common::architecture::current_architecture;
 use secrecy::{ExposeSecret, Secret};
 use sqlx::postgres::{PgConnectOptions, PgSslMode};
 
@@ -8,6 +9,45 @@ use sqlx::postgres::{PgConnectOptions, PgSslMode};
 pub struct ApplicationSettings {
     pub port: u16,
     pub host: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, utoipa::ToSchema)]
+pub struct SchedulingSettings {
+    #[serde(default = "default_memory_oversubscription_ratio")]
+    pub memory_oversubscription_ratio: f64,
+    #[serde(default = "default_cpu_oversubscription_ratio")]
+    pub cpu_oversubscription_ratio: f64,
+    #[serde(default = "default_disk_headroom_bytes")]
+    pub disk_headroom_bytes: i64,
+    #[serde(default = "default_memory_health_floor_bytes")]
+    pub memory_health_floor_bytes: i64,
+}
+
+impl Default for SchedulingSettings {
+    fn default() -> Self {
+        Self {
+            memory_oversubscription_ratio: default_memory_oversubscription_ratio(),
+            cpu_oversubscription_ratio: default_cpu_oversubscription_ratio(),
+            disk_headroom_bytes: default_disk_headroom_bytes(),
+            memory_health_floor_bytes: default_memory_health_floor_bytes(),
+        }
+    }
+}
+
+fn default_memory_oversubscription_ratio() -> f64 {
+    1.0
+}
+
+fn default_cpu_oversubscription_ratio() -> f64 {
+    4.0
+}
+
+fn default_disk_headroom_bytes() -> i64 {
+    10 * 1024 * 1024 * 1024
+}
+
+fn default_memory_health_floor_bytes() -> i64 {
+    1024 * 1024 * 1024
 }
 
 #[derive(serde::Deserialize, Debug)]
@@ -58,6 +98,8 @@ pub struct Settings {
     pub database: DatabaseSettings,
     pub application: ApplicationSettings,
     pub vm_defaults: VmDefaultsSettings,
+    #[serde(default)]
+    pub scheduling: SchedulingSettings,
     #[serde(default)]
     pub telemetry: TelemetrySettings,
 }
@@ -167,6 +209,10 @@ pub fn get_configuration() -> Result<Settings, config::ConfigError> {
         )?
         .build()?;
     settings.try_deserialize::<Settings>()
+}
+
+pub fn default_control_plane_architecture() -> String {
+    current_architecture()
 }
 pub enum Environment {
     Local,

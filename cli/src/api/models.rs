@@ -48,6 +48,8 @@ pub struct NewVm {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hypervisor: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub architecture: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub boot_vcpus: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_vcpus: Option<i32>,
@@ -88,6 +90,7 @@ pub struct InstanceType {
     pub id: Uuid,
     pub name: String,
     pub description: Option<String>,
+    pub architecture: Option<String>,
     pub boot_vcpus: i32,
     pub max_vcpus: i32,
     pub memory_size: i64,
@@ -98,6 +101,8 @@ pub struct NewInstanceType {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub architecture: Option<String>,
     pub boot_vcpus: i32,
     pub max_vcpus: i32,
     pub memory_size: i64,
@@ -198,6 +203,7 @@ pub struct Host {
     pub node_version: Option<String>,
     pub last_deployed_image: Option<String>,
     pub update_available: bool,
+    pub architecture: Option<String>,
     pub total_cpus: Option<i32>,
     pub total_memory_bytes: Option<i64>,
     pub available_memory_bytes: Option<i64>,
@@ -205,6 +211,19 @@ pub struct Host {
     pub disk_total_bytes: Option<i64>,
     pub disk_available_bytes: Option<i64>,
     pub resources_updated_at: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct HostResourceCapacity {
+    pub host_id: Uuid,
+    pub architecture: Option<String>,
+    pub total_cpus: Option<i32>,
+    pub allocated_vcpus: i64,
+    pub total_memory_bytes: Option<i64>,
+    pub allocated_memory_bytes: i64,
+    pub available_memory_bytes: Option<i64>,
+    pub disk_total_bytes: Option<i64>,
+    pub disk_available_bytes: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]

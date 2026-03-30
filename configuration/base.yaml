@@ -12,6 +12,11 @@ vm_defaults:
   firmware: ""
   initramfs: ""
   cmdline: "console=ttyS0 reboot=k panic=1 pci=off"
+scheduling:
+  memory_oversubscription_ratio: 1.0
+  cpu_oversubscription_ratio: 4.0
+  disk_headroom_bytes: 10737418240
+  memory_health_floor_bytes: 1073741824
 telemetry:
   otel_enabled: false
   otlp_endpoint: "http://localhost:4318"

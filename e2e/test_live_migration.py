@@ -189,7 +189,6 @@ async def test_migrate_stopped_vm_returns_422(client, two_hosts):
 @pytest.mark.asyncio
 async def test_migrate_to_same_host_returns_422(client, two_hosts):
     """Migrating a VM to its current host returns 422."""
-    host1_id, _ = two_hosts
     async with client as c:
         new_vm = NewVm(
             name="e2e-migrate-same-host",
@@ -205,12 +204,14 @@ async def test_migrate_to_same_host_returns_422(client, two_hosts):
             # Start the VM so it is in RUNNING state (required for migration validation to reach
             # the same-host check), then attempt to migrate to the same host.
             await start_vm.asyncio_detailed(client=c, vm_id=vm_id)
-            await _wait_for_vm_status(c, vm_id, VmStatus.RUNNING)
+            vm = await _wait_for_vm_status(c, vm_id, VmStatus.RUNNING)
+            current_host_id = vm.host_id
+            assert current_host_id is not None, "VM should have an assigned host"
 
             resp = await migrate.asyncio_detailed(
                 client=c,
                 vm_id=vm_id,
-                body=VmMigrateRequest(target_host_id=host1_id),
+                body=VmMigrateRequest(target_host_id=current_host_id),
             )
             assert resp.status_code == 422, (
                 f"Expected 422 for same-host migration, got {resp.status_code}"
@@ -284,13 +285,16 @@ async def test_live_migration(client, two_hosts):
 
             # Start the VM and wait for RUNNING
             await start_vm.asyncio_detailed(client=c, vm_id=vm_id)
-            await _wait_for_vm_status(c, vm_id, VmStatus.RUNNING)
+            vm = await _wait_for_vm_status(c, vm_id, VmStatus.RUNNING)
+            source_host_id = vm.host_id
+            assert source_host_id is not None, "VM should have an assigned host"
+            target_host_id = host2_id if source_host_id == host1_id else host1_id
 
-            # Trigger live migration to host2
+            # Trigger live migration to the other host.
             migrate_resp = await migrate.asyncio_detailed(
                 client=c,
                 vm_id=vm_id,
-                body=VmMigrateRequest(target_host_id=host2_id),
+                body=VmMigrateRequest(target_host_id=target_host_id),
             )
             assert migrate_resp.status_code == 202, (
                 f"Expected 202 from migrate, got {migrate_resp.status_code}: {migrate_resp.content}"
@@ -305,8 +309,8 @@ async def test_live_migration(client, two_hosts):
             assert vm.status == VmStatus.RUNNING, (
                 f"Expected RUNNING after migration, got: {vm.status}"
             )
-            assert vm.host_id == host2_id, (
-                f"Expected host_id={host2_id} after migration, got: {vm.host_id}"
+            assert vm.host_id == target_host_id, (
+                f"Expected host_id={target_host_id} after migration, got: {vm.host_id}"
             )
 
             await stop_vm.asyncio_detailed(client=c, vm_id=vm_id)

@@ -18,6 +18,7 @@ from .hook_scope import HookScope
 from .host import Host
 from .host_gpu import HostGpu
 from .host_numa_node import HostNumaNode
+from .host_resource_capacity import HostResourceCapacity
 from .host_status import HostStatus
 from .hypervisor import Hypervisor
 from .import_to_pool_request import ImportToPoolRequest
@@ -49,6 +50,7 @@ from .rate_limiter_config import RateLimiterConfig
 from .restore_request import RestoreRequest
 from .sandbox import Sandbox
 from .sandbox_status import SandboxStatus
+from .scheduling_settings import SchedulingSettings
 from .snapshot import Snapshot
 from .snapshot_status import SnapshotStatus
 from .storage_object import StorageObject
@@ -95,6 +97,7 @@ __all__ = (
     "Host",
     "HostGpu",
     "HostNumaNode",
+    "HostResourceCapacity",
     "HostStatus",
     "Hypervisor",
     "ImportToPoolRequest",
@@ -126,6 +129,7 @@ __all__ = (
     "RestoreRequest",
     "Sandbox",
     "SandboxStatus",
+    "SchedulingSettings",
     "Snapshot",
     "SnapshotStatus",
     "StorageObject",

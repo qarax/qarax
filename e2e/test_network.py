@@ -118,22 +118,27 @@ async def test_vm_with_network(client):
         assert net_id is not None
         net_id_str = str(net_id)
         
-        # Get host to attach the network to
+        # Attach the network to every available host so dynamic scheduling can
+        # place the VM on either node without breaking guest connectivity.
         hosts = await call_api(list_hosts, client=c)
         assert hosts, "No hosts available"
-        host_id = str(hosts[0].id)
-        
-        # Attach the network to the host so the bridge is created
-        attach_req = AttachHostRequest(
-            host_id=hosts[0].id,
-            bridge_name="br-10-99",
-        )
-        print(f"Attaching host {host_id} to network {net_id_str}...")
-        attach_resp = await attach_host.asyncio_detailed(
-            client=c, network_id=net_id_str, body=attach_req
-        )
-        assert attach_resp.status_code.value in (200, 204), \
-            f"attach_host failed: {attach_resp.status_code} — {attach_resp.content.decode()}"
+        host_by_id = {str(host.id): host for host in hosts}
+        attached_host_ids = []
+        for host in hosts:
+            host_id = str(host.id)
+            attach_req = AttachHostRequest(
+                host_id=host.id,
+                bridge_name="br-10-99",
+            )
+            print(f"Attaching host {host_id} to network {net_id_str}...")
+            attach_resp = await attach_host.asyncio_detailed(
+                client=c, network_id=net_id_str, body=attach_req
+            )
+            assert attach_resp.status_code.value in (200, 204), (
+                f"attach_host failed for host {host_id}: "
+                f"{attach_resp.status_code} — {attach_resp.content.decode()}"
+            )
+            attached_host_ids.append(host_id)
 
         vm_id_str = None
         try:
@@ -165,26 +170,40 @@ async def test_vm_with_network(client):
                         break
                         
             assert vm_ip is not None, f"No IP allocated for VM {vm_id_str} on network {net_id_str}"
-            
-            print(f"\nVM {vm_id_str} running. Assigned IP: {vm_ip}")
+
+            vm = await call_api(get_vm, client=c, vm_id=vm_id_str)
+            vm_host_id = str(vm.host_id)
+            vm_host = host_by_id[vm_host_id]
+            ssh_container = {
+                "qarax-node": "e2e-qarax-node-1",
+                "qarax-node-2": "e2e-qarax-node-2-1",
+            }.get(vm_host.address)
+            assert ssh_container is not None, (
+                f"Unsupported host address for SSH routing: {vm_host.address}"
+            )
+
+            print(
+                f"\nVM {vm_id_str} running on host {vm_host_id} "
+                f"({vm_host.address}). Assigned IP: {vm_ip}"
+            )
 
             # 5. Connect via SSH and check ping to gateway
             # Since the isolated network is created inside the qarax-node container (Linux bridge),
-            # the host cannot route to 10.99.0.2 directly. We execute the SSH client from inside
-            # the qarax-node container using the baked-in Dropbear keys.
-            print("Connecting to VM via SSH from qarax-node container...")
+            # the host cannot route to 10.99.0.2 directly. Execute the SSH client from the
+            # specific qarax-node container that the VM is running on.
+            print(f"Connecting to VM via SSH from {ssh_container}...")
             success = False
             import subprocess
             # Clear any stale known_hosts entry for this IP to avoid key mismatch errors.
             # ssh-keygen is not available in the container (only dropbear), so use sed.
             subprocess.run(
-                ["docker", "exec", "e2e-qarax-node-1",
+                ["docker", "exec", ssh_container,
                  "sh", "-c", f"sed -i '/{vm_ip}/d' /root/.ssh/known_hosts 2>/dev/null || true"],
                 capture_output=True,
             )
             for attempt in range(20):
                 cmd = [
-                    "docker", "exec", "e2e-qarax-node-1",
+                    "docker", "exec", ssh_container,
                     "dbclient", "-y", "-i", "/root/.ssh/id_rsa", f"root@{vm_ip}",
                     "ping", "-c", "3", "10.99.0.1"
                 ]
@@ -220,8 +239,7 @@ async def test_vm_with_network(client):
                 except Exception as e:
                     print(f"Cleanup of VM {vm_id_str} failed: {e}")
                     
-            if net_id_str and host_id:
-                # 7. Detach host and Delete network
+            for host_id in attached_host_ids:
                 print(f"Detaching host {host_id} from network {net_id_str}...")
                 try:
                     await call_api(detach_host, client=c, network_id=net_id_str, host_id=host_id)

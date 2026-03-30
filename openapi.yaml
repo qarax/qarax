@@ -255,6 +255,14 @@ paths:
           type:
           - string
           - 'null'
+      - name: architecture
+        in: query
+        description: Optional architecture filter
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
       responses:
         '200':
           description: List all hosts
@@ -423,6 +431,28 @@ paths:
           description: Host not found
         '500':
           description: Internal server error
+  /hosts/{host_id}/resources:
+    get:
+      tags:
+      - hosts
+      operationId: resources
+      parameters:
+      - name: host_id
+        in: path
+        description: Host unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Computed host resource ledger
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HostResourceCapacity'
+        '404':
+          description: Host not found
   /hosts/{host_id}/upgrade:
     post:
       tags:
@@ -814,6 +844,18 @@ paths:
           description: Sandbox not found
         '500':
           description: Internal server error
+  /scheduling/config:
+    get:
+      tags:
+      - scheduling
+      operationId: config
+      responses:
+        '200':
+          description: Current scheduling configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SchedulingSettings'
   /storage-objects:
     get:
       tags:
@@ -2194,6 +2236,10 @@ components:
       properties:
         address:
           type: string
+        architecture:
+          type:
+          - string
+          - 'null'
         available_memory_bytes:
           type:
           - integer
@@ -2348,6 +2394,51 @@ components:
           - string
           - 'null'
           format: date-time
+    HostResourceCapacity:
+      type: object
+      required:
+      - host_id
+      - allocated_vcpus
+      - allocated_memory_bytes
+      properties:
+        allocated_memory_bytes:
+          type: integer
+          format: int64
+        allocated_vcpus:
+          type: integer
+          format: int64
+        architecture:
+          type:
+          - string
+          - 'null'
+        available_memory_bytes:
+          type:
+          - integer
+          - 'null'
+          format: int64
+        disk_available_bytes:
+          type:
+          - integer
+          - 'null'
+          format: int64
+        disk_total_bytes:
+          type:
+          - integer
+          - 'null'
+          format: int64
+        host_id:
+          type: string
+          format: uuid
+        total_cpus:
+          type:
+          - integer
+          - 'null'
+          format: int32
+        total_memory_bytes:
+          type:
+          - integer
+          - 'null'
+          format: int64
     HostStatus:
       type: string
       enum:
@@ -2396,6 +2487,10 @@ components:
       - accelerator_config
       properties:
         accelerator_config: {}
+        architecture:
+          type:
+          - string
+          - 'null'
         boot_vcpus:
           type: integer
           format: int32
@@ -2755,6 +2850,10 @@ components:
       - memory_size
       properties:
         accelerator_config: {}
+        architecture:
+          type:
+          - string
+          - 'null'
         boot_vcpus:
           type: integer
           format: int32
@@ -2943,6 +3042,10 @@ components:
             Accelerator (GPU) configuration. When set, GPU-aware scheduling picks a
             host with available GPUs matching these filters, and VFIO passthrough
             devices are attached to the VM.
+        architecture:
+          type:
+          - string
+          - 'null'
         boot_mode:
           oneOf:
           - type: 'null'
@@ -3412,6 +3515,21 @@ components:
       - ready
       - error
       - destroying
+    SchedulingSettings:
+      type: object
+      properties:
+        cpu_oversubscription_ratio:
+          type: number
+          format: double
+        disk_headroom_bytes:
+          type: integer
+          format: int64
+        memory_health_floor_bytes:
+          type: integer
+          format: int64
+        memory_oversubscription_ratio:
+          type: number
+          format: double
     Snapshot:
       type: object
       required:
@@ -4090,3 +4208,5 @@ tags:
   description: Lifecycle hook management endpoints
 - name: sandboxes
   description: Ephemeral sandbox environments for AI agents
+- name: scheduling
+  description: Scheduling observability endpoints

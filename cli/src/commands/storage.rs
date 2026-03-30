@@ -192,7 +192,7 @@ pub async fn run_pool(
             if attach_all_hosts {
                 let pool_uuid = uuid::Uuid::parse_str(&id)
                     .map_err(|e| anyhow::anyhow!("Invalid pool UUID: {}", e))?;
-                let hosts = api::hosts::list(client, None).await?;
+                let hosts = api::hosts::list(client, None, None).await?;
                 for h in active_hosts(&hosts) {
                     if let Err(e) = api::storage::attach_host_to_pool(client, pool_uuid, h.id).await
                     {
@@ -216,7 +216,7 @@ pub async fn run_pool(
         StoragePoolCommand::AttachHost { pool, host, all } => {
             let pool_id = resolve_pool_id(client, &pool).await?;
             if all {
-                let hosts = api::hosts::list(client, None).await?;
+                let hosts = api::hosts::list(client, None, None).await?;
                 for h in active_hosts(&hosts) {
                     if let Err(e) = api::storage::attach_host_to_pool(client, pool_id, h.id).await {
                         eprintln!(

@@ -12,6 +12,7 @@ pub struct InstanceType {
     pub id: Uuid,
     pub name: String,
     pub description: Option<String>,
+    pub architecture: Option<String>,
     pub boot_vcpus: i32,
     pub max_vcpus: i32,
     pub cpu_topology: Option<serde_json::Value>,
@@ -33,6 +34,7 @@ struct InstanceTypeRow {
     pub id: Uuid,
     pub name: String,
     pub description: Option<String>,
+    pub architecture: Option<String>,
     pub boot_vcpus: i32,
     pub max_vcpus: i32,
     pub cpu_topology: Option<Json<serde_json::Value>>,
@@ -55,6 +57,7 @@ impl From<InstanceTypeRow> for InstanceType {
             id: row.id,
             name: row.name,
             description: row.description,
+            architecture: row.architecture,
             boot_vcpus: row.boot_vcpus,
             max_vcpus: row.max_vcpus,
             cpu_topology: row.cpu_topology.map(|value| value.0),
@@ -77,6 +80,7 @@ impl From<InstanceTypeRow> for InstanceType {
 pub struct NewInstanceType {
     pub name: String,
     pub description: Option<String>,
+    pub architecture: Option<String>,
     pub boot_vcpus: i32,
     pub max_vcpus: i32,
     pub cpu_topology: Option<serde_json::Value>,
@@ -103,6 +107,7 @@ pub async fn list(
 SELECT id,
        name,
        description,
+       architecture,
        boot_vcpus,
        max_vcpus,
        cpu_topology,
@@ -135,6 +140,7 @@ pub async fn get(pool: &PgPool, instance_type_id: Uuid) -> Result<InstanceType, 
 SELECT id,
        name,
        description,
+       architecture,
        boot_vcpus,
        max_vcpus,
        cpu_topology,
@@ -166,6 +172,7 @@ pub async fn get_by_name(pool: &PgPool, name: &str) -> Result<InstanceType, sqlx
 SELECT id,
        name,
        description,
+       architecture,
        boot_vcpus,
        max_vcpus,
        cpu_topology,
@@ -199,6 +206,10 @@ pub async fn create(
     let cpu_topology = new_instance_type.cpu_topology.map(Json);
     let accelerator_config = Json(new_instance_type.accelerator_config);
     let numa_config = new_instance_type.numa_config.map(Json);
+    let architecture = new_instance_type
+        .architecture
+        .as_deref()
+        .and_then(common::architecture::normalize_architecture);
 
     sqlx::query(
         r#"
@@ -206,6 +217,7 @@ INSERT INTO instance_types (
     id,
     name,
     description,
+    architecture,
     boot_vcpus,
     max_vcpus,
     cpu_topology,
@@ -223,13 +235,14 @@ INSERT INTO instance_types (
 )
 VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8,
-    $9, $10, $11, $12, $13, $14, $15, $16, $17
+    $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
 )
         "#,
     )
     .bind(id)
     .bind(new_instance_type.name)
     .bind(new_instance_type.description)
+    .bind(architecture)
     .bind(new_instance_type.boot_vcpus)
     .bind(new_instance_type.max_vcpus)
     .bind(cpu_topology)

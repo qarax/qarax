@@ -42,6 +42,9 @@ enum InstanceTypeCommand {
         /// Description
         #[arg(long)]
         description: Option<String>,
+        /// Target architecture (e.g. x86_64, aarch64, riscv64)
+        #[arg(long)]
+        architecture: Option<String>,
         /// Number of GPUs to request
         #[arg(long)]
         gpu_count: Option<i32>,
@@ -124,6 +127,7 @@ pub async fn run(
             max_vcpus,
             memory,
             description,
+            architecture,
             gpu_count,
             gpu_vendor,
             gpu_model,
@@ -148,6 +152,7 @@ pub async fn run(
             let new_instance_type = NewInstanceType {
                 name,
                 description,
+                architecture,
                 boot_vcpus: vcpus,
                 max_vcpus: max_vcpus.unwrap_or(vcpus),
                 memory_size: memory,

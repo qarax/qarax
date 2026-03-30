@@ -1,7 +1,11 @@
 use tokio::net::TcpListener;
 
 use common::telemtry::{get_subscriber, init_subscriber};
-use qarax::{configuration::get_configuration, database, startup::run};
+use qarax::{
+    configuration::{default_control_plane_architecture, get_configuration},
+    database,
+    startup::run,
+};
 use sqlx::PgPool;
 
 #[cfg(feature = "dhat-heap")]
@@ -56,13 +60,22 @@ async fn main() -> std::io::Result<()> {
     tracing::info!("Starting server on {}", address);
     let listener = TcpListener::bind(address).await?;
     let vm_defaults = configuration.vm_defaults.clone();
+    let scheduling = configuration.scheduling.clone();
     tracing::info!(
         "VM defaults: kernel={}, initramfs={:?}, cmdline={}",
         vm_defaults.kernel,
         vm_defaults.initramfs,
         vm_defaults.cmdline
     );
-    match run(listener, connection_pool, vm_defaults).await {
+    match run(
+        listener,
+        connection_pool,
+        vm_defaults,
+        scheduling,
+        default_control_plane_architecture(),
+    )
+    .await
+    {
         Ok(server) => {
             tokio::select! {
                 result = async { server.await } => result.unwrap(),

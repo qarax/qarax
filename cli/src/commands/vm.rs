@@ -68,6 +68,9 @@ enum VmCommand {
         /// Hypervisor type
         #[arg(long)]
         hypervisor: Option<String>,
+        /// Target architecture (e.g. x86_64, aarch64, riscv64)
+        #[arg(long)]
+        architecture: Option<String>,
         /// Boot source name or ID
         #[arg(long)]
         boot_source: Option<String>,
@@ -414,6 +417,7 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
             template,
             instance_type,
             hypervisor,
+            architecture,
             boot_source,
             root_disk,
             description,
@@ -521,6 +525,7 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
                 vm_template_id,
                 instance_type_id,
                 hypervisor,
+                architecture,
                 boot_vcpus: vcpus,
                 max_vcpus,
                 memory_size: memory,

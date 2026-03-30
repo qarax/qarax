@@ -1,3 +1,4 @@
+pub mod architecture;
 pub mod cpu_list;
 pub mod telemtry;
 

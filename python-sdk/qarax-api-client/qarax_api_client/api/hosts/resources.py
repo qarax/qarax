@@ -1,60 +1,40 @@
 from http import HTTPStatus
 from typing import Any, cast
+from urllib.parse import quote
+from uuid import UUID
 
 import httpx
 
 from ... import errors
 from ...client import AuthenticatedClient, Client
-from ...models.host import Host
-from ...types import UNSET, Response, Unset
+from ...models.host_resource_capacity import HostResourceCapacity
+from ...types import Response
 
 
 def _get_kwargs(
-    *,
-    name: None | str | Unset = UNSET,
-    architecture: None | str | Unset = UNSET,
+    host_id: UUID,
 ) -> dict[str, Any]:
-    params: dict[str, Any] = {}
-
-    json_name: None | str | Unset
-    if isinstance(name, Unset):
-        json_name = UNSET
-    else:
-        json_name = name
-    params["name"] = json_name
-
-    json_architecture: None | str | Unset
-    if isinstance(architecture, Unset):
-        json_architecture = UNSET
-    else:
-        json_architecture = architecture
-    params["architecture"] = json_architecture
-
-    params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
-
     _kwargs: dict[str, Any] = {
         "method": "get",
-        "url": "/hosts",
-        "params": params,
+        "url": "/hosts/{host_id}/resources".format(
+            host_id=quote(str(host_id), safe=""),
+        ),
     }
 
     return _kwargs
 
 
-def _parse_response(*, client: AuthenticatedClient | Client, response: httpx.Response) -> Any | list[Host] | None:
+def _parse_response(
+    *, client: AuthenticatedClient | Client, response: httpx.Response
+) -> Any | HostResourceCapacity | None:
     if response.status_code == 200:
-        response_200 = []
-        _response_200 = response.json()
-        for response_200_item_data in _response_200:
-            response_200_item = Host.from_dict(response_200_item_data)
-
-            response_200.append(response_200_item)
+        response_200 = HostResourceCapacity.from_dict(response.json())
 
         return response_200
 
-    if response.status_code == 500:
-        response_500 = cast(Any, None)
-        return response_500
+    if response.status_code == 404:
+        response_404 = cast(Any, None)
+        return response_404
 
     if client.raise_on_unexpected_status:
         raise errors.UnexpectedStatus(response.status_code, response.content)
@@ -62,7 +42,9 @@ def _parse_response(*, client: AuthenticatedClient | Client, response: httpx.Res
         return None
 
 
-def _build_response(*, client: AuthenticatedClient | Client, response: httpx.Response) -> Response[Any | list[Host]]:
+def _build_response(
+    *, client: AuthenticatedClient | Client, response: httpx.Response
+) -> Response[Any | HostResourceCapacity]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -72,27 +54,24 @@ def _build_response(*, client: AuthenticatedClient | Client, response: httpx.Res
 
 
 def sync_detailed(
+    host_id: UUID,
     *,
     client: AuthenticatedClient | Client,
-    name: None | str | Unset = UNSET,
-    architecture: None | str | Unset = UNSET,
-) -> Response[Any | list[Host]]:
+) -> Response[Any | HostResourceCapacity]:
     """
     Args:
-        name (None | str | Unset):
-        architecture (None | str | Unset):
+        host_id (UUID):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Any | list[Host]]
+        Response[Any | HostResourceCapacity]
     """
 
     kwargs = _get_kwargs(
-        name=name,
-        architecture=architecture,
+        host_id=host_id,
     )
 
     response = client.get_httpx_client().request(
@@ -103,53 +82,47 @@ def sync_detailed(
 
 
 def sync(
+    host_id: UUID,
     *,
     client: AuthenticatedClient | Client,
-    name: None | str | Unset = UNSET,
-    architecture: None | str | Unset = UNSET,
-) -> Any | list[Host] | None:
+) -> Any | HostResourceCapacity | None:
     """
     Args:
-        name (None | str | Unset):
-        architecture (None | str | Unset):
+        host_id (UUID):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Any | list[Host]
+        Any | HostResourceCapacity
     """
 
     return sync_detailed(
+        host_id=host_id,
         client=client,
-        name=name,
-        architecture=architecture,
     ).parsed
 
 
 async def asyncio_detailed(
+    host_id: UUID,
     *,
     client: AuthenticatedClient | Client,
-    name: None | str | Unset = UNSET,
-    architecture: None | str | Unset = UNSET,
-) -> Response[Any | list[Host]]:
+) -> Response[Any | HostResourceCapacity]:
     """
     Args:
-        name (None | str | Unset):
-        architecture (None | str | Unset):
+        host_id (UUID):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Any | list[Host]]
+        Response[Any | HostResourceCapacity]
     """
 
     kwargs = _get_kwargs(
-        name=name,
-        architecture=architecture,
+        host_id=host_id,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -158,28 +131,25 @@ async def asyncio_detailed(
 
 
 async def asyncio(
+    host_id: UUID,
     *,
     client: AuthenticatedClient | Client,
-    name: None | str | Unset = UNSET,
-    architecture: None | str | Unset = UNSET,
-) -> Any | list[Host] | None:
+) -> Any | HostResourceCapacity | None:
     """
     Args:
-        name (None | str | Unset):
-        architecture (None | str | Unset):
+        host_id (UUID):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Any | list[Host]
+        Any | HostResourceCapacity
     """
 
     return (
         await asyncio_detailed(
+            host_id=host_id,
             client=client,
-            name=name,
-            architecture=architecture,
         )
     ).parsed

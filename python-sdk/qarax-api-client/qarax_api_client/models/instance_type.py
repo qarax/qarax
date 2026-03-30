@@ -21,6 +21,7 @@ class InstanceType:
         max_vcpus (int):
         memory_size (int):
         name (str):
+        architecture (None | str | Unset):
         cpu_topology (Any | Unset):
         description (None | str | Unset):
         kvm_hyperv (bool | None | Unset):
@@ -40,6 +41,7 @@ class InstanceType:
     max_vcpus: int
     memory_size: int
     name: str
+    architecture: None | str | Unset = UNSET
     cpu_topology: Any | Unset = UNSET
     description: None | str | Unset = UNSET
     kvm_hyperv: bool | None | Unset = UNSET
@@ -65,6 +67,12 @@ class InstanceType:
         memory_size = self.memory_size
 
         name = self.name
+
+        architecture: None | str | Unset
+        if isinstance(self.architecture, Unset):
+            architecture = UNSET
+        else:
+            architecture = self.architecture
 
         cpu_topology = self.cpu_topology
 
@@ -136,6 +144,8 @@ class InstanceType:
                 "name": name,
             }
         )
+        if architecture is not UNSET:
+            field_dict["architecture"] = architecture
         if cpu_topology is not UNSET:
             field_dict["cpu_topology"] = cpu_topology
         if description is not UNSET:
@@ -175,6 +185,15 @@ class InstanceType:
         memory_size = d.pop("memory_size")
 
         name = d.pop("name")
+
+        def _parse_architecture(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        architecture = _parse_architecture(d.pop("architecture", UNSET))
 
         cpu_topology = d.pop("cpu_topology", UNSET)
 
@@ -268,6 +287,7 @@ class InstanceType:
             max_vcpus=max_vcpus,
             memory_size=memory_size,
             name=name,
+            architecture=architecture,
             cpu_topology=cpu_topology,
             description=description,
             kvm_hyperv=kvm_hyperv,

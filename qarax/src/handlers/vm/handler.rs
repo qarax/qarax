@@ -61,31 +61,151 @@ pub struct VmMetrics {
     pub counters: HashMap<String, HashMap<String, i64>>,
 }
 
-/// Pick an UP host with sufficient resources for scheduling a new VM.
-async fn pick_host(
+fn resolved_vm_architecture(env: &App, architecture: Option<&str>) -> String {
+    architecture
+        .and_then(common::architecture::normalize_architecture)
+        .unwrap_or_else(|| env.control_plane_architecture().to_string())
+}
+
+fn gpu_request(accel: Option<&host_gpus::AcceleratorConfig>) -> Option<hosts::GpuRequest> {
+    accel.map(|accel| hosts::GpuRequest {
+        count: accel.gpu_count,
+        vendor: accel.gpu_vendor.clone(),
+        model: accel.gpu_model.clone(),
+        min_vram_bytes: accel.min_vram_bytes,
+    })
+}
+
+fn persisted_vm_architecture(vm: &Vm) -> Option<String> {
+    vm.config
+        .get("architecture")
+        .and_then(|value| value.as_str())
+        .and_then(common::architecture::normalize_architecture)
+}
+
+fn ensure_host_matches_architecture(host: &Host, architecture: &str) -> Result<()> {
+    if let Some(host_architecture) = host.architecture.as_deref()
+        && host_architecture != architecture
+    {
+        return Err(crate::errors::Error::UnprocessableEntity(format!(
+            "selected host architecture {} does not match VM architecture {}",
+            host_architecture, architecture
+        )));
+    }
+
+    Ok(())
+}
+
+async fn root_disk_scheduling_requirements(
     env: &App,
-    requested_memory: i64,
-    accel: Option<&host_gpus::AcceleratorConfig>,
-) -> Result<Host> {
-    let host = if let Some(accel) = accel {
-        hosts::pick_up_host_with_gpu(
-            env.pool(),
-            requested_memory,
-            accel.gpu_count,
-            accel.gpu_vendor.as_deref(),
-            accel.gpu_model.as_deref(),
-            accel.min_vram_bytes,
-        )
-        .await?
-    } else {
-        hosts::pick_up_host(env.pool(), requested_memory).await?
+    root_disk_object_id: Option<Uuid>,
+) -> Result<(i64, Option<Uuid>)> {
+    let Some(object_id) = root_disk_object_id else {
+        return Ok((0, None));
     };
 
-    host.ok_or_else(|| {
+    let object = storage_objects::get(env.pool(), object_id).await?;
+    match object.object_type {
+        StorageObjectType::Disk | StorageObjectType::Snapshot | StorageObjectType::OciImage => {}
+        _ => {
+            return Err(crate::errors::Error::UnprocessableEntity(
+                "root_disk_object_id must reference a disk-like storage object".into(),
+            ));
+        }
+    }
+
+    let pool = storage_pools::get(env.pool(), object.storage_pool_id).await?;
+    let storage_pool_id = match pool.pool_type {
+        storage_pools::StoragePoolType::Local | storage_pools::StoragePoolType::Nfs => {
+            Some(pool.id)
+        }
+        storage_pools::StoragePoolType::OverlayBd => None,
+    };
+
+    Ok((object.size_bytes.max(0), storage_pool_id))
+}
+
+async fn validate_root_disk_for_host(
+    env: &App,
+    host_id: Uuid,
+    object_id: Uuid,
+    maybe_pool_id: Option<Uuid>,
+) -> Result<()> {
+    let Some(pool_id) = maybe_pool_id else {
+        return Ok(());
+    };
+
+    if !storage_pools::host_has_pool(env.pool(), host_id, pool_id).await? {
+        return Err(crate::errors::Error::UnprocessableEntity(format!(
+            "selected host is not attached to the storage pool backing root_disk_object_id {}",
+            object_id
+        )));
+    }
+
+    Ok(())
+}
+
+async fn scheduling_request_for_vm(
+    env: &App,
+    vm: &ResolvedNewVm,
+    accel: Option<&host_gpus::AcceleratorConfig>,
+) -> Result<hosts::SchedulingRequest> {
+    let (disk_bytes, storage_pool_id) =
+        root_disk_scheduling_requirements(env, vm.root_disk_object_id).await?;
+    Ok(hosts::SchedulingRequest {
+        memory_bytes: vm.memory_size,
+        vcpus: vm.boot_vcpus,
+        disk_bytes,
+        architecture: Some(resolved_vm_architecture(env, vm.architecture.as_deref())),
+        storage_pool_id,
+        gpu: gpu_request(accel),
+    })
+}
+
+async fn pick_host(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    env: &App,
+    request: &hosts::SchedulingRequest,
+) -> Result<Host> {
+    let host = hosts::pick_host_tx(tx, request, env.scheduling()).await?;
+
+    host.inspect(|host| {
+        info!(
+            host_id = %host.id,
+            host_name = %host.name,
+            requested_memory_bytes = request.memory_bytes,
+            requested_vcpus = request.vcpus,
+            requested_disk_bytes = request.disk_bytes,
+            architecture = ?request.architecture,
+            has_gpu_request = request.gpu.is_some(),
+            "scheduler selected host"
+        );
+    })
+    .ok_or_else(|| {
+        warn!(
+            requested_memory_bytes = request.memory_bytes,
+            requested_vcpus = request.vcpus,
+            requested_disk_bytes = request.disk_bytes,
+            architecture = ?request.architecture,
+            has_gpu_request = request.gpu.is_some(),
+            "scheduler found no eligible host"
+        );
         crate::errors::Error::UnprocessableEntity(
             "no hosts in UP state with sufficient resources available for scheduling".into(),
         )
     })
+}
+
+fn persist_vm_scheduling_metadata(vm: &mut ResolvedNewVm, architecture: &str) {
+    if let serde_json::Value::Object(map) = &mut vm.config {
+        map.insert(
+            "architecture".to_string(),
+            serde_json::Value::String(architecture.to_string()),
+        );
+        if let Some(nc) = vm.numa_config.clone() {
+            map.insert("numa_config".to_string(), nc);
+        }
+    }
 }
 
 /// Allocate GPUs for a VM inside an existing transaction. Returns an error if
@@ -127,30 +247,6 @@ fn image_ref_to_rootfs_path(image_ref: &str) -> String {
     format!("/var/lib/qarax/images/{}/rootfs", safe)
 }
 
-async fn validate_root_disk_for_host(env: &App, host_id: Uuid, object_id: Uuid) -> Result<()> {
-    let object = storage_objects::get(env.pool(), object_id).await?;
-    match object.object_type {
-        StorageObjectType::Disk | StorageObjectType::Snapshot | StorageObjectType::OciImage => {}
-        _ => {
-            return Err(crate::errors::Error::UnprocessableEntity(
-                "root_disk_object_id must reference a disk-like storage object".into(),
-            ));
-        }
-    }
-
-    let pool = storage_pools::get(env.pool(), object.storage_pool_id).await?;
-    if pool.pool_type == storage_pools::StoragePoolType::Local
-        && !storage_pools::host_has_pool(env.pool(), host_id, pool.id).await?
-    {
-        return Err(crate::errors::Error::UnprocessableEntity(format!(
-            "selected host is not attached to the local storage pool backing root_disk_object_id {}",
-            object_id
-        )));
-    }
-
-    Ok(())
-}
-
 async fn create_root_disk_record(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     vm_id: Uuid,
@@ -179,6 +275,56 @@ async fn host_for_vm(env: &App, vm_id: Uuid) -> Result<Host> {
     hosts::get_by_id(env.pool(), host_id)
         .await?
         .ok_or_else(|| crate::errors::Error::UnprocessableEntity("assigned host not found".into()))
+}
+
+async fn ensure_resize_capacity(
+    env: &App,
+    vm: &Vm,
+    host: &Host,
+    desired_vcpus: Option<i32>,
+    desired_ram: Option<i64>,
+) -> Result<()> {
+    let Some(capacity) = hosts::get_resource_capacity(env.pool(), host.id).await? else {
+        return Err(crate::errors::Error::NotFound);
+    };
+
+    let target_vcpus = desired_vcpus.unwrap_or(vm.boot_vcpus) as i64;
+    if let Some(total_cpus) = capacity.total_cpus {
+        let allocated_vcpus = capacity.allocated_vcpus - i64::from(vm.boot_vcpus) + target_vcpus;
+        let max_vcpus =
+            (f64::from(total_cpus) * env.scheduling().cpu_oversubscription_ratio).floor();
+        if (allocated_vcpus as f64) > max_vcpus {
+            return Err(crate::errors::Error::UnprocessableEntity(format!(
+                "resizing to {} vCPUs would exceed host CPU capacity on {}",
+                target_vcpus, host.name
+            )));
+        }
+    }
+
+    let target_memory = desired_ram.unwrap_or(vm.memory_size);
+    if let Some(total_memory_bytes) = capacity.total_memory_bytes {
+        let allocated_memory = capacity.allocated_memory_bytes - vm.memory_size + target_memory;
+        let max_memory =
+            (total_memory_bytes as f64 * env.scheduling().memory_oversubscription_ratio).floor();
+        if (allocated_memory as f64) > max_memory {
+            return Err(crate::errors::Error::UnprocessableEntity(format!(
+                "resizing to {} bytes would exceed host memory capacity on {}",
+                target_memory, host.name
+            )));
+        }
+    }
+
+    if desired_ram.is_some_and(|ram| ram > vm.memory_size)
+        && let Some(available_memory_bytes) = capacity.available_memory_bytes
+        && available_memory_bytes <= env.scheduling().memory_health_floor_bytes
+    {
+        return Err(crate::errors::Error::UnprocessableEntity(format!(
+            "host {} is below the configured memory health floor",
+            host.name
+        )));
+    }
+
+    Ok(())
 }
 
 #[utoipa::path(
@@ -275,21 +421,28 @@ pub(crate) async fn create_vm_internal(env: &App, vm: ResolvedNewVm) -> Result<U
         .accelerator_config
         .as_ref()
         .and_then(host_gpus::AcceleratorConfig::from_value);
-    let host = pick_host(env, vm.memory_size, accel_config.as_ref()).await?;
-    if let Some(root_disk_object_id) = vm.root_disk_object_id {
-        validate_root_disk_for_host(env, host.id, root_disk_object_id).await?;
-    }
-
-    // Merge numa_config into vm.config so it's available at start time.
     let mut vm = vm;
-    if let Some(nc) = vm.numa_config.clone()
-        && let serde_json::Value::Object(map) = &mut vm.config
-    {
-        map.insert("numa_config".to_string(), nc);
-    }
+    let scheduling_request = scheduling_request_for_vm(env, &vm, accel_config.as_ref()).await?;
+    let target_architecture = scheduling_request
+        .architecture
+        .clone()
+        .unwrap_or_else(|| env.control_plane_architecture().to_string());
+    persist_vm_scheduling_metadata(&mut vm, &target_architecture);
 
     let mut tx = env.pool().begin().await?;
-    let id = vms::create_tx(&mut tx, &vm).await?;
+    let host = pick_host(&mut tx, env, &scheduling_request).await?;
+    ensure_host_matches_architecture(&host, &target_architecture)?;
+    if let Some(root_disk_object_id) = vm.root_disk_object_id {
+        validate_root_disk_for_host(
+            env,
+            host.id,
+            root_disk_object_id,
+            scheduling_request.storage_pool_id,
+        )
+        .await?;
+    }
+
+    let id = vms::create_tx(&mut tx, &vm, Some(host.id)).await?;
     if let Some(root_disk_object_id) = vm.root_disk_object_id {
         create_root_disk_record(&mut tx, id, root_disk_object_id).await?;
     }
@@ -305,7 +458,6 @@ pub(crate) async fn create_vm_internal(env: &App, vm: ResolvedNewVm) -> Result<U
     tx.commit().await?;
 
     register_static_ips(env.pool(), id, vm.networks.as_deref()).await?;
-    let _ = vms::update_host_id(env.pool(), id, host.id).await;
 
     if let Some(network_id) = vm.network_id {
         create_managed_network_interface(env.pool(), id, network_id).await?;
@@ -326,9 +478,25 @@ async fn create_with_image(env: App, vm: ResolvedNewVm) -> Result<axum::response
         .accelerator_config
         .as_ref()
         .and_then(host_gpus::AcceleratorConfig::from_value);
-    let host = pick_host(&env, vm.memory_size, accel_config.as_ref()).await?;
+    let mut vm = vm;
+    let scheduling_request = scheduling_request_for_vm(&env, &vm, accel_config.as_ref()).await?;
+    let target_architecture = scheduling_request
+        .architecture
+        .clone()
+        .unwrap_or_else(|| env.control_plane_architecture().to_string());
+    persist_vm_scheduling_metadata(&mut vm, &target_architecture);
+
+    let mut tx = env.pool().begin().await?;
+    let host = pick_host(&mut tx, &env, &scheduling_request).await?;
+    ensure_host_matches_architecture(&host, &target_architecture)?;
     if let Some(root_disk_object_id) = vm.root_disk_object_id {
-        validate_root_disk_for_host(&env, host.id, root_disk_object_id).await?;
+        validate_root_disk_for_host(
+            &env,
+            host.id,
+            root_disk_object_id,
+            scheduling_request.storage_pool_id,
+        )
+        .await?;
     }
 
     // Check if the selected host has an OverlayBD storage pool; if so, use that path.
@@ -389,50 +557,6 @@ async fn create_with_image(env: App, vm: ResolvedNewVm) -> Result<axum::response
         }
     }
 
-    // Create VM row with PENDING status
-    let mut tx = env.pool().begin().await?;
-    let vm_id = vms::create_tx_with_status(&mut tx, &vm, VmStatus::Pending).await?;
-
-    // Store network interfaces in the transaction
-    for net in vm.networks.as_deref().unwrap_or(&[]) {
-        network_interfaces::create(&mut tx, vm_id, net).await?;
-    }
-    if let Some(root_disk_object_id) = vm.root_disk_object_id {
-        create_root_disk_record(&mut tx, vm_id, root_disk_object_id).await?;
-    }
-
-    // Allocate GPUs atomically inside the transaction
-    if let Some(ref accel) = accel_config {
-        allocate_vm_gpus(&mut tx, host.id, vm_id, accel).await?;
-    }
-
-    tx.commit().await?;
-
-    // For any explicit networks with a static IP + network_id, register in IPAM.
-    register_static_ips(env.pool(), vm_id, vm.networks.as_deref()).await?;
-
-    // If network_id is provided, allocate an IP and create a default interface.
-    // This mirrors the synchronous create path so async image-based VMs get managed networking.
-    if let Some(network_id) = vm.network_id {
-        create_managed_network_interface(env.pool(), vm_id, network_id).await?;
-    }
-
-    // Record host assignment
-    let _ = vms::update_host_id(env.pool(), vm_id, host.id).await;
-
-    // Create job record
-    let job = jobs::create(
-        env.pool(),
-        NewJob {
-            job_type: JobType::ImagePull,
-            description: Some(format!("Pulling image {}", image_ref)),
-            resource_id: Some(vm_id),
-            resource_type: Some("vm".to_string()),
-        },
-    )
-    .await?;
-    let job_id = job.id;
-
     // Validate persistent_upper_pool_id if provided: must be Local/NFS, Active,
     // and already attached to the selected host.
     let persistent_upper_pool_id = vm.persistent_upper_pool_id;
@@ -479,6 +603,46 @@ async fn create_with_image(env: App, vm: ResolvedNewVm) -> Result<axum::response
             )));
         }
     }
+
+    // Create VM row with PENDING status
+    let vm_id = vms::create_tx_with_status(&mut tx, &vm, Some(host.id), VmStatus::Pending).await?;
+
+    // Store network interfaces in the transaction
+    for net in vm.networks.as_deref().unwrap_or(&[]) {
+        network_interfaces::create(&mut tx, vm_id, net).await?;
+    }
+    if let Some(root_disk_object_id) = vm.root_disk_object_id {
+        create_root_disk_record(&mut tx, vm_id, root_disk_object_id).await?;
+    }
+
+    // Allocate GPUs atomically inside the transaction
+    if let Some(ref accel) = accel_config {
+        allocate_vm_gpus(&mut tx, host.id, vm_id, accel).await?;
+    }
+
+    tx.commit().await?;
+
+    // For any explicit networks with a static IP + network_id, register in IPAM.
+    register_static_ips(env.pool(), vm_id, vm.networks.as_deref()).await?;
+
+    // If network_id is provided, allocate an IP and create a default interface.
+    // This mirrors the synchronous create path so async image-based VMs get managed networking.
+    if let Some(network_id) = vm.network_id {
+        create_managed_network_interface(env.pool(), vm_id, network_id).await?;
+    }
+
+    // Create job record
+    let job = jobs::create(
+        env.pool(),
+        NewJob {
+            job_type: JobType::ImagePull,
+            description: Some(format!("Pulling image {}", image_ref)),
+            resource_id: Some(vm_id),
+            resource_type: Some("vm".to_string()),
+        },
+    )
+    .await?;
+    let job_id = job.id;
 
     // Spawn background task
     let db_pool = env.pool_arc();
@@ -816,6 +980,9 @@ pub(crate) async fn start_vm_internal(env: &App, vm_id: Uuid) -> Result<Uuid> {
     }
 
     let host = host_for_vm(env, vm_id).await?;
+    if let Some(architecture) = persisted_vm_architecture(&vm) {
+        ensure_host_matches_architecture(&host, &architecture)?;
+    }
 
     // Set VM status to Pending to prevent double-start
     vms::update_status(env.pool(), vm_id, VmStatus::Pending).await?;
@@ -2984,6 +3151,7 @@ pub async fn resize_vm(
     }
 
     let host = host_for_vm(&env, vm_id).await?;
+    ensure_resize_capacity(&env, &vm, &host, req.desired_vcpus, req.desired_ram).await?;
     NodeClient::new(&host.address, host.port as u16)
         .resize_vm(vm_id, req.desired_vcpus, req.desired_ram)
         .await

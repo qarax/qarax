@@ -3,7 +3,7 @@ use tokio::net::TcpListener;
 use common::telemtry::{get_subscriber, init_subscriber};
 use once_cell::sync::Lazy;
 use qarax::{
-    configuration::{DatabaseSettings, get_configuration},
+    configuration::{DatabaseSettings, default_control_plane_architecture, get_configuration},
     startup::run,
 };
 use reqwest::StatusCode;
@@ -64,6 +64,8 @@ async fn spawn_app() -> TestApp {
         listener,
         connection_pool.clone(),
         configuration.vm_defaults.clone(),
+        configuration.scheduling.clone(),
+        default_control_plane_architecture(),
     )
     .await
     .unwrap();

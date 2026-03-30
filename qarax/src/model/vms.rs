@@ -229,6 +229,7 @@ pub struct NewVm {
     pub vm_template_id: Option<Uuid>,
     pub instance_type_id: Option<Uuid>,
     pub hypervisor: Option<Hypervisor>,
+    pub architecture: Option<String>,
 
     // CPU
     pub boot_vcpus: Option<i32>,
@@ -297,6 +298,7 @@ pub struct ResolvedNewVm {
     pub name: String,
     pub tags: Vec<String>,
     pub hypervisor: Hypervisor,
+    pub architecture: Option<String>,
     pub boot_vcpus: i32,
     pub max_vcpus: i32,
     pub cpu_topology: Option<serde_json::Value>,
@@ -352,6 +354,7 @@ pub async fn resolve_create_request(pool: &PgPool, request: NewVm) -> Result<Res
         vm_template_id,
         instance_type_id,
         hypervisor,
+        architecture,
         boot_vcpus,
         max_vcpus,
         cpu_topology,
@@ -388,6 +391,12 @@ pub async fn resolve_create_request(pool: &PgPool, request: NewVm) -> Result<Res
         Some(id) => Some(instance_types::get(pool, id).await?),
         None => None,
     };
+
+    let architecture = architecture
+        .or(instance_type
+            .as_ref()
+            .and_then(|it| it.architecture.clone()))
+        .and_then(|arch| common::architecture::normalize_architecture(&arch));
 
     let boot_vcpus = boot_vcpus
         .or(instance_type.as_ref().map(|it| it.boot_vcpus))
@@ -438,6 +447,7 @@ pub async fn resolve_create_request(pool: &PgPool, request: NewVm) -> Result<Res
         name,
         tags: tags.unwrap_or_default(),
         hypervisor,
+        architecture,
         boot_vcpus,
         max_vcpus,
         cpu_topology: cpu_topology
@@ -682,7 +692,7 @@ WHERE id = $1
 
 pub async fn create(pool: &PgPool, vm: &ResolvedNewVm) -> Result<Uuid, sqlx::Error> {
     let mut tx = pool.begin().await?;
-    let id = create_tx(&mut tx, vm).await?;
+    let id = create_tx(&mut tx, vm, None).await?;
     tx.commit().await?;
     Ok(id)
 }
@@ -691,14 +701,16 @@ pub async fn create(pool: &PgPool, vm: &ResolvedNewVm) -> Result<Uuid, sqlx::Err
 pub async fn create_tx(
     tx: &mut Transaction<'_, Postgres>,
     vm: &ResolvedNewVm,
+    host_id: Option<Uuid>,
 ) -> Result<Uuid, sqlx::Error> {
-    create_tx_with_status(tx, vm, VmStatus::Created).await
+    create_tx_with_status(tx, vm, host_id, VmStatus::Created).await
 }
 
 /// Creates a VM row with a specific initial status inside the given transaction.
 pub async fn create_tx_with_status(
     tx: &mut Transaction<'_, Postgres>,
     vm: &ResolvedNewVm,
+    host_id: Option<Uuid>,
     status: VmStatus,
 ) -> Result<Uuid, sqlx::Error> {
     let id = Uuid::new_v4();
@@ -708,7 +720,7 @@ pub async fn create_tx_with_status(
     sqlx::query(
         r#"
 INSERT INTO vms (
-    id, name, tags, status, hypervisor,
+    id, name, tags, status, host_id, hypervisor,
     boot_vcpus, max_vcpus, cpu_topology, kvm_hyperv,
     memory_size, memory_hotplug_size, memory_mergeable, memory_shared,
     memory_hugepages, memory_hugepage_size, memory_prefault, memory_thp,
@@ -717,13 +729,13 @@ INSERT INTO vms (
     config
 )
 VALUES (
-    $1, $2, $3, $4, $5,
-    $6, $7, $8, $9,
-    $10, $11, $12, $13,
-    $14, $15, $16, $17,
-    $18, $19, $20, $21,
-    $22, $23, $24,
-    $25
+    $1, $2, $3, $4, $5, $6,
+    $7, $8, $9, $10,
+    $11, $12, $13, $14,
+    $15, $16, $17, $18,
+    $19, $20, $21, $22,
+    $23, $24, $25,
+    $26
 )
         "#,
     )
@@ -731,6 +743,7 @@ VALUES (
     .bind(&vm.name)
     .bind(&vm.tags)
     .bind(status)
+    .bind(host_id)
     .bind(vm.hypervisor.clone())
     .bind(vm.boot_vcpus)
     .bind(vm.max_vcpus)
