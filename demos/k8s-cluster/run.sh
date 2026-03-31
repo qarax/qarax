@@ -588,7 +588,7 @@ if ! run storage-pool get "$STORAGE_POOL_NAME" &>/dev/null; then
 		--name "$STORAGE_POOL_NAME" \
 		--pool-type local \
 		--config "{\"path\":\"${STORAGE_POOL_PATH}\"}" \
-		--attach-all-hosts
+		--host "$HOST_NAME"
 	ok "Storage pool ${STORAGE_POOL_NAME} created at ${STORAGE_POOL_PATH}"
 else
 	ok "Storage pool ${STORAGE_POOL_NAME} already exists"

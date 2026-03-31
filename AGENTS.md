@@ -148,7 +148,7 @@ YAML files in `configuration/` (base.yaml, local.yaml, production.yaml), selecte
 
 ## CI
 
-GitHub Actions (`rust-ci.yml`): fmt check (nightly) → clippy → build (musl) → unit tests → E2E tests. E2E tests run on push to master or PRs with `run-e2e` label. E2E uses pytest against a Docker Compose stack with KVM passthrough (`e2e/`). E2E tests cover: cloud-init, hotplug, network, storage types, GPU scheduling, and lifecycle hooks.
+GitHub Actions (`rust-ci.yml`): fmt check (nightly) → clippy → build (musl) → unit tests → E2E tests. E2E tests run on push to master or when a repo member comments `/run-e2e` on a PR, which dispatches `rust-ci.yml` against that PR's merge ref from a default-branch workflow. E2E uses pytest against a Docker Compose stack with KVM passthrough (`e2e/`). E2E tests cover: cloud-init, hotplug, network, storage types, GPU scheduling, and lifecycle hooks.
 
 ## Versioning
 

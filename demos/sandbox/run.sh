@@ -36,6 +36,7 @@ SERVER="${QARAX_SERVER:-http://localhost:8000}"
 IDLE_TIMEOUT="${SANDBOX_IDLE_TIMEOUT:-90}"
 TEMPLATE_NAME="sandbox-demo-template"
 BOOT_SOURCE_NAME="sandbox-demo-boot"
+HOST_NAME="${QARAX_HOST:-local-node}"
 POOL_NAME="sandbox-demo-pool"
 POOL_PATH="/var/lib/qarax/images"
 KERNEL_PATH="/var/lib/qarax/images/vmlinux"
@@ -330,7 +331,7 @@ else
 			--name "$POOL_NAME" \
 			--pool-type local \
 			--config "{\"path\":\"$POOL_PATH\"}" \
-			--attach-all-hosts
+			--host "$HOST_NAME"
 		echo ""
 	else
 		info "Storage pool '$POOL_NAME' already exists."

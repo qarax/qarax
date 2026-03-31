@@ -44,8 +44,8 @@ enum HostCommand {
         /// SSH user
         #[arg(long)]
         user: String,
-        /// SSH password
-        #[arg(long)]
+        /// SSH password (omit for key-based auth)
+        #[arg(long, default_value = "")]
         password: String,
     },
     /// Deploy a bootc image to a host

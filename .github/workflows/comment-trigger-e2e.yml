@@ -1,0 +1,32 @@
+name: Comment Trigger E2E
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  actions: write
+  contents: read
+  issues: read
+  pull-requests: read
+
+jobs:
+  dispatch:
+    name: Dispatch E2E Run
+    runs-on: ubuntu-latest
+    if: github.event.issue.pull_request && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && contains(github.event.comment.body, '/run-e2e')
+    steps:
+      - name: Dispatch Rust CI workflow
+        uses: actions/github-script@v8
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'rust-ci.yml',
+              ref: context.payload.repository.default_branch,
+              inputs: {
+                run_e2e: 'true',
+                checkout_ref: `refs/pull/${context.payload.issue.number}/merge`,
+              },
+            })

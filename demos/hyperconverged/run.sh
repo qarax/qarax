@@ -685,7 +685,7 @@ echo ""
 
 echo "Creating overlaybd storage pool..."
 "$QARAX_CLI" storage-pool create --name overlaybd-pool --pool-type overlaybd \
-	--config '{"url":"http://'"${VM_SEES_HOST}"':'"${REGISTRY_PORT}"'"}' --attach-all-hosts
+	--config '{"url":"http://'"${VM_SEES_HOST}"':'"${REGISTRY_PORT}"'"}'
 
 echo "Importing OCI image: ${DEMO_IMAGE}..."
 "$QARAX_CLI" storage-pool import --pool overlaybd-pool \
@@ -705,7 +705,7 @@ echo ""
 if [[ "$WITH_LOCAL" -eq 1 ]]; then
 	echo "Creating local storage pool..."
 	"$QARAX_CLI" storage-pool create --name local-pool --pool-type local \
-		--config '{"path":"'"${LOCAL_POOL_PATH}"'"}' --attach-all-hosts
+		--config '{"path":"'"${LOCAL_POOL_PATH}"'"}' --host local-node
 	echo -e "${GREEN}Local storage pool 'local-pool' created (path: ${LOCAL_POOL_PATH})${NC}"
 	echo ""
 fi
@@ -713,7 +713,7 @@ fi
 if [[ "$WITH_NFS" -eq 1 ]]; then
 	echo "Creating NFS storage pool..."
 	"$QARAX_CLI" storage-pool create --name nfs-pool --pool-type nfs \
-		--config '{"url":"'"${NFS_URL}"'"}' --attach-all-hosts
+		--config '{"url":"'"${NFS_URL}"'"}'
 	echo -e "${GREEN}NFS storage pool 'nfs-pool' created (url: ${NFS_URL})${NC}"
 	echo ""
 fi

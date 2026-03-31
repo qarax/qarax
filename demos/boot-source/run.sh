@@ -26,6 +26,7 @@ set -euo pipefail
 
 # Defaults (match hack/run-local.sh --with-vm paths inside the qarax-node container)
 VM_NAME="demo-bootsrc-vm"
+HOST_NAME="${QARAX_HOST:-local-node}"
 POOL_NAME="demo-local-pool"
 POOL_PATH="/var/lib/qarax/images"
 BOOT_SOURCE_NAME="demo-boot"
@@ -127,9 +128,9 @@ echo ""
 
 # Step 1: Create a local storage pool (idempotent — reuses if exists)
 echo "--- Step 1: Create local storage pool ---"
-echo "\$ qarax storage-pool create --name $POOL_NAME --pool-type local --config '{\"path\":\"$POOL_PATH\"}' --attach-all-hosts"
+echo "\$ qarax storage-pool create --name $POOL_NAME --pool-type local --config '{\"path\":\"$POOL_PATH\"}' --host $HOST_NAME"
 $QARAX storage-pool create --name "$POOL_NAME" --pool-type local \
-	--config "{\"path\":\"$POOL_PATH\"}" --attach-all-hosts 2>/dev/null || echo "(pool may already exist, continuing)"
+	--config "{\"path\":\"$POOL_PATH\"}" --host "$HOST_NAME" 2>/dev/null || echo "(pool may already exist, continuing)"
 echo ""
 
 # Step 2: Transfer kernel into the pool

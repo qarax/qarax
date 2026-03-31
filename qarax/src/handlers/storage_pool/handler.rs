@@ -79,41 +79,44 @@ pub async fn create(
     Extension(env): Extension<App>,
     Json(new_pool): Json<NewStoragePool>,
 ) -> Result<(StatusCode, String)> {
-    let id = storage_pools::create(env.pool(), new_pool).await?;
+    let id = storage_pools::create(env.pool(), new_pool.clone()).await?;
 
-    // Background: attach every UP host to this new pool via gRPC, then record in DB.
-    let db_pool = env.pool_arc();
-    tokio::spawn(async move {
-        let pool = match storage_pools::get(&db_pool, id).await {
-            Ok(p) => p,
-            Err(e) => {
-                warn!(pool_id = %id, error = %e, "Failed to fetch new pool for host attachment");
-                return;
-            }
-        };
+    // For shared pool types (NFS, OverlayBD), auto-attach every UP host.
+    // Local pools are host-specific and must be attached explicitly.
+    if new_pool.pool_type.is_shared() {
+        let db_pool = env.pool_arc();
+        tokio::spawn(async move {
+            let pool = match storage_pools::get(&db_pool, id).await {
+                Ok(p) => p,
+                Err(e) => {
+                    warn!(pool_id = %id, error = %e, "Failed to fetch new pool for host attachment");
+                    return;
+                }
+            };
 
-        let up_hosts = match hosts::list_up(&db_pool).await {
-            Ok(h) => h,
-            Err(e) => {
-                warn!(pool_id = %id, error = %e, "Failed to list UP hosts for pool attachment");
-                return;
-            }
-        };
+            let up_hosts = match hosts::list_up(&db_pool).await {
+                Ok(h) => h,
+                Err(e) => {
+                    warn!(pool_id = %id, error = %e, "Failed to list UP hosts for pool attachment");
+                    return;
+                }
+            };
 
-        for host in up_hosts {
-            let client = NodeClient::new(&host.address, host.port as u16);
-            match client.attach_storage_pool(&pool).await {
-                Ok(()) => {
-                    if let Err(e) = storage_pools::attach_host(&db_pool, id, host.id).await {
-                        warn!(pool_id = %id, host_id = %host.id, error = %e, "Failed to record pool attachment in DB");
+            for host in up_hosts {
+                let client = NodeClient::new(&host.address, host.port as u16);
+                match client.attach_storage_pool(&pool).await {
+                    Ok(()) => {
+                        if let Err(e) = storage_pools::attach_host(&db_pool, id, host.id).await {
+                            warn!(pool_id = %id, host_id = %host.id, error = %e, "Failed to record pool attachment in DB");
+                        }
+                    }
+                    Err(e) => {
+                        warn!(pool_id = %id, host_id = %host.id, error = %e, "Failed to attach storage pool to host via gRPC");
                     }
                 }
-                Err(e) => {
-                    warn!(pool_id = %id, host_id = %host.id, error = %e, "Failed to attach storage pool to host via gRPC");
-                }
             }
-        }
-    });
+        });
+    }
 
     Ok((StatusCode::CREATED, id.to_string()))
 }

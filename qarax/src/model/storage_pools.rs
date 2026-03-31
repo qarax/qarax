@@ -68,15 +68,18 @@ pub enum StoragePoolType {
 }
 
 impl StoragePoolType {
-    /// Whether VMs using this pool type can be live-migrated.
+    /// Whether this pool type represents shared storage accessible from multiple hosts.
     ///
     /// NFS pools are accessible from multiple hosts at the same path.
-    /// OverlayBD pools are backed by a shared OCI registry — any host
-    /// attached to the same pool can create its own TCMU backstore for
-    /// the same image (lazy-pull, no data copy needed).
-    /// Local pools are truly node-local and cannot be migrated.
-    pub fn supports_live_migration(&self) -> bool {
+    /// OverlayBD pools are backed by a shared OCI registry.
+    /// Local pools are host-specific and must be attached explicitly.
+    pub fn is_shared(&self) -> bool {
         matches!(self, StoragePoolType::Nfs | StoragePoolType::OverlayBd)
+    }
+
+    /// Whether VMs using this pool type can be live-migrated.
+    pub fn supports_live_migration(&self) -> bool {
+        self.is_shared()
     }
 }
 
@@ -245,6 +248,23 @@ pub async fn detach_host(pool: &PgPool, pool_id: Uuid, host_id: Uuid) -> Result<
         .await?;
 
     Ok(())
+}
+
+/// List all storage pools attached to a specific host.
+pub async fn list_for_host(pool: &PgPool, host_id: Uuid) -> Result<Vec<StoragePool>, sqlx::Error> {
+    let rows: Vec<StoragePoolRow> = sqlx::query_as::<_, StoragePoolRow>(
+        r#"
+SELECT sp.id, sp.name, sp.pool_type, sp.status, sp.config, sp.capacity_bytes, sp.allocated_bytes
+FROM storage_pools sp
+JOIN host_storage_pools hsp ON hsp.storage_pool_id = sp.id
+WHERE hsp.host_id = $1
+        "#,
+    )
+    .bind(host_id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows.into_iter().map(|r| r.into()).collect())
 }
 
 pub async fn find_host_for_pool(pool: &PgPool, pool_id: Uuid) -> Result<Option<Uuid>, sqlx::Error> {

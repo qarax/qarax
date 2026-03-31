@@ -235,12 +235,21 @@ pub async fn init(
 
     let updated_host = hosts::require_by_id(env.pool(), host_id).await?;
 
-    // Background: attach this host to every existing storage pool via gRPC, then record in DB.
+    // Background: re-attach pools this host already belongs to (including local pools),
+    // and attach any shared pools (NFS, OverlayBD) that it hasn't joined yet.
     let db_pool = env.pool_arc();
     let host_address = host.address.clone();
     let host_port = host.port;
     tokio::spawn(async move {
-        let pools = match storage_pools::list(&db_pool, None).await {
+        let existing_pools = match storage_pools::list_for_host(&db_pool, host_id).await {
+            Ok(p) => p,
+            Err(e) => {
+                warn!(host_id = %host_id, error = %e, "Failed to list existing pools for host");
+                return;
+            }
+        };
+
+        let all_pools = match storage_pools::list(&db_pool, None).await {
             Ok(p) => p,
             Err(e) => {
                 warn!(host_id = %host_id, error = %e, "Failed to list storage pools for host init");
@@ -248,15 +257,37 @@ pub async fn init(
             }
         };
 
+        let existing_ids: std::collections::HashSet<Uuid> =
+            existing_pools.iter().map(|p| p.id).collect();
+
+        // Shared pools this host hasn't joined yet
+        let new_shared: Vec<_> = all_pools
+            .into_iter()
+            .filter(|p| p.pool_type.is_shared() && !existing_ids.contains(&p.id))
+            .collect();
+
         let client = NodeClient::new(&host_address, host_port as u16);
-        for pool in pools {
-            let pool_id = pool.id;
-            match client.attach_storage_pool(&pool).await {
+
+        // Re-attach existing pools via gRPC (e.g. recreate local dirs after reboot)
+        for pool in &existing_pools {
+            if let Err(e) = client.attach_storage_pool(pool).await {
+                warn!(
+                    host_id = %host_id,
+                    pool_id = %pool.id,
+                    error = %e,
+                    "Failed to re-attach storage pool to host via gRPC"
+                );
+            }
+        }
+
+        // Attach new shared pools
+        for pool in &new_shared {
+            match client.attach_storage_pool(pool).await {
                 Ok(()) => {
-                    if let Err(e) = storage_pools::attach_host(&db_pool, pool_id, host_id).await {
+                    if let Err(e) = storage_pools::attach_host(&db_pool, pool.id, host_id).await {
                         warn!(
                             host_id = %host_id,
-                            pool_id = %pool_id,
+                            pool_id = %pool.id,
                             error = %e,
                             "Failed to record pool attachment in DB"
                         );
@@ -265,9 +296,9 @@ pub async fn init(
                 Err(e) => {
                     warn!(
                         host_id = %host_id,
-                        pool_id = %pool_id,
+                        pool_id = %pool.id,
                         error = %e,
-                        "Failed to attach storage pool to host via gRPC"
+                        "Failed to attach shared storage pool to host via gRPC"
                     );
                 }
             }

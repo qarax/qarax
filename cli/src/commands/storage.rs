@@ -51,9 +51,9 @@ enum StoragePoolCommand {
         /// Pool config as JSON (e.g. '{"url":"http://registry:5000"}' for overlaybd)
         #[arg(long, value_name = "JSON")]
         config: Option<String>,
-        /// Automatically attach all active hosts to this pool
+        /// Host to attach this pool to (name or ID, for local pools)
         #[arg(long)]
-        attach_all_hosts: bool,
+        host: Option<String>,
     },
     /// Delete a storage pool
     Delete {
@@ -169,7 +169,7 @@ pub async fn run_pool(
             pool_type,
             capacity,
             config,
-            attach_all_hosts,
+            host,
         } => {
             let config = match config {
                 Some(s) => serde_json::from_str(&s)
@@ -189,20 +189,13 @@ pub async fn run_pool(
                 println!("Created storage pool: {id}");
             }
 
-            if attach_all_hosts {
+            if let Some(host_name) = host {
                 let pool_uuid = uuid::Uuid::parse_str(&id)
                     .map_err(|e| anyhow::anyhow!("Invalid pool UUID: {}", e))?;
-                let hosts = api::hosts::list(client, None, None).await?;
-                for h in active_hosts(&hosts) {
-                    if let Err(e) = api::storage::attach_host_to_pool(client, pool_uuid, h.id).await
-                    {
-                        eprintln!(
-                            "Warning: Failed to attach host {} ({}): {}",
-                            h.name, h.id, e
-                        );
-                    } else if matches!(output, OutputFormat::Table) {
-                        println!("Attached host: {}", h.name);
-                    }
+                let host_id = resolve_host_id(client, &host_name).await?;
+                api::storage::attach_host_to_pool(client, pool_uuid, host_id).await?;
+                if matches!(output, OutputFormat::Table) {
+                    println!("Attached host: {host_name}");
                 }
             }
         }
