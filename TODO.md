@@ -57,3 +57,6 @@ Platform
   - Scheduled backups — cron-based snapshot scheduling with retention policies
   - Memory ballooning — virtio-balloon API for memory reclaim
   - TPM support — vTPM via swtpm
+
+- make run-local: suggests IDs instead of names - make project wide pass
+- improve VM create with image import

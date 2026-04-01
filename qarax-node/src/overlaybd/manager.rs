@@ -371,6 +371,8 @@ impl OverlayBdManager {
             ))
         })?;
 
+        self.wait_for_tcmu_control_files(&tcmu_dir).await?;
+
         let dev_config = format!(
             "dev_config=overlaybd/{},dev_size={},dev_max_sectors=128",
             config_file.display(),
@@ -385,13 +387,6 @@ impl OverlayBdManager {
                     e
                 ))
             })?;
-
-        // Pre-create UIO device nodes covering the minor the kernel is about to allocate.
-        // The kernel assigns UIO minors from a global pool shared with the host; udev
-        // does not run inside the container, so nodes for minors > 7 are missing.
-        // We pre-create all existing minors +1 BEFORE calling enable so the node
-        // exists before overlaybd-tcmu's inotify handler fires.
-        self.pre_create_uio_nodes().await;
 
         tokio::fs::write(tcmu_dir.join("enable"), "1\n")
             .await
@@ -535,7 +530,12 @@ impl OverlayBdManager {
                 Err(_) => continue,
             };
 
-            if device_path.is_empty() {
+            if !looks_like_device_path(&device_path) {
+                warn!(
+                    "Ignoring stale OverlayBD recovery state for VM {}: invalid result '{}'",
+                    vm_id, device_path
+                );
+                self.unmount(&vm_id).await;
                 continue;
             }
 
@@ -710,79 +710,6 @@ impl OverlayBdManager {
         Ok(oci_config.config)
     }
 
-    /// Ensure /dev/uioN nodes exist for all UIO devices visible in /sys/class/uio/,
-    /// plus one extra slot for the device the kernel is about to allocate.
-    ///
-    /// The kernel allocates UIO minors from a global IDR (lowest-first).  When the
-    /// container shares `/sys/kernel/config` with the host, the host kernel may have
-    /// already allocated minors 0–N for other purposes.  The entrypoint pre-creates
-    /// only uio0–uio7; any higher minor won't have a node, and overlaybd-tcmu's
-    /// open("/dev/uioN") will fail with ENOENT, leaving the device DEACTIVATED.
-    async fn pre_create_uio_nodes(&self) {
-        // Read the UIO character-device major from /proc/devices.
-        let uio_major = match tokio::fs::read_to_string("/proc/devices").await {
-            Ok(content) => content.lines().find_map(|line| {
-                let mut parts = line.trim().splitn(2, ' ');
-                let major_str = parts.next()?;
-                let name = parts.next()?.trim();
-                if name == "uio" {
-                    major_str.parse::<u64>().ok()
-                } else {
-                    None
-                }
-            }),
-            Err(_) => None,
-        };
-
-        let Some(uio_major) = uio_major else {
-            warn!(
-                "Could not determine UIO major from /proc/devices; skipping uio node pre-creation"
-            );
-            return;
-        };
-
-        // Find the highest minor already allocated.
-        let mut max_minor: u64 = 0;
-        if let Ok(mut rd) = tokio::fs::read_dir("/sys/class/uio").await {
-            while let Ok(Some(entry)) = rd.next_entry().await {
-                if let Ok(dev_nums) = tokio::fs::read_to_string(entry.path().join("dev")).await
-                    && let Some((_, minor_str)) = dev_nums.trim().split_once(':')
-                    && let Ok(minor) = minor_str.parse::<u64>()
-                {
-                    max_minor = max_minor.max(minor);
-                }
-            }
-        }
-
-        // Create nodes for minors 0 through max_minor+1 (inclusive).
-        // The new device will get the lowest free minor, which is ≤ max_minor+1.
-        for minor in 0..=(max_minor + 1) {
-            let dev_path = format!("/dev/uio{}", minor);
-            if std::path::Path::new(&dev_path).exists() {
-                continue;
-            }
-            info!(
-                "Pre-creating UIO device node {} ({}:{})",
-                dev_path, uio_major, minor
-            );
-            match tokio::process::Command::new("mknod")
-                .args([&dev_path, "c", &uio_major.to_string(), &minor.to_string()])
-                .output()
-                .await
-            {
-                Ok(out) if out.status.success() => {}
-                Ok(out) => warn!(
-                    "mknod {} c {} {} failed: {}",
-                    dev_path,
-                    uio_major,
-                    minor,
-                    String::from_utf8_lossy(&out.stderr).trim()
-                ),
-                Err(e) => warn!("Failed to run mknod for {}: {}", dev_path, e),
-            }
-        }
-    }
-
     /// Fetch layer descriptors from the converted OverlayBD image manifest in the local registry.
     /// These populate the `lowers` array in the TCMU config.json so overlaybd-tcmu knows
     /// which blobs to lazy-fetch from the registry.
@@ -838,6 +765,26 @@ impl OverlayBdManager {
             .collect();
 
         Ok(lowers)
+    }
+
+    /// Configfs object creation is asynchronous enough that newly-created TCMU
+    /// backstores can briefly exist before their control files appear. Wait for
+    /// the writable control surface before writing `control` or `enable`.
+    async fn wait_for_tcmu_control_files(&self, tcmu_dir: &Path) -> Result<(), OverlayBdError> {
+        let control = tcmu_dir.join("control");
+        let enable = tcmu_dir.join("enable");
+
+        for _ in 0..50 {
+            if control.exists() && enable.exists() {
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        Err(OverlayBdError::MountFailed(format!(
+            "TCMU control files did not appear under {}",
+            tcmu_dir.display()
+        )))
     }
 
     /// Wait for the TCMU backstore to be configured by the overlaybd-tcmu daemon.
@@ -1128,4 +1075,25 @@ fn parse_image_ref(image_ref: &str) -> Result<(String, String), OverlayBdError> 
     }
 
     Ok((repo, tag))
+}
+
+fn looks_like_device_path(path: &str) -> bool {
+    path.starts_with("/dev/") && path.len() > "/dev/".len()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::looks_like_device_path;
+
+    #[test]
+    fn accepts_dev_paths_for_recovery() {
+        assert!(looks_like_device_path("/dev/sdb"));
+    }
+
+    #[test]
+    fn rejects_non_device_recovery_results() {
+        assert!(!looks_like_device_path(""));
+        assert!(!looks_like_device_path("success"));
+        assert!(!looks_like_device_path("sdb"));
+    }
 }

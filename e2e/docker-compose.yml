@@ -61,6 +61,7 @@ services:
       - /lib/modules:/lib/modules:ro
       - /sys/kernel/config:/sys/kernel/config
     environment:
+      START_OVERLAYBD_TCMU: "0"
       OVERLAYBD_REGISTRY_URL: http://registry:5000
       INSECURE_REGISTRIES: registry:5000
       OTEL_ENABLED: ${OTEL_ENABLED:-false}
