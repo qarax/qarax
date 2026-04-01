@@ -91,14 +91,14 @@ COPY target/x86_64-unknown-linux-musl/release/qarax-node /usr/local/bin/qarax-no
 COPY target/x86_64-unknown-linux-musl/release/qarax-init /usr/local/bin/qarax-init
 RUN chmod +x /usr/local/bin/qarax-node /usr/local/bin/qarax-init
 
-# Build test initramfs: qarax-init as PID 1, dropbear for SSH access
+# Build test initramfs: qarax-init as PID 1, dropbear for SSH access, and a long-lived shell workload
 # Network is configured statically by the kernel via ip= cmdline parameter.
 RUN mkdir -p /tmp/initramfs/{dev,proc,sys,sbin,etc/dropbear,var/run,lib64,root/.ssh} && \
     cp /usr/local/bin/qarax-init /tmp/initramfs/init && \
-    echo '{"cmd":["/sbin/dropbear","-F","-E","-R"]}' > /tmp/initramfs/.qarax-config.json && \
+    echo '{"cmd":["/bin/sh","-c","/sbin/dropbear -F -E -R & while true; do sleep 3600; done"]}' > /tmp/initramfs/.qarax-config.json && \
     mkdir -p /tmp/initramfs/bin && \
     cp /usr/sbin/busybox /tmp/initramfs/bin/busybox && \
-    for cmd in sh ping ip; do ln -s busybox /tmp/initramfs/bin/$cmd; done && \
+    for cmd in sh ping ip sleep echo uname cat ls pwd true false; do ln -s busybox /tmp/initramfs/bin/$cmd; done && \
     dnf install -y dropbear && \
     cp /usr/sbin/dropbear /tmp/initramfs/sbin/ && \
     cp /lib64/libtomcrypt.so.1 /tmp/initramfs/lib64/ && \

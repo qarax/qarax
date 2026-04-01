@@ -7,6 +7,7 @@ set -e
 # Kernel modules──────────
 modprobe target_core_user 2>/dev/null || true
 modprobe tcm_loop 2>/dev/null || true
+modprobe vhost_vsock 2>/dev/null || true
 
 # UIO device nodes──────────
 UIO_MAJOR=$(awk '/[[:space:]]uio$/{print $1}' /proc/devices 2>/dev/null | head -1)

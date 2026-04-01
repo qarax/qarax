@@ -15,6 +15,7 @@ from qarax_api_client.api.hosts import list_ as list_hosts
 from qarax_api_client.api.sandboxes import (
     create as create_sandbox,
     delete as delete_sandbox,
+    exec_ as exec_sandbox,
 )
 from qarax_api_client.api.sandboxes import get as get_sandbox
 from qarax_api_client.api.sandboxes import list_ as list_sandboxes
@@ -32,6 +33,7 @@ from qarax_api_client.api.vm_templates import (
     delete as delete_template,
 )
 from qarax_api_client.models import (
+    ExecSandboxRequest,
     NewBootSource,
     NewStoragePool,
     NewTransfer,
@@ -111,6 +113,17 @@ async def sandbox_template():
             raise TimeoutError("Kernel transfer did not complete in time")
 
         assert transfer.storage_object_id is not None
+
+        initrd_transfer = await create_transfer.asyncio(
+            client=c,
+            pool_id=pool_id,
+            body=NewTransfer(
+                name=f"e2e-sandbox-initrd-{test_id}",
+                source="/var/lib/qarax/images/test-initramfs.gz",
+                object_type=StorageObjectType.INITRD,
+            ),
+        )
+        assert initrd_transfer is not None
         objects = await list_storage_objects.asyncio(
             client=c, name=f"e2e-sandbox-kernel-{test_id}"
         )
@@ -120,6 +133,24 @@ async def sandbox_template():
         )
         assert kernel is not None, "Expected transferred kernel storage object"
 
+        initrd_deadline = time.time() + TRANSFER_TIMEOUT
+        while time.time() < initrd_deadline:
+            initrd_transfer = await get_transfer.asyncio(
+                client=c, pool_id=pool_id, transfer_id=initrd_transfer.id
+            )
+            assert initrd_transfer is not None
+            if initrd_transfer.status == TransferStatus.COMPLETED:
+                break
+            if initrd_transfer.status == TransferStatus.FAILED:
+                raise AssertionError(
+                    f"Initrd transfer failed: {initrd_transfer.error_message}"
+                )
+            await asyncio.sleep(0.5)
+        else:
+            raise TimeoutError("Initrd transfer did not complete in time")
+
+        assert initrd_transfer.storage_object_id is not None
+
         boot_source_name = f"e2e-sandbox-boot-{uuid.uuid4().hex[:8]}"
         boot_source_id_raw = await create_boot_source.asyncio(
             client=c,
@@ -127,7 +158,7 @@ async def sandbox_template():
                 name=boot_source_name,
                 kernel_image_id=kernel.id,
                 kernel_params="console=ttyS0",
-                initrd_image_id=None,
+                initrd_image_id=initrd_transfer.storage_object_id,
             ),
         )
         assert boot_source_id_raw is not None
@@ -162,6 +193,12 @@ async def sandbox_template():
         try:
             await delete_storage_object.asyncio_detailed(
                 client=c, object_id=str(transfer.storage_object_id)
+            )
+        except Exception:
+            pass
+        try:
+            await delete_storage_object.asyncio_detailed(
+                client=c, object_id=str(initrd_transfer.storage_object_id)
             )
         except Exception:
             pass
@@ -319,6 +356,39 @@ async def test_sandbox_full_lifecycle(client, sandbox_template):
 
         finally:
             await delete_sandbox.asyncio_detailed(client=c, sandbox_id=sandbox_id)
+
+
+@pytest.mark.asyncio
+async def test_sandbox_exec_runs_command(client, sandbox_template):
+    """POST /sandboxes/{id}/exec executes a command inside the running sandbox."""
+    async with client as c:
+        req = NewSandbox(
+            name=f"e2e-sandbox-exec-{uuid.uuid4().hex[:8]}",
+            vm_template_id=sandbox_template,
+            idle_timeout_secs=120,
+        )
+        resp = await create_sandbox.asyncio(client=c, body=req)
+        assert resp is not None
+
+        try:
+            await wait_for_sandbox_status(c, resp.id, SandboxStatus.READY)
+
+            result = await exec_sandbox.asyncio(
+                client=c,
+                sandbox_id=resp.id,
+                body=ExecSandboxRequest(
+                    command=["/bin/sh", "-c", "printf sandbox-exec && uname -s"],
+                    timeout_secs=15,
+                ),
+            )
+            assert result is not None
+            assert result.exit_code == 0
+            assert result.timed_out is False
+            assert "sandbox-exec" in result.stdout
+            assert "Linux" in result.stdout
+            assert result.stderr == ""
+        finally:
+            await delete_sandbox.asyncio_detailed(client=c, sandbox_id=resp.id)
 
 
 @pytest.mark.asyncio

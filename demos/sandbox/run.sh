@@ -5,13 +5,14 @@
 # Sandboxes are ephemeral VMs spun up from a VM template and automatically
 # reaped after an idle timeout.  This demo shows the full lifecycle:
 #
-#   1. Create (or reuse) a VM template backed by a boot source
+#   1. Create (or reuse) a VM template backed by a boot source with initramfs
 #   2. Create a sandbox from the template
 #   3. Poll until the sandbox is ready
-#   4. Inspect the sandbox (status, IP, idle timeout)
-#   5. Create a second sandbox — demonstrating rapid provisioning from the same template
-#   6. Delete one sandbox manually
-#   7. Watch the remaining sandbox auto-expire after its short idle timeout
+#   4. Execute a command inside the sandbox
+#   5. Inspect the sandbox (status, IP, idle timeout)
+#   6. Create a second sandbox — demonstrating rapid provisioning from the same template
+#   7. Delete one sandbox manually
+#   8. Watch the remaining sandbox auto-expire after its short idle timeout
 #
 # Each sandbox creates its own underlying VM automatically; no manual VM
 # lifecycle management is required.
@@ -25,6 +26,7 @@
 #   ./demos/sandbox/run.sh --server http://localhost:8000
 #   ./demos/sandbox/run.sh --template my-template     # reuse an existing template
 #   ./demos/sandbox/run.sh --idle-timeout 60          # custom idle timeout in seconds
+#   SANDBOX_INITRAMFS_PATH=/path/to/initramfs ./demos/sandbox/run.sh
 #
 
 set -euo pipefail
@@ -41,7 +43,7 @@ POOL_NAME="sandbox-demo-pool"
 POOL_PATH="/var/lib/qarax/images"
 KERNEL_PATH="/var/lib/qarax/images/vmlinux"
 KERNEL_NAME="sandbox-demo-kernel"
-INITRAMFS_PATH="${SANDBOX_INITRAMFS_PATH:-}"
+INITRAMFS_PATH="${SANDBOX_INITRAMFS_PATH:-/var/lib/qarax/images/test-initramfs.gz}"
 INITRAMFS_NAME="sandbox-demo-initramfs"
 SANDBOX_NAME_PREFIX="sandbox-demo"
 SANDBOX1_NAME=""
@@ -90,10 +92,6 @@ while [[ $# -gt 0 ]]; do
 		INITRAMFS_PATH="$2"
 		shift 2
 		;;
-	--no-initramfs)
-		INITRAMFS_PATH=""
-		shift 1
-		;;
 	--cleanup)
 		CLEANUP_ONLY=1
 		shift 1
@@ -105,8 +103,7 @@ while [[ $# -gt 0 ]]; do
 		echo "  --server URL          qarax API URL (default: \$QARAX_SERVER or http://localhost:8000)"
 		echo "  --template NAME       VM template name to use or create (default: sandbox-demo-template)"
 		echo "  --idle-timeout SECS   Idle timeout for sandboxes in seconds (default: 90)"
-		echo "  --initramfs PATH      Optional initramfs path on the host running qarax-node"
-		echo "  --no-initramfs        Do not create an initramfs boot source"
+		echo "  --initramfs PATH      Initramfs path on the host running qarax-node"
 		echo "  --cleanup             Remove demo-managed sandboxes, VMs, and template assets, then exit"
 		exit 0
 		;;
@@ -116,6 +113,8 @@ while [[ $# -gt 0 ]]; do
 		;;
 	esac
 done
+
+[[ -n "$INITRAMFS_PATH" ]] || die "sandbox demo requires an initramfs with qarax-init; set SANDBOX_INITRAMFS_PATH or pass --initramfs"
 
 banner() {
 	echo -e "\n${BOLD}${CYAN}══════════════════════════════════════════════════════════════${NC}"
@@ -411,6 +410,13 @@ step "Sandbox 1 details:"
 run $QARAX sandbox get "$SANDBOX1_ID"
 echo ""
 
+banner "Step 3 — Execute Inside Sandbox"
+
+step "Running a command inside sandbox #1..."
+echo ""
+run $QARAX sandbox exec "$SANDBOX1_ID" -- /bin/sh -c 'printf sandbox-demo && uname -s'
+echo ""
+
 banner "Step 4 — Rapid Provisioning (second sandbox)"
 
 info "Demonstrating that multiple sandboxes can be provisioned from the same template concurrently."
@@ -476,6 +482,7 @@ echo -e "${GREEN}What we demonstrated:${NC}"
 echo "  ✓ Create a VM template from a boot source"
 echo "  ✓ Spin up an ephemeral sandbox from that template"
 echo "  ✓ Poll the sandbox until it is ready"
+echo "  ✓ Execute a command inside the sandbox over the guest agent"
 echo "  ✓ Provision a second sandbox concurrently from the same template"
 echo "  ✓ Delete a sandbox manually"
 echo "  ✓ Watch idle-timeout auto-reap kick in"
@@ -484,5 +491,6 @@ echo "Useful commands:"
 echo "  qarax sandbox list                 # list all sandboxes"
 echo "  qarax sandbox get <id>             # inspect a sandbox"
 echo "  qarax sandbox create --template T  # create a new sandbox"
+echo "  qarax sandbox exec <id> -- cmd     # run a command inside a sandbox"
 echo "  qarax sandbox delete <id>          # delete a sandbox immediately"
 echo "  qarax vm-template list             # list all VM templates"

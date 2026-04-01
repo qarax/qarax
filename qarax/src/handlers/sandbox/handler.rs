@@ -8,8 +8,11 @@ use crate::{
     App,
     handlers::{ApiResponse, Result},
     model::{
-        network_interfaces,
-        sandboxes::{self, CreateSandboxResponse, NewSandbox, Sandbox, SandboxStatus},
+        hosts, network_interfaces,
+        sandboxes::{
+            self, CreateSandboxResponse, ExecSandboxRequest, ExecSandboxResponse, NewSandbox,
+            Sandbox, SandboxStatus,
+        },
         vms::{self, NewVm, VmStatus},
     },
 };
@@ -67,7 +70,7 @@ pub async fn create(
         accelerator_config: None,
         numa_config: None,
         persistent_upper_pool_id: None,
-        config: serde_json::json!({}),
+        config: serde_json::json!({ "sandbox_exec": true }),
     };
 
     let resolved_vm = vms::resolve_create_request(env.pool(), new_vm).await?;
@@ -183,6 +186,85 @@ pub async fn create(
         code: StatusCode::ACCEPTED,
     }
     .into_response())
+}
+
+#[utoipa::path(
+    post,
+    path = "/sandboxes/{sandbox_id}/exec",
+    params(
+        ("sandbox_id" = uuid::Uuid, Path, description = "Sandbox unique identifier")
+    ),
+    request_body = ExecSandboxRequest,
+    responses(
+        (status = 200, description = "Command executed inside the sandbox", body = ExecSandboxResponse),
+        (status = 404, description = "Sandbox not found"),
+        (status = 422, description = "Sandbox is not ready or guest exec is unavailable"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "sandboxes"
+)]
+#[instrument(skip(env, req))]
+pub async fn exec(
+    Extension(env): Extension<App>,
+    Path(sandbox_id): Path<Uuid>,
+    Json(req): Json<ExecSandboxRequest>,
+) -> Result<ApiResponse<ExecSandboxResponse>> {
+    if req.command.is_empty() {
+        return Err(crate::errors::Error::UnprocessableEntity(
+            "command must contain at least one argument".into(),
+        ));
+    }
+
+    let sandbox = sandboxes::get(env.pool(), sandbox_id).await?;
+    if sandbox.status != SandboxStatus::Ready {
+        return Err(crate::errors::Error::UnprocessableEntity(format!(
+            "sandbox {} is not ready",
+            sandbox_id
+        )));
+    }
+
+    let vm = vms::get(env.pool(), sandbox.vm_id).await?;
+    if vm.status != VmStatus::Running {
+        return Err(crate::errors::Error::UnprocessableEntity(format!(
+            "sandbox VM {} is not running",
+            sandbox.vm_id
+        )));
+    }
+
+    let host_id = vm.host_id.ok_or_else(|| {
+        crate::errors::Error::UnprocessableEntity("sandbox VM has no assigned host".into())
+    })?;
+    let host = hosts::get_by_id(env.pool(), host_id)
+        .await?
+        .ok_or_else(|| {
+            crate::errors::Error::UnprocessableEntity("assigned host not found".into())
+        })?;
+
+    let client = crate::grpc_client::NodeClient::new(&host.address, host.port as u16);
+    let response = client
+        .exec_vm(sandbox.vm_id, req.command, req.timeout_secs)
+        .await
+        .map_err(|e| match e.downcast::<crate::errors::Error>() {
+            Ok(err) => err,
+            Err(err) => {
+                tracing::error!(sandbox_id = %sandbox_id, error = %err, "sandbox exec failed");
+                crate::errors::Error::InternalServerError
+            }
+        })?;
+
+    sandboxes::touch_activity(env.pool(), sandbox_id)
+        .await
+        .map_err(crate::errors::Error::Sqlx)?;
+
+    Ok(ApiResponse {
+        data: ExecSandboxResponse {
+            exit_code: response.exit_code,
+            stdout: response.stdout,
+            stderr: response.stderr,
+            timed_out: response.timed_out,
+        },
+        code: StatusCode::OK,
+    })
 }
 
 #[utoipa::path(

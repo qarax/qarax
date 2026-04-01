@@ -3,7 +3,10 @@ use tabled::{Table, Tabled, settings::Style};
 use uuid::Uuid;
 
 use crate::{
-    api::{self, models::NewSandbox},
+    api::{
+        self,
+        models::{ExecSandboxRequest, NewSandbox},
+    },
     client::Client,
 };
 
@@ -47,6 +50,17 @@ enum SandboxCommand {
     Delete {
         /// Sandbox name or ID
         sandbox: String,
+    },
+    /// Execute a command inside a running sandbox
+    Exec {
+        /// Sandbox name or ID
+        sandbox: String,
+        /// Kill the guest command if it runs longer than this many seconds
+        #[arg(long)]
+        timeout: Option<u64>,
+        /// Command and arguments to execute inside the sandbox
+        #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
+        command: Vec<String>,
     },
 }
 
@@ -151,6 +165,39 @@ pub async fn run(args: SandboxArgs, client: &Client, output: OutputFormat) -> an
             let id = resolve_sandbox_id(client, &sandbox).await?;
             api::sandboxes::delete(client, id).await?;
             println!("Deleted sandbox: {id}");
+        }
+        SandboxCommand::Exec {
+            sandbox,
+            timeout,
+            command,
+        } => {
+            let id = resolve_sandbox_id(client, &sandbox).await?;
+            let response = api::sandboxes::exec(
+                client,
+                id,
+                &ExecSandboxRequest {
+                    command,
+                    timeout_secs: timeout,
+                },
+            )
+            .await?;
+
+            if !matches!(output, OutputFormat::Table) {
+                print_output(&response, output)?;
+            } else {
+                if !response.stdout.is_empty() {
+                    print!("{}", response.stdout);
+                }
+                if !response.stderr.is_empty() {
+                    eprint!("{}", response.stderr);
+                }
+                if response.timed_out {
+                    anyhow::bail!("sandbox command timed out");
+                }
+                if response.exit_code != 0 {
+                    anyhow::bail!("sandbox command exited with status {}", response.exit_code);
+                }
+            }
         }
     }
 

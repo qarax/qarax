@@ -12,6 +12,8 @@ from .create_vm_response import CreateVmResponse
 from .create_vm_template_from_vm_request import CreateVmTemplateFromVmRequest
 from .deploy_host_request import DeployHostRequest
 from .disk_resize_request import DiskResizeRequest
+from .exec_sandbox_request import ExecSandboxRequest
+from .exec_sandbox_response import ExecSandboxResponse
 from .hook_execution import HookExecution
 from .hook_execution_status import HookExecutionStatus
 from .hook_scope import HookScope
@@ -91,6 +93,8 @@ __all__ = (
     "CreateVmTemplateFromVmRequest",
     "DeployHostRequest",
     "DiskResizeRequest",
+    "ExecSandboxRequest",
+    "ExecSandboxResponse",
     "HookExecution",
     "HookExecutionStatus",
     "HookScope",

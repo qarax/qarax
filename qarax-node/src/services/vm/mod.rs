@@ -11,11 +11,11 @@ use crate::rpc::node::{
     AttachNetworkRequest, AttachNetworkResponse, AttachStoragePoolRequest,
     AttachStoragePoolResponse, ConsoleInput, ConsoleLogResponse, ConsoleOutput,
     ConsolePtyPathResponse, DetachNetworkRequest, DetachNetworkResponse, DetachStoragePoolRequest,
-    DeviceCounters, GpuInfo, ImportOverlayBdRequest, ImportOverlayBdResponse, NodeInfo, NumaNode,
-    OciImageRequest, OciImageResponse, ReceiveMigrationRequest, ReceiveMigrationResponse,
-    RemoveDeviceRequest, ResizeDiskRequest, ResizeVmRequest, RestoreVmRequest,
-    SendMigrationRequest, SnapshotVmRequest, StoragePoolKind, VmConfig, VmCounters, VmId, VmList,
-    VmState, vm_service_server::VmService,
+    DeviceCounters, ExecVmRequest, ExecVmResponse, GpuInfo, ImportOverlayBdRequest,
+    ImportOverlayBdResponse, NodeInfo, NumaNode, OciImageRequest, OciImageResponse,
+    ReceiveMigrationRequest, ReceiveMigrationResponse, RemoveDeviceRequest, ResizeDiskRequest,
+    ResizeVmRequest, RestoreVmRequest, SendMigrationRequest, SnapshotVmRequest, StoragePoolKind,
+    VmConfig, VmCounters, VmId, VmList, VmState, vm_service_server::VmService,
 };
 use common::cpu_list::expand_cpu_list;
 
@@ -192,6 +192,26 @@ impl VmService for VmServiceImpl {
             }
             Err(e) => {
                 error!("Failed to get VM counters {}: {}", vm_id, e);
+                Err(map_manager_error(e))
+            }
+        }
+    }
+
+    async fn exec_vm(
+        &self,
+        request: Request<ExecVmRequest>,
+    ) -> Result<Response<ExecVmResponse>, Status> {
+        let req = request.into_inner();
+        info!("Executing command inside VM: {}", req.vm_id);
+
+        match self
+            .manager
+            .exec_vm(&req.vm_id, req.command, req.timeout_secs)
+            .await
+        {
+            Ok(response) => Ok(Response::new(response)),
+            Err(e) => {
+                error!("Failed to exec command in VM {}: {}", req.vm_id, e);
                 Err(map_manager_error(e))
             }
         }
@@ -1334,6 +1354,12 @@ fn map_manager_error(e: crate::cloud_hypervisor::VmManagerError) -> Status {
             Status::internal(format!("Migration error: {}", msg))
         }
         VmManagerError::StorageError(msg) => Status::internal(format!("Storage error: {}", msg)),
+        VmManagerError::ExecUnavailable(msg) => Status::failed_precondition(msg),
+        VmManagerError::ExecInvalid(msg) => Status::invalid_argument(msg),
+        VmManagerError::ExecError(msg) => Status::internal(msg),
+        VmManagerError::ExecTimeout(secs) => {
+            Status::deadline_exceeded(format!("guest exec timed out after {}s", secs))
+        }
     }
 }
 

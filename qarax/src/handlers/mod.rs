@@ -143,6 +143,7 @@ pub struct VmListQuery {
         sandbox::handler::create,
         sandbox::handler::list,
         sandbox::handler::get,
+        sandbox::handler::exec,
         sandbox::handler::delete,
         scheduling::handler::config,
     ),
@@ -220,6 +221,8 @@ pub struct VmListQuery {
             crate::model::sandboxes::NewSandbox,
             crate::model::sandboxes::SandboxStatus,
             crate::model::sandboxes::CreateSandboxResponse,
+            crate::model::sandboxes::ExecSandboxRequest,
+            crate::model::sandboxes::ExecSandboxResponse,
             crate::configuration::SchedulingSettings,
         )
     ),
@@ -527,6 +530,7 @@ fn sandboxes() -> Router {
             "/sandboxes/{sandbox_id}",
             get(sandbox::handler::get).delete(sandbox::handler::delete),
         )
+        .route("/sandboxes/{sandbox_id}/exec", post(sandbox::handler::exec))
 }
 
 fn scheduling() -> Router {

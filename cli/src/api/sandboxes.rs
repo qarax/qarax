@@ -2,7 +2,9 @@ use uuid::Uuid;
 
 use crate::client::Client;
 
-use super::models::{CreateSandboxResponse, NewSandbox, Sandbox};
+use super::models::{
+    CreateSandboxResponse, ExecSandboxRequest, ExecSandboxResponse, NewSandbox, Sandbox,
+};
 
 pub async fn create(client: &Client, req: &NewSandbox) -> anyhow::Result<CreateSandboxResponse> {
     client.post("/sandboxes", req).await
@@ -18,4 +20,12 @@ pub async fn get(client: &Client, id: Uuid) -> anyhow::Result<Sandbox> {
 
 pub async fn delete(client: &Client, id: Uuid) -> anyhow::Result<()> {
     client.delete(&format!("/sandboxes/{id}")).await
+}
+
+pub async fn exec(
+    client: &Client,
+    id: Uuid,
+    req: &ExecSandboxRequest,
+) -> anyhow::Result<ExecSandboxResponse> {
+    client.post(&format!("/sandboxes/{id}/exec"), req).await
 }

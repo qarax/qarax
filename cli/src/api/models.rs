@@ -579,6 +579,21 @@ pub struct CreateSandboxResponse {
     pub job_id: Uuid,
 }
 
+#[derive(Debug, Serialize)]
+pub struct ExecSandboxRequest {
+    pub command: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_secs: Option<u64>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ExecSandboxResponse {
+    pub exit_code: i32,
+    pub stdout: String,
+    pub stderr: String,
+    pub timed_out: bool,
+}
+
 // Lifecycle Hooks
 
 #[derive(Debug, Serialize, Deserialize)]

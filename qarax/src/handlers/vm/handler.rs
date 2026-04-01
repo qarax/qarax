@@ -19,7 +19,9 @@ use crate::{
     App,
     grpc_client::{
         CreateVmRequest, NodeClient, net_configs_from_db,
-        node::{CpuPinning, DiskConfig, FsConfig, NetConfig, NumaPlacement, VhostMode},
+        node::{
+            CpuPinning, DiskConfig, FsConfig, NetConfig, NumaPlacement, VhostMode, VsockConfig,
+        },
     },
     model::{
         boot_sources, host_gpus, host_numa, hosts,
@@ -2120,6 +2122,18 @@ async fn build_create_vm_request(env: &App, vm: &Vm) -> Result<CreateVmRequest> 
         cloud_init_meta_data,
         cloud_init_network_config: vm.cloud_init_network_config.clone(),
         devices,
+        vsock: vm
+            .config
+            .get("sandbox_exec")
+            .and_then(|value| value.as_bool())
+            .filter(|enabled| *enabled)
+            .map(|_| VsockConfig {
+                cid: None,
+                socket: None,
+                iommu: None,
+                pci_segment: None,
+                id: Some("sandbox-exec".to_string()),
+            }),
         numa_placement,
     })
 }
@@ -3004,6 +3018,7 @@ pub async fn migrate(
                 }
             }),
             devices: create_req.devices,
+            vsock: create_req.vsock,
             // NUMA placement is not carried across migration — the destination node
             // will handle its own NUMA topology.
             numa_placement: None,

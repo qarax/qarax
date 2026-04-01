@@ -52,6 +52,7 @@ services:
     devices:
       - /dev/kvm:/dev/kvm
       - /dev/net/tun:/dev/net/tun
+      - /dev/vhost-vsock:/dev/vhost-vsock
     volumes:
       - ${PRODUCTION_IMAGES_DIR:-/tmp/qarax-no-production-images}:/var/lib/qarax/production-images:rw
       - qarax_storage_2:/var/lib/qarax/storage
@@ -123,6 +124,7 @@ services:
     devices:
       - /dev/kvm:/dev/kvm
       - /dev/net/tun:/dev/net/tun # Required for VM network interfaces (virtio-net/tap)
+      - /dev/vhost-vsock:/dev/vhost-vsock
     volumes:
       # Mount local images if they exist (for --with-vm mode)
       # Default location: ./local-test-images (created by run-local.sh --with-vm)

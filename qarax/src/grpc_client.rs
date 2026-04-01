@@ -79,13 +79,13 @@ type FileTransferClient =
 use node::{
     AddDiskDeviceRequest, AddNetworkDeviceRequest, AttachNetworkRequest, AttachStoragePoolRequest,
     CloudInitConfig, ConsoleConfig, ConsoleInput, ConsoleLogResponse, CopyFileRequest, CpusConfig,
-    DetachNetworkRequest, DetachStoragePoolRequest, DiskConfig, DownloadFileRequest, FsConfig,
-    ImportOverlayBdRequest, ImportOverlayBdResponse, MemoryConfig, NetConfig, NodeInfo,
-    NumaPlacement, OciImageRequest, OciImageResponse, PayloadConfig, ReceiveMigrationRequest,
-    RemoveDeviceRequest, ResizeDiskRequest, ResizeVmRequest, RestoreVmRequest,
-    SendMigrationRequest, SnapshotVmRequest, StoragePoolKind, VfioDeviceConfig, VmConfig,
-    VmCounters, VmId, VmState, file_transfer_service_client::FileTransferServiceClient,
-    vm_service_client::VmServiceClient,
+    DetachNetworkRequest, DetachStoragePoolRequest, DiskConfig, DownloadFileRequest, ExecVmRequest,
+    ExecVmResponse, FsConfig, ImportOverlayBdRequest, ImportOverlayBdResponse, MemoryConfig,
+    NetConfig, NodeInfo, NumaPlacement, OciImageRequest, OciImageResponse, PayloadConfig,
+    ReceiveMigrationRequest, RemoveDeviceRequest, ResizeDiskRequest, ResizeVmRequest,
+    RestoreVmRequest, SendMigrationRequest, SnapshotVmRequest, StoragePoolKind, VfioDeviceConfig,
+    VmConfig, VmCounters, VmId, VmState, VsockConfig,
+    file_transfer_service_client::FileTransferServiceClient, vm_service_client::VmServiceClient,
 };
 
 /// Client for communicating with qarax-node via gRPC
@@ -123,6 +123,8 @@ pub struct CreateVmRequest {
     pub cloud_init_network_config: Option<String>,
     /// VFIO device configs for GPU passthrough
     pub devices: Vec<VfioDeviceConfig>,
+    /// Optional virtio-vsock device for guest agent communication
+    pub vsock: Option<VsockConfig>,
     /// NUMA placement (optional; computed at start time for GPU-local or explicit pinning)
     pub numa_placement: Option<NumaPlacement>,
 }
@@ -328,6 +330,7 @@ impl NodeClient {
             cloud_init_meta_data,
             cloud_init_network_config,
             devices,
+            vsock,
             numa_placement,
         } = req;
         debug!("Creating VM {} on node {}", vm_id, self.address);
@@ -407,6 +410,7 @@ impl NodeClient {
                 network_config: cloud_init_network_config.unwrap_or_default(),
             }),
             devices,
+            vsock,
             numa_placement,
         };
 
@@ -915,6 +919,41 @@ impl NodeClient {
             })
             .await
             .context("Failed to read console log from qarax-node")?;
+
+        Ok(response.into_inner())
+    }
+
+    /// Execute a command inside the guest using the sandbox guest agent.
+    #[instrument(skip(self, command))]
+    pub async fn exec_vm(
+        &self,
+        vm_id: Uuid,
+        command: Vec<String>,
+        timeout_secs: Option<u64>,
+    ) -> Result<ExecVmResponse> {
+        debug!(
+            "Executing guest command for VM {} on node {}: {:?}",
+            vm_id, self.address, command
+        );
+
+        let mut client = self.connect_vm_service().await?;
+
+        let response = client
+            .exec_vm(ExecVmRequest {
+                vm_id: vm_id.to_string(),
+                command,
+                timeout_secs,
+            })
+            .await
+            .map_err(|status| match status.code() {
+                tonic::Code::NotFound => crate::errors::Error::NotFound.into(),
+                tonic::Code::InvalidArgument
+                | tonic::Code::FailedPrecondition
+                | tonic::Code::DeadlineExceeded => {
+                    crate::errors::Error::UnprocessableEntity(status.message().to_string()).into()
+                }
+                _ => anyhow::anyhow!("Failed to exec command on qarax-node: {}", status),
+            })?;
 
         Ok(response.into_inner())
     }

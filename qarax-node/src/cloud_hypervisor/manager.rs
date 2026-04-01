@@ -18,11 +18,13 @@ use cloud_hypervisor_sdk::client::TokioIo;
 use cloud_hypervisor_sdk::machine::{Machine, MachineConfig, VM};
 use cloud_hypervisor_sdk::models::{
     self, CpuAffinity, CpusConfig, FsConfig, MemoryConfig, MemoryZoneConfig, NumaConfig,
-    PayloadConfig, VmConfig, console_config::Mode as ConsoleMode, disk_config::ImageType,
+    PayloadConfig, VmConfig, VsockConfig as SdkVsockConfig, console_config::Mode as ConsoleMode,
+    disk_config::ImageType,
 };
 use futures::stream::StreamExt;
 use http_body_util::{Empty, Full, combinators::BoxBody};
 use hyper::Request;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 
 use prost::Message;
@@ -33,13 +35,17 @@ use crate::rpc::node::StoragePoolKind;
 use crate::rpc::node::{
     ConsoleConfig as ProtoConsoleConfig, ConsoleMode as ProtoConsoleMode,
     CpuTopology as ProtoCpuTopology, CpusConfig as ProtoCpusConfig, DiskConfig as ProtoDiskConfig,
-    FsConfig as ProtoFsConfig, MemoryConfig as ProtoMemoryConfig, NetConfig as ProtoNetConfig,
-    NumaPlacement as ProtoNumaPlacement, PayloadConfig as ProtoPayloadConfig,
-    RateLimiterConfig as ProtoRateLimiterConfig, RngConfig as ProtoRngConfig,
-    TokenBucket as ProtoTokenBucket, VfioDeviceConfig as ProtoVfioDeviceConfig,
-    VhostMode as ProtoVhostMode, VmConfig as ProtoVmConfig, VmState, VmStatus,
+    ExecVmResponse, FsConfig as ProtoFsConfig, MemoryConfig as ProtoMemoryConfig,
+    NetConfig as ProtoNetConfig, NumaPlacement as ProtoNumaPlacement,
+    PayloadConfig as ProtoPayloadConfig, RateLimiterConfig as ProtoRateLimiterConfig,
+    RngConfig as ProtoRngConfig, TokenBucket as ProtoTokenBucket,
+    VfioDeviceConfig as ProtoVfioDeviceConfig, VhostMode as ProtoVhostMode,
+    VmConfig as ProtoVmConfig, VmState, VmStatus, VsockConfig as ProtoVsockConfig,
 };
 use crate::storage::StorageBackendRegistry;
+
+const MAX_GUEST_AGENT_HANDSHAKE_BYTES: u64 = 4096;
+const MAX_GUEST_AGENT_RESPONSE_BYTES: u64 = 10 * 1024 * 1024;
 
 #[derive(Debug, Error)]
 pub enum VmManagerError {
@@ -72,6 +78,27 @@ pub enum VmManagerError {
 
     #[error("Storage backend error: {0}")]
     StorageError(String),
+
+    #[error("Exec agent not configured for VM {0}")]
+    ExecUnavailable(String),
+
+    #[error("Exec request is invalid: {0}")]
+    ExecInvalid(String),
+
+    #[error("Exec guest agent error: {0}")]
+    ExecError(String),
+
+    #[error("Exec guest agent timed out after {0}s")]
+    ExecTimeout(u64),
+}
+
+/// Wire format for the guest exec response returned by the qarax-init agent.
+#[derive(serde::Deserialize)]
+struct GuestExecResponse {
+    exit_code: i32,
+    stdout: String,
+    stderr: String,
+    timed_out: bool,
 }
 
 /// Represents a running VM instance
@@ -94,6 +121,8 @@ struct VmInstance {
     serial_pty_path: Option<String>,
     /// PTY path for console device (if PTY mode is enabled)
     console_pty_path: Option<String>,
+    /// Host-side UNIX socket used for virtio-vsock guest-agent access
+    vsock_socket_path: Option<PathBuf>,
     /// Which storage backend mapped a disk for this VM (if any).
     /// Used by delete_vm to call the correct backend's unmap().
     storage_backend_kind: Option<StoragePoolKind>,
@@ -206,6 +235,10 @@ impl VmManager {
         self.runtime_dir.join(format!("{}-cidata.img", vm_id))
     }
 
+    fn vsock_socket_path(&self, vm_id: &str) -> PathBuf {
+        self.runtime_dir.join(format!("{}.vsock", vm_id))
+    }
+
     /// Get the log path for a VM
     fn log_path(&self, vm_id: &str) -> PathBuf {
         self.runtime_dir.join(format!("{}.log", vm_id))
@@ -214,6 +247,60 @@ impl VmManager {
     /// Get the config persistence path for a VM
     fn config_path(&self, vm_id: &str) -> PathBuf {
         self.runtime_dir.join(format!("{}.json", vm_id))
+    }
+
+    fn next_vsock_cid() -> i64 {
+        use std::sync::atomic::{AtomicI64, Ordering};
+
+        static NEXT_VSOCK_CID: AtomicI64 = AtomicI64::new(0x4000);
+        NEXT_VSOCK_CID.fetch_add(1, Ordering::Relaxed)
+    }
+
+    fn resolve_vsock_config(&self, vm_id: &str, vsock: &mut ProtoVsockConfig) {
+        if vsock.cid.is_none() {
+            vsock.cid = Some(Self::next_vsock_cid());
+        }
+        if vsock.socket.is_none() {
+            vsock.socket = Some(self.vsock_socket_path(vm_id).display().to_string());
+        }
+    }
+
+    fn vsock_socket_path_from_config(vsock: &Option<ProtoVsockConfig>) -> Option<PathBuf> {
+        vsock
+            .as_ref()
+            .and_then(|cfg| cfg.socket.as_ref())
+            .map(PathBuf::from)
+    }
+
+    fn exec_timeout(timeout_secs: Option<u64>) -> Duration {
+        // Add a grace period so the guest's inner timeout fires first and returns
+        // timed_out=true rather than racing with this outer tokio::time::timeout.
+        const GRACE_SECS: u64 = 5;
+        const SAFETY_TIMEOUT_SECS: u64 = 300;
+        Duration::from_secs(
+            timeout_secs
+                .map(|s| s + GRACE_SECS)
+                .unwrap_or(SAFETY_TIMEOUT_SECS),
+        )
+    }
+
+    fn build_guest_exec_request(
+        command: Vec<String>,
+        timeout_secs: Option<u64>,
+    ) -> Result<Vec<u8>, VmManagerError> {
+        #[derive(serde::Serialize)]
+        struct GuestExecRequest {
+            command: Vec<String>,
+            timeout_secs: Option<u64>,
+        }
+
+        let mut request_json = serde_json::to_vec(&GuestExecRequest {
+            command,
+            timeout_secs,
+        })
+        .map_err(|e| VmManagerError::ExecInvalid(e.to_string()))?;
+        request_json.push(b'\n');
+        Ok(request_json)
     }
 
     async fn load_persisted_vm_config(
@@ -343,6 +430,8 @@ impl VmManager {
                 .filter(|t| t.starts_with("qt"))
                 .collect();
 
+            let vsock_socket_path = Self::vsock_socket_path_from_config(&proto_config.vsock);
+
             let instance = VmInstance {
                 proto_config,
                 process: None, // We don't have the child process handle for recovered VMs
@@ -353,6 +442,7 @@ impl VmManager {
                 passt_processes: Vec::new(),
                 serial_pty_path: None,
                 console_pty_path: None,
+                vsock_socket_path,
                 storage_backend_kind: None, // Recovery doesn't restore OverlayBD state
             };
 
@@ -484,6 +574,9 @@ impl VmManager {
         // Create TAP devices for networks that need them, injecting the names
         // into the config so CH uses our managed devices (and we can clean them up).
         let mut config = config;
+        if let Some(vsock) = config.vsock.as_mut() {
+            self.resolve_vsock_config(&vm_id, vsock);
+        }
         let mut tap_devices: Vec<String> = Vec::new();
         let mut passt_processes: Vec<Child> = Vec::new();
         for (i, net) in config.networks.iter_mut().enumerate() {
@@ -634,12 +727,18 @@ impl VmManager {
             .map_err(VmManagerError::SpawnError)?;
 
         let socket_path = self.socket_path(&vm_id);
+        let vsock_socket_path = Self::vsock_socket_path_from_config(&config.vsock);
         let log_path = self.log_path(&vm_id);
         let config_path = self.config_path(&vm_id);
 
         // Remove old socket if it exists
         if socket_path.exists() {
             let _ = tokio::fs::remove_file(&socket_path).await;
+        }
+        if let Some(path) = &vsock_socket_path
+            && path.exists()
+        {
+            let _ = tokio::fs::remove_file(path).await;
         }
 
         // Spawn Cloud Hypervisor process directly
@@ -785,6 +884,7 @@ impl VmManager {
             passt_processes,
             serial_pty_path: serial_pty,
             console_pty_path: console_pty,
+            vsock_socket_path,
             storage_backend_kind,
         };
 
@@ -1096,6 +1196,8 @@ impl VmManager {
             .await
             .map_err(VmManagerError::SdkError)?;
 
+        let vsock_socket_path = Self::vsock_socket_path_from_config(&proto_config.vsock);
+
         let instance = VmInstance {
             proto_config,
             process: Some(process),
@@ -1106,6 +1208,7 @@ impl VmManager {
             passt_processes: vec![],
             serial_pty_path: serial_pty,
             console_pty_path: console_pty,
+            vsock_socket_path,
             storage_backend_kind: None,
         };
 
@@ -1165,6 +1268,9 @@ impl VmManager {
         // Create TAP devices for the incoming VM's networks.
         let mut tap_devices: Vec<String> = Vec::new();
         let mut mutable_config = config.clone();
+        if let Some(vsock) = mutable_config.vsock.as_mut() {
+            self.resolve_vsock_config(vm_id, vsock);
+        }
         for (i, net) in mutable_config.networks.iter_mut().enumerate() {
             if !net.vhost_user.unwrap_or(false) && net.tap.is_none() {
                 let tap_name = Self::tap_name_for_net(vm_id, i);
@@ -1239,10 +1345,16 @@ impl VmManager {
             .map_err(VmManagerError::SpawnError)?;
 
         let socket_path = self.socket_path(vm_id);
+        let vsock_socket_path = Self::vsock_socket_path_from_config(&mutable_config.vsock);
         let log_path = self.log_path(vm_id);
 
         if socket_path.exists() {
             let _ = tokio::fs::remove_file(&socket_path).await;
+        }
+        if let Some(path) = &vsock_socket_path
+            && path.exists()
+        {
+            let _ = tokio::fs::remove_file(path).await;
         }
 
         let log_file = match tokio::fs::File::create(&log_path).await {
@@ -1331,6 +1443,7 @@ impl VmManager {
             passt_processes: Vec::new(),
             serial_pty_path: None,
             console_pty_path: None,
+            vsock_socket_path,
             storage_backend_kind,
         };
 
@@ -1443,6 +1556,11 @@ impl VmManager {
         // Clean up socket
         if instance.socket_path.exists() {
             let _ = tokio::fs::remove_file(&instance.socket_path).await;
+        }
+        if let Some(vsock_socket_path) = &instance.vsock_socket_path
+            && vsock_socket_path.exists()
+        {
+            let _ = tokio::fs::remove_file(vsock_socket_path).await;
         }
 
         // Clean up persisted config
@@ -1852,6 +1970,11 @@ impl VmManager {
             );
         }
 
+        // Virtio-vsock guest-agent channel
+        if let Some(vsock) = &config.vsock {
+            sdk_config.vsock = Some(Box::new(Self::proto_vsock_to_sdk(vsock)?));
+        }
+
         // NUMA placement (optional)
         if let Some(placement) = &config.numa_placement {
             Self::apply_numa_placement(&mut sdk_config, placement);
@@ -2124,6 +2247,24 @@ impl VmManager {
         }
     }
 
+    fn proto_vsock_to_sdk(vsock: &ProtoVsockConfig) -> Result<SdkVsockConfig, VmManagerError> {
+        let cid = vsock
+            .cid
+            .ok_or_else(|| VmManagerError::InvalidConfig("vsock.cid is required".into()))?;
+        let socket = vsock
+            .socket
+            .clone()
+            .ok_or_else(|| VmManagerError::InvalidConfig("vsock.socket is required".into()))?;
+
+        Ok(SdkVsockConfig {
+            cid,
+            socket,
+            iommu: vsock.iommu,
+            pci_segment: vsock.pci_segment,
+            id: vsock.id.clone(),
+        })
+    }
+
     fn proto_fs_to_sdk(fs: &ProtoFsConfig) -> FsConfig {
         FsConfig {
             tag: fs.tag.clone(),
@@ -2143,6 +2284,134 @@ impl VmManager {
             id: Some(device.id.clone()),
             x_nv_gpudirect_clique: None,
         }
+    }
+
+    /// Execute a command inside the guest through the sandbox exec guest agent.
+    pub async fn exec_vm(
+        &self,
+        vm_id: &str,
+        command: Vec<String>,
+        timeout_secs: Option<u64>,
+    ) -> Result<ExecVmResponse, VmManagerError> {
+        if command.is_empty() {
+            return Err(VmManagerError::ExecInvalid(
+                "command must contain at least one argument".into(),
+            ));
+        }
+
+        let (status, vsock_socket_path) = {
+            let vms = self.vms.lock().await;
+            let instance = vms
+                .get(vm_id)
+                .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
+
+            (instance.status, instance.vsock_socket_path.clone())
+        };
+
+        if status != VmStatus::Running {
+            return Err(VmManagerError::ExecUnavailable(format!(
+                "VM {} is not running",
+                vm_id
+            )));
+        }
+
+        let vsock_socket_path =
+            vsock_socket_path.ok_or_else(|| VmManagerError::ExecUnavailable(vm_id.to_string()))?;
+
+        let request_json = Self::build_guest_exec_request(command, timeout_secs)?;
+
+        let timeout = Self::exec_timeout(timeout_secs);
+        let response_bytes = tokio::time::timeout(timeout, async {
+            let mut stream = tokio::net::UnixStream::connect(&vsock_socket_path)
+                .await
+                .map_err(|e| {
+                    VmManagerError::ExecError(format!(
+                        "failed to connect to guest-agent socket {}: {}",
+                        vsock_socket_path.display(),
+                        e
+                    ))
+                })?;
+
+            stream.write_all(b"CONNECT 7000\n").await.map_err(|e| {
+                VmManagerError::ExecError(format!(
+                    "failed to open vsock stream to guest agent: {}",
+                    e
+                ))
+            })?;
+
+            let mut handshake = Vec::new();
+            {
+                let mut reader = tokio::io::BufReader::new(&mut stream);
+                let mut limited = (&mut reader).take(MAX_GUEST_AGENT_HANDSHAKE_BYTES + 1);
+                limited
+                    .read_until(b'\n', &mut handshake)
+                    .await
+                    .map_err(|e| {
+                        VmManagerError::ExecError(format!(
+                            "failed to read guest-agent handshake: {}",
+                            e
+                        ))
+                    })?;
+            }
+
+            if !handshake.ends_with(b"\n")
+                || handshake.len() > MAX_GUEST_AGENT_HANDSHAKE_BYTES as usize
+            {
+                return Err(VmManagerError::ExecError(format!(
+                    "guest-agent handshake exceeds {} bytes or is missing a newline terminator",
+                    MAX_GUEST_AGENT_HANDSHAKE_BYTES
+                )));
+            }
+
+            let handshake = String::from_utf8(handshake).map_err(|e| {
+                VmManagerError::ExecError(format!(
+                    "guest-agent handshake was not valid UTF-8: {}",
+                    e
+                ))
+            })?;
+            if !handshake.starts_with("OK") {
+                return Err(VmManagerError::ExecError(format!(
+                    "guest-agent connect failed: {}",
+                    handshake.trim_end()
+                )));
+            }
+
+            stream.write_all(&request_json).await.map_err(|e| {
+                VmManagerError::ExecError(format!(
+                    "failed to send exec request to guest agent: {}",
+                    e
+                ))
+            })?;
+
+            let mut response = Vec::new();
+            stream
+                .take(MAX_GUEST_AGENT_RESPONSE_BYTES + 1)
+                .read_to_end(&mut response)
+                .await
+                .map_err(|e| {
+                    VmManagerError::ExecError(format!("failed to read guest-agent response: {}", e))
+                })?;
+            if response.len() > MAX_GUEST_AGENT_RESPONSE_BYTES as usize {
+                return Err(VmManagerError::ExecError(format!(
+                    "guest-agent response exceeds {} bytes",
+                    MAX_GUEST_AGENT_RESPONSE_BYTES
+                )));
+            }
+            Ok::<_, VmManagerError>(response)
+        })
+        .await
+        .map_err(|_| VmManagerError::ExecTimeout(timeout.as_secs()))??;
+
+        let response: GuestExecResponse = serde_json::from_slice(&response_bytes).map_err(|e| {
+            VmManagerError::ExecError(format!("invalid guest-agent response: {}", e))
+        })?;
+
+        Ok(ExecVmResponse {
+            exit_code: response.exit_code,
+            stdout: response.stdout,
+            stderr: response.stderr,
+            timed_out: response.timed_out,
+        })
     }
 
     /// Add a VFIO device (e.g., GPU) to a running VM
@@ -2447,6 +2716,7 @@ impl Drop for VmManager {
 mod tests {
     use super::*;
     use crate::rpc::node::{CpuPinning as ProtoCpuPinning, NumaPlacement as ProtoNumaPlacement};
+    use tempfile::TempDir;
 
     fn base_vm_config(memory_size: i64, boot_vcpus: i32) -> VmConfig {
         VmConfig {
@@ -2589,5 +2859,53 @@ mod tests {
         assert!(config.memory.as_ref().unwrap().zones.is_none());
         assert_eq!(config.memory.as_ref().unwrap().size, original_size);
         assert!(config.numa.is_none());
+    }
+
+    #[test]
+    fn resolve_vsock_config_sets_defaults() {
+        let runtime_dir = TempDir::new().unwrap();
+        let manager = VmManager::new(runtime_dir.path(), "/bin/true", None);
+        let mut vsock = ProtoVsockConfig::default();
+
+        manager.resolve_vsock_config("test-vm", &mut vsock);
+
+        assert!(vsock.cid.is_some());
+        assert_eq!(
+            vsock.socket.as_deref(),
+            Some(
+                runtime_dir
+                    .path()
+                    .join("test-vm.vsock")
+                    .to_string_lossy()
+                    .as_ref()
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn exec_vm_rejects_empty_command() {
+        let runtime_dir = TempDir::new().unwrap();
+        let manager = VmManager::new(runtime_dir.path(), "/bin/true", None);
+
+        let err = manager
+            .exec_vm("test-vm", Vec::new(), None)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, VmManagerError::ExecInvalid(_)));
+    }
+
+    #[test]
+    fn build_guest_exec_request_is_newline_framed_json() {
+        let payload =
+            VmManager::build_guest_exec_request(vec!["/bin/echo".into(), "hello".into()], Some(5))
+                .unwrap();
+
+        assert_eq!(payload.last(), Some(&b'\n'));
+
+        let body = std::str::from_utf8(&payload[..payload.len() - 1]).unwrap();
+        let json: serde_json::Value = serde_json::from_str(body).unwrap();
+        assert_eq!(json["command"], serde_json::json!(["/bin/echo", "hello"]));
+        assert_eq!(json["timeout_secs"], 5);
     }
 }

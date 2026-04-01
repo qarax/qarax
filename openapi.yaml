@@ -844,6 +844,38 @@ paths:
           description: Sandbox not found
         '500':
           description: Internal server error
+  /sandboxes/{sandbox_id}/exec:
+    post:
+      tags:
+      - sandboxes
+      operationId: exec
+      parameters:
+      - name: sandbox_id
+        in: path
+        description: Sandbox unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExecSandboxRequest'
+        required: true
+      responses:
+        '200':
+          description: Command executed inside the sandbox
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecSandboxResponse'
+        '404':
+          description: Sandbox not found
+        '422':
+          description: Sandbox is not ready or guest exec is unavailable
+        '500':
+          description: Internal server error
   /scheduling/config:
     get:
       tags:
@@ -2150,6 +2182,38 @@ components:
           type: integer
           format: int64
           description: New disk size in bytes. Must be larger than the current size and a multiple of 1 MiB.
+    ExecSandboxRequest:
+      type: object
+      required:
+      - command
+      properties:
+        command:
+          type: array
+          items:
+            type: string
+        timeout_secs:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          minimum: 0
+    ExecSandboxResponse:
+      type: object
+      required:
+      - exit_code
+      - stdout
+      - stderr
+      - timed_out
+      properties:
+        exit_code:
+          type: integer
+          format: int32
+        stderr:
+          type: string
+        stdout:
+          type: string
+        timed_out:
+          type: boolean
     HookExecution:
       type: object
       required:

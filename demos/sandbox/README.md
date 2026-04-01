@@ -8,7 +8,7 @@ and deletes the underlying VM.  No manual cleanup required.
 
 ## What this demo shows
 
-1. Create a VM template backed by a boot source (kernel, optionally initramfs)
+1. Create a VM template backed by a boot source (kernel + initramfs)
 2. Provision a sandbox from the template with a short idle timeout
 3. Poll until the sandbox transitions from `provisioning` → `ready`
 4. Inspect the sandbox (status, IP, idle timeout)
@@ -21,7 +21,8 @@ and deletes the underlying VM.  No manual cleanup required.
 - qarax stack running: `./hack/run-local.sh`
 - `qarax` CLI on PATH
 - A host registered and initialized (run-local.sh does this automatically)
-- The demo works with kernel-only boot by default; pass `--initramfs PATH` if your node exposes one
+- The demo requires an initramfs that contains `qarax-init`, because it runs `qarax sandbox exec` inside the guest
+- By default it uses `/var/lib/qarax/images/test-initramfs.gz` from the local e2e/demo environment; override with `--initramfs PATH` or `SANDBOX_INITRAMFS_PATH`
 - The default run removes old `sandbox-demo-*` sandboxes, waits briefly for prior VM cleanup to settle, and refreshes its managed template assets before starting
 
 ## Usage
@@ -33,7 +34,7 @@ and deletes the underlying VM.  No manual cleanup required.
 # Custom server
 ./demos/sandbox/run.sh --server http://localhost:8000
 
-# Reuse an existing template
+# Reuse an existing template that boots with an exec-capable initramfs
 ./demos/sandbox/run.sh --template my-template
 
 # Shorter idle timeout to see auto-reap faster
@@ -50,8 +51,7 @@ and deletes the underlying VM.  No manual cleanup required.
 | `--server URL` | `$QARAX_SERVER` or `http://localhost:8000` | qarax API URL |
 | `--template NAME` | `sandbox-demo-template` | VM template name; custom templates are reused and not deleted by the demo |
 | `--idle-timeout SECS` | `90` | Idle timeout before auto-reap |
-| `--initramfs PATH` | unset | Optional initramfs path on the qarax-node host |
-| `--no-initramfs` | n/a | Force kernel-only boot source creation |
+| `--initramfs PATH` | `/var/lib/qarax/images/test-initramfs.gz` | Initramfs path on the qarax-node host; must contain `qarax-init` |
 | `--cleanup` | n/a | Remove demo-managed sandboxes, VMs, and template assets, then exit |
 
 ## How auto-reap works

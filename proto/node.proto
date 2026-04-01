@@ -58,8 +58,19 @@ message VmConfig {
   // VFIO device passthrough (GPU, etc.)
   repeated VfioDeviceConfig devices = 13;
 
+  // Virtio-vsock configuration (optional; used for host <-> guest control channels)
+  optional VsockConfig vsock = 14;
+
   // NUMA placement (optional; set by control plane for GPU-local or explicit NUMA pinning)
-  optional NumaPlacement numa_placement = 14;
+  optional NumaPlacement numa_placement = 15;
+}
+
+message VsockConfig {
+  optional int64 cid = 1;       // Guest CID; auto-assigned by the node when omitted
+  optional string socket = 2;   // Host-side UNIX socket path; derived by the node when omitted
+  optional bool iommu = 3;
+  optional int32 pci_segment = 4;
+  optional string id = 5;
 }
 
 // ============================================================================
@@ -305,6 +316,19 @@ message ConsolePtyPathResponse {
   bool available = 2;     // Whether PTY console is available
 }
 
+message ExecVmRequest {
+  string vm_id = 1;
+  repeated string command = 2;
+  optional uint64 timeout_secs = 3;
+}
+
+message ExecVmResponse {
+  int32 exit_code = 1;
+  string stdout = 2;
+  string stderr = 3;
+  bool timed_out = 4;
+}
+
 message NodeInfo {
   string hostname = 1;
   string cloud_hypervisor_version = 2;
@@ -428,6 +452,7 @@ service VmService {
   rpc ListVms(google.protobuf.Empty) returns (VmList) {}
   rpc GetVmCounters(VmID) returns (VmCounters) {}
   rpc ReadConsoleLog(VmID) returns (ConsoleLogResponse) {}
+  rpc ExecVM(ExecVmRequest) returns (ExecVmResponse) {}
 
   // Console streaming (for PTY/interactive console access)
   rpc AttachConsole(stream ConsoleInput) returns (stream ConsoleOutput) {}

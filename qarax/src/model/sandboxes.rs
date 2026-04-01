@@ -85,6 +85,20 @@ pub struct CreateSandboxResponse {
     pub job_id: Uuid,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
+pub struct ExecSandboxRequest {
+    pub command: Vec<String>,
+    pub timeout_secs: Option<u64>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
+pub struct ExecSandboxResponse {
+    pub exit_code: i32,
+    pub stdout: String,
+    pub stderr: String,
+    pub timed_out: bool,
+}
+
 pub async fn create(
     pool: &PgPool,
     id: Uuid,
