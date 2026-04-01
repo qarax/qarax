@@ -8,6 +8,7 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -18,7 +19,11 @@ use oci_client::secrets::RegistryAuth;
 use thiserror::Error;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
+use uuid::Uuid;
 
+use crate::image_preflight::{
+    PreflightCheckResult, architecture_check, boot_mode_check, guest_command_check,
+};
 use crate::oci_config::{OciImageConfig, OciImageConfigDetails};
 
 /// Path to the overlaybd-create binary installed by the overlaybd RPM.
@@ -433,6 +438,128 @@ impl OverlayBdManager {
         Ok(mounted)
     }
 
+    pub async fn preflight_boot(
+        &self,
+        image_ref: &str,
+        registry_url: &str,
+        architecture: &str,
+        boot_mode: &str,
+        qarax_init_binary: Option<&Path>,
+    ) -> Result<(String, Vec<PreflightCheckResult>), OverlayBdError> {
+        let mut checks = vec![boot_mode_check(boot_mode)];
+
+        let imported_ref = self.import_image(image_ref, registry_url).await?;
+        checks.push(PreflightCheckResult::ok(
+            "overlaybd_import",
+            format!("imported image into local registry as {}", imported_ref),
+        ));
+
+        let oci_config = self
+            .fetch_full_oci_config(&imported_ref, registry_url)
+            .await?;
+        let manifest_architecture = oci_config
+            .architecture
+            .as_deref()
+            .and_then(common::architecture::normalize_architecture)
+            .unwrap_or_else(|| architecture.to_string());
+        checks.push(architecture_check(architecture, &manifest_architecture));
+        match oci_config.os.as_deref() {
+            Some("linux") | None => checks.push(PreflightCheckResult::ok(
+                "os",
+                format!(
+                    "image OS is {}",
+                    oci_config.os.as_deref().unwrap_or("linux (unspecified)")
+                ),
+            )),
+            Some(os) => checks.push(PreflightCheckResult::fail(
+                "os",
+                format!("image OS {} is not supported for VM boot", os),
+            )),
+        }
+
+        let vm_id = format!("preflight-{}", Uuid::new_v4());
+        let mount_result = self
+            .mount(&vm_id, &imported_ref, registry_url, None, None)
+            .await;
+        let mounted = match mount_result {
+            Ok(mounted) => mounted,
+            Err(e) => {
+                checks.push(PreflightCheckResult::fail("overlaybd_mount", e.to_string()));
+                self.unmount(&vm_id).await;
+                return Ok((imported_ref, checks));
+            }
+        };
+
+        checks.push(PreflightCheckResult::ok(
+            "overlaybd_mount",
+            format!("mapped OverlayBD device at {}", mounted.device_path),
+        ));
+
+        let mount_dir = self.cache_dir.join(&vm_id).join("rootfs-mount");
+        tokio::fs::create_dir_all(&mount_dir).await.map_err(|e| {
+            OverlayBdError::MountFailed(format!("create mount dir {}: {}", mount_dir.display(), e))
+        })?;
+
+        let out = tokio::process::Command::new("mount")
+            .args([
+                mounted.device_path.as_str(),
+                mount_dir.to_str().unwrap_or(""),
+            ])
+            .output()
+            .await
+            .map_err(|e| OverlayBdError::MountFailed(format!("exec mount: {}", e)))?;
+
+        if !out.status.success() {
+            checks.push(PreflightCheckResult::fail(
+                "rootfs_mount",
+                format!(
+                    "mount {} on {}: {}",
+                    mounted.device_path,
+                    mount_dir.display(),
+                    String::from_utf8_lossy(&out.stderr).trim()
+                ),
+            ));
+            let _ = tokio::fs::remove_dir(&mount_dir).await;
+            self.unmount(&vm_id).await;
+            return Ok((imported_ref, checks));
+        }
+
+        checks.push(guest_command_check(&oci_config.config, &mount_dir).await);
+
+        let init_result = match qarax_init_binary {
+            Some(path) if path.exists() => {
+                match self
+                    .inject_init_inner(&mount_dir, &imported_ref, registry_url, path)
+                    .await
+                {
+                    Ok(()) => PreflightCheckResult::ok(
+                        "qarax_init",
+                        format!("injected qarax-init from {}", path.display()),
+                    ),
+                    Err(e) => PreflightCheckResult::fail("qarax_init", e.to_string()),
+                }
+            }
+            Some(path) => PreflightCheckResult::fail(
+                "qarax_init",
+                format!("qarax-init binary is missing at {}", path.display()),
+            ),
+            None => PreflightCheckResult::fail(
+                "qarax_init",
+                "qarax-init binary is not configured on this node",
+            ),
+        };
+        checks.push(init_result);
+
+        let _ = tokio::process::Command::new("umount")
+            .arg(mount_dir.to_str().unwrap_or(""))
+            .output()
+            .await;
+        let _ = tokio::fs::remove_dir(&mount_dir).await;
+        self.unmount(&vm_id).await;
+
+        Ok((imported_ref, checks))
+    }
+
     /// Unmount the OverlayBD device for the given VM:
     ///   1. Tear down the loopback fabric (disable TPG, remove LUN symlink, remove dirs)
     ///   2. Disable and remove the TCMU backstore
@@ -654,7 +781,6 @@ impl OverlayBdManager {
                 ))
             })?;
 
-        use std::os::unix::fs::PermissionsExt;
         tokio::fs::set_permissions(&init_dest, std::fs::Permissions::from_mode(0o755))
             .await
             .map_err(|e| OverlayBdError::MountFailed(format!("chmod +x .qarax-init: {}", e)))?;
@@ -672,6 +798,17 @@ impl OverlayBdManager {
         image_ref: &str,
         registry_url: &str,
     ) -> Result<OciImageConfigDetails, OverlayBdError> {
+        Ok(self
+            .fetch_full_oci_config(image_ref, registry_url)
+            .await?
+            .config)
+    }
+
+    async fn fetch_full_oci_config(
+        &self,
+        image_ref: &str,
+        registry_url: &str,
+    ) -> Result<OciImageConfig, OverlayBdError> {
         let host = registry_host(registry_url);
 
         let full_ref_str = if image_ref.starts_with(&host) {
@@ -703,11 +840,9 @@ impl OverlayBdManager {
                 OverlayBdError::OciError(format!("fetch config blob for {}: {}", full_ref_str, e))
             })?;
 
-        let oci_config: OciImageConfig = serde_json::from_slice(&config_data).map_err(|e| {
+        serde_json::from_slice(&config_data).map_err(|e| {
             OverlayBdError::OciError(format!("parse OCI config for {}: {}", full_ref_str, e))
-        })?;
-
-        Ok(oci_config.config)
+        })
     }
 
     /// Fetch layer descriptors from the converted OverlayBD image manifest in the local registry.

@@ -1397,6 +1397,28 @@ paths:
           description: Invalid input
         '500':
           description: Internal server error
+  /vms/preflight:
+    post:
+      tags:
+      - vms
+      operationId: preflight_image
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VmImagePreflightRequest'
+        required: true
+      responses:
+        '200':
+          description: OCI image preflight completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VmImagePreflightResponse'
+        '422':
+          description: Image or host is not preflightable
+        '500':
+          description: Internal server error
   /vms/{vm_id}:
     get:
       tags:
@@ -4048,6 +4070,67 @@ components:
         vm_id:
           type: string
           format: uuid
+    VmImagePreflightCheck:
+      type: object
+      required:
+      - name
+      - ok
+      - detail
+      properties:
+        detail:
+          type: string
+        name:
+          type: string
+        ok:
+          type: boolean
+    VmImagePreflightRequest:
+      type: object
+      required:
+      - image_ref
+      properties:
+        architecture:
+          type:
+          - string
+          - 'null'
+        boot_mode:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/BootMode'
+        host_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        image_ref:
+          type: string
+    VmImagePreflightResponse:
+      type: object
+      required:
+      - bootable
+      - host_id
+      - host_name
+      - backend
+      - resolved_image_ref
+      - architecture
+      - checks
+      properties:
+        architecture:
+          type: string
+        backend:
+          type: string
+        bootable:
+          type: boolean
+        checks:
+          type: array
+          items:
+            $ref: '#/components/schemas/VmImagePreflightCheck'
+        host_id:
+          type: string
+          format: uuid
+        host_name:
+          type: string
+        resolved_image_ref:
+          type: string
     VmMetrics:
       type: object
       required:

@@ -83,7 +83,7 @@ async def test_local_copy_transfer(client):
             # The test kernel is already on the node at this path
             new_transfer = NewTransfer(
                 name="test-kernel",
-                source="/var/lib/qarax/images/vmlinux",
+                source="/bin/sh",
                 object_type=StorageObjectType.KERNEL,
             )
             transfer = await create_transfer.asyncio(

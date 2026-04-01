@@ -123,6 +123,36 @@ async def test_create_vm_with_oci_image(client, oci_image_ref):
 
 
 @pytest.mark.asyncio
+async def test_preflight_oci_image(client, oci_image_ref):
+    """Preflight should report the selected backend and mark the test image bootable."""
+    async with client as c:
+        response = await c.get_async_httpx_client().post(
+            f"{QARAX_URL}/vms/preflight",
+            json={
+                "image_ref": oci_image_ref,
+                "boot_mode": "kernel",
+            },
+        )
+        assert response.status_code == 200, response.text
+
+        body = response.json()
+        assert body["backend"] in ("virtiofs", "overlaybd")
+        assert body["architecture"]
+        assert body["checks"], "expected preflight checks"
+
+        if body["backend"] == "overlaybd" and any(
+            check["name"] == "overlaybd_import" and not check["ok"]
+            for check in body["checks"]
+        ):
+            pytest.skip("OverlayBD backend not configured on this e2e node")
+
+        assert body["bootable"] is True, body
+        assert any(
+            check["name"] == "guest_command" and check["ok"] for check in body["checks"]
+        )
+
+
+@pytest.mark.asyncio
 async def test_create_vm_with_persistent_overlaybd_upper_has_storage_object(
     client, oci_image_ref
 ):

@@ -7,7 +7,8 @@ use crate::client::Client;
 use super::models::{
     AttachDiskRequest, CreateSnapshotRequest, CreateVmResponse, CreateVmResult, DiskResizeRequest,
     HotplugNicRequest, NetworkInterface, NewVm, RestoreRequest, Snapshot, StorageObject, Vm,
-    VmDisk, VmMigrateRequest, VmMigrateResponse, VmResizeRequest, VmStartResponse,
+    VmDisk, VmImagePreflightRequest, VmImagePreflightResponse, VmMigrateRequest, VmMigrateResponse,
+    VmResizeRequest, VmStartResponse,
 };
 
 pub async fn list(client: &Client, name: Option<&str>, tags: &[String]) -> anyhow::Result<Vec<Vm>> {
@@ -61,6 +62,13 @@ pub async fn delete(client: &Client, vm_id: Uuid) -> anyhow::Result<()> {
 
 pub async fn start(client: &Client, vm_id: Uuid) -> anyhow::Result<VmStartResponse> {
     client.post_empty_json(&format!("/vms/{vm_id}/start")).await
+}
+
+pub async fn preflight_image(
+    client: &Client,
+    req: &VmImagePreflightRequest,
+) -> anyhow::Result<VmImagePreflightResponse> {
+    client.post("/vms/preflight", req).await
 }
 
 pub async fn stop(client: &Client, vm_id: Uuid) -> anyhow::Result<()> {

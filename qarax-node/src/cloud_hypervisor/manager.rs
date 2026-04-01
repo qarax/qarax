@@ -153,6 +153,8 @@ pub struct VmManager {
     /// Direct reference to OverlayBdManager for import operations
     /// (shared Arc with the OverlayBD storage backend)
     overlaybd_manager: Option<Arc<OverlayBdManager>>,
+    /// Path to qarax-init used for OCI boot injection and preflight checks.
+    qarax_init_binary: Option<PathBuf>,
 }
 
 impl VmManager {
@@ -168,6 +170,7 @@ impl VmManager {
             image_store_manager,
             StorageBackendRegistry::new(),
             None,
+            None,
         )
     }
 
@@ -178,6 +181,7 @@ impl VmManager {
         image_store_manager: Option<Arc<ImageStoreManager>>,
         storage_backends: StorageBackendRegistry,
         overlaybd_manager: Option<Arc<OverlayBdManager>>,
+        qarax_init_binary: Option<PathBuf>,
     ) -> Self {
         let runtime_dir = runtime_dir.into();
         let ch_binary = ch_binary.into();
@@ -195,6 +199,7 @@ impl VmManager {
             image_store_manager,
             storage_backends,
             overlaybd_manager,
+            qarax_init_binary,
         }
     }
 
@@ -206,6 +211,10 @@ impl VmManager {
     /// Get the OverlayBD manager if configured (used for import operations)
     pub fn overlaybd_manager(&self) -> Option<&Arc<OverlayBdManager>> {
         self.overlaybd_manager.as_ref()
+    }
+
+    pub fn qarax_init_binary(&self) -> Option<&Path> {
+        self.qarax_init_binary.as_deref()
     }
 
     /// Get a storage backend by kind

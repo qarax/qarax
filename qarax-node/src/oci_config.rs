@@ -6,10 +6,12 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct OciImageConfig {
+    pub architecture: Option<String>,
+    pub os: Option<String>,
     pub config: OciImageConfigDetails,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct OciImageConfigDetails {
     pub env: Option<Vec<String>>,

@@ -103,12 +103,21 @@ impl Drop for TestApp {
 
 /// Create a host and set it to UP so the scheduler can assign VMs.
 async fn ensure_host_up(client: &reqwest::Client, address: &str) -> String {
+    ensure_host_up_with_name(client, address, "test-host", 50051).await
+}
+
+async fn ensure_host_up_with_name(
+    client: &reqwest::Client,
+    address: &str,
+    name: &str,
+    port: u16,
+) -> String {
     let res = client
         .post(format!("{}/hosts", address))
         .json(&json!({
-            "name": "test-host",
+            "name": name,
             "address": "127.0.0.1",
-            "port": 50051,
+            "port": port,
             "host_user": "root",
             "password": ""
         }))
@@ -126,6 +135,15 @@ async fn ensure_host_up(client: &reqwest::Client, address: &str) -> String {
         .unwrap();
 
     host_id
+}
+
+async fn set_host_architecture(pool: &PgPool, host_id: &str, architecture: &str) {
+    sqlx::query("UPDATE hosts SET architecture = $1 WHERE id = $2")
+        .bind(architecture)
+        .bind(Uuid::parse_str(host_id).unwrap())
+        .execute(pool)
+        .await
+        .unwrap();
 }
 
 /// Create a VM via the API, returns the VM UUID string.
@@ -668,5 +686,52 @@ async fn test_attach_disk_duplicate_logical_name_rejected() {
         res.status().is_client_error() || res.status().is_server_error(),
         "Expected error for duplicate logical_name, got {}",
         res.status()
+    );
+}
+
+#[tokio::test]
+async fn test_preflight_requires_non_empty_image_ref() {
+    let app = spawn_app().await;
+    let client = reqwest::Client::new();
+
+    let res = client
+        .post(format!("{}/vms/preflight", &app.address))
+        .json(&json!({
+            "image_ref": ""
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["message"], "image_ref is required");
+}
+
+#[tokio::test]
+async fn test_preflight_rejects_selected_host_architecture_mismatch() {
+    let app = spawn_app().await;
+    let client = reqwest::Client::new();
+    let host_id = ensure_host_up_with_name(&client, &app.address, "arch-host", 50051).await;
+    set_host_architecture(&app.pool, &host_id, "x86_64").await;
+
+    let res = client
+        .post(format!("{}/vms/preflight", &app.address))
+        .json(&json!({
+            "image_ref": "registry:5000/test/busybox:latest",
+            "host_id": host_id,
+            "architecture": "aarch64"
+        }))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert!(
+        body["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("selected host architecture x86_64 does not match VM architecture aarch64")
     );
 }

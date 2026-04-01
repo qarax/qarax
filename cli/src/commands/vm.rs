@@ -8,8 +8,8 @@ use crate::{
         self,
         models::{
             AttachDiskRequest, CreateSnapshotRequest, CreateVmResult, DiskResizeRequest,
-            HotplugNicRequest, NewVm, NewVmNetwork, RestoreRequest, VmMigrateRequest,
-            VmResizeRequest,
+            HotplugNicRequest, NewVm, NewVmNetwork, RestoreRequest, VmImagePreflightRequest,
+            VmMigrateRequest, VmResizeRequest,
         },
     },
     client::Client,
@@ -141,6 +141,21 @@ enum VmCommand {
     Start {
         /// VM name or ID
         vm: String,
+    },
+    /// Check whether an OCI image is likely to boot on a real Qarax host/backend
+    Preflight {
+        /// OCI image reference
+        #[arg(long)]
+        image_ref: String,
+        /// Optional host name or ID to force preflight on
+        #[arg(long)]
+        host: Option<String>,
+        /// Optional target architecture
+        #[arg(long)]
+        architecture: Option<String>,
+        /// Boot mode: kernel (default) or firmware
+        #[arg(long, default_value = "kernel")]
+        boot_mode: String,
     },
     /// Stop a VM
     Stop {
@@ -584,6 +599,43 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
                 println!("Starting VM: {vm}");
                 println!("Job:         {}", resp.job_id);
                 poll_job(client, resp.job_id).await?;
+            }
+        }
+
+        VmCommand::Preflight {
+            image_ref,
+            host,
+            architecture,
+            boot_mode,
+        } => {
+            let host_id = match host {
+                Some(ref host) => Some(resolve_host_id(client, host).await?),
+                None => None,
+            };
+            let request = VmImagePreflightRequest {
+                image_ref,
+                host_id,
+                architecture,
+                boot_mode: if boot_mode == "kernel" {
+                    None
+                } else {
+                    Some(boot_mode)
+                },
+            };
+            let response = api::vms::preflight_image(client, &request).await?;
+            if !matches!(output, OutputFormat::Table) {
+                print_output(&response, output)?;
+            } else {
+                println!("Bootable:   {}", response.bootable);
+                println!("Host:       {} ({})", response.host_name, response.host_id);
+                println!("Backend:    {}", response.backend);
+                println!("Resolved:   {}", response.resolved_image_ref);
+                println!("Arch:       {}", response.architecture);
+                println!();
+                for check in response.checks {
+                    let status = if check.ok { "ok" } else { "fail" };
+                    println!("[{status}] {}: {}", check.name, check.detail);
+                }
             }
         }
 

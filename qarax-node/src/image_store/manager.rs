@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::io::Cursor;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -9,7 +10,11 @@ use oci_client::client::{Client, ClientConfig, ClientProtocol};
 use oci_client::manifest::OciImageManifest;
 use oci_client::secrets::RegistryAuth;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
+use crate::image_preflight::{
+    PreflightCheckResult, boot_mode_check, guest_command_check, supported_layer_media_type,
+};
 use crate::oci_config::{OciImageConfig, OciImageConfigDetails};
 use thiserror::Error;
 use tokio::process::Child;
@@ -263,51 +268,7 @@ impl ImageStoreManager {
 
         info!("OverlayFS mounted at {}", merged_dir.display());
 
-        // Inject the qarax-init binary and its config into the overlay upper dir.
-        if let Some(parent) = rootfs_dir.parent() {
-            let config_file = parent.join("config.json");
-            if config_file.exists()
-                && let Ok(config_str) = tokio::fs::read_to_string(&config_file).await
-                && let Ok(oci_config) = serde_json::from_str::<OciImageConfigDetails>(&config_str)
-            {
-                // Write /.qarax-config.json for the init binary to read at boot
-                let init_config = serde_json::json!({
-                    "entrypoint": oci_config.entrypoint.unwrap_or_default(),
-                    "cmd": oci_config.cmd.unwrap_or_default(),
-                    "env": oci_config.env.unwrap_or_default(),
-                });
-                let config_path = upper_dir.join(".qarax-config.json");
-                tokio::fs::write(&config_path, init_config.to_string())
-                    .await
-                    .map_err(|e| {
-                        ImageStoreError::VirtiofsdError(format!(
-                            "failed to write .qarax-config.json: {e}"
-                        ))
-                    })?;
-
-                // Copy the pre-built static qarax-init binary to /.qarax-init
-                let init_dest = upper_dir.join(".qarax-init");
-                tokio::fs::copy(&self.qarax_init_binary, &init_dest)
-                    .await
-                    .map_err(|e| {
-                        ImageStoreError::VirtiofsdError(format!(
-                            "failed to copy qarax-init from {}: {e} — is it installed?",
-                            self.qarax_init_binary.display()
-                        ))
-                    })?;
-
-                use std::os::unix::fs::PermissionsExt;
-                tokio::fs::set_permissions(&init_dest, std::fs::Permissions::from_mode(0o755))
-                    .await
-                    .map_err(|e| {
-                        ImageStoreError::VirtiofsdError(format!(
-                            "failed to chmod +x .qarax-init: {e}"
-                        ))
-                    })?;
-
-                info!("Injected qarax-init binary at {}", init_dest.display());
-            }
-        }
+        self.inject_init_files(rootfs_dir, &upper_dir).await?;
 
         // Remove stale socket
         if socket_path.exists() {
@@ -356,6 +317,140 @@ impl ImageStoreManager {
         );
 
         Ok(socket_path)
+    }
+
+    pub async fn preflight_boot(
+        &self,
+        image_ref: &str,
+        architecture: &str,
+        boot_mode: &str,
+    ) -> Result<Vec<PreflightCheckResult>, ImageStoreError> {
+        let reference = Reference::try_from(image_ref)
+            .map_err(|e| ImageStoreError::InvalidRef(e.to_string()))?;
+
+        let mut insecure_hosts: Vec<String> =
+            vec!["localhost".to_string(), "127.0.0.1".to_string()];
+        if let Ok(val) = std::env::var("INSECURE_REGISTRIES") {
+            for host in val.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+                insecure_hosts.push(host.to_string());
+            }
+        }
+        let client = Client::new(ClientConfig {
+            protocol: ClientProtocol::HttpsExcept(insecure_hosts),
+            ..Default::default()
+        });
+
+        let mut checks = vec![boot_mode_check(boot_mode)];
+
+        let (manifest, _digest): (OciImageManifest, String) = client
+            .pull_image_manifest(&reference, &RegistryAuth::Anonymous)
+            .await?;
+
+        let mut config_buf: Vec<u8> = Vec::new();
+        client
+            .pull_blob(&reference, &manifest.config, &mut config_buf)
+            .await?;
+        let config_str = String::from_utf8(config_buf)
+            .map_err(|e| ImageStoreError::VirtiofsdError(e.to_string()))?;
+        let oci_config: OciImageConfig = serde_json::from_str(&config_str)?;
+
+        match oci_config.os.as_deref() {
+            Some("linux") | None => checks.push(PreflightCheckResult::ok(
+                "os",
+                format!(
+                    "image OS is {}",
+                    oci_config.os.as_deref().unwrap_or("linux (unspecified)")
+                ),
+            )),
+            Some(os) => checks.push(PreflightCheckResult::fail(
+                "os",
+                format!("image OS {} is not supported for VM boot", os),
+            )),
+        }
+
+        let manifest_architecture = oci_config
+            .architecture
+            .as_deref()
+            .and_then(common::architecture::normalize_architecture)
+            .unwrap_or_else(|| architecture.to_string());
+        checks.push(crate::image_preflight::architecture_check(
+            architecture,
+            &manifest_architecture,
+        ));
+
+        let mut unsupported_layers = Vec::new();
+        for layer in &manifest.layers {
+            if !supported_layer_media_type(layer.media_type.as_str()) {
+                unsupported_layers.push(layer.media_type.clone());
+            }
+        }
+        if unsupported_layers.is_empty() {
+            checks.push(PreflightCheckResult::ok(
+                "layer_media_types",
+                "all image layers use supported tar/gzip media types",
+            ));
+        } else {
+            checks.push(PreflightCheckResult::fail(
+                "layer_media_types",
+                format!(
+                    "unsupported layer media types: {}",
+                    unsupported_layers.join(", ")
+                ),
+            ));
+        }
+
+        let info = self.pull_and_unpack(image_ref).await?;
+        let config = OciImageConfigDetails {
+            env: oci_config.config.env.clone(),
+            entrypoint: oci_config.config.entrypoint.clone(),
+            cmd: oci_config.config.cmd.clone(),
+        };
+        checks.push(guest_command_check(&config, &info.rootfs_path).await);
+
+        if self.qarax_init_binary.exists() {
+            checks.push(PreflightCheckResult::ok(
+                "qarax_init",
+                format!(
+                    "qarax-init is available at {}",
+                    self.qarax_init_binary.display()
+                ),
+            ));
+        } else {
+            checks.push(PreflightCheckResult::fail(
+                "qarax_init",
+                format!(
+                    "qarax-init binary is missing at {}",
+                    self.qarax_init_binary.display()
+                ),
+            ));
+        }
+
+        let vm_id = format!("preflight-{}", Uuid::new_v4());
+        let vm_dir = self.runtime_dir.join(&vm_id);
+        let merged_dir = vm_dir.join("merged");
+        let preflight_result = async {
+            self.start_virtiofsd(&vm_id, &info.rootfs_path).await?;
+            Ok::<(), ImageStoreError>(())
+        }
+        .await;
+        self.cleanup_vm(&vm_id).await;
+
+        match preflight_result {
+            Ok(()) => checks.push(PreflightCheckResult::ok(
+                "virtiofs_prepare",
+                "rootfs overlay mount, init injection, and virtiofsd startup succeeded",
+            )),
+            Err(e) => checks.push(PreflightCheckResult::fail(
+                "virtiofs_prepare",
+                e.to_string(),
+            )),
+        }
+
+        if merged_dir.exists() {
+            let _ = tokio::fs::remove_dir_all(&vm_dir).await;
+        }
+
+        Ok(checks)
     }
 
     pub async fn stop_virtiofsd(&self, vm_id: &str) {
@@ -430,5 +525,54 @@ impl ImageStoreManager {
         if vm_dir.exists() {
             let _ = tokio::fs::remove_dir_all(&vm_dir).await;
         }
+    }
+
+    async fn inject_init_files(
+        &self,
+        rootfs_dir: &Path,
+        upper_dir: &Path,
+    ) -> Result<(), ImageStoreError> {
+        let Some(parent) = rootfs_dir.parent() else {
+            return Ok(());
+        };
+
+        let config_file = parent.join("config.json");
+        if !config_file.exists() {
+            return Ok(());
+        }
+
+        let config_str = tokio::fs::read_to_string(&config_file).await?;
+        let oci_config = serde_json::from_str::<OciImageConfigDetails>(&config_str)?;
+
+        let init_config = serde_json::json!({
+            "entrypoint": oci_config.entrypoint.unwrap_or_default(),
+            "cmd": oci_config.cmd.unwrap_or_default(),
+            "env": oci_config.env.unwrap_or_default(),
+        });
+        let config_path = upper_dir.join(".qarax-config.json");
+        tokio::fs::write(&config_path, init_config.to_string())
+            .await
+            .map_err(|e| {
+                ImageStoreError::VirtiofsdError(format!("failed to write .qarax-config.json: {e}"))
+            })?;
+
+        let init_dest = upper_dir.join(".qarax-init");
+        tokio::fs::copy(&self.qarax_init_binary, &init_dest)
+            .await
+            .map_err(|e| {
+                ImageStoreError::VirtiofsdError(format!(
+                    "failed to copy qarax-init from {}: {e} — is it installed?",
+                    self.qarax_init_binary.display()
+                ))
+            })?;
+
+        tokio::fs::set_permissions(&init_dest, std::fs::Permissions::from_mode(0o755))
+            .await
+            .map_err(|e| {
+                ImageStoreError::VirtiofsdError(format!("failed to chmod +x .qarax-init: {e}"))
+            })?;
+
+        info!("Injected qarax-init binary at {}", init_dest.display());
+        Ok(())
     }
 }

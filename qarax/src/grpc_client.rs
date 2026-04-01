@@ -82,9 +82,9 @@ use node::{
     DetachNetworkRequest, DetachStoragePoolRequest, DiskConfig, DownloadFileRequest, ExecVmRequest,
     ExecVmResponse, FsConfig, ImportOverlayBdRequest, ImportOverlayBdResponse, MemoryConfig,
     NetConfig, NodeInfo, NumaPlacement, OciImageRequest, OciImageResponse, PayloadConfig,
-    ReceiveMigrationRequest, RemoveDeviceRequest, ResizeDiskRequest, ResizeVmRequest,
-    RestoreVmRequest, SendMigrationRequest, SnapshotVmRequest, StoragePoolKind, VfioDeviceConfig,
-    VmConfig, VmCounters, VmId, VmState, VsockConfig,
+    PreflightImageRequest, PreflightImageResponse, ReceiveMigrationRequest, RemoveDeviceRequest,
+    ResizeDiskRequest, ResizeVmRequest, RestoreVmRequest, SendMigrationRequest, SnapshotVmRequest,
+    StoragePoolKind, VfioDeviceConfig, VmConfig, VmCounters, VmId, VmState, VsockConfig,
     file_transfer_service_client::FileTransferServiceClient, vm_service_client::VmServiceClient,
 };
 
@@ -722,6 +722,38 @@ impl NodeClient {
             })
             .await
             .map_err(|s| anyhow::anyhow!("Failed to pull image on qarax-node: {}", s.message()))?;
+
+        Ok(response.into_inner())
+    }
+
+    #[instrument(skip(self))]
+    pub async fn preflight_image(
+        &self,
+        image_ref: &str,
+        backend: &str,
+        registry_url: Option<&str>,
+        architecture: &str,
+        boot_mode: &str,
+    ) -> Result<PreflightImageResponse> {
+        debug!(
+            "Preflighting image {} with backend {} on node {}",
+            image_ref, backend, self.address
+        );
+
+        let mut client = self.connect_vm_service().await?;
+
+        let response = client
+            .preflight_image(PreflightImageRequest {
+                image_ref: image_ref.to_string(),
+                backend: backend.to_string(),
+                registry_url: registry_url.unwrap_or_default().to_string(),
+                architecture: architecture.to_string(),
+                boot_mode: boot_mode.to_string(),
+            })
+            .await
+            .map_err(|s| {
+                anyhow::anyhow!("Failed to preflight image on qarax-node: {}", s.message())
+            })?;
 
         Ok(response.into_inner())
     }

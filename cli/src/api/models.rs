@@ -178,6 +178,35 @@ pub struct VmStartResponse {
     pub job_id: Uuid,
 }
 
+#[derive(Debug, Serialize)]
+pub struct VmImagePreflightRequest {
+    pub image_ref: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub architecture: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub boot_mode: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct VmImagePreflightCheck {
+    pub name: String,
+    pub ok: bool,
+    pub detail: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct VmImagePreflightResponse {
+    pub bootable: bool,
+    pub host_id: Uuid,
+    pub host_name: String,
+    pub backend: String,
+    pub resolved_image_ref: String,
+    pub architecture: String,
+    pub checks: Vec<VmImagePreflightCheck>,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct VmMigrateRequest {
     pub target_host_id: Uuid,

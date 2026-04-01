@@ -84,6 +84,7 @@ pub struct VmListQuery {
         vm::handler::list,
         vm::handler::get,
         vm::handler::create,
+        vm::handler::preflight_image,
         vm::handler::create_template_from_vm,
         vm::handler::start,
         vm::handler::stop,
@@ -197,6 +198,9 @@ pub struct VmListQuery {
             crate::model::snapshots::Snapshot,
             crate::model::snapshots::SnapshotStatus,
             crate::handlers::vm::handler::CreateVmResponse,
+            crate::handlers::vm::handler::VmImagePreflightRequest,
+            crate::handlers::vm::handler::VmImagePreflightResponse,
+            crate::handlers::vm::handler::VmImagePreflightCheck,
             crate::handlers::vm::handler::VmStartResponse,
             crate::handlers::vm::handler::AttachDiskRequest,
             crate::handlers::vm::handler::RestoreRequest,
@@ -345,6 +349,7 @@ fn hosts() -> Router {
 fn vms() -> Router {
     Router::new()
         .route("/vms", get(vm::handler::list).post(vm::handler::create))
+        .route("/vms/preflight", post(vm::handler::preflight_image))
         .route(
             "/vms/{vm_id}",
             get(vm::handler::get).delete(vm::handler::delete),

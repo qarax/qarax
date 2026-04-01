@@ -190,7 +190,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(ref obd) = overlaybd_manager {
         storage_backends.register(
             StoragePoolKind::Overlaybd,
-            Arc::new(OverlayBdBackend::new(Arc::clone(obd), qarax_init_binary)),
+            Arc::new(OverlayBdBackend::new(
+                Arc::clone(obd),
+                qarax_init_binary.clone(),
+            )),
         );
     }
 
@@ -200,6 +203,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         image_store_manager,
         storage_backends,
         overlaybd_manager,
+        qarax_init_binary,
     ));
     vm_manager.recover_vms().await;
 

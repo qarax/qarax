@@ -481,6 +481,7 @@ service VmService {
   // OCI image management
   rpc PullImage(OciImageRequest) returns (OciImageResponse) {}
   rpc GetImageStatus(OciImageRequest) returns (OciImageResponse) {}
+  rpc PreflightImage(PreflightImageRequest) returns (PreflightImageResponse) {}
 
   // OverlayBD image import (convert OCI image for lazy block loading)
   rpc ImportOverlayBdImage(ImportOverlayBdRequest) returns (ImportOverlayBdResponse) {}
@@ -572,6 +573,20 @@ message OciImageRequest {
   string image_ref = 1;   // OCI image reference (e.g. "docker.io/library/ubuntu:22.04")
 }
 
+message PreflightImageRequest {
+  string image_ref = 1;    // OCI image reference to validate
+  string backend = 2;      // "virtiofs" or "overlaybd"
+  string registry_url = 3; // required for overlaybd imports
+  string architecture = 4; // normalized target arch (e.g. "x86_64")
+  string boot_mode = 5;    // "kernel" or "firmware"
+}
+
+message PreflightCheck {
+  string name = 1;
+  bool ok = 2;
+  string detail = 3;
+}
+
 // ============================================================================
 // OverlayBD Image Import
 // ============================================================================
@@ -646,4 +661,12 @@ message OciImageResponse {
   string bootstrap_path = 3;  // Path to RAFS bootstrap file on host
   string socket_path = 4;     // Path to nydusd socket (set after start_nydusd)
   bool available = 5;     // Whether the image is locally cached
+}
+
+message PreflightImageResponse {
+  bool bootable = 1;
+  string backend = 2;
+  string resolved_image_ref = 3;
+  string architecture = 4;
+  repeated PreflightCheck checks = 5;
 }

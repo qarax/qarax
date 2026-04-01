@@ -70,6 +70,9 @@ from .vhost_mode import VhostMode
 from .vm import Vm
 from .vm_disk import VmDisk
 from .vm_filesystem import VmFilesystem
+from .vm_image_preflight_check import VmImagePreflightCheck
+from .vm_image_preflight_request import VmImagePreflightRequest
+from .vm_image_preflight_response import VmImagePreflightResponse
 from .vm_metrics import VmMetrics
 from .vm_metrics_counters import VmMetricsCounters
 from .vm_metrics_counters_additional_property import VmMetricsCountersAdditionalProperty
@@ -151,6 +154,9 @@ __all__ = (
     "Vm",
     "VmDisk",
     "VmFilesystem",
+    "VmImagePreflightCheck",
+    "VmImagePreflightRequest",
+    "VmImagePreflightResponse",
     "VmMetrics",
     "VmMetricsCounters",
     "VmMetricsCountersAdditionalProperty",

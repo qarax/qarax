@@ -63,6 +63,32 @@ pub struct VmMetrics {
     pub counters: HashMap<String, HashMap<String, i64>>,
 }
 
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct VmImagePreflightRequest {
+    pub image_ref: String,
+    pub host_id: Option<Uuid>,
+    pub architecture: Option<String>,
+    pub boot_mode: Option<BootMode>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct VmImagePreflightCheck {
+    pub name: String,
+    pub ok: bool,
+    pub detail: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct VmImagePreflightResponse {
+    pub bootable: bool,
+    pub host_id: Uuid,
+    pub host_name: String,
+    pub backend: String,
+    pub resolved_image_ref: String,
+    pub architecture: String,
+    pub checks: Vec<VmImagePreflightCheck>,
+}
+
 fn resolved_vm_architecture(env: &App, architecture: Option<&str>) -> String {
     architecture
         .and_then(common::architecture::normalize_architecture)
@@ -198,6 +224,42 @@ async fn pick_host(
     })
 }
 
+async fn select_preflight_host(
+    env: &App,
+    host_id: Option<Uuid>,
+    architecture: &str,
+) -> Result<Host> {
+    match host_id {
+        Some(host_id) => {
+            let host = hosts::require_by_id(env.pool(), host_id).await?;
+            if host.status != hosts::HostStatus::Up {
+                return Err(crate::errors::Error::UnprocessableEntity(format!(
+                    "selected host {} is not in up state",
+                    host.name
+                )));
+            }
+            ensure_host_matches_architecture(&host, architecture)?;
+            Ok(host)
+        }
+        None => {
+            let mut tx = env.pool().begin().await?;
+            pick_host(
+                &mut tx,
+                env,
+                &hosts::SchedulingRequest {
+                    memory_bytes: 0,
+                    vcpus: 0,
+                    disk_bytes: 0,
+                    architecture: Some(architecture.to_string()),
+                    storage_pool_id: None,
+                    gpu: None,
+                },
+            )
+            .await
+        }
+    }
+}
+
 fn persist_vm_scheduling_metadata(vm: &mut ResolvedNewVm, architecture: &str) {
     if let serde_json::Value::Object(map) = &mut vm.config {
         map.insert(
@@ -327,6 +389,93 @@ async fn ensure_resize_capacity(
     }
 
     Ok(())
+}
+
+#[utoipa::path(
+    post,
+    path = "/vms/preflight",
+    request_body = VmImagePreflightRequest,
+    responses(
+        (status = 200, description = "OCI image preflight completed", body = VmImagePreflightResponse),
+        (status = 422, description = "Image or host is not preflightable"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "vms"
+)]
+#[instrument(skip(env))]
+pub async fn preflight_image(
+    Extension(env): Extension<App>,
+    Json(body): Json<VmImagePreflightRequest>,
+) -> Result<ApiResponse<VmImagePreflightResponse>> {
+    if body.image_ref.trim().is_empty() {
+        return Err(crate::errors::Error::UnprocessableEntity(
+            "image_ref is required".into(),
+        ));
+    }
+
+    let architecture = resolved_vm_architecture(&env, body.architecture.as_deref());
+    let boot_mode = body.boot_mode.unwrap_or(BootMode::Kernel);
+    let host = select_preflight_host(&env, body.host_id, &architecture).await?;
+
+    let overlaybd_pool = storage_pools::find_overlaybd_for_host(env.pool(), host.id)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to query OverlayBD pool for host {}: {}", host.id, e);
+            crate::errors::Error::InternalServerError
+        })?;
+
+    let (backend, registry_url) = match overlaybd_pool {
+        Some(pool) => (
+            "overlaybd",
+            Some(
+                OverlayBdPoolConfig::from_value(&pool.config)
+                    .ok_or(crate::errors::Error::InternalServerError)?
+                    .url,
+            ),
+        ),
+        None => ("virtiofs", None),
+    };
+
+    let node_client = NodeClient::new(&host.address, host.port as u16);
+    let response = node_client
+        .preflight_image(
+            &body.image_ref,
+            backend,
+            registry_url.as_deref(),
+            &architecture,
+            &boot_mode.to_string(),
+        )
+        .await
+        .map_err(|e| {
+            tracing::error!(
+                host_id = %host.id,
+                image_ref = %body.image_ref,
+                error = %e,
+                "Failed to preflight OCI image on qarax-node"
+            );
+            crate::errors::Error::InternalServerError
+        })?;
+
+    Ok(ApiResponse {
+        data: VmImagePreflightResponse {
+            bootable: response.bootable,
+            host_id: host.id,
+            host_name: host.name,
+            backend: response.backend,
+            resolved_image_ref: response.resolved_image_ref,
+            architecture: response.architecture,
+            checks: response
+                .checks
+                .into_iter()
+                .map(|check| VmImagePreflightCheck {
+                    name: check.name,
+                    ok: check.ok,
+                    detail: check.detail,
+                })
+                .collect(),
+        },
+        code: StatusCode::OK,
+    })
 }
 
 #[utoipa::path(
@@ -2291,10 +2440,15 @@ pub async fn attach_disk(
         }
     }
 
-    // Verify the storage object exists and check local pool affinity
+    // Verify the storage object exists and check local pool affinity.
+    // For Running/Shutdown VMs the disk is applied immediately via gRPC, so the
+    // VM's host must already have the pool. For Created VMs the disk is only
+    // recorded in the DB and the check is deferred to VM start time.
     let obj = storage_objects::get(env.pool(), req.storage_object_id).await?;
     let pool = storage_pools::get(env.pool(), obj.storage_pool_id).await?;
-    if pool.pool_type == storage_pools::StoragePoolType::Local {
+    if pool.pool_type == storage_pools::StoragePoolType::Local
+        && matches!(vm.status, VmStatus::Running | VmStatus::Shutdown)
+    {
         let host_id = vm.host_id.ok_or_else(|| {
             crate::errors::Error::UnprocessableEntity(
                 "Cannot attach a local disk to a VM with no assigned host".into(),

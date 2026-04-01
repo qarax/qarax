@@ -317,7 +317,7 @@ print_overlaybd_workflow() {
 	local pool_name="${1:-<POOL_NAME_OR_ID>}"
 
 	cat <<EOF
-Explicit disk workflow (OverlayBD — recommended):
+Explicit disk workflow (OverlayBD):
   # 1. Import an OCI image into the storage pool (async, polls to completion):
   cargo run -p cli storage-pool import --pool ${pool_name} \\
     --image-ref public.ecr.aws/docker/library/alpine:latest \\
