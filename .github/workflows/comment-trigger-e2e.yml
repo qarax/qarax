@@ -8,39 +8,41 @@ permissions:
   contents: read
   issues: write
   pull-requests: write
-  actions: write
 
 jobs:
-  dispatch:
-    name: Dispatch E2E
+  label:
+    name: Label PR For E2E
     runs-on: ubuntu-latest
     if: github.event.issue.pull_request && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && contains(github.event.comment.body, '/run-e2e')
     steps:
-      - name: Dispatch E2E workflow on PR merge ref
+      - name: Add E2E label to PR
         uses: actions/github-script@v8
         with:
+          github-token: ${{ secrets.E2E_TRIGGER_PAT }}
           script: |
             const owner = context.repo.owner;
             const repo = context.repo.repo;
             const issue_number = context.payload.issue.number;
+            const label = 'run-e2e';
 
-            const { data: pr } = await github.rest.pulls.get({
-              owner,
-              repo,
-              pull_number: issue_number,
-            });
-
-            await github.rest.actions.createWorkflowDispatch({
-              owner,
-              repo,
-              workflow_id: 'rust-ci.yml',
-              ref: 'master',
-              inputs: { pr_number: String(issue_number) },
-            });
-
-            await github.rest.issues.createComment({
+            const { data: existingLabels } = await github.rest.issues.listLabelsOnIssue({
               owner,
               repo,
               issue_number,
-              body: `Dispatching E2E tests for PR #${issue_number} (${pr.head.sha.substring(0, 7)}). Watch the [Actions tab](https://github.com/${owner}/${repo}/actions/workflows/rust-ci.yml) for the new run.`,
+            });
+
+            if (existingLabels.some(existing => existing.name === label)) {
+              await github.rest.issues.removeLabel({
+                owner,
+                repo,
+                issue_number,
+                name: label,
+              });
+            }
+
+            await github.rest.issues.addLabels({
+              owner,
+              repo,
+              issue_number,
+              labels: [label],
             });
