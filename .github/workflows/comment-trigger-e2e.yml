@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event.issue.pull_request && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && contains(github.event.comment.body, '/run-e2e')
     steps:
-      - name: Dispatch E2E workflow on PR branch
+      - name: Dispatch E2E workflow on PR merge ref
         uses: actions/github-script@v8
         with:
           script: |
@@ -34,12 +34,13 @@ jobs:
               owner,
               repo,
               workflow_id: 'rust-ci.yml',
-              ref: pr.head.ref,
+              ref: 'master',
+              inputs: { pr_number: String(issue_number) },
             });
 
             await github.rest.issues.createComment({
               owner,
               repo,
               issue_number,
-              body: `Dispatching E2E tests for branch \`${pr.head.ref}\` (${pr.head.sha.substring(0, 7)}). Watch the [Actions tab](https://github.com/${owner}/${repo}/actions/workflows/rust-ci.yml) for the new run.`,
+              body: `Dispatching E2E tests for PR #${issue_number} (${pr.head.sha.substring(0, 7)}). Watch the [Actions tab](https://github.com/${owner}/${repo}/actions/workflows/rust-ci.yml) for the new run.`,
             });
