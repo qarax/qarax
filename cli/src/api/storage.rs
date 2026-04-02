@@ -3,8 +3,8 @@ use uuid::Uuid;
 use crate::client::Client;
 
 use super::models::{
-    AttachHostToPoolRequest, ImportToPoolRequest, ImportToPoolResponse, NewStorageObject,
-    NewStoragePool, StorageObject, StoragePool,
+    AttachHostToPoolRequest, CreateDiskRequest, CreateDiskResponse, ImportToPoolRequest,
+    ImportToPoolResponse, NewStorageObject, NewStoragePool, StorageObject, StoragePool,
 };
 
 // Storage pools
@@ -79,6 +79,16 @@ pub async fn create_object(client: &Client, obj: &NewStorageObject) -> anyhow::R
 pub async fn delete_object(client: &Client, object_id: Uuid) -> anyhow::Result<()> {
     client
         .delete(&format!("/storage-objects/{object_id}"))
+        .await
+}
+
+pub async fn create_disk(
+    client: &Client,
+    pool_id: Uuid,
+    req: &CreateDiskRequest,
+) -> anyhow::Result<CreateDiskResponse> {
+    client
+        .post(&format!("/storage-pools/{pool_id}/disks"), req)
         .await
 }
 

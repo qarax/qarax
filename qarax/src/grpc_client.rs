@@ -79,12 +79,13 @@ type FileTransferClient =
 use node::{
     AddDiskDeviceRequest, AddNetworkDeviceRequest, AttachNetworkRequest, AttachStoragePoolRequest,
     CloudInitConfig, ConsoleConfig, ConsoleInput, ConsoleLogResponse, CopyFileRequest, CpusConfig,
-    DetachNetworkRequest, DetachStoragePoolRequest, DiskConfig, DownloadFileRequest, ExecVmRequest,
-    ExecVmResponse, FsConfig, ImportOverlayBdRequest, ImportOverlayBdResponse, MemoryConfig,
-    NetConfig, NodeInfo, NumaPlacement, OciImageRequest, OciImageResponse, PayloadConfig,
-    PreflightImageRequest, PreflightImageResponse, ReceiveMigrationRequest, RemoveDeviceRequest,
-    ResizeDiskRequest, ResizeVmRequest, RestoreVmRequest, SendMigrationRequest, SnapshotVmRequest,
-    StoragePoolKind, VfioDeviceConfig, VmConfig, VmCounters, VmId, VmState, VsockConfig,
+    CreateDiskRequest, DetachNetworkRequest, DetachStoragePoolRequest, DiskConfig,
+    DownloadFileRequest, ExecVmRequest, ExecVmResponse, FsConfig, ImportOverlayBdRequest,
+    ImportOverlayBdResponse, MemoryConfig, NetConfig, NodeInfo, NumaPlacement, OciImageRequest,
+    OciImageResponse, PayloadConfig, PreflightImageRequest, PreflightImageResponse,
+    ReceiveMigrationRequest, RemoveDeviceRequest, ResizeDiskRequest, ResizeVmRequest,
+    RestoreVmRequest, SendMigrationRequest, SnapshotVmRequest, StoragePoolKind, VfioDeviceConfig,
+    VmConfig, VmCounters, VmId, VmState, VsockConfig,
     file_transfer_service_client::FileTransferServiceClient, vm_service_client::VmServiceClient,
 };
 
@@ -675,6 +676,46 @@ impl NodeClient {
             Ok(response.bytes_written)
         } else {
             anyhow::bail!("Copy failed: {}", response.error)
+        }
+    }
+
+    /// Create a disk file on the node: blank (sparse or preallocated) or populated from source_url.
+    #[instrument(skip(self))]
+    pub async fn create_disk(
+        &self,
+        path: &str,
+        size_bytes: i64,
+        source_url: Option<&str>,
+        preallocate: bool,
+    ) -> Result<i64> {
+        debug!(
+            "Creating disk on node {}: path={path} size={size_bytes}",
+            self.address
+        );
+
+        let mut client = self.connect_file_transfer_service().await?;
+
+        let response = client
+            .create_disk(CreateDiskRequest {
+                path: path.to_string(),
+                size_bytes,
+                source_url: source_url.map(str::to_string),
+                preallocate: Some(preallocate),
+            })
+            .await
+            .map_err(|s| {
+                anyhow::anyhow!(
+                    "gRPC create_disk failed: code={:?} message={}",
+                    s.code(),
+                    s.message()
+                )
+            })?
+            .into_inner();
+
+        if response.success {
+            Ok(response.bytes_written)
+        } else {
+            anyhow::bail!("Disk creation failed: {}", response.error)
         }
     }
 

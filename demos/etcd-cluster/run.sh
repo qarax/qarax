@@ -49,48 +49,50 @@ MEMORY_MIB=256
 NODES=(etcd-0 etcd-1 etcd-2)
 declare -A NODE_IPS=([etcd-0]="10.100.0.10" [etcd-1]="10.100.0.11" [etcd-2]="10.100.0.12")
 
-MEMORY_BYTES=$(( MEMORY_MIB * 1024 * 1024 ))
+MEMORY_BYTES=$((MEMORY_MIB * 1024 * 1024))
 
 step() { echo -e "\n${CYAN}=== $* ===${NC}"; }
-ok()   { echo -e "${GREEN}✓ $*${NC}"; }
+ok() { echo -e "${GREEN}✓ $*${NC}"; }
 info() { echo -e "${YELLOW}$*${NC}"; }
 
 # Locate qarax CLI
 
 if [[ -z "$(find_qarax_bin)" ]]; then
-    echo "qarax CLI not found — building..."
-    cargo build -p cli
+	echo "qarax CLI not found — building..."
+	cargo build -p cli
 fi
 
 QARAX_BIN="$(find_qarax_bin)"
 [[ -n "$QARAX_BIN" ]] || die "qarax CLI not found even after build"
 QARAX="$QARAX_BIN --server $SERVER"
 
+ensure_stack "$SERVER"
+
 # Cleanup
 
 cleanup() {
-    step "Cleaning up etcd cluster demo"
+	step "Cleaning up etcd cluster demo"
 
-    if ip link show "$VETH_HOST" &>/dev/null; then
-        sudo ip link del "$VETH_HOST" 2>/dev/null || true
-        ok "Host veth removed"
-    fi
+	if ip link show "$VETH_HOST" &>/dev/null; then
+		sudo ip link del "$VETH_HOST" 2>/dev/null || true
+		ok "Host veth removed"
+	fi
 
-    if [[ -n "$(find_qarax_bin)" ]]; then
-        for node in "${NODES[@]}"; do
-            "$QARAX_BIN" --server "$SERVER" vm stop   "$node" 2>/dev/null || true
-            "$QARAX_BIN" --server "$SERVER" vm delete "$node" 2>/dev/null || true
-        done
-        ok "VMs removed"
-    fi
-    cd "$REPO_ROOT/e2e"
-    docker compose down -v 2>/dev/null || true
-    ok "Stack torn down"
+	if [[ -n "$(find_qarax_bin)" ]]; then
+		for node in "${NODES[@]}"; do
+			"$QARAX_BIN" --server "$SERVER" vm stop "$node" 2>/dev/null || true
+			"$QARAX_BIN" --server "$SERVER" vm delete "$node" 2>/dev/null || true
+		done
+		ok "VMs removed"
+	fi
+	cd "$REPO_ROOT/e2e"
+	docker compose down -v 2>/dev/null || true
+	ok "Stack torn down"
 }
 
 if [[ "${1:-}" == "--cleanup" ]]; then
-    cleanup
-    exit 0
+	cleanup
+	exit 0
 fi
 
 # Preflight
@@ -99,12 +101,12 @@ step "Preflight checks"
 
 command -v docker &>/dev/null || die "docker is required"
 command -v podman &>/dev/null || die "podman is required (to build the etcd image)"
-command -v jq &>/dev/null     || die "jq is required (to parse JSON output)"
-[[ -e /dev/kvm ]]             || die "/dev/kvm not found — KVM is required"
+command -v jq &>/dev/null || die "jq is required (to parse JSON output)"
+[[ -e /dev/kvm ]] || die "/dev/kvm not found — KVM is required"
 
 if [[ ! -e /dev/net/tun ]]; then
-    info "Warning: /dev/net/tun not found — VM networking will fail."
-    info "Fix: sudo modprobe tun && sudo mkdir -p /dev/net && sudo mknod /dev/net/tun c 10 200 && sudo chmod 0666 /dev/net/tun"
+	info "Warning: /dev/net/tun not found — VM networking will fail."
+	info "Fix: sudo modprobe tun && sudo mkdir -p /dev/net && sudo mknod /dev/net/tun c 10 200 && sudo chmod 0666 /dev/net/tun"
 fi
 
 ok "Preflight passed"
@@ -119,13 +121,15 @@ INIT_BIN="$REPO_ROOT/target/$MUSL_TARGET/release/qarax-init"
 CLI_BIN="$REPO_ROOT/target/$MUSL_TARGET/debug/qarax"
 
 if [[ ! -f "$NODE_BIN" || ! -f "$SERVER_BIN" || ! -f "$INIT_BIN" ]]; then
-    cargo build --release -p qarax -p qarax-node -p qarax-init
+	cargo build --release -p qarax -p qarax-node -p qarax-init
 fi
 if [[ ! -f "$CLI_BIN" ]]; then
-    cargo build -p cli
+	cargo build -p cli
 fi
 
 QARAX="$(find_qarax_bin) --server $SERVER"
+
+ensure_stack "$SERVER"
 [[ -n "$(find_qarax_bin)" ]] || die "qarax CLI binary not found after build"
 ok "Binaries ready"
 
@@ -136,24 +140,27 @@ step "Starting qarax stack (docker-compose)"
 cd "$REPO_ROOT/e2e"
 
 if curl -sf "$SERVER/hosts" -o /dev/null 2>/dev/null; then
-    ok "Stack already running"
+	ok "Stack already running"
 else
-    docker compose up -d --build
+	docker compose up -d --build
 
-    info "Waiting for qarax API to be ready..."
-    timeout=120; elapsed=0
-    while [[ $elapsed -lt $timeout ]]; do
-        if curl -sf "$SERVER/hosts" -o /dev/null 2>/dev/null; then
-            ok "qarax API is ready"
-            break
-        fi
-        if docker compose ps 2>/dev/null | grep -E "Exit [^0]" | grep -qv nfs; then
-            docker compose logs --tail=40
-            die "A required service exited unexpectedly"
-        fi
-        echo -n "."; sleep 2; elapsed=$((elapsed + 2))
-    done
-    [[ $elapsed -lt $timeout ]] || die "Timeout waiting for qarax API"
+	info "Waiting for qarax API to be ready..."
+	timeout=120
+	elapsed=0
+	while [[ $elapsed -lt $timeout ]]; do
+		if curl -sf "$SERVER/hosts" -o /dev/null 2>/dev/null; then
+			ok "qarax API is ready"
+			break
+		fi
+		if docker compose ps 2>/dev/null | grep -E "Exit [^0]" | grep -qv nfs; then
+			docker compose logs --tail=40
+			die "A required service exited unexpectedly"
+		fi
+		echo -n "."
+		sleep 2
+		elapsed=$((elapsed + 2))
+	done
+	[[ $elapsed -lt $timeout ]] || die "Timeout waiting for qarax API"
 fi
 
 cd "$REPO_ROOT"
@@ -162,28 +169,34 @@ cd "$REPO_ROOT"
 
 step "Setting up overlaybd storage pool"
 
-pool_exists=$($QARAX storage-pool list 2>/dev/null | grep -c overlaybd 2>/dev/null; true)
+pool_exists=$(
+	$QARAX storage-pool list 2>/dev/null | grep -c overlaybd 2>/dev/null
+	true
+)
 pool_exists=${pool_exists:-0}
 if [[ "$pool_exists" -gt 0 ]]; then
-    ok "overlaybd pool already exists"
+	ok "overlaybd pool already exists"
 else
-    # Register host if not already present
-    if ! $QARAX host list 2>/dev/null | grep -q "$HOST_NAME"; then
-        $QARAX host add --name "$HOST_NAME" --address qarax-node --port 50051 --user root --password ""
-    fi
+	# Register host if not already present
+	if ! $QARAX host list 2>/dev/null | grep -q "$HOST_NAME"; then
+		$QARAX host add --name "$HOST_NAME" --address qarax-node --port 50051 --user root --password ""
+	fi
 
-    # Init host with retries (qarax-node may still be starting)
-    for attempt in 1 2 3 4 5; do
-        if $QARAX host init "$HOST_NAME" 2>/dev/null; then
-            ok "Host initialized"
-            break
-        fi
-        [[ $attempt -lt 5 ]] && { info "Host init attempt $attempt/5 failed, retrying..."; sleep 3; }
-        [[ $attempt -eq 5 ]] && die "Could not initialize host after 5 attempts"
-    done
+	# Init host with retries (qarax-node may still be starting)
+	for attempt in 1 2 3 4 5; do
+		if $QARAX host init "$HOST_NAME" 2>/dev/null; then
+			ok "Host initialized"
+			break
+		fi
+		[[ $attempt -lt 5 ]] && {
+			info "Host init attempt $attempt/5 failed, retrying..."
+			sleep 3
+		}
+		[[ $attempt -eq 5 ]] && die "Could not initialize host after 5 attempts"
+	done
 
-    $QARAX storage-pool create --name overlaybd-pool --pool-type overlaybd --config '{"url":"http://registry:5000"}'
-    ok "overlaybd pool created"
+	$QARAX storage-pool create --name overlaybd-pool --pool-type overlaybd --config '{"url":"http://registry:5000"}'
+	ok "overlaybd pool created"
 fi
 
 # Build and push etcd node image
@@ -204,10 +217,10 @@ step "Converting to OverlayBD format"
 # returns the existing manifest) and keeps :latest in sync with :src.
 CONVERTOR="docker exec e2e-qarax-node-1 /opt/overlaybd/snapshotter/convertor"
 $CONVERTOR \
-    --repository "registry:5000/etcd-node" \
-    --input-tag src \
-    --overlaybd latest \
-    --plain
+	--repository "registry:5000/etcd-node" \
+	--input-tag src \
+	--overlaybd latest \
+	--plain
 ok "OverlayBD conversion complete (registry:5000/etcd-node:latest)"
 
 # Demo
@@ -224,53 +237,53 @@ echo ""
 
 step "Step 1: Create isolated network"
 if $QARAX network get "$NETWORK_NAME" &>/dev/null; then
-    ok "Network '$NETWORK_NAME' already exists"
+	ok "Network '$NETWORK_NAME' already exists"
 else
-    $QARAX network create --name "$NETWORK_NAME" --subnet "$SUBNET" --gateway "$GATEWAY"
-    $QARAX network attach-host --network "$NETWORK_NAME" --host "$HOST_NAME" --bridge-name "$BRIDGE_NAME"
-    ok "Network ready"
+	$QARAX network create --name "$NETWORK_NAME" --subnet "$SUBNET" --gateway "$GATEWAY"
+	$QARAX network attach-host --network "$NETWORK_NAME" --host "$HOST_NAME" --bridge-name "$BRIDGE_NAME"
+	ok "Network ready"
 fi
 
 step "Step 2: Import etcd image into storage pool"
 if $QARAX storage-object get "$IMAGE_OBJECT_NAME" &>/dev/null; then
-    ok "Storage object '$IMAGE_OBJECT_NAME' already exists"
+	ok "Storage object '$IMAGE_OBJECT_NAME' already exists"
 else
-    $QARAX storage-pool import --pool "$POOL_NAME" --image-ref "$IMAGE_REF" --name "$IMAGE_OBJECT_NAME"
-    ok "Image imported as '$IMAGE_OBJECT_NAME'"
+	$QARAX storage-pool import --pool "$POOL_NAME" --image-ref "$IMAGE_REF" --name "$IMAGE_OBJECT_NAME"
+	ok "Image imported as '$IMAGE_OBJECT_NAME'"
 fi
 
 step "Step 3: Create VMs with static IPs"
 for node in "${NODES[@]}"; do
-    ip="${NODE_IPS[$node]}"
-    if $QARAX vm get "$node" &>/dev/null; then
-        ok "VM $node already exists"
-    else
-        $QARAX vm create --name "$node" --vcpus "$VCPUS" --memory "$MEMORY_BYTES" \
-            --network "$NETWORK_NAME" --ip "$ip"
-        ok "VM $node ($ip)"
-    fi
+	ip="${NODE_IPS[$node]}"
+	if $QARAX vm get "$node" &>/dev/null; then
+		ok "VM $node already exists"
+	else
+		$QARAX vm create --name "$node" --vcpus "$VCPUS" --memory "$MEMORY_BYTES" \
+			--network "$NETWORK_NAME" --ip "$ip"
+		ok "VM $node ($ip)"
+	fi
 done
 
 step "Step 4: Attach etcd disk to each VM"
 for node in "${NODES[@]}"; do
-    status=$($QARAX vm get "$node" --json 2>/dev/null | jq -r '.status')
-    if [[ "$status" != "created" ]]; then
-        ok "Skipping disk attach for $node (status: $status)"
-    else
-        $QARAX vm attach-disk "$node" --object "$IMAGE_OBJECT_NAME"
-        ok "Disk attached to $node"
-    fi
+	status=$($QARAX vm get "$node" --json 2>/dev/null | jq -r '.status')
+	if [[ "$status" != "created" ]]; then
+		ok "Skipping disk attach for $node (status: $status)"
+	else
+		$QARAX vm attach-disk "$node" --object "$IMAGE_OBJECT_NAME"
+		ok "Disk attached to $node"
+	fi
 done
 
 step "Step 5: Start the cluster"
 for node in "${NODES[@]}"; do
-    status=$($QARAX vm get "$node" --json 2>/dev/null | jq -r '.status')
-    if [[ "$status" == "running" ]]; then
-        ok "$node already running"
-    else
-        $QARAX vm start "$node"
-        ok "$node started"
-    fi
+	status=$($QARAX vm get "$node" --json 2>/dev/null | jq -r '.status')
+	if [[ "$status" == "running" ]]; then
+		ok "$node already running"
+	else
+		$QARAX vm start "$node"
+		ok "$node started"
+	fi
 done
 
 step "Step 6: Wait for etcd cluster to be ready"
@@ -281,21 +294,23 @@ elapsed=0
 
 info "Waiting for all 3 etcd nodes to be reachable..."
 while [[ $elapsed -lt $BOOT_TIMEOUT ]]; do
-    all_up=true
-    for node in "${NODES[@]}"; do
-        ip="${NODE_IPS[$node]}"
-        if ! docker exec e2e-qarax-node-1 nc -z -w2 "$ip" 2379 &>/dev/null; then
-            all_up=false
-            break
-        fi
-    done
+	all_up=true
+	for node in "${NODES[@]}"; do
+		ip="${NODE_IPS[$node]}"
+		if ! docker exec e2e-qarax-node-1 nc -z -w2 "$ip" 2379 &>/dev/null; then
+			all_up=false
+			break
+		fi
+	done
 
-    if $all_up; then
-        ok "All 3 etcd nodes are reachable"
-        break
-    fi
+	if $all_up; then
+		ok "All 3 etcd nodes are reachable"
+		break
+	fi
 
-    echo -n "."; sleep 3; elapsed=$((elapsed + 3))
+	echo -n "."
+	sleep 3
+	elapsed=$((elapsed + 3))
 done
 echo ""
 [[ $elapsed -lt $BOOT_TIMEOUT ]] || die "Timeout waiting for etcd nodes to boot"
@@ -303,25 +318,25 @@ echo ""
 info "Checking etcd cluster health via HTTP..."
 sleep 2
 for node in "${NODES[@]}"; do
-    ip="${NODE_IPS[$node]}"
-    health=$(docker exec e2e-qarax-node-1 sh -c \
-        "curl -sf http://${ip}:2379/health 2>/dev/null || echo '{\"health\":\"false\"}'")
-    ok "$node ($ip): $health"
+	ip="${NODE_IPS[$node]}"
+	health=$(docker exec e2e-qarax-node-1 sh -c \
+		"curl -sf http://${ip}:2379/health 2>/dev/null || echo '{\"health\":\"false\"}'")
+	ok "$node ($ip): $health"
 done
 
 step "Step 7: Make VM network accessible from the host"
 
 if ip link show "$VETH_HOST" &>/dev/null; then
-    ok "Host veth already exists"
+	ok "Host veth already exists"
 else
-    NODE_PID=$(docker inspect -f '{{.State.Pid}}' e2e-qarax-node-1)
-    sudo ip link add "$VETH_HOST" type veth peer name "$VETH_VM"
-    sudo ip link set "$VETH_VM" netns "$NODE_PID"
-    sudo nsenter -t "$NODE_PID" -n ip link set "$VETH_VM" master "$BRIDGE_NAME"
-    sudo nsenter -t "$NODE_PID" -n ip link set "$VETH_VM" up
-    sudo ip link set "$VETH_HOST" up
-    sudo ip addr add "$HOST_ACCESS_IP" dev "$VETH_HOST"
-    ok "Host veth created — VMs are directly reachable from the host"
+	NODE_PID=$(docker inspect -f '{{.State.Pid}}' e2e-qarax-node-1)
+	sudo ip link add "$VETH_HOST" type veth peer name "$VETH_VM"
+	sudo ip link set "$VETH_VM" netns "$NODE_PID"
+	sudo nsenter -t "$NODE_PID" -n ip link set "$VETH_VM" master "$BRIDGE_NAME"
+	sudo nsenter -t "$NODE_PID" -n ip link set "$VETH_VM" up
+	sudo ip link set "$VETH_HOST" up
+	sudo ip addr add "$HOST_ACCESS_IP" dev "$VETH_HOST"
+	ok "Host veth created — VMs are directly reachable from the host"
 fi
 
 echo ""
@@ -330,12 +345,12 @@ echo "║  etcd cluster is READY                                           ║"
 echo "╚══════════════════════════════════════════════════════════════════╝"
 echo ""
 for node in "${NODES[@]}"; do
-    $QARAX vm get "$node"
-    echo ""
+	$QARAX vm get "$node"
+	echo ""
 done
 echo "Cluster endpoints:"
 for node in "${NODES[@]}"; do
-    echo "  $node  http://${NODE_IPS[$node]}:2379"
+	echo "  $node  http://${NODE_IPS[$node]}:2379"
 done
 echo ""
 echo "Try it out (directly from your laptop):"

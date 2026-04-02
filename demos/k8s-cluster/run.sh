@@ -466,6 +466,8 @@ QARAX_BIN="$(find_qarax_bin)"
 [[ -n "$QARAX_BIN" ]] || die "qarax CLI not found"
 QARAX=("$QARAX_BIN" --server "$SERVER")
 
+ensure_stack "$SERVER"
+
 mkdir -p "$ARTIFACT_DIR"
 
 step "Starting qarax stack"

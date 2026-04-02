@@ -156,6 +156,40 @@ pub async fn resolve_snapshot_id(
         .ok_or_else(|| anyhow::anyhow!("no snapshot named {:?}", name_or_id))
 }
 
+/// Parse a human-readable size string into bytes.
+/// Accepts plain integers or suffixed values: GiB, GB, MiB, MB, KiB, KB.
+/// Examples: "10GiB", "20GB", "512MiB", "1073741824"
+pub fn parse_size(s: &str) -> anyhow::Result<i64> {
+    const GIB: i64 = 1024 * 1024 * 1024;
+    const GB: i64 = 1_000_000_000;
+    const MIB: i64 = 1024 * 1024;
+    const MB: i64 = 1_000_000;
+    const KIB: i64 = 1024;
+    const KB: i64 = 1000;
+
+    let s = s.trim();
+    let (num, mult): (&str, i64) = if let Some(n) = s.strip_suffix("GiB") {
+        (n, GIB)
+    } else if let Some(n) = s.strip_suffix("GB") {
+        (n, GB)
+    } else if let Some(n) = s.strip_suffix("MiB") {
+        (n, MIB)
+    } else if let Some(n) = s.strip_suffix("MB") {
+        (n, MB)
+    } else if let Some(n) = s.strip_suffix("KiB") {
+        (n, KIB)
+    } else if let Some(n) = s.strip_suffix("KB") {
+        (n, KB)
+    } else {
+        (s, 1)
+    };
+    let value: i64 = num
+        .trim()
+        .parse()
+        .map_err(|_| anyhow::anyhow!("Invalid size: {s}"))?;
+    Ok(value * mult)
+}
+
 /// Format a byte count as a human-readable string (GiB / MiB / KiB / B).
 pub fn format_bytes(bytes: i64) -> String {
     const GIB: i64 = 1024 * 1024 * 1024;

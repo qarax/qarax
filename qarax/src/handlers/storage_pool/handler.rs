@@ -241,6 +241,219 @@ pub struct ImportToPoolResponse {
     pub storage_object_id: Uuid,
 }
 
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct CreateDiskRequest {
+    /// Human-readable name for the resulting storage object.
+    pub name: String,
+    /// Logical size of the disk in bytes. Required when no source_url is given.
+    /// When source_url is provided, this is optional and, if set, is used as the
+    /// initial reported size until the download completes and the actual size is known.
+    pub size_bytes: Option<i64>,
+    /// Optional URL to populate the disk from (e.g. a cloud image). When set the
+    /// operation becomes async and returns 202 with a job_id.
+    pub source_url: Option<String>,
+    /// If true, use fallocate to reserve blocks upfront (default: sparse).
+    #[serde(default)]
+    pub preallocate: bool,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct CreateDiskResponse {
+    pub storage_object_id: Uuid,
+    /// Only present when source_url was supplied and the operation is async.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub job_id: Option<Uuid>,
+}
+
+/// Create a disk in the pool: blank (sparse or preallocated) or populated from a source URL.
+#[utoipa::path(
+    post,
+    path = "/storage-pools/{pool_id}/disks",
+    params(
+        ("pool_id" = Uuid, Path, description = "Storage pool ID")
+    ),
+    request_body = CreateDiskRequest,
+    responses(
+        (status = 201, description = "Blank disk created", body = CreateDiskResponse),
+        (status = 202, description = "Disk creation job accepted (source_url provided)", body = CreateDiskResponse),
+        (status = 404, description = "Pool not found"),
+        (status = 422, description = "Validation error"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "storage-pools"
+)]
+#[instrument(skip(env))]
+pub async fn create_disk(
+    Extension(env): Extension<App>,
+    Path(pool_id): Path<Uuid>,
+    Json(req): Json<CreateDiskRequest>,
+) -> Result<axum::response::Response> {
+    use axum::response::IntoResponse as _;
+
+    let CreateDiskRequest {
+        name,
+        size_bytes,
+        source_url,
+        preallocate,
+    } = req;
+
+    let is_blank_disk = source_url.is_none();
+    let size_bytes = match (size_bytes, source_url.as_ref()) {
+        (Some(size_bytes), _) if size_bytes <= 0 => {
+            return Err(crate::errors::Error::UnprocessableEntity(
+                "size_bytes must be greater than 0".into(),
+            ));
+        }
+        (Some(size_bytes), _) => size_bytes,
+        (None, Some(_)) => 0,
+        (None, None) => {
+            return Err(crate::errors::Error::UnprocessableEntity(
+                "size_bytes is required when source_url is not provided".into(),
+            ));
+        }
+    };
+
+    let pool = storage_pools::get(env.pool(), pool_id).await?;
+
+    if !matches!(
+        pool.pool_type,
+        storage_pools::StoragePoolType::Local | storage_pools::StoragePoolType::Nfs
+    ) {
+        return Err(crate::errors::Error::UnprocessableEntity(
+            "Disks can only be created in Local or NFS pools".into(),
+        ));
+    }
+
+    if pool.status != storage_pools::StoragePoolStatus::Active {
+        return Err(crate::errors::Error::UnprocessableEntity(
+            "Storage pool is not active".into(),
+        ));
+    }
+
+    // Capacity check for blank disks (source_url size is unknown until download).
+    if is_blank_disk
+        && let (Some(capacity), Some(allocated)) = (pool.capacity_bytes, pool.allocated_bytes)
+    {
+        let available = capacity - allocated;
+        if size_bytes > available {
+            return Err(crate::errors::Error::UnprocessableEntity(format!(
+                "Insufficient pool capacity: requested {} bytes but only {} available",
+                size_bytes, available
+            )));
+        }
+    }
+
+    let host = require_up_host_for_pool(&env, pool_id).await?;
+
+    // Create the StorageObject record — path is auto-derived from pool config.
+    let storage_object_id = storage_objects::create(
+        env.pool(),
+        NewStorageObject {
+            name: name.clone(),
+            storage_pool_id: Some(pool_id),
+            object_type: StorageObjectType::Disk,
+            size_bytes,
+            config: serde_json::Value::Object(Default::default()),
+            parent_id: None,
+        },
+    )
+    .await?;
+
+    // Derive the path the node should write to from the created storage object.
+    let so = storage_objects::get(env.pool(), storage_object_id).await?;
+    let dest_path = so
+        .config
+        .get("path")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            tracing::error!(storage_object_id = %storage_object_id, "Storage object has no path in config");
+            crate::errors::Error::InternalServerError
+        })?
+        .to_string();
+
+    let node_client = NodeClient::new(&host.address, host.port as u16);
+
+    if let Some(source_url) = source_url {
+        // Async path: download may take a while.
+        let job = jobs::create(
+            env.pool(),
+            NewJob {
+                job_type: JobType::DiskCreate,
+                description: Some(format!("Creating disk {} from {}", name, source_url)),
+                resource_id: Some(storage_object_id),
+                resource_type: Some("storage_object".to_string()),
+            },
+        )
+        .await?;
+        let job_id = job.id;
+
+        let db_pool = env.pool_arc();
+
+        tokio::spawn(async move {
+            if let Err(e) = jobs::mark_running(&db_pool, job_id).await {
+                tracing::error!(job_id = %job_id, error = %e, "Failed to mark disk creation job running");
+                return;
+            }
+
+            match node_client
+                .create_disk(&dest_path, size_bytes, Some(&source_url), preallocate)
+                .await
+            {
+                Ok(bytes_written) => {
+                    let _ = storage_objects::update_size_bytes(
+                        &db_pool,
+                        storage_object_id,
+                        bytes_written,
+                    )
+                    .await;
+                    let _ = jobs::mark_completed(
+                        &db_pool,
+                        job_id,
+                        Some(serde_json::json!({ "storage_object_id": storage_object_id, "bytes_written": bytes_written })),
+                    )
+                    .await;
+                }
+                Err(e) => {
+                    let msg = format!("Disk creation failed: {e}");
+                    tracing::error!(storage_object_id = %storage_object_id, error = %msg);
+                    let _ = jobs::mark_failed(&db_pool, job_id, &msg).await;
+                    let _ = storage_objects::delete(&db_pool, storage_object_id).await;
+                }
+            }
+        });
+
+        Ok(ApiResponse {
+            data: CreateDiskResponse {
+                storage_object_id,
+                job_id: Some(job_id),
+            },
+            code: StatusCode::ACCEPTED,
+        }
+        .into_response())
+    } else {
+        // Sync path: creating a blank disk is fast.
+        match node_client
+            .create_disk(&dest_path, size_bytes, None, preallocate)
+            .await
+        {
+            Ok(_) => Ok(ApiResponse {
+                data: CreateDiskResponse {
+                    storage_object_id,
+                    job_id: None,
+                },
+                code: StatusCode::CREATED,
+            }
+            .into_response()),
+            Err(e) => {
+                let _ = storage_objects::delete(env.pool(), storage_object_id).await;
+                Err(crate::errors::Error::UnprocessableEntity(format!(
+                    "Failed to create disk on node: {e}"
+                )))
+            }
+        }
+    }
+}
+
 /// Import an OCI image into the pool, converting it to OverlayBD format.
 #[utoipa::path(
     post,
@@ -267,19 +480,7 @@ pub async fn import_to_pool(
 
     let pool = storage_pools::get(env.pool(), pool_id).await?;
 
-    // Find a host attached to this pool
-    let host_id = storage_pools::find_host_for_pool(env.pool(), pool_id)
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to find host for pool {}: {}", pool_id, e);
-            crate::errors::Error::InternalServerError
-        })?
-        .ok_or_else(|| {
-            crate::errors::Error::UnprocessableEntity(
-                "No host attached to this storage pool".into(),
-            )
-        })?;
-    let host = hosts::require_by_id(env.pool(), host_id).await?;
+    let host = require_up_host_for_pool(&env, pool_id).await?;
 
     // Create storage object record
     let storage_object_id = storage_objects::create(
@@ -369,4 +570,26 @@ pub async fn import_to_pool(
         code: StatusCode::ACCEPTED,
     }
     .into_response())
+}
+
+async fn require_up_host_for_pool(env: &App, pool_id: Uuid) -> Result<hosts::Host> {
+    let host_id = storage_pools::find_host_for_pool(env.pool(), pool_id)
+        .await
+        .map_err(|e| {
+            tracing::error!("Failed to find host for pool {}: {}", pool_id, e);
+            crate::errors::Error::InternalServerError
+        })?
+        .ok_or_else(|| {
+            crate::errors::Error::UnprocessableEntity(
+                "No host attached to this storage pool".into(),
+            )
+        })?;
+    let host = hosts::require_by_id(env.pool(), host_id).await?;
+    if host.status != hosts::HostStatus::Up {
+        return Err(crate::errors::Error::UnprocessableEntity(
+            "No UP host attached to this storage pool".into(),
+        ));
+    }
+
+    Ok(host)
 }

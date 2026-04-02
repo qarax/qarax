@@ -6,6 +6,8 @@ from .attach_host_request import AttachHostRequest
 from .attach_pool_host_request import AttachPoolHostRequest
 from .boot_mode import BootMode
 from .boot_source import BootSource
+from .create_disk_request import CreateDiskRequest
+from .create_disk_response import CreateDiskResponse
 from .create_sandbox_response import CreateSandboxResponse
 from .create_snapshot_request import CreateSnapshotRequest
 from .create_vm_response import CreateVmResponse
@@ -90,6 +92,8 @@ __all__ = (
     "AttachPoolHostRequest",
     "BootMode",
     "BootSource",
+    "CreateDiskRequest",
+    "CreateDiskResponse",
     "CreateSandboxResponse",
     "CreateSnapshotRequest",
     "CreateVmResponse",

@@ -1066,6 +1066,45 @@ paths:
           description: Storage pool not found
         '500':
           description: Internal server error
+  /storage-pools/{pool_id}/disks:
+    post:
+      tags:
+      - storage-pools
+      summary: 'Create a disk in the pool: blank (sparse or preallocated) or populated from a source URL.'
+      operationId: create_disk
+      parameters:
+      - name: pool_id
+        in: path
+        description: Storage pool ID
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateDiskRequest'
+        required: true
+      responses:
+        '201':
+          description: Blank disk created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateDiskResponse'
+        '202':
+          description: Disk creation job accepted (source_url provided)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateDiskResponse'
+        '404':
+          description: Pool not found
+        '422':
+          description: Validation error
+        '500':
+          description: Internal server error
   /storage-pools/{pool_id}/hosts:
     post:
       tags:
@@ -2099,6 +2138,47 @@ components:
           - 'null'
         name:
           type: string
+    CreateDiskRequest:
+      type: object
+      required:
+      - name
+      properties:
+        name:
+          type: string
+          description: Human-readable name for the resulting storage object.
+        preallocate:
+          type: boolean
+          description: 'If true, use fallocate to reserve blocks upfront (default: sparse).'
+        size_bytes:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          description: |-
+            Logical size of the disk in bytes. Required when no source_url is given.
+            When source_url is provided, this is optional and, if set, is used as the
+            initial reported size until the download completes and the actual size is known.
+        source_url:
+          type:
+          - string
+          - 'null'
+          description: |-
+            Optional URL to populate the disk from (e.g. a cloud image). When set the
+            operation becomes async and returns 202 with a job_id.
+    CreateDiskResponse:
+      type: object
+      required:
+      - storage_object_id
+      properties:
+        job_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+          description: Only present when source_url was supplied and the operation is async.
+        storage_object_id:
+          type: string
+          format: uuid
     CreateSandboxResponse:
       type: object
       required:
@@ -2729,6 +2809,7 @@ components:
       - image_pull
       - vm_start
       - vm_migrate
+      - disk_create
     LifecycleHook:
       type: object
       required:

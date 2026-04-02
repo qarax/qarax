@@ -2,17 +2,45 @@ use clap::{Args, Subcommand};
 use tabled::{Table, Tabled, settings::Style};
 use uuid::Uuid;
 
+use crate::api::jobs;
+
 use crate::{
     api::{
         self,
-        models::{ImportToPoolRequest, NewStorageObject, NewStoragePool},
+        models::{CreateDiskRequest, ImportToPoolRequest, NewStorageObject, NewStoragePool},
     },
     client::Client,
 };
 
 use super::{
-    OutputFormat, format_bytes, print_output, resolve_host_id, resolve_object_id, resolve_pool_id,
+    OutputFormat, format_bytes, parse_size, print_output, resolve_host_id, resolve_object_id,
+    resolve_pool_id,
 };
+
+/// Poll a job to completion, printing progress to stderr. Returns an error if the job fails.
+async fn poll_job_to_completion(client: &Client, job_id: Uuid, label: &str) -> anyhow::Result<()> {
+    use std::io::Write as _;
+    loop {
+        let job = jobs::get(client, job_id).await?;
+        match job.status.as_str() {
+            "completed" => {
+                eprintln!("\r[completed]                    ");
+                return Ok(());
+            }
+            "failed" => {
+                return Err(anyhow::anyhow!(
+                    "{label} job {job_id} failed: {}",
+                    job.error.unwrap_or_else(|| "unknown error".to_string())
+                ));
+            }
+            status => {
+                eprint!("\r[{status}] {}%   ", job.progress.unwrap_or(0));
+                let _ = std::io::stderr().flush();
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            }
+        }
+    }
+}
 
 fn active_hosts(hosts: &[api::models::Host]) -> impl Iterator<Item = &api::models::Host> {
     hosts
@@ -76,6 +104,24 @@ enum StoragePoolCommand {
         pool: String,
         /// Host name or ID
         host: String,
+    },
+    /// Create a disk in the pool (blank, or populated from a source URL)
+    CreateDisk {
+        /// Pool name or ID
+        #[arg(long)]
+        pool: String,
+        /// Name for the resulting disk storage object
+        #[arg(long)]
+        name: String,
+        /// Disk size (e.g. 10GiB, 20GB, 53687091200). Required for blank disks.
+        #[arg(long)]
+        size: Option<String>,
+        /// URL to populate the disk from (e.g. a cloud image). Makes the operation async.
+        #[arg(long)]
+        source: Option<String>,
+        /// Reserve blocks upfront with fallocate (default: sparse)
+        #[arg(long)]
+        preallocate: bool,
     },
     /// Import an OCI image into the pool (convert to OverlayBD)
     Import {
@@ -250,6 +296,48 @@ pub async fn run_pool(
             }
         }
 
+        StoragePoolCommand::CreateDisk {
+            pool,
+            name,
+            size,
+            source,
+            preallocate,
+        } => {
+            let pool_id = resolve_pool_id(client, &pool).await?;
+
+            let size_bytes = match (&size, &source) {
+                (None, None) => {
+                    return Err(anyhow::anyhow!(
+                        "--size is required when --source is not provided"
+                    ));
+                }
+                (None, Some(_)) => None,
+                (Some(s), _) => Some(parse_size(s)?),
+            };
+
+            let req = CreateDiskRequest {
+                name,
+                size_bytes,
+                source_url: source.clone(),
+                preallocate,
+            };
+            let resp = api::storage::create_disk(client, pool_id, &req).await?;
+
+            if let Some(job_id) = resp.job_id {
+                if !matches!(output, OutputFormat::Table) {
+                    print_output(&resp, output)?;
+                } else {
+                    println!("Disk object: {}", resp.storage_object_id);
+                    println!("Download job: {job_id}");
+                    poll_job_to_completion(client, job_id, "Disk creation").await?;
+                }
+            } else if !matches!(output, OutputFormat::Table) {
+                print_output(&resp, output)?;
+            } else {
+                println!("Created disk: {}", resp.storage_object_id);
+            }
+        }
+
         StoragePoolCommand::Import {
             pool,
             image_ref,
@@ -263,30 +351,7 @@ pub async fn run_pool(
             } else {
                 println!("Import job: {}", resp.job_id);
                 println!("Storage object: {}", resp.storage_object_id);
-                // Poll job to completion
-                use crate::api::jobs;
-                use std::io::Write as _;
-                loop {
-                    let job = jobs::get(client, resp.job_id).await?;
-                    match job.status.as_str() {
-                        "completed" => {
-                            eprintln!("\r[completed]                    ");
-                            break;
-                        }
-                        "failed" => {
-                            return Err(anyhow::anyhow!(
-                                "Import job {} failed: {}",
-                                resp.job_id,
-                                job.error.unwrap_or_else(|| "unknown error".to_string())
-                            ));
-                        }
-                        status => {
-                            eprint!("\r[{status}] {}%   ", job.progress.unwrap_or(0));
-                            let _ = std::io::stderr().flush();
-                            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                        }
-                    }
-                }
+                poll_job_to_completion(client, resp.job_id, "Import").await?;
             }
         }
     }

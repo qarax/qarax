@@ -572,6 +572,23 @@ pub struct ImportToPoolResponse {
     pub storage_object_id: Uuid,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CreateDiskRequest {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size_bytes: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_url: Option<String>,
+    #[serde(default)]
+    pub preallocate: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CreateDiskResponse {
+    pub storage_object_id: Uuid,
+    pub job_id: Option<Uuid>,
+}
+
 // Sandboxes
 
 #[derive(Debug, Serialize, Deserialize)]

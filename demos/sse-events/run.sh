@@ -76,6 +76,8 @@ QARAX_BIN="$(find_qarax_bin)"
 [[ -n "$QARAX_BIN" ]] || die "qarax CLI not found even after build"
 QARAX="$QARAX_BIN --server $SERVER"
 
+ensure_stack "$SERVER"
+
 # Pretty-print an SSE event line───────
 # Reads from a log file and renders each data: line as a formatted transition.
 print_events() {

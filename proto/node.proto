@@ -518,9 +518,18 @@ message TransferResponse {
   string error = 4;
 }
 
+message CreateDiskRequest {
+  string path                = 1;  // Absolute host path to create the disk at
+  int64  size_bytes          = 2;  // Logical size of the disk in bytes
+  optional string source_url = 3;  // If set, populate disk by downloading this URL
+  optional bool   preallocate = 4; // If true, use fallocate (reserve blocks); default sparse
+}
+
 service FileTransferService {
   rpc DownloadFile(DownloadFileRequest) returns (TransferResponse) {}
   rpc CopyFile(CopyFileRequest) returns (TransferResponse) {}
+  // Create a disk file: blank (sparse or preallocated) or populated from source_url.
+  rpc CreateDisk(CreateDiskRequest) returns (TransferResponse) {}
 }
 
 // ============================================================================

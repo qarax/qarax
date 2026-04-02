@@ -33,6 +33,7 @@ pub enum JobType {
     ImagePull,
     VmStart,
     VmMigrate,
+    DiskCreate,
 }
 
 #[derive(

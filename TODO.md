@@ -60,3 +60,4 @@ Platform
 
 - make run-local: suggests IDs instead of names - make project wide pass
 - improve VM create with image import
+- make sure all demos are standalone and idempotent

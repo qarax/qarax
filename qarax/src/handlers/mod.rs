@@ -116,6 +116,7 @@ pub struct VmListQuery {
         storage_pool::handler::attach_host,
         storage_pool::handler::detach_host,
         storage_pool::handler::import_to_pool,
+        storage_pool::handler::create_disk,
         boot_source::handler::list,
         boot_source::handler::get,
         boot_source::handler::create,
@@ -210,6 +211,8 @@ pub struct VmListQuery {
             crate::handlers::vm::handler::DiskResizeRequest,
             crate::handlers::storage_pool::handler::ImportToPoolRequest,
             crate::handlers::storage_pool::handler::ImportToPoolResponse,
+            crate::handlers::storage_pool::handler::CreateDiskRequest,
+            crate::handlers::storage_pool::handler::CreateDiskResponse,
             crate::model::networks::Network,
             crate::model::networks::NewNetwork,
             crate::model::networks::NetworkStatus,
@@ -452,6 +455,10 @@ fn storage_pools() -> Router {
         .route(
             "/storage-pools/{pool_id}/import",
             post(storage_pool::handler::import_to_pool),
+        )
+        .route(
+            "/storage-pools/{pool_id}/disks",
+            post(storage_pool::handler::create_disk),
         )
 }
 
