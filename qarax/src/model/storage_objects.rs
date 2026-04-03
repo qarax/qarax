@@ -79,6 +79,8 @@ pub struct NewStorageObject {
 pub async fn list(
     pool: &PgPool,
     name_filter: Option<&str>,
+    pool_id_filter: Option<Uuid>,
+    type_filter: Option<StorageObjectType>,
 ) -> Result<Vec<StorageObject>, sqlx::Error> {
     let storage_objects: Vec<StorageObjectRow> = sqlx::query_as!(
         StorageObjectRow,
@@ -92,8 +94,12 @@ SELECT id,
         parent_id as "parent_id?"
 FROM storage_objects
 WHERE ($1::text IS NULL OR name = $1)
+  AND ($2::uuid IS NULL OR storage_pool_id = $2)
+  AND ($3::storage_object_type IS NULL OR object_type = $3)
         "#,
-        name_filter
+        name_filter,
+        pool_id_filter,
+        type_filter as Option<StorageObjectType>,
     )
     .fetch_all(pool)
     .await?;
@@ -146,61 +152,6 @@ WHERE id = $1
     .await?;
 
     Ok(storage_object.into())
-}
-
-pub async fn list_by_pool(pool: &PgPool, pool_id: Uuid) -> Result<Vec<StorageObject>, sqlx::Error> {
-    let storage_objects: Vec<StorageObjectRow> = sqlx::query_as!(
-        StorageObjectRow,
-        r#"
-SELECT id,
-        name,
-        storage_pool_id,
-        object_type as "object_type: _",
-        size_bytes,
-        config as "config: _",
-        parent_id as "parent_id?"
-FROM storage_objects
-WHERE storage_pool_id = $1
-        "#,
-        pool_id
-    )
-    .fetch_all(pool)
-    .await?;
-
-    let storage_objects: Vec<StorageObject> = storage_objects
-        .into_iter()
-        .map(|so: StorageObjectRow| so.into())
-        .collect();
-    Ok(storage_objects)
-}
-
-pub async fn list_by_type(
-    pool: &PgPool,
-    object_type: StorageObjectType,
-) -> Result<Vec<StorageObject>, sqlx::Error> {
-    let storage_objects: Vec<StorageObjectRow> = sqlx::query_as!(
-        StorageObjectRow,
-        r#"
-SELECT id,
-        name,
-        storage_pool_id,
-        object_type as "object_type: _",
-        size_bytes,
-        config as "config: _",
-        parent_id as "parent_id?"
-FROM storage_objects
-WHERE object_type = $1
-        "#,
-        object_type as StorageObjectType
-    )
-    .fetch_all(pool)
-    .await?;
-
-    let storage_objects: Vec<StorageObject> = storage_objects
-        .into_iter()
-        .map(|so: StorageObjectRow| so.into())
-        .collect();
-    Ok(storage_objects)
 }
 
 /// Resolve pool ID and derive config for a new storage object.

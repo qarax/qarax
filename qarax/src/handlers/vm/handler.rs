@@ -19,7 +19,11 @@ use crate::{
     App,
     grpc_client::{
         CreateVmRequest, NodeClient, net_configs_from_db,
-        node::{CpuPinning, DiskConfig, NetConfig, NumaPlacement, VhostMode, VsockConfig},
+        node::{
+            ConsoleConfig as ProtoConsoleConfig, ConsoleMode as ProtoConsoleMode, CpuPinning,
+            DiskConfig, NetConfig, NumaPlacement, RngConfig as ProtoRngConfig, VhostMode,
+            VsockConfig,
+        },
     },
     model::{
         boot_sources, host_gpus, host_numa, hosts,
@@ -33,7 +37,9 @@ use crate::{
         snapshots::{NewSnapshot, Snapshot, SnapshotStatus},
         storage_objects::{self, NewStorageObject, StorageObject, StorageObjectType},
         storage_pools::{self, OverlayBdPoolConfig},
+        vm_consoles::{self, ConsoleMode},
         vm_disks::{self, NewVmDisk},
+        vm_rng,
         vm_templates::{self, CreateVmTemplateFromVmRequest},
         vms::{self, BootMode, NewVm, NewVmNetwork, ResolvedNewVm, Vm, VmStatus},
     },
@@ -2170,6 +2176,39 @@ async fn build_create_vm_request(env: &App, vm: &Vm) -> Result<CreateVmRequest> 
     // Compute NUMA placement if applicable
     let numa_placement = compute_numa_placement(env, vm, &allocated_gpus).await;
 
+    // Query RNG and console configs from DB (both are optional / may be empty).
+    let rng = vm_rng::get_by_vm(env.pool(), vm_id)
+        .await?
+        .map(|r| ProtoRngConfig {
+            src: r.src,
+            iommu: Some(r.iommu),
+        });
+
+    let db_consoles = vm_consoles::list_by_vm(env.pool(), vm_id).await?;
+    let console_mode_to_proto = |m: &ConsoleMode| match m {
+        ConsoleMode::Off => ProtoConsoleMode::Off as i32,
+        ConsoleMode::Pty => ProtoConsoleMode::Pty as i32,
+        ConsoleMode::Tty => ProtoConsoleMode::Tty as i32,
+        ConsoleMode::File => ProtoConsoleMode::File as i32,
+        ConsoleMode::Socket => ProtoConsoleMode::Socket as i32,
+        ConsoleMode::Null => ProtoConsoleMode::Null as i32,
+    };
+    let mut serial_override = None;
+    let mut console_override = None;
+    for c in &db_consoles {
+        let proto = ProtoConsoleConfig {
+            mode: console_mode_to_proto(&c.mode),
+            file: c.file_path.clone(),
+            socket: c.socket_path.clone(),
+            iommu: Some(c.iommu),
+        };
+        match c.console_type.as_str() {
+            "SERIAL" => serial_override = Some(proto),
+            "CONSOLE" => console_override = Some(proto),
+            _ => {}
+        }
+    }
+
     Ok(CreateVmRequest {
         vm_id,
         boot_vcpus: vm.boot_vcpus,
@@ -2201,6 +2240,9 @@ async fn build_create_vm_request(env: &App, vm: &Vm) -> Result<CreateVmRequest> 
                 id: Some("sandbox-exec".to_string()),
             }),
         numa_placement,
+        rng,
+        serial: serial_override,
+        console: console_override,
     })
 }
 
@@ -3068,14 +3110,16 @@ pub async fn migrate(
             }),
             disks: create_req.disks,
             networks: create_req.networks,
-            rng: None,
-            serial: Some(crate::grpc_client::node::ConsoleConfig {
-                mode: 1, // CONSOLE_MODE_PTY
-                file: None,
-                socket: None,
-                iommu: None,
-            }),
-            console: None,
+            rng: create_req.rng,
+            serial: create_req
+                .serial
+                .or(Some(crate::grpc_client::node::ConsoleConfig {
+                    mode: crate::grpc_client::node::ConsoleMode::Pty as i32,
+                    file: None,
+                    socket: None,
+                    iommu: None,
+                })),
+            console: create_req.console,
             rate_limit_groups: vec![],
             cloud_init: create_req.cloud_init_user_data.as_ref().map(|user_data| {
                 crate::grpc_client::node::CloudInitConfig {

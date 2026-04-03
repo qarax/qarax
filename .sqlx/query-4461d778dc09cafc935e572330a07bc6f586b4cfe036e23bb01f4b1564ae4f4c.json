@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\nSELECT id,\n        name,\n        storage_pool_id,\n        object_type as \"object_type: _\",\n        size_bytes,\n        config as \"config: _\",\n        parent_id as \"parent_id?\"\nFROM storage_objects\nWHERE storage_pool_id = $1\n        ",
+  "query": "\nSELECT id,\n        name,\n        storage_pool_id,\n        object_type as \"object_type: _\",\n        size_bytes,\n        config as \"config: _\",\n        parent_id as \"parent_id?\"\nFROM storage_objects\nWHERE ($1::text IS NULL OR name = $1)\n  AND ($2::uuid IS NULL OR storage_pool_id = $2)\n  AND ($3::storage_object_type IS NULL OR object_type = $3)\n        ",
   "describe": {
     "columns": [
       {
@@ -56,7 +56,24 @@
     ],
     "parameters": {
       "Left": [
-        "Uuid"
+        "Text",
+        "Uuid",
+        {
+          "Custom": {
+            "name": "storage_object_type",
+            "kind": {
+              "Enum": [
+                "DISK",
+                "KERNEL",
+                "INITRD",
+                "ISO",
+                "SNAPSHOT",
+                "OCI_IMAGE",
+                "OVERLAYBD_UPPER"
+              ]
+            }
+          }
+        }
       ]
     },
     "nullable": [
@@ -69,5 +86,5 @@
       true
     ]
   },
-  "hash": "0421a518e8ed4cfa3b624fb1da29ecf462f400c7d4da848b42517636113f91bf"
+  "hash": "4461d778dc09cafc935e572330a07bc6f586b4cfe036e23bb01f4b1564ae4f4c"
 }

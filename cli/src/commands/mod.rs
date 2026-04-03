@@ -66,7 +66,7 @@ pub async fn resolve_object_id(client: &Client, name_or_id: &str) -> anyhow::Res
     if let Ok(id) = Uuid::parse_str(name_or_id) {
         return Ok(id);
     }
-    let objects = api::storage::list_objects(client, Some(name_or_id)).await?;
+    let objects = api::storage::list_objects(client, Some(name_or_id), None, None).await?;
     objects
         .into_iter()
         .next()

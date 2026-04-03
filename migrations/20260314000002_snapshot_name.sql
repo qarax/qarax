@@ -1,1 +1,0 @@
-ALTER TABLE vm_snapshots ADD COLUMN name TEXT NOT NULL DEFAULT '';

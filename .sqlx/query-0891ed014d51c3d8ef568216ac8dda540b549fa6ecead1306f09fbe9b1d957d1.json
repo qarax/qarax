@@ -32,7 +32,8 @@
                 "PAUSED",
                 "SHUTDOWN",
                 "PENDING",
-                "MIGRATING"
+                "MIGRATING",
+                "COMMITTING"
               ]
             }
           }

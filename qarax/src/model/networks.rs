@@ -132,21 +132,6 @@ WHERE id = $1
     Ok(row.into())
 }
 
-pub async fn get_by_name(pool: &PgPool, name: &str) -> Result<Network, sqlx::Error> {
-    let row: NetworkRow = sqlx::query_as::<_, NetworkRow>(
-        r#"
-SELECT id, name, subnet::text, gateway::text, dns::text, type, status
-FROM networks
-WHERE name = $1
-        "#,
-    )
-    .bind(name)
-    .fetch_one(pool)
-    .await?;
-
-    Ok(row.into())
-}
-
 pub async fn create(pool: &PgPool, new: NewNetwork) -> Result<Uuid, sqlx::Error> {
     let id = Uuid::new_v4();
 

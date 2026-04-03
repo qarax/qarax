@@ -370,7 +370,14 @@ pub struct StorageObjectArgs {
 #[derive(Subcommand)]
 enum StorageObjectCommand {
     /// List all storage objects
-    List,
+    List {
+        /// Filter by storage pool name or ID
+        #[arg(long)]
+        pool: Option<String>,
+        /// Filter by object type (disk, kernel, initrd, iso, snapshot, oci_image)
+        #[arg(long, value_name = "TYPE")]
+        object_type: Option<String>,
+    },
     /// Get details of a storage object
     Get {
         /// Object name or ID
@@ -421,8 +428,14 @@ pub async fn run_object(
     output: OutputFormat,
 ) -> anyhow::Result<()> {
     match args.command {
-        StorageObjectCommand::List => {
-            let objects = api::storage::list_objects(client, None).await?;
+        StorageObjectCommand::List { pool, object_type } => {
+            let pool_id = if let Some(p) = pool {
+                Some(resolve_pool_id(client, &p).await?)
+            } else {
+                None
+            };
+            let objects =
+                api::storage::list_objects(client, None, pool_id, object_type.as_deref()).await?;
             if !matches!(output, OutputFormat::Table) {
                 print_output(&objects, output)?;
             } else {

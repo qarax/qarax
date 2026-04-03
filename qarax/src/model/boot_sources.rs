@@ -96,27 +96,6 @@ WHERE id = $1
     Ok(boot_source.into())
 }
 
-pub async fn get_by_name(pool: &PgPool, name: &str) -> Result<BootSource, sqlx::Error> {
-    let boot_source: BootSourceRow = sqlx::query_as!(
-        BootSourceRow,
-        r#"
-SELECT id,
-        name,
-        description as "description?",
-        kernel_image_id,
-        kernel_params as "kernel_params?",
-        initrd_image_id as "initrd_image_id?"
-FROM boot_sources
-WHERE name = $1
-        "#,
-        name
-    )
-    .fetch_one(pool)
-    .await?;
-
-    Ok(boot_source.into())
-}
-
 pub async fn create(pool: &PgPool, new_boot_source: NewBootSource) -> Result<Uuid, sqlx::Error> {
     let id = Uuid::new_v4();
 

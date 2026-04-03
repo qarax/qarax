@@ -59,10 +59,23 @@ pub async fn detach_host_from_pool(
 pub async fn list_objects(
     client: &Client,
     name: Option<&str>,
+    pool_id: Option<Uuid>,
+    object_type: Option<&str>,
 ) -> anyhow::Result<Vec<StorageObject>> {
-    let path = match name {
-        Some(n) => format!("/storage-objects?name={n}"),
-        None => "/storage-objects".to_string(),
+    let mut params: Vec<String> = Vec::new();
+    if let Some(n) = name {
+        params.push(format!("name={}", urlencoding::encode(n)));
+    }
+    if let Some(id) = pool_id {
+        params.push(format!("pool_id={id}"));
+    }
+    if let Some(t) = object_type {
+        params.push(format!("object_type={}", urlencoding::encode(t)));
+    }
+    let path = if params.is_empty() {
+        "/storage-objects".to_string()
+    } else {
+        format!("/storage-objects?{}", params.join("&"))
     };
     client.get(&path).await
 }

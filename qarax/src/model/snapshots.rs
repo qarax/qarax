@@ -5,8 +5,6 @@ use strum_macros::{Display, EnumString};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use crate::model::storage_objects::StorageObject;
-
 #[derive(
     Deserialize, Serialize, Debug, Clone, Eq, PartialEq, Type, EnumString, Display, ToSchema,
 )]
@@ -66,15 +64,6 @@ WHERE id = $1
     )
     .fetch_one(pool)
     .await
-}
-
-pub async fn get_with_storage_object(
-    pool: &PgPool,
-    snapshot_id: Uuid,
-) -> Result<(Snapshot, StorageObject), sqlx::Error> {
-    let snapshot = get(pool, snapshot_id).await?;
-    let so = crate::model::storage_objects::get(pool, snapshot.storage_object_id).await?;
-    Ok((snapshot, so))
 }
 
 pub async fn list_for_vm(

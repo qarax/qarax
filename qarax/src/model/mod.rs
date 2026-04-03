@@ -8,10 +8,8 @@ pub mod jobs;
 pub mod lifecycle_hooks;
 pub mod network_interfaces;
 pub mod networks;
-pub mod rate_limit_groups;
 pub mod sandboxes;
 pub mod snapshots;
-// pub mod storage; // Commented out - storages table doesn't exist yet
 pub mod storage_objects;
 pub mod storage_pools;
 pub mod transfers;

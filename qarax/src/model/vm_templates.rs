@@ -225,46 +225,6 @@ WHERE id = $1
     Ok(row.into())
 }
 
-pub async fn get_by_name(pool: &PgPool, name: &str) -> Result<VmTemplate, sqlx::Error> {
-    let row = sqlx::query_as::<_, VmTemplateRow>(
-        r#"
-SELECT id,
-       name,
-       description,
-       hypervisor,
-       boot_vcpus,
-       max_vcpus,
-       cpu_topology,
-       kvm_hyperv,
-       memory_size,
-       memory_hotplug_size,
-       memory_mergeable,
-       memory_shared,
-       memory_hugepages,
-       memory_hugepage_size,
-       memory_prefault,
-       memory_thp,
-       boot_source_id,
-       root_disk_object_id,
-       boot_mode,
-       image_ref,
-       cloud_init_user_data,
-       cloud_init_meta_data,
-       cloud_init_network_config,
-       network_id,
-       networks,
-       config
-FROM vm_templates
-WHERE name = $1
-        "#,
-    )
-    .bind(name)
-    .fetch_one(pool)
-    .await?;
-
-    Ok(row.into())
-}
-
 pub async fn create(pool: &PgPool, new_vm_template: NewVmTemplate) -> Result<Uuid, sqlx::Error> {
     let id = Uuid::new_v4();
     let cpu_topology = new_vm_template.cpu_topology.map(Json);

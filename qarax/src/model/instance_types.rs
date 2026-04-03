@@ -166,38 +166,6 @@ WHERE id = $1
     Ok(row.into())
 }
 
-pub async fn get_by_name(pool: &PgPool, name: &str) -> Result<InstanceType, sqlx::Error> {
-    let row = sqlx::query_as::<_, InstanceTypeRow>(
-        r#"
-SELECT id,
-       name,
-       description,
-       architecture,
-       boot_vcpus,
-       max_vcpus,
-       cpu_topology,
-       kvm_hyperv,
-       memory_size,
-       memory_hotplug_size,
-       memory_mergeable,
-       memory_shared,
-       memory_hugepages,
-       memory_hugepage_size,
-       memory_prefault,
-       memory_thp,
-       accelerator_config,
-       numa_config
-FROM instance_types
-WHERE name = $1
-        "#,
-    )
-    .bind(name)
-    .fetch_one(pool)
-    .await?;
-
-    Ok(row.into())
-}
-
 pub async fn create(
     pool: &PgPool,
     new_instance_type: NewInstanceType,

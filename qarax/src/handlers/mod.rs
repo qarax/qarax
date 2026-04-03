@@ -65,6 +65,16 @@ pub struct VmListQuery {
     pub tags: Option<String>,
 }
 
+#[derive(serde::Deserialize, utoipa::IntoParams, Debug)]
+pub struct StorageObjectListQuery {
+    /// Optional name filter
+    pub name: Option<String>,
+    /// Filter by storage pool UUID
+    pub pool_id: Option<uuid::Uuid>,
+    /// Filter by object type
+    pub object_type: Option<crate::model::storage_objects::StorageObjectType>,
+}
+
 #[derive(OpenApi)]
 #[openapi(
     paths(
