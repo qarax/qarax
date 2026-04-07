@@ -99,6 +99,8 @@ pub enum Commands {
     Sandbox(commands::sandbox::SandboxArgs),
     /// Configure the CLI (server URL, etc.)
     Configure(commands::configure::ConfigureArgs),
+    /// Audit log operations
+    AuditLog(commands::audit_log::AuditLogArgs),
 }
 
 #[tokio::main]
@@ -131,6 +133,7 @@ async fn main() -> Result<()> {
         Commands::Hook(args) => commands::hook::run(args, &client, cli.output).await,
         Commands::Job(args) => commands::job::run(args, &client, cli.output).await,
         Commands::Sandbox(args) => commands::sandbox::run(args, &client, cli.output).await,
+        Commands::AuditLog(args) => commands::audit_log::run(args, &client, cli.output).await,
         Commands::Configure(_) => unreachable!(),
     }
 }

@@ -2,8 +2,10 @@ use super::*;
 use crate::{
     App,
     grpc_client::NodeClient,
+    handlers::audit::{AuditEvent, AuditEventExt},
     host_deployer,
     model::{
+        audit_log::{AuditAction, AuditResourceType},
         host_gpus::{self, HostGpu},
         host_numa::{self, HostNumaNode},
         hosts::{self, DeployHostRequest, Host, HostStatus, NewHost, UpdateHostRequest},
@@ -107,10 +109,20 @@ pub async fn list(
 pub async fn add(
     Extension(env): Extension<App>,
     Json(host): Json<NewHost>,
-) -> Result<(StatusCode, String)> {
+) -> Result<axum::response::Response> {
     host.validate_unique_name(env.pool()).await?;
+    let host_name = host.name.clone();
     let id = hosts::add(env.pool(), &host).await?;
-    Ok((StatusCode::CREATED, id.to_string()))
+
+    Ok(
+        (StatusCode::CREATED, id.to_string()).with_audit_event(AuditEvent {
+            action: AuditAction::Create,
+            resource_type: AuditResourceType::Host,
+            resource_id: id,
+            resource_name: Some(host_name),
+            metadata: None,
+        }),
+    )
 }
 
 #[utoipa::path(
@@ -160,15 +172,26 @@ pub async fn deploy(
     Extension(env): Extension<App>,
     Path(host_id): Path<Uuid>,
     Json(body): Json<DeployHostRequest>,
-) -> Result<(StatusCode, String)> {
+) -> Result<axum::response::Response> {
     body.validate()?;
 
     let host = hosts::require_by_id(env.pool(), host_id).await?;
+    let host_name = host.name.clone();
     hosts::update_status(env.pool(), host_id, HostStatus::Installing).await?;
 
     spawn_deploy(env.pool_arc(), host, body, host_id);
 
-    Ok((StatusCode::ACCEPTED, "Host deployment started".to_string()))
+    Ok(
+        (StatusCode::ACCEPTED, "Host deployment started".to_string()).with_audit_event(
+            AuditEvent {
+                action: AuditAction::Deploy,
+                resource_type: AuditResourceType::Host,
+                resource_id: host_id,
+                resource_name: Some(host_name),
+                metadata: None,
+            },
+        ),
+    )
 }
 
 #[utoipa::path(

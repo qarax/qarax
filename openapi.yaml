@@ -6,6 +6,84 @@ info:
     name: ''
   version: 0.1.0
 paths:
+  /audit-logs:
+    get:
+      tags:
+      - audit-logs
+      operationId: list
+      parameters:
+      - name: resource_type
+        in: query
+        description: Filter by resource type (e.g. "vm", "host")
+        required: false
+        schema:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/AuditResourceType'
+      - name: resource_id
+        in: query
+        description: Filter by resource UUID
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+          format: uuid
+      - name: action
+        in: query
+        description: Filter by action (e.g. "create", "start", "delete")
+        required: false
+        schema:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/AuditAction'
+      - name: limit
+        in: query
+        description: 'Maximum number of entries to return (default: 100, max: 1000)'
+        required: false
+        schema:
+          type:
+          - integer
+          - 'null'
+          format: int32
+          minimum: 0
+      responses:
+        '200':
+          description: List audit log entries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AuditLog'
+        '400':
+          description: Invalid query parameters
+        '500':
+          description: Internal server error
+  /audit-logs/{audit_log_id}:
+    get:
+      tags:
+      - audit-logs
+      operationId: get
+      parameters:
+      - name: audit_log_id
+        in: path
+        description: Audit log entry ID
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Get audit log entry
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditLog'
+        '404':
+          description: Not found
+        '500':
+          description: Internal server error
   /boot-sources:
     get:
       tags:
@@ -2177,6 +2255,72 @@ components:
         host_id:
           type: string
           format: uuid
+    AuditAction:
+      type: string
+      enum:
+      - create
+      - update
+      - delete
+      - start
+      - stop
+      - force_stop
+      - pause
+      - resume
+      - deploy
+      - init
+      - migrate
+      - restore
+      - attach_disk
+      - remove_disk
+      - add_nic
+      - remove_nic
+      - resize
+      - commit
+      - create_snapshot
+      - restore_snapshot
+      - create_template
+      - node_upgrade
+    AuditLog:
+      type: object
+      required:
+      - id
+      - action
+      - resource_type
+      - resource_id
+      - created_at
+      properties:
+        action:
+          $ref: '#/components/schemas/AuditAction'
+        created_at:
+          type: string
+          format: date-time
+        id:
+          type: string
+          format: uuid
+        metadata: {}
+        resource_id:
+          type: string
+          format: uuid
+        resource_name:
+          type:
+          - string
+          - 'null'
+        resource_type:
+          $ref: '#/components/schemas/AuditResourceType'
+    AuditResourceType:
+      type: string
+      enum:
+      - vm
+      - host
+      - storage_pool
+      - storage_object
+      - network
+      - boot_source
+      - vm_template
+      - instance_type
+      - lifecycle_hook
+      - transfer
+      - sandbox
     BootMode:
       type: string
       enum:
@@ -4465,3 +4609,5 @@ tags:
   description: Ephemeral sandbox environments for AI agents
 - name: scheduling
   description: Scheduling observability endpoints
+- name: audit-logs
+  description: Audit log endpoints

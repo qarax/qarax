@@ -1,3 +1,4 @@
+pub mod audit_log;
 pub mod boot_sources;
 pub mod events;
 pub mod host_gpus;

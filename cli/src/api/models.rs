@@ -704,6 +704,19 @@ pub struct UpdateLifecycleHook {
     pub active: Option<bool>,
 }
 
+// Audit Logs
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AuditLog {
+    pub id: Uuid,
+    pub action: String,
+    pub resource_type: String,
+    pub resource_id: Uuid,
+    pub resource_name: Option<String>,
+    pub metadata: Option<serde_json::Value>,
+    pub created_at: String,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct HookExecution {
     pub id: Uuid,

@@ -48,6 +48,7 @@ qarax vm start 3f6c2b1a-0000-0000-0000-000000000001
 | `qarax transfer` | File transfer operations |
 | `qarax job` | Async job status |
 | `qarax sandbox` | Ephemeral sandbox VMs |
+| `qarax audit-log` | Audit log inspection |
 
 Run `qarax <command> --help` for full usage of any command.
 
@@ -205,6 +206,13 @@ qarax vm delete my-vm
 # Console
 qarax vm console my-vm      # print stored serial log
 qarax vm attach my-vm       # interactive WebSocket console (Ctrl-C to exit)
+```
+
+### Audit logs
+
+```bash
+qarax audit-log list --resource-type vm --action create
+qarax audit-log get 3f6c2b1a-0000-0000-0000-000000000001
 ```
 
 ### Disk and NIC hotplug

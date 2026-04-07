@@ -2,14 +2,12 @@ use crate::{App, errors::Error};
 use axum::{
     Extension, Json, Router,
     body::Body,
+    middleware,
     response::{self, IntoResponse, Response},
     routing::{get, patch, post},
 };
 #[cfg(feature = "otel")]
-use axum::{
-    extract::MatchedPath,
-    middleware::{self, Next},
-};
+use axum::{extract::MatchedPath, middleware::Next};
 use http::{Request, StatusCode, header::HeaderName};
 #[cfg(feature = "otel")]
 use opentelemetry::KeyValue;
@@ -26,6 +24,8 @@ use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 use validator::ValidationErrors;
 
+mod audit;
+mod audit_log;
 mod boot_source;
 mod events;
 mod host;
@@ -78,6 +78,8 @@ pub struct StorageObjectListQuery {
 #[derive(OpenApi)]
 #[openapi(
     paths(
+        audit_log::handler::list,
+        audit_log::handler::get,
         host::handler::list,
         host::handler::add,
         host::handler::update,
@@ -243,6 +245,9 @@ pub struct StorageObjectListQuery {
             crate::model::sandboxes::ExecSandboxRequest,
             crate::model::sandboxes::ExecSandboxResponse,
             crate::configuration::SchedulingSettings,
+        crate::model::audit_log::AuditLog,
+        crate::model::audit_log::AuditAction,
+        crate::model::audit_log::AuditResourceType,
         )
     ),
     tags(
@@ -258,7 +263,8 @@ pub struct StorageObjectListQuery {
         (name = "networks", description = "Network management endpoints"),
         (name = "hooks", description = "Lifecycle hook management endpoints"),
         (name = "sandboxes", description = "Ephemeral sandbox environments for AI agents"),
-        (name = "scheduling", description = "Scheduling observability endpoints")
+        (name = "scheduling", description = "Scheduling observability endpoints"),
+        (name = "audit-logs", description = "Audit log endpoints")
     ),
     info(
         title = "Qarax API",
@@ -315,6 +321,7 @@ pub fn app(env: App) -> Router {
         .merge(hooks())
         .merge(sandboxes())
         .merge(scheduling())
+        .merge(audit_logs())
         .merge(event_stream())
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .layer(
@@ -338,7 +345,11 @@ pub fn app(env: App) -> Router {
                     }),
                 ),
         )
-        .layer(Extension(env.clone()));
+        .layer(Extension(env.clone()))
+        .layer(middleware::from_fn_with_state(
+            env.clone(),
+            audit::record_http_audit_log,
+        ));
 
     #[cfg(feature = "otel")]
     let router = router.layer(middleware::from_fn_with_state(env, record_http_metrics));
@@ -563,6 +574,12 @@ fn sandboxes() -> Router {
 
 fn scheduling() -> Router {
     Router::new().route("/scheduling/config", get(scheduling::handler::config))
+}
+
+fn audit_logs() -> Router {
+    Router::new()
+        .route("/audit-logs", get(audit_log::handler::list))
+        .route("/audit-logs/{audit_log_id}", get(audit_log::handler::get))
 }
 
 fn event_stream() -> Router {

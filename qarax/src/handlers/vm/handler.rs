@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::{Extension, Json, extract::Path, response::IntoResponse};
+use axum::{Extension, Json, extract::Path};
 use futures::{SinkExt, StreamExt};
 use http::StatusCode;
 #[cfg(feature = "otel")]
@@ -25,7 +25,9 @@ use crate::{
             VsockConfig,
         },
     },
+    handlers::audit::{AuditEvent, AuditEventExt},
     model::{
+        audit_log::{AuditAction, AuditResourceType},
         boot_sources, host_gpus, host_numa, hosts,
         hosts::Host,
         jobs::{self, JobType, NewJob},
@@ -710,12 +712,20 @@ pub async fn create(
         return create_with_image(env, vm).await;
     }
 
+    let vm_name = vm.name.clone();
     let id = create_vm_internal(&env, vm).await?;
+
     Ok(ApiResponse {
         data: id.to_string(),
         code: StatusCode::CREATED,
     }
-    .into_response())
+    .with_audit_event(AuditEvent {
+        action: AuditAction::Create,
+        resource_type: AuditResourceType::Vm,
+        resource_id: id,
+        resource_name: Some(vm_name),
+        metadata: None,
+    }))
 }
 
 /// Create a VM from a resolved config: pick host, write DB records, allocate network.
@@ -779,6 +789,7 @@ async fn create_with_image(env: App, vm: ResolvedNewVm) -> Result<axum::response
         .image_ref
         .clone()
         .expect("image_ref checked before calling");
+    let vm_name = vm.name.clone();
 
     // Pick host eagerly so we return 422 immediately if none are UP
     let accel_config = vm
@@ -956,6 +967,18 @@ async fn create_with_image(env: App, vm: ResolvedNewVm) -> Result<axum::response
     .await?;
     let job_id = job.id;
 
+    let response = ApiResponse {
+        data: CreateVmResponse { vm_id, job_id },
+        code: StatusCode::ACCEPTED,
+    }
+    .with_audit_event(AuditEvent {
+        action: AuditAction::Create,
+        resource_type: AuditResourceType::Vm,
+        resource_id: vm_id,
+        resource_name: Some(vm_name),
+        metadata: None,
+    });
+
     // Spawn background task
     let db_pool = env.pool_arc();
 
@@ -982,12 +1005,7 @@ async fn create_with_image(env: App, vm: ResolvedNewVm) -> Result<axum::response
         .await;
     });
 
-    use axum::response::IntoResponse as _;
-    Ok(ApiResponse {
-        data: CreateVmResponse { vm_id, job_id },
-        code: StatusCode::ACCEPTED,
-    }
-    .into_response())
+    Ok(response)
 }
 
 /// Allocate an IP from the given network and create the default network interface record for a VM.
@@ -1193,12 +1211,18 @@ pub async fn start(
     Path(vm_id): Path<Uuid>,
 ) -> Result<axum::response::Response> {
     let job_id = start_vm_internal(&env, vm_id).await?;
-    use axum::response::IntoResponse as _;
+
     Ok(ApiResponse {
         data: VmStartResponse { job_id },
         code: StatusCode::ACCEPTED,
     }
-    .into_response())
+    .with_audit_event(AuditEvent {
+        action: AuditAction::Start,
+        resource_type: AuditResourceType::Vm,
+        resource_id: vm_id,
+        resource_name: None,
+        metadata: None,
+    }))
 }
 
 /// Kick off an async VM start: validate state, build CreateVmRequest, spawn background task.
@@ -1419,7 +1443,7 @@ async fn ensure_vm_start_allowed(
 pub async fn stop(
     Extension(env): Extension<App>,
     Path(vm_id): Path<Uuid>,
-) -> Result<ApiResponse<()>> {
+) -> Result<axum::response::Response> {
     let host = host_for_vm(&env, vm_id).await?;
     let node_client = NodeClient::new(&host.address, host.port as u16);
     match node_client.stop_vm(vm_id).await {
@@ -1448,7 +1472,14 @@ pub async fn stop(
     Ok(ApiResponse {
         data: (),
         code: StatusCode::OK,
-    })
+    }
+    .with_audit_event(AuditEvent {
+        action: AuditAction::Stop,
+        resource_type: AuditResourceType::Vm,
+        resource_id: vm_id,
+        resource_name: None,
+        metadata: None,
+    }))
 }
 
 #[utoipa::path(
@@ -1468,7 +1499,7 @@ pub async fn stop(
 pub async fn force_stop(
     Extension(env): Extension<App>,
     Path(vm_id): Path<Uuid>,
-) -> Result<ApiResponse<()>> {
+) -> Result<axum::response::Response> {
     let host = host_for_vm(&env, vm_id).await?;
     let node_client = NodeClient::new(&host.address, host.port as u16);
     match node_client.force_stop_vm(vm_id).await {
@@ -1496,7 +1527,14 @@ pub async fn force_stop(
     Ok(ApiResponse {
         data: (),
         code: StatusCode::OK,
-    })
+    }
+    .with_audit_event(AuditEvent {
+        action: AuditAction::ForceStop,
+        resource_type: AuditResourceType::Vm,
+        resource_id: vm_id,
+        resource_name: None,
+        metadata: None,
+    }))
 }
 
 #[utoipa::path(
@@ -1516,7 +1554,7 @@ pub async fn force_stop(
 pub async fn pause(
     Extension(env): Extension<App>,
     Path(vm_id): Path<Uuid>,
-) -> Result<ApiResponse<()>> {
+) -> Result<axum::response::Response> {
     let host = host_for_vm(&env, vm_id).await?;
     let node_client = NodeClient::new(&host.address, host.port as u16);
     node_client.pause_vm(vm_id).await.map_err(|e| {
@@ -1529,7 +1567,14 @@ pub async fn pause(
     Ok(ApiResponse {
         data: (),
         code: StatusCode::OK,
-    })
+    }
+    .with_audit_event(AuditEvent {
+        action: AuditAction::Pause,
+        resource_type: AuditResourceType::Vm,
+        resource_id: vm_id,
+        resource_name: None,
+        metadata: None,
+    }))
 }
 
 #[utoipa::path(
@@ -1549,7 +1594,7 @@ pub async fn pause(
 pub async fn resume(
     Extension(env): Extension<App>,
     Path(vm_id): Path<Uuid>,
-) -> Result<ApiResponse<()>> {
+) -> Result<axum::response::Response> {
     let host = host_for_vm(&env, vm_id).await?;
     let node_client = NodeClient::new(&host.address, host.port as u16);
     node_client.resume_vm(vm_id).await.map_err(|e| {
@@ -1562,7 +1607,14 @@ pub async fn resume(
     Ok(ApiResponse {
         data: (),
         code: StatusCode::OK,
-    })
+    }
+    .with_audit_event(AuditEvent {
+        action: AuditAction::Resume,
+        resource_type: AuditResourceType::Vm,
+        resource_id: vm_id,
+        resource_name: None,
+        metadata: None,
+    }))
 }
 
 #[utoipa::path(
@@ -1899,7 +1951,7 @@ pub async fn metrics(
 pub async fn delete(
     Extension(env): Extension<App>,
     Path(vm_id): Path<Uuid>,
-) -> Result<ApiResponse<()>> {
+) -> Result<axum::response::Response> {
     let vm = vms::get(env.pool(), vm_id).await?;
 
     // Release any allocated GPUs before deleting
@@ -1927,12 +1979,20 @@ pub async fn delete(
         tracing::warn!("failed to enqueue delete hooks for VM {}: {}", vm_id, e);
     }
 
+    let vm_name = vm.name.clone();
     vms::delete(env.pool(), vm_id).await?;
 
     Ok(ApiResponse {
         data: (),
         code: StatusCode::NO_CONTENT,
-    })
+    }
+    .with_audit_event(AuditEvent {
+        action: AuditAction::Delete,
+        resource_type: AuditResourceType::Vm,
+        resource_id: vm_id,
+        resource_name: Some(vm_name),
+        metadata: None,
+    }))
 }
 
 #[utoipa::path(

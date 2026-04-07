@@ -4,6 +4,9 @@ from .accelerator_config import AcceleratorConfig
 from .attach_disk_request import AttachDiskRequest
 from .attach_host_request import AttachHostRequest
 from .attach_pool_host_request import AttachPoolHostRequest
+from .audit_action import AuditAction
+from .audit_log import AuditLog
+from .audit_resource_type import AuditResourceType
 from .boot_mode import BootMode
 from .boot_source import BootSource
 from .commit_vm_request import CommitVmRequest
@@ -90,6 +93,9 @@ __all__ = (
     "AttachDiskRequest",
     "AttachHostRequest",
     "AttachPoolHostRequest",
+    "AuditAction",
+    "AuditLog",
+    "AuditResourceType",
     "BootMode",
     "BootSource",
     "CommitVmRequest",

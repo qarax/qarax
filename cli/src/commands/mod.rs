@@ -1,3 +1,4 @@
+pub mod audit_log;
 pub mod boot_source;
 pub mod configure;
 pub mod hook;
