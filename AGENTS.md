@@ -147,7 +147,54 @@ YAML files in `configuration/` (base.yaml, local.yaml, production.yaml), selecte
 
 ## CI
 
-GitHub Actions (`rust-ci.yml`): fmt check (nightly) → clippy → build (musl) → unit tests → E2E tests. E2E tests run on push to master or when a repo member comments `/run-e2e` on a PR, which dispatches `rust-ci.yml` against that PR's merge ref from a default-branch workflow. E2E uses pytest against a Docker Compose stack with KVM passthrough (`e2e/`). E2E tests cover: cloud-init, hotplug, network, storage types, GPU scheduling, and lifecycle hooks.
+CI is driven by Dagger (`ci/main.go`) invoked from GitHub Actions (`.github/workflows/rust-ci.yml`).
+
+### Pipeline structure
+
+Three jobs run on every PR and push to master:
+
+- **check** (`dagger call --mod ./ci all --src=.`): runs fmt, lint, test, sqlx-check, audit, openapi-check, and python-sdk-lint in parallel. All steps except `fmt` chain from a shared `prebuilt` container (debug build) so the workspace compiles exactly once per session.
+- **build** (`dagger call --mod ./ci build --src=.`): release build targeting `x86_64-unknown-linux-musl`; uploads the four binaries as a workflow artifact.
+- **e2e**: downloads the build artifacts, starts a Docker Compose stack with KVM passthrough, runs pytest. Triggered on push to master or when the `run-e2e` label is present on a PR.
+
+### Dagger checks
+
+| Function | What it does |
+|---|---|
+| `Fmt` | `cargo +nightly fmt --all -- --check` |
+| `Lint` | `cargo clippy --workspace -D warnings` |
+| `Test` | `cargo nextest run --workspace` against a live Postgres 16 service |
+| `SqlxCheck` | `cargo sqlx prepare --workspace --check` after running migrations |
+| `Audit` | `cargo audit` (ignores configured in `.cargo/audit.toml`) |
+| `OpenApiCheck` | Regenerates `openapi.yaml` and diffs against the committed copy |
+| `PythonSdkLint` | Regenerates the Python SDK and runs `ruff check` |
+
+### Running CI locally
+
+```bash
+# Run all checks (same as CI):
+dagger call --mod ./ci all --src=.
+
+# Run a single check:
+dagger call --mod ./ci fmt --src=.
+dagger call --mod ./ci lint --src=.
+dagger call --mod ./ci test --src=.
+dagger call --mod ./ci sqlx-check --src=.
+dagger call --mod ./ci audit --src=.
+dagger call --mod ./ci open-api-check --src=.
+dagger call --mod ./ci python-sdk-lint --src=.
+
+# Build release binaries via Dagger:
+dagger call --mod ./ci build --src=. export --path=./target/x86_64-unknown-linux-musl/release
+```
+
+### Advisory ignores
+
+Known unfixable advisories are listed in `.cargo/audit.toml` with comments explaining why each is ignored and what upstream change would unblock removal.
+
+### E2E trigger
+
+E2E tests run automatically on push to master. On PRs, apply the `run-e2e` label to trigger them.
 
 ## Versioning
 
