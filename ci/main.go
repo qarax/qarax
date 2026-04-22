@@ -218,7 +218,8 @@ func (c *Ci) QaraxImage(ctx context.Context, src *dagger.Directory) (*dagger.Con
 }
 
 // QaraxNodeImage builds and returns the qarax-node container image.
-// Reads the Cloud Hypervisor version from versions/cloud-hypervisor-version.
+// Reads the hypervisor versions from versions/cloud-hypervisor-version and
+// versions/firecracker-version.
 // Chain .Publish(ctx, address) to push to a registry.
 func (c *Ci) QaraxNodeImage(ctx context.Context, src *dagger.Directory) (*dagger.Container, error) {
 	binDir, err := c.Build(ctx, src)
@@ -229,11 +230,16 @@ func (c *Ci) QaraxNodeImage(ctx context.Context, src *dagger.Directory) (*dagger
 	if err != nil {
 		return nil, fmt.Errorf("read cloud-hypervisor version: %w", err)
 	}
+	firecrackerVersion, err := src.File("versions/firecracker-version").Contents(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("read firecracker version: %w", err)
+	}
 	buildCtx := src.WithDirectory("target/x86_64-unknown-linux-musl/release", binDir)
 	return buildCtx.DockerBuild(dagger.DirectoryDockerBuildOpts{
 		Dockerfile: "e2e/Dockerfile.qarax-node",
 		BuildArgs: []dagger.BuildArg{
 			{Name: "CLOUD_HYPERVISOR_VERSION", Value: strings.TrimSpace(chVersion)},
+			{Name: "FIRECRACKER_VERSION", Value: strings.TrimSpace(firecrackerVersion)},
 		},
 	}), nil
 }

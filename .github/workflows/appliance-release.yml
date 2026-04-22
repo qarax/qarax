@@ -17,6 +17,11 @@ on:
         required: false
         default: ""
         type: string
+      firecracker_version:
+        description: "Firecracker version build arg"
+        required: false
+        default: ""
+        type: string
       push_latest:
         description: "Also publish the latest tag"
         required: false
@@ -90,9 +95,15 @@ jobs:
             cloud_hv="$(tr -d '\n' < versions/cloud-hypervisor-version)"
           fi
 
+          firecracker="${{ inputs.firecracker_version }}"
+          if [ -z "${firecracker}" ]; then
+            firecracker="$(tr -d '\n' < versions/firecracker-version)"
+          fi
+
           echo "image_tag=${image_tag}" >> "${GITHUB_OUTPUT}"
           echo "extra_tags=${extra_tags}" >> "${GITHUB_OUTPUT}"
           echo "cloud_hv=${cloud_hv}" >> "${GITHUB_OUTPUT}"
+          echo "firecracker=${firecracker}" >> "${GITHUB_OUTPUT}"
 
       - name: Build release binaries
         run: cargo build --release -p qarax-node -p qarax-init --target "${TARGET_TRIPLE}"
@@ -116,6 +127,7 @@ jobs:
             ${{ steps.vars.outputs.extra_tags }}
           build-args: |
             CLOUD_HYPERVISOR_VERSION=${{ steps.vars.outputs.cloud_hv }}
+            FIRECRACKER_VERSION=${{ steps.vars.outputs.firecracker }}
             QARAX_VERSION=${{ steps.vars.outputs.image_tag }}
 
       - name: Install cosign

@@ -32,8 +32,6 @@ services:
       POSTGRES_USER: qarax
       POSTGRES_PASSWORD: qarax
       POSTGRES_DB: qarax
-    ports:
-      - "5432:5432"
     healthcheck:
       test: [ "CMD-SHELL", "pg_isready -U qarax" ]
       interval: 5s
@@ -48,6 +46,7 @@ services:
       dockerfile: e2e/Dockerfile.qarax-node
       args:
         CLOUD_HYPERVISOR_VERSION: ${CLOUD_HYPERVISOR_VERSION}
+        FIRECRACKER_VERSION: ${FIRECRACKER_VERSION}
     privileged: true
     devices:
       - /dev/kvm:/dev/kvm
@@ -123,6 +122,7 @@ services:
       dockerfile: e2e/Dockerfile.qarax-node
       args:
         CLOUD_HYPERVISOR_VERSION: ${CLOUD_HYPERVISOR_VERSION}
+        FIRECRACKER_VERSION: ${FIRECRACKER_VERSION}
     privileged: true
     devices:
       - /dev/kvm:/dev/kvm

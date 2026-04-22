@@ -239,6 +239,7 @@ pub struct Host {
     pub status: String,
     pub host_user: String,
     pub cloud_hypervisor_version: Option<String>,
+    pub firecracker_version: Option<String>,
     pub kernel_version: Option<String>,
     pub node_version: Option<String>,
     pub last_deployed_image: Option<String>,

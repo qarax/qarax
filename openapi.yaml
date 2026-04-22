@@ -2667,6 +2667,10 @@ components:
           - integer
           - 'null'
           format: int64
+        firecracker_version:
+          type:
+          - string
+          - 'null'
         host_user:
           type: string
         id:

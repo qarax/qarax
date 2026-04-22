@@ -9,7 +9,7 @@ use crate::errors;
 /// The version of the control-plane binary, used to detect out-of-date nodes.
 pub const CONTROL_PLANE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-const HOST_COLUMNS: &str = "id, name, address, port, host_user, password, status, cloud_hypervisor_version, kernel_version, node_version, last_deployed_image, architecture, total_cpus, total_memory_bytes, available_memory_bytes, load_average, disk_total_bytes, disk_available_bytes, resources_updated_at";
+const HOST_COLUMNS: &str = "id, name, address, port, host_user, password, status, cloud_hypervisor_version, firecracker_version, kernel_version, node_version, last_deployed_image, architecture, total_cpus, total_memory_bytes, available_memory_bytes, load_average, disk_total_bytes, disk_available_bytes, resources_updated_at";
 
 /// Build a Host from a sqlx Row containing all host columns.
 fn host_from_row(r: &sqlx::postgres::PgRow) -> Host {
@@ -26,6 +26,7 @@ fn host_from_row(r: &sqlx::postgres::PgRow) -> Host {
         password: r.get("password"),
         status: r.get("status"),
         cloud_hypervisor_version: r.get("cloud_hypervisor_version"),
+        firecracker_version: r.get("firecracker_version"),
         kernel_version: r.get("kernel_version"),
         node_version,
         last_deployed_image: r.get("last_deployed_image"),
@@ -54,6 +55,7 @@ pub struct Host {
     pub password: Vec<u8>,
 
     pub cloud_hypervisor_version: Option<String>,
+    pub firecracker_version: Option<String>,
     pub kernel_version: Option<String>,
     /// Version of the qarax-node agent running on this host.
     pub node_version: Option<String>,
@@ -301,7 +303,7 @@ pub async fn pick_host_tx(
     let mut qb = QueryBuilder::<Postgres>::new(
         r#"
 SELECT h.id, h.name, h.address, h.port, h.host_user, h.password,
-       h.status, h.cloud_hypervisor_version, h.kernel_version,
+       h.status, h.cloud_hypervisor_version, h.firecracker_version, h.kernel_version,
        h.node_version, h.last_deployed_image, h.architecture,
        h.total_cpus, h.total_memory_bytes, h.available_memory_bytes,
        h.load_average, h.disk_total_bytes, h.disk_available_bytes,
@@ -404,13 +406,15 @@ pub async fn update_versions(
     pool: &PgPool,
     id: Uuid,
     ch_version: &str,
+    fc_version: Option<&str>,
     kernel_version: &str,
     node_version: &str,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "UPDATE hosts SET cloud_hypervisor_version = $1, kernel_version = $2, node_version = $3 WHERE id = $4",
+        "UPDATE hosts SET cloud_hypervisor_version = $1, firecracker_version = $2, kernel_version = $3, node_version = $4 WHERE id = $5",
     )
     .bind(ch_version)
+    .bind(fc_version)
     .bind(kernel_version)
     .bind(node_version)
     .bind(id)

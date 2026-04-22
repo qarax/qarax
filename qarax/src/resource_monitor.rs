@@ -19,6 +19,7 @@ async fn handle_probe_result(pool: &PgPool, host: &Host, node_info: Result<NodeI
                 pool,
                 host.id,
                 &info.cloud_hypervisor_version,
+                info.firecracker_version.as_deref(),
                 &info.kernel_version,
                 &info.node_version,
             )
@@ -260,6 +261,7 @@ mod tests {
             Ok(NodeInfo {
                 hostname: "node-1".to_string(),
                 cloud_hypervisor_version: "44.0".to_string(),
+                firecracker_version: Some("Firecracker v1.11.0".to_string()),
                 kernel_version: "6.12.0".to_string(),
                 node_version: "0.1.0".to_string(),
                 total_cpus: 8,
@@ -283,5 +285,9 @@ mod tests {
         assert_eq!(updated.architecture.as_deref(), Some("x86_64"));
         assert_eq!(updated.total_cpus, Some(8));
         assert_eq!(updated.available_memory_bytes, Some(8 * 1024 * 1024));
+        assert_eq!(
+            updated.firecracker_version.as_deref(),
+            Some("Firecracker v1.11.0")
+        );
     }
 }

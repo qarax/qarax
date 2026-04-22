@@ -33,6 +33,7 @@ cargo build --release -p qarax-node --target x86_64-unknown-linux-musl
 # 2. Build the deploy image
 sudo podman build -f deployments/Containerfile.qarax-vmm \
   --build-arg CLOUD_HYPERVISOR_VERSION="$(cat versions/cloud-hypervisor-version)" \
+  --build-arg FIRECRACKER_VERSION="$(cat versions/firecracker-version)" \
   -t localhost/qarax-vmm-host:latest .
 
 # 3. Start a local registry (skip if already running)

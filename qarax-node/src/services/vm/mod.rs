@@ -1,4 +1,5 @@
 use futures::Stream;
+use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -99,6 +100,32 @@ impl VmServiceImpl {
             Err(e) => {
                 error!("Failed to {} VM {}: {}", op_name.to_lowercase(), vm_id, e);
                 Err(map_vmm_error(e))
+            }
+        }
+    }
+
+    async fn binary_version(path: &Path, arg: &str) -> Option<String> {
+        match tokio::process::Command::new(path).arg(arg).output().await {
+            Ok(output) if output.status.success() => {
+                let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                (!version.is_empty()).then_some(version)
+            }
+            Ok(output) => {
+                warn!(
+                    "Binary {} returned non-zero exit code {}: {}",
+                    path.display(),
+                    output.status,
+                    String::from_utf8_lossy(&output.stderr).trim()
+                );
+                None
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to get binary version from {}: {}",
+                    path.display(),
+                    e
+                );
+                None
             }
         }
     }
@@ -680,17 +707,13 @@ impl VmService for VmServiceImpl {
         let hostname = gethostname::gethostname().to_string_lossy().into_owned();
         let architecture = detect_architecture().await;
 
-        // Get Cloud Hypervisor version
-        let ch_version = match tokio::process::Command::new(self.ch_manager.ch_binary())
-            .arg("--version")
-            .output()
+        let ch_version = Self::binary_version(self.ch_manager.ch_binary(), "--version")
             .await
-        {
-            Ok(output) => String::from_utf8_lossy(&output.stdout).trim().to_string(),
-            Err(e) => {
-                error!("Failed to get Cloud Hypervisor version: {}", e);
-                "unknown".to_string()
-            }
+            .unwrap_or_else(|| "unknown".to_string());
+        let firecracker_version = if let Some(fc_manager) = &self.fc_manager {
+            Self::binary_version(fc_manager.fc_binary(), "--version").await
+        } else {
+            None
         };
 
         // Get kernel version
@@ -730,6 +753,7 @@ impl VmService for VmServiceImpl {
                 .unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_string()),
             numa_nodes,
             architecture,
+            firecracker_version,
         }))
     }
 

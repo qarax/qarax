@@ -43,6 +43,8 @@ qarax uses **bootc** (bootable containers) to deploy VMM hosts. This provides:
 # From the qarax repository root:
 podman build \
   -f deployments/Containerfile.qarax-vmm \
+  --build-arg CLOUD_HYPERVISOR_VERSION="$(cat versions/cloud-hypervisor-version)" \
+  --build-arg FIRECRACKER_VERSION="$(cat versions/firecracker-version)" \
   -t quay.io/yourorg/qarax-vmm-host:v1.0.0 \
   .
 ```
@@ -167,6 +169,7 @@ After reboot, the host will:
 - Load all kernel modules for VM support
 - Apply networking configuration
 - Start qarax-node automatically
+- Have both `cloud-hypervisor` and `firecracker` installed under `/usr/local/bin/`
 
 ### Verify Deployment
 

@@ -70,7 +70,7 @@ Follow this order before touching code:
 2. **Check that required services are running** before looking at code:
    - Docker Compose mode: `docker compose ps` and `docker compose logs qarax-node`
    - Hyperconverged mode: `systemctl status qarax-node`, `ps aux | grep cloud-hypervisor`
-   - Verify Postgres: `docker compose ps postgres` or `pg_isready -h 127.0.0.1 -p 5432`
+   - Verify Postgres: `docker compose ps postgres` or `docker compose exec postgres pg_isready -U qarax`
 3. **Read service logs** before grep-ing source files. Most runtime failures are infrastructure, not code.
 4. **Only after confirming infrastructure is healthy**, investigate code-level issues.
 
@@ -204,7 +204,7 @@ Key component versions are pinned in `Makefile` (`CLOUD_HYPERVISOR_VERSION`) and
 
 - **Async fixture clients**: Pytest async fixtures that use `async with Client(...) as c:` must create their own `Client(base_url=QARAX_URL)` — never share the test's `client` fixture. httpx clients cannot be opened as a context manager more than once per instance.
 - **`docker compose` commands**: Must be run from `e2e/` (the compose file lives there). `make run-local` handles this via `cd e2e` internally.
-- **Port 5432 conflict**: A standalone postgres container may hold port 5432. Stop it before `docker compose up`: `docker stop <name>`.
+- **Compose Postgres is internal-only**: the E2E stack no longer binds Postgres to host port 5432, so it can run alongside the standalone test database container.
 
 ## Additional Directories
 

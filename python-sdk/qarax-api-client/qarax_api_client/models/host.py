@@ -30,6 +30,7 @@ class Host:
         cloud_hypervisor_version (None | str | Unset):
         disk_available_bytes (int | None | Unset):
         disk_total_bytes (int | None | Unset):
+        firecracker_version (None | str | Unset):
         kernel_version (None | str | Unset):
         last_deployed_image (None | str | Unset): Last bootc image deployed to this host via the `/deploy` endpoint.
         load_average (float | None | Unset):
@@ -51,6 +52,7 @@ class Host:
     cloud_hypervisor_version: None | str | Unset = UNSET
     disk_available_bytes: int | None | Unset = UNSET
     disk_total_bytes: int | None | Unset = UNSET
+    firecracker_version: None | str | Unset = UNSET
     kernel_version: None | str | Unset = UNSET
     last_deployed_image: None | str | Unset = UNSET
     load_average: float | None | Unset = UNSET
@@ -104,6 +106,12 @@ class Host:
             disk_total_bytes = UNSET
         else:
             disk_total_bytes = self.disk_total_bytes
+
+        firecracker_version: None | str | Unset
+        if isinstance(self.firecracker_version, Unset):
+            firecracker_version = UNSET
+        else:
+            firecracker_version = self.firecracker_version
 
         kernel_version: None | str | Unset
         if isinstance(self.kernel_version, Unset):
@@ -172,6 +180,8 @@ class Host:
             field_dict["disk_available_bytes"] = disk_available_bytes
         if disk_total_bytes is not UNSET:
             field_dict["disk_total_bytes"] = disk_total_bytes
+        if firecracker_version is not UNSET:
+            field_dict["firecracker_version"] = firecracker_version
         if kernel_version is not UNSET:
             field_dict["kernel_version"] = kernel_version
         if last_deployed_image is not UNSET:
@@ -250,6 +260,15 @@ class Host:
             return cast(int | None | Unset, data)
 
         disk_total_bytes = _parse_disk_total_bytes(d.pop("disk_total_bytes", UNSET))
+
+        def _parse_firecracker_version(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        firecracker_version = _parse_firecracker_version(d.pop("firecracker_version", UNSET))
 
         def _parse_kernel_version(data: object) -> None | str | Unset:
             if data is None:
@@ -335,6 +354,7 @@ class Host:
             cloud_hypervisor_version=cloud_hypervisor_version,
             disk_available_bytes=disk_available_bytes,
             disk_total_bytes=disk_total_bytes,
+            firecracker_version=firecracker_version,
             kernel_version=kernel_version,
             last_deployed_image=last_deployed_image,
             load_average=load_average,

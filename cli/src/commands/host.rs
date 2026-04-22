@@ -112,6 +112,8 @@ struct HostRow {
     host_user: String,
     #[tabled(rename = "CH Version")]
     ch_version: String,
+    #[tabled(rename = "FC Version")]
+    fc_version: String,
     #[tabled(rename = "Node Version")]
     node_version: String,
     #[tabled(rename = "CPUs")]
@@ -174,6 +176,10 @@ pub async fn run(args: HostArgs, client: &Client, output: OutputFormat) -> anyho
                             .cloud_hypervisor_version
                             .clone()
                             .unwrap_or_else(|| "-".to_string()),
+                        fc_version: h
+                            .firecracker_version
+                            .clone()
+                            .unwrap_or_else(|| "-".to_string()),
                         node_version: {
                             let v = h.node_version.clone().unwrap_or_else(|| "-".to_string());
                             if h.update_available {
@@ -215,6 +221,9 @@ pub async fn run(args: HostArgs, client: &Client, output: OutputFormat) -> anyho
                 println!("Arch:    {}", h.architecture.as_deref().unwrap_or("-"));
                 if let Some(ch) = &h.cloud_hypervisor_version {
                     println!("CH:      {ch}");
+                }
+                if let Some(fc) = &h.firecracker_version {
+                    println!("FC:      {fc}");
                 }
                 if let Some(nv) = &h.node_version {
                     if h.update_available {
@@ -285,6 +294,9 @@ pub async fn run(args: HostArgs, client: &Client, output: OutputFormat) -> anyho
                 println!("Initialized host: {} ({})", host.name, host.status);
                 if let Some(ch) = &host.cloud_hypervisor_version {
                     println!("  Cloud Hypervisor: {ch}");
+                }
+                if let Some(fc) = &host.firecracker_version {
+                    println!("  Firecracker:      {fc}");
                 }
                 if let Some(k) = &host.kernel_version {
                     println!("  Kernel:           {k}");

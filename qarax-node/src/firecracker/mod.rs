@@ -86,6 +86,10 @@ impl FirecrackerManager {
         }
     }
 
+    pub fn fc_binary(&self) -> &Path {
+        &self.fc_binary
+    }
+
     /// Configure a freshly-attached [`Machine`] from a proto VmConfig using
     /// the SDK's typed API methods.
     async fn configure_vm(

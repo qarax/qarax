@@ -338,6 +338,7 @@ message NodeInfo {
   // NUMA topology of the host
   repeated NumaNode numa_nodes = 12;
   string architecture = 13;
+  optional string firecracker_version = 14;
 }
 
 // ============================================================================

@@ -27,7 +27,7 @@ use qarax_node::vmm::VmmManager;
 #[derive(Parser, Debug)]
 #[clap(
     name = "qarax-node",
-    about = "qarax data plane - manages VMs using Cloud Hypervisor",
+    about = "qarax data plane - manages VMs using Cloud Hypervisor and Firecracker",
     rename_all = "kebab-case",
     rename_all_env = "screaming-snake"
 )]
@@ -207,7 +207,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create the VM service with all available backends
     let vm_service = VmServiceImpl::new(vm_manager, fc_manager);
 
-    info!("Starting gRPC server with Cloud Hypervisor backend");
+    info!("Starting gRPC server with available hypervisor backends");
 
     let file_transfer_service =
         FileTransferServiceImpl::with_overlaybd(overlaybd_manager_for_transfer);

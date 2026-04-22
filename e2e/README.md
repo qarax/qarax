@@ -122,7 +122,7 @@ Docker Compose
 ├── qarax (control plane) :8000
 ├── qarax-node (data plane) :50051
 │   └── Cloud Hypervisor (with /dev/kvm)
-└── postgres :5432
+└── postgres (internal compose service)
 
 E2E Tests (Python + pytest)
 └── qarax-api-client SDK -> qarax :8000

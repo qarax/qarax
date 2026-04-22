@@ -225,6 +225,7 @@ pub async fn init(
         host_id = %host_id,
         hostname = %node_info.hostname,
         ch_version = %node_info.cloud_hypervisor_version,
+        fc_version = node_info.firecracker_version.as_deref().unwrap_or("-"),
         kernel_version = %node_info.kernel_version,
         total_cpus = node_info.total_cpus,
         total_memory_bytes = node_info.total_memory_bytes,
@@ -236,6 +237,7 @@ pub async fn init(
         env.pool(),
         host_id,
         &node_info.cloud_hypervisor_version,
+        node_info.firecracker_version.as_deref(),
         &node_info.kernel_version,
         &node_info.node_version,
     )

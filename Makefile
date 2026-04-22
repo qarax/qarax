@@ -14,6 +14,8 @@ APPLIANCE_TAG ?= dev
 APPLIANCE_TARGET ?= x86_64-unknown-linux-musl
 CLOUD_HYPERVISOR_VERSION_FILE ?= versions/cloud-hypervisor-version
 CLOUD_HYPERVISOR_VERSION ?= $(shell tr -d '\n' < $(CLOUD_HYPERVISOR_VERSION_FILE))
+FIRECRACKER_VERSION_FILE ?= versions/firecracker-version
+FIRECRACKER_VERSION ?= $(shell tr -d '\n' < $(FIRECRACKER_VERSION_FILE))
 
 help:
 	@echo "Available targets:"
@@ -93,6 +95,7 @@ appliance-build:
 	$(CONTAINER_ENGINE) build \
 		-f deployments/Containerfile.qarax-vmm \
 		--build-arg CLOUD_HYPERVISOR_VERSION=$(CLOUD_HYPERVISOR_VERSION) \
+		--build-arg FIRECRACKER_VERSION=$(FIRECRACKER_VERSION) \
 		--build-arg QARAX_VERSION=$(APPLIANCE_TAG) \
 		-t $(APPLIANCE_IMAGE):$(APPLIANCE_TAG) \
 		.

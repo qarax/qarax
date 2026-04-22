@@ -1,13 +1,13 @@
 # qarax
 
-qarax is a management platform for virtual machines running on Cloud Hypervisor.
+qarax is a management platform for virtual machines running on Cloud Hypervisor and Firecracker.
 
 ## Architecture
 
 qarax consists of two main components:
 
 - **[qarax](qarax/)** (control plane) -- Axum REST API server managing VM and host lifecycle, backed by PostgreSQL
-- **[qarax-node](qarax-node/)** (data plane) -- gRPC service running on hypervisor hosts, managing VM execution via Cloud Hypervisor
+- **[qarax-node](qarax-node/)** (data plane) -- gRPC service running on hypervisor hosts, managing VM execution via Cloud Hypervisor and Firecracker
 
 Supporting crates:
 
@@ -15,7 +15,7 @@ Supporting crates:
 - **[qarax-init](qarax-init/)** -- Minimal PID 1 init process for OCI-booted VMs
 - **[common](common/)** -- Shared logging and telemetry helpers
 
-Communication flow: control plane -> gRPC (`proto/node.proto`) -> qarax-node -> Cloud Hypervisor API.
+Communication flow: control plane -> gRPC (`proto/node.proto`) -> qarax-node -> selected hypervisor backend.
 
 ## Building
 
@@ -55,7 +55,7 @@ qarax vm list
 
 ## Host provisioning
 
-qarax uses bootc (bootable containers) to deploy hypervisor hosts. The appliance image includes qarax-node, Cloud Hypervisor, and all dependencies.
+qarax uses bootc (bootable containers) to deploy hypervisor hosts. The appliance image includes qarax-node, Cloud Hypervisor, Firecracker, and all dependencies.
 
 ```bash
 # Register the host
@@ -95,6 +95,7 @@ Working demo setups in `demos/`:
 | `etcd-cluster/` | 3-node etcd cluster on VMs |
 | `k8s-cluster/` | 3-node kubeadm Kubernetes cluster |
 | `gpu-passthrough/` | VFIO GPU passthrough |
+| `firecracker/` | Firecracker backend lifecycle demo |
 | `hyperconverged/` | Single-VM control plane + node |
 | `sandbox/` | Ephemeral auto-reaping VMs |
 | `sse-events/` | Server-Sent Events stream |

@@ -21,6 +21,8 @@ cd "$(dirname "$0")"
 
 : "${CLOUD_HYPERVISOR_VERSION:=$(cat ../versions/cloud-hypervisor-version)}"
 export CLOUD_HYPERVISOR_VERSION
+: "${FIRECRACKER_VERSION:=$(cat ../versions/firecracker-version)}"
+export FIRECRACKER_VERSION
 
 default_webhook_host() {
 	if [ "$(uname -s)" != "Linux" ]; then

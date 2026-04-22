@@ -102,6 +102,17 @@ def new_fc_vm(name: str, **kwargs) -> NewVm:
 
 
 @pytest.mark.asyncio
+async def test_host_reports_firecracker_version(client):
+    """Initialized hosts should report the Firecracker version through the REST API."""
+    async with client as c:
+        hosts = [h for h in (await call_api(list_hosts, client=c) or []) if h.status == HostStatus.UP]
+        assert hosts, "No UP hosts registered"
+        assert any(h.firecracker_version for h in hosts), (
+            "Expected at least one initialized host to report a Firecracker version"
+        )
+
+
+@pytest.mark.asyncio
 async def test_fc_vm_create_and_delete(client):
     """Create a Firecracker VM and verify it appears in the list, then delete it."""
     async with client as c:
