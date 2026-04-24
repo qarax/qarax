@@ -572,6 +572,93 @@ pub async fn import_to_pool(
     .into_response())
 }
 
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct RegisterLunRequest {
+    /// Human-readable name for the resulting storage object.
+    pub name: String,
+    /// LUN number exported by the iSCSI target for this disk.
+    pub lun: u32,
+    /// Logical size of the LUN in bytes. Informational (reported back to clients).
+    pub size_bytes: i64,
+}
+
+/// Register a pre-existing LUN on an iSCSI (BLOCK) storage pool as a disk object.
+///
+/// BLOCK pools do not support disk creation because LUNs are pre-provisioned
+/// on the target. Callers create the LUN out of band (e.g. via `targetcli`)
+/// and then register it with qarax so VMs can consume it.
+#[utoipa::path(
+    post,
+    path = "/storage-pools/{pool_id}/luns",
+    params(
+        ("pool_id" = Uuid, Path, description = "Storage pool ID")
+    ),
+    request_body = RegisterLunRequest,
+    responses(
+        (status = 201, description = "LUN registered", body = CreateDiskResponse),
+        (status = 404, description = "Pool not found"),
+        (status = 422, description = "Validation error"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "storage-pools"
+)]
+#[instrument(skip(env))]
+pub async fn register_lun(
+    Extension(env): Extension<App>,
+    Path(pool_id): Path<Uuid>,
+    Json(req): Json<RegisterLunRequest>,
+) -> Result<ApiResponse<CreateDiskResponse>> {
+    let pool = storage_pools::get(env.pool(), pool_id).await?;
+
+    if pool.pool_type != storage_pools::StoragePoolType::Block {
+        return Err(crate::errors::Error::UnprocessableEntity(
+            "LUN registration is only valid for BLOCK pools".into(),
+        ));
+    }
+
+    if req.size_bytes <= 0 {
+        return Err(crate::errors::Error::UnprocessableEntity(
+            "size_bytes must be greater than 0".into(),
+        ));
+    }
+
+    let existing = storage_objects::list(env.pool(), None, Some(pool_id), None).await?;
+    let lun_already_registered = existing.iter().any(|obj| {
+        obj.config
+            .get("lun")
+            .and_then(|v| v.as_i64())
+            .map(|l| l as u32 == req.lun)
+            .unwrap_or(false)
+    });
+    if lun_already_registered {
+        return Err(crate::errors::Error::Conflict(format!(
+            "LUN {} is already registered in this pool",
+            req.lun
+        )));
+    }
+
+    let storage_object_id = storage_objects::create(
+        env.pool(),
+        NewStorageObject {
+            name: req.name,
+            storage_pool_id: Some(pool_id),
+            object_type: StorageObjectType::Disk,
+            size_bytes: req.size_bytes,
+            config: serde_json::json!({ "lun": req.lun }),
+            parent_id: None,
+        },
+    )
+    .await?;
+
+    Ok(ApiResponse {
+        data: CreateDiskResponse {
+            storage_object_id,
+            job_id: None,
+        },
+        code: StatusCode::CREATED,
+    })
+}
+
 async fn require_up_host_for_pool(env: &App, pool_id: Uuid) -> Result<hosts::Host> {
     let host_id = storage_pools::find_host_for_pool(env.pool(), pool_id)
         .await

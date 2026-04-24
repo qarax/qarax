@@ -1,0 +1,30 @@
+# Adds a LIO iSCSI target container to the qarax e2e stack for the BLOCK
+# storage demo. Merge this on top of e2e/docker-compose.yml:
+#
+#   docker compose -f e2e/docker-compose.yml -f demos/block-storage/compose.yml up -d
+#
+# The target listens on port 3260 inside the compose network. qarax-node
+# reaches it as hostname `iscsi-target`.
+services:
+  iscsi-target:
+    build:
+      context: ..
+      dockerfile: demos/block-storage/Containerfile.target
+    privileged: true
+    volumes:
+      - block_demo_storage:/var/lib/qarax-block
+      - /lib/modules:/lib/modules:ro
+      - /sys/kernel/config:/sys/kernel/config
+    environment:
+      TARGET_IQN: iqn.2024-01.qarax:demo
+      LUN_SIZE: "1073741824"
+    ports:
+      - "3260:3260"
+    healthcheck:
+      test: ["CMD", "sh", "-c", "ss -ltn | grep -q :3260"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  block_demo_storage:

@@ -16,6 +16,22 @@ impl OverlayBdPoolConfig {
     }
 }
 
+/// Configuration for a BLOCK (iSCSI) storage pool, extracted from the JSONB `config` column.
+///
+/// `portal` is the iSCSI target portal (host:port, e.g. `10.0.0.5:3260`).
+/// `iqn` is the target IQN (e.g. `iqn.2024-01.qarax:target0`).
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct BlockPoolConfig {
+    pub portal: String,
+    pub iqn: String,
+}
+
+impl BlockPoolConfig {
+    pub fn from_value(v: &serde_json::Value) -> Option<Self> {
+        serde_json::from_value(v.clone()).ok()
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
 pub struct StoragePool {
     pub id: Uuid,
@@ -65,6 +81,7 @@ pub enum StoragePoolType {
     #[sqlx(rename = "OVERLAYBD")]
     #[serde(alias = "overlaybd")]
     OverlayBd,
+    Block,
 }
 
 impl StoragePoolType {
@@ -72,9 +89,13 @@ impl StoragePoolType {
     ///
     /// NFS pools are accessible from multiple hosts at the same path.
     /// OverlayBD pools are backed by a shared OCI registry.
+    /// BLOCK pools are iSCSI targets, reachable from any initiator on the network.
     /// Local pools are host-specific and must be attached explicitly.
     pub fn is_shared(&self) -> bool {
-        matches!(self, StoragePoolType::Nfs | StoragePoolType::OverlayBd)
+        matches!(
+            self,
+            StoragePoolType::Nfs | StoragePoolType::OverlayBd | StoragePoolType::Block
+        )
     }
 
     /// Whether VMs using this pool type can be live-migrated.

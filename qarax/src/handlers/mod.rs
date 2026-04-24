@@ -131,6 +131,7 @@ pub struct StorageObjectListQuery {
         storage_pool::handler::detach_host,
         storage_pool::handler::import_to_pool,
         storage_pool::handler::create_disk,
+        storage_pool::handler::register_lun,
         boot_source::handler::list,
         boot_source::handler::get,
         boot_source::handler::create,
@@ -227,6 +228,7 @@ pub struct StorageObjectListQuery {
             crate::handlers::storage_pool::handler::ImportToPoolResponse,
             crate::handlers::storage_pool::handler::CreateDiskRequest,
             crate::handlers::storage_pool::handler::CreateDiskResponse,
+            crate::handlers::storage_pool::handler::RegisterLunRequest,
             crate::model::networks::Network,
             crate::model::networks::NewNetwork,
             crate::model::networks::NetworkStatus,
@@ -486,6 +488,10 @@ fn storage_pools() -> Router {
         .route(
             "/storage-pools/{pool_id}/disks",
             post(storage_pool::handler::create_disk),
+        )
+        .route(
+            "/storage-pools/{pool_id}/luns",
+            post(storage_pool::handler::register_lun),
         )
 }
 

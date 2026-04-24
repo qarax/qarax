@@ -4,7 +4,8 @@ use crate::client::Client;
 
 use super::models::{
     AttachHostToPoolRequest, CreateDiskRequest, CreateDiskResponse, ImportToPoolRequest,
-    ImportToPoolResponse, NewStorageObject, NewStoragePool, StorageObject, StoragePool,
+    ImportToPoolResponse, NewStorageObject, NewStoragePool, RegisterLunRequest, StorageObject,
+    StoragePool,
 };
 
 // Storage pools
@@ -112,5 +113,15 @@ pub async fn import_to_pool(
 ) -> anyhow::Result<ImportToPoolResponse> {
     client
         .post(&format!("/storage-pools/{pool_id}/import"), req)
+        .await
+}
+
+pub async fn register_lun(
+    client: &Client,
+    pool_id: Uuid,
+    req: &RegisterLunRequest,
+) -> anyhow::Result<CreateDiskResponse> {
+    client
+        .post(&format!("/storage-pools/{pool_id}/luns"), req)
         .await
 }

@@ -621,6 +621,7 @@ enum StoragePoolKind {
   STORAGE_POOL_KIND_LOCAL    = 0;
   STORAGE_POOL_KIND_NFS      = 1;
   STORAGE_POOL_KIND_OVERLAYBD = 2;
+  STORAGE_POOL_KIND_BLOCK    = 3;
 }
 
 // Request to physically attach a storage pool on a node.
@@ -628,6 +629,7 @@ enum StoragePoolKind {
 //   LOCAL:     {"path": "/var/lib/qarax/storage/..."}
 //   NFS:       {"url": "nfs-server:/export/path"}
 //   OVERLAYBD: {"url": "http://registry:5000"}
+//   BLOCK:     {"portal": "10.0.0.5:3260", "iqn": "iqn.2024-01.qarax:target0"}
 message AttachStoragePoolRequest {
   string pool_id    = 1;   // UUID of the storage pool
   StoragePoolKind pool_kind = 2;
@@ -642,6 +644,7 @@ message AttachStoragePoolResponse {
 message DetachStoragePoolRequest {
   string pool_id    = 1;
   StoragePoolKind pool_kind = 2;
+  string config_json = 3;
 }
 
 // ============================================================================

@@ -55,6 +55,7 @@ from .new_vm import NewVm
 from .new_vm_network import NewVmNetwork
 from .new_vm_template import NewVmTemplate
 from .rate_limiter_config import RateLimiterConfig
+from .register_lun_request import RegisterLunRequest
 from .restore_request import RestoreRequest
 from .sandbox import Sandbox
 from .sandbox_status import SandboxStatus
@@ -144,6 +145,7 @@ __all__ = (
     "NewVmNetwork",
     "NewVmTemplate",
     "RateLimiterConfig",
+    "RegisterLunRequest",
     "RestoreRequest",
     "Sandbox",
     "SandboxStatus",

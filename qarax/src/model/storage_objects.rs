@@ -230,6 +230,7 @@ async fn resolve_new_object(
     } else if (new_object.object_type == StorageObjectType::Disk
         || new_object.object_type == StorageObjectType::Snapshot)
         && new_object.config.get("path").is_none()
+        && new_object.config.get("lun").is_none()
     {
         if let Ok(storage_pool) = storage_pools::get(pool, pool_id).await {
             let derived_path = match storage_pool.pool_type {
@@ -250,6 +251,34 @@ async fn resolve_new_object(
             }
         } else {
             new_object.config.clone()
+        }
+    } else if new_object.object_type == StorageObjectType::Disk
+        && new_object.config.get("lun").is_some()
+    {
+        // Block disks: caller supplies {"lun": N}; we enrich with pool portal/iqn
+        // so the node backend has everything it needs without a pool lookup.
+        match storage_pools::get(pool, pool_id).await {
+            Ok(storage_pool) if storage_pool.pool_type == storage_pools::StoragePoolType::Block => {
+                let portal = storage_pool
+                    .config
+                    .get("portal")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                let iqn = storage_pool
+                    .config
+                    .get("iqn")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                let lun = new_object
+                    .config
+                    .get("lun")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0);
+                serde_json::json!({ "portal": portal, "iqn": iqn, "lun": lun })
+            }
+            _ => new_object.config.clone(),
         }
     } else {
         new_object.config.clone()

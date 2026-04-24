@@ -2,6 +2,7 @@ from enum import Enum
 
 
 class StoragePoolType(str, Enum):
+    BLOCK = "block"
     LOCAL = "local"
     NFS = "nfs"
     OVERLAY_BD = "overlay_bd"

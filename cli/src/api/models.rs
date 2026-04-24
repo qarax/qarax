@@ -601,6 +601,13 @@ pub struct CreateDiskResponse {
     pub job_id: Option<Uuid>,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RegisterLunRequest {
+    pub name: String,
+    pub lun: u32,
+    pub size_bytes: i64,
+}
+
 // Sandboxes
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -1,3 +1,4 @@
+pub mod block;
 pub mod local;
 pub mod nfs;
 pub mod overlaybd;
@@ -24,7 +25,7 @@ pub trait StorageBackend: Send + Sync {
     async fn attach(&self, pool_id: &str, config_json: &str) -> anyhow::Result<String>;
 
     /// Reverse of attach.
-    async fn detach(&self, pool_id: &str) -> anyhow::Result<()>;
+    async fn detach(&self, pool_id: &str, config_json: &str) -> anyhow::Result<()>;
 
     /// Present a storage object as a device/path for a specific VM.
     async fn map(&self, vm_id: &str, config: &serde_json::Value) -> anyhow::Result<MappedDisk>;

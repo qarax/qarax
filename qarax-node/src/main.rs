@@ -19,6 +19,7 @@ use qarax_node::rpc::node::vm_service_server::VmServiceServer;
 use qarax_node::services::file_transfer::FileTransferServiceImpl;
 use qarax_node::services::vm::VmServiceImpl;
 use qarax_node::storage::StorageBackendRegistry;
+use qarax_node::storage::block::BlockBackend;
 use qarax_node::storage::local::LocalBackend;
 use qarax_node::storage::nfs::NfsBackend;
 use qarax_node::storage::overlaybd::OverlayBdBackend;
@@ -164,6 +165,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut storage_backends = StorageBackendRegistry::new();
     storage_backends.register(StoragePoolKind::Local, Arc::new(LocalBackend));
     storage_backends.register(StoragePoolKind::Nfs, Arc::new(NfsBackend));
+    storage_backends.register(StoragePoolKind::Block, Arc::new(BlockBackend));
     if let Some(ref obd) = overlaybd_manager {
         storage_backends.register(
             StoragePoolKind::Overlaybd,

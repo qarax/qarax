@@ -55,7 +55,7 @@ impl StorageBackend for NfsBackend {
         }
     }
 
-    async fn detach(&self, pool_id: &str) -> anyhow::Result<()> {
+    async fn detach(&self, pool_id: &str, _config_json: &str) -> anyhow::Result<()> {
         let mount_point = format!("/var/lib/qarax/pools/{}", pool_id);
 
         let output = tokio::process::Command::new("umount")

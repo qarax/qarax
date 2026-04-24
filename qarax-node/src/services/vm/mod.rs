@@ -1090,10 +1090,13 @@ impl VmService for VmServiceImpl {
             Status::unimplemented(format!("{:?} storage backend not configured", kind))
         })?;
 
-        backend.detach(pool_id).await.map_err(|e| {
-            error!("Failed to detach storage pool {}: {}", pool_id, e);
-            Status::internal(format!("Detach failed: {}", e))
-        })?;
+        backend
+            .detach(pool_id, &req.config_json)
+            .await
+            .map_err(|e| {
+                error!("Failed to detach storage pool {}: {}", pool_id, e);
+                Status::internal(format!("Detach failed: {}", e))
+            })?;
 
         Ok(Response::new(()))
     }

@@ -7,7 +7,10 @@ use crate::api::jobs;
 use crate::{
     api::{
         self,
-        models::{CreateDiskRequest, ImportToPoolRequest, NewStorageObject, NewStoragePool},
+        models::{
+            CreateDiskRequest, ImportToPoolRequest, NewStorageObject, NewStoragePool,
+            RegisterLunRequest,
+        },
     },
     client::Client,
 };
@@ -70,15 +73,15 @@ enum StoragePoolCommand {
         /// Pool name
         #[arg(long)]
         name: String,
-        /// Pool type (local, nfs, or overlaybd)
+        /// Pool type (local, nfs, overlaybd, or block)
         #[arg(long, value_name = "TYPE")]
         pool_type: String,
         /// Capacity in bytes
         #[arg(long)]
         capacity: Option<i64>,
         /// Pool config as JSON (e.g. '{"url":"http://registry:5000"}' for overlaybd).
-        /// Use --path or --url instead for a simpler interface.
-        #[arg(long, value_name = "JSON", conflicts_with_all = ["path", "url"])]
+        /// Use --path, --url, or --portal/--iqn instead for a simpler interface.
+        #[arg(long, value_name = "JSON", conflicts_with_all = ["path", "url", "portal", "iqn"])]
         config: Option<String>,
         /// Filesystem path on the host for a local pool (e.g. /var/lib/qarax/images).
         /// Shorthand for --config '{"path":"..."}' with --pool-type local.
@@ -88,6 +91,12 @@ enum StoragePoolCommand {
         /// Shorthand for --config '{"url":"..."}' with --pool-type nfs or overlaybd.
         #[arg(long, conflicts_with = "config")]
         url: Option<String>,
+        /// iSCSI target portal (host:port) for a block pool.
+        #[arg(long, conflicts_with = "config", requires = "iqn")]
+        portal: Option<String>,
+        /// iSCSI target IQN for a block pool.
+        #[arg(long, conflicts_with = "config", requires = "portal")]
+        iqn: Option<String>,
         /// Host to attach this pool to (name or ID). Required for local pools.
         #[arg(long, required_if_eq("pool_type", "local"))]
         host: Option<String>,
@@ -131,6 +140,21 @@ enum StoragePoolCommand {
         /// Reserve blocks upfront with fallocate (default: sparse)
         #[arg(long)]
         preallocate: bool,
+    },
+    /// Register a pre-provisioned LUN on a BLOCK pool as a disk storage object
+    RegisterLun {
+        /// Pool name or ID
+        #[arg(long)]
+        pool: String,
+        /// Name for the resulting disk storage object
+        #[arg(long)]
+        name: String,
+        /// LUN number on the iSCSI target
+        #[arg(long)]
+        lun: u32,
+        /// LUN size (e.g. 1GiB)
+        #[arg(long)]
+        size: String,
     },
     /// Import an OCI image into the pool (convert to OverlayBD)
     Import {
@@ -226,14 +250,19 @@ pub async fn run_pool(
             config,
             path,
             url,
+            portal,
+            iqn,
             host,
         } => {
-            let config = match (config, path, url) {
-                (Some(s), _, _) => serde_json::from_str(&s)
+            let config = match (config, path, url, portal, iqn) {
+                (Some(s), _, _, _, _) => serde_json::from_str(&s)
                     .map_err(|e| anyhow::anyhow!("Invalid JSON for --config: {e}"))?,
-                (_, Some(p), _) => serde_json::json!({ "path": p }),
-                (_, _, Some(u)) => serde_json::json!({ "url": u }),
-                (None, None, None) => serde_json::json!({}),
+                (_, Some(p), _, _, _) => serde_json::json!({ "path": p }),
+                (_, _, Some(u), _, _) => serde_json::json!({ "url": u }),
+                (_, _, _, Some(p), Some(i)) => {
+                    serde_json::json!({ "portal": p, "iqn": i })
+                }
+                _ => serde_json::json!({}),
             };
             let new_pool = NewStoragePool {
                 name,
@@ -348,6 +377,27 @@ pub async fn run_pool(
                 print_output(&resp, output)?;
             } else {
                 println!("Created disk: {}", resp.storage_object_id);
+            }
+        }
+
+        StoragePoolCommand::RegisterLun {
+            pool,
+            name,
+            lun,
+            size,
+        } => {
+            let pool_id = resolve_pool_id(client, &pool).await?;
+            let size_bytes = parse_size(&size)?;
+            let req = RegisterLunRequest {
+                name,
+                lun,
+                size_bytes,
+            };
+            let resp = api::storage::register_lun(client, pool_id, &req).await?;
+            if !matches!(output, OutputFormat::Table) {
+                print_output(&resp, output)?;
+            } else {
+                println!("Registered LUN: {}", resp.storage_object_id);
             }
         }
 

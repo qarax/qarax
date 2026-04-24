@@ -35,6 +35,7 @@ RUN dnf install -y \
     # Storage tools
     lvm2 \
     e2fsprogs \
+    iscsi-initiator-utils \
     # OverlayBD / TCMU RPM extraction
     cpio \
     # Monitoring and debugging

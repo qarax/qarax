@@ -60,7 +60,7 @@ impl StorageBackend for OverlayBdBackend {
         }
     }
 
-    async fn detach(&self, _pool_id: &str) -> anyhow::Result<()> {
+    async fn detach(&self, _pool_id: &str, _config_json: &str) -> anyhow::Result<()> {
         Ok(())
     }
 

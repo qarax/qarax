@@ -148,9 +148,9 @@ async fn root_disk_scheduling_requirements(
 
     let pool = storage_pools::get(env.pool(), object.storage_pool_id).await?;
     let storage_pool_id = match pool.pool_type {
-        storage_pools::StoragePoolType::Local | storage_pools::StoragePoolType::Nfs => {
-            Some(pool.id)
-        }
+        storage_pools::StoragePoolType::Local
+        | storage_pools::StoragePoolType::Nfs
+        | storage_pools::StoragePoolType::Block => Some(pool.id),
         storage_pools::StoragePoolType::OverlayBd => None,
     };
 
@@ -2376,6 +2376,22 @@ async fn build_create_vm_request(env: &App, vm: &Vm) -> Result<CreateVmRequest> 
                     let path = storage_objects::get_path_from_config(&obj.config);
                     resolved_disks.push(disk_to_disk_config(disk, path, None, None, None, None));
                 }
+                storage_pools::StoragePoolType::Block => {
+                    let path = iscsi_by_path(&obj.config).ok_or_else(|| {
+                        crate::errors::Error::UnprocessableEntity(format!(
+                            "Storage object {} has invalid iSCSI config",
+                            obj.id
+                        ))
+                    })?;
+                    resolved_disks.push(disk_to_disk_config(
+                        disk,
+                        Some(path),
+                        None,
+                        None,
+                        None,
+                        None,
+                    ));
+                }
             }
         }
     }
@@ -2718,7 +2734,7 @@ pub async fn attach_disk(
             Some(object_id) => Some(storage_objects::get(env.pool(), object_id).await?),
             None => None,
         };
-        let disk_config = disk_config_for_hotplug(&disk, &obj, &pool, upper_object.as_ref());
+        let disk_config = disk_config_for_hotplug(&disk, &obj, &pool, upper_object.as_ref())?;
         if let Err(e) = NodeClient::new(&host.address, host.port as u16)
             .add_disk_device(vm_id, disk_config)
             .await
@@ -2747,7 +2763,7 @@ fn disk_config_for_hotplug(
     obj: &storage_objects::StorageObject,
     pool: &storage_pools::StoragePool,
     upper_object: Option<&storage_objects::StorageObject>,
-) -> DiskConfig {
+) -> Result<DiskConfig> {
     match pool.pool_type {
         storage_pools::StoragePoolType::OverlayBd => {
             let image_ref = obj
@@ -2763,20 +2779,47 @@ fn disk_config_for_hotplug(
                 .unwrap_or_default()
                 .to_string();
             let (upper_data_path, upper_index_path) = overlaybd_upper_paths(upper_object);
-            disk_to_disk_config(
+            Ok(disk_to_disk_config(
                 disk,
                 None,
                 Some(image_ref),
                 Some(registry_url),
                 upper_data_path,
                 upper_index_path,
-            )
+            ))
         }
         storage_pools::StoragePoolType::Local | storage_pools::StoragePoolType::Nfs => {
             let path = storage_objects::get_path_from_config(&obj.config);
-            disk_to_disk_config(disk, path, None, None, None, None)
+            Ok(disk_to_disk_config(disk, path, None, None, None, None))
+        }
+        storage_pools::StoragePoolType::Block => {
+            let path = iscsi_by_path(&obj.config).ok_or_else(|| {
+                crate::errors::Error::UnprocessableEntity(format!(
+                    "Storage object {} has invalid iSCSI config",
+                    obj.id
+                ))
+            })?;
+            Ok(disk_to_disk_config(
+                disk,
+                Some(path),
+                None,
+                None,
+                None,
+                None,
+            ))
         }
     }
+}
+
+/// Build `/dev/disk/by-path/ip-<portal>-iscsi-<iqn>-lun-<N>` from a BLOCK
+/// storage object's config. Returns `None` if any field is missing.
+fn iscsi_by_path(config: &serde_json::Value) -> Option<String> {
+    let portal = config.get("portal")?.as_str()?;
+    let iqn = config.get("iqn")?.as_str()?;
+    let lun = config.get("lun")?.as_i64()?;
+    Some(format!(
+        "/dev/disk/by-path/ip-{portal}-iscsi-{iqn}-lun-{lun}"
+    ))
 }
 
 fn overlaybd_upper_paths(
@@ -2833,6 +2876,11 @@ fn resolve_disk_resize_target(
         (storage_pools::StoragePoolType::Local | storage_pools::StoragePoolType::Nfs, _) => {
             Err(crate::errors::Error::UnprocessableEntity(
                 "disk resize is only supported for disk and snapshot storage objects".into(),
+            ))
+        }
+        (storage_pools::StoragePoolType::Block, _) => {
+            Err(crate::errors::Error::UnprocessableEntity(
+                "disk resize is not supported for BLOCK storage pools (resize the LUN on the target)".into(),
             ))
         }
     }

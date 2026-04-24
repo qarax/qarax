@@ -125,6 +125,8 @@ impl TransferExecutor for FilesystemTransferExecutor {
 pub fn executor_for_pool(pool: &StoragePool) -> Box<dyn TransferExecutor> {
     match pool.pool_type {
         StoragePoolType::Local | StoragePoolType::Nfs => Box::new(FilesystemTransferExecutor),
-        StoragePoolType::OverlayBd => Box::new(UnsupportedTransferExecutor),
+        StoragePoolType::OverlayBd | StoragePoolType::Block => {
+            Box::new(UnsupportedTransferExecutor)
+        }
     }
 }

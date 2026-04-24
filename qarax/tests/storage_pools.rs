@@ -92,10 +92,12 @@ impl Drop for TestApp {
     fn drop(&mut self) {
         let (tx, rx) = std::sync::mpsc::channel();
         let db_name = self.db_name.clone();
+        let pool = self.pool.clone();
 
         std::thread::spawn(move || {
             let rt = Runtime::new().unwrap();
             rt.block_on(async {
+                pool.close().await;
                 let config = get_configuration().expect("Failed to read configuration");
                 let mut conn = PgConnection::connect_with(&config.database.without_db())
                     .await
@@ -121,6 +123,10 @@ async fn create_test_pool(pool: &PgPool, pool_type: StoragePoolType) -> Uuid {
             "export_path": format!("/exports/{}", Uuid::new_v4()),
         }),
         StoragePoolType::OverlayBd => json!({ "url": "http://registry:5000" }),
+        StoragePoolType::Block => json!({
+            "portal": "127.0.0.1:3260",
+            "iqn": "iqn.2024-01.qarax:test",
+        }),
     };
 
     storage_pools::create(

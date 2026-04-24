@@ -30,6 +30,7 @@ RUN dnf install -y \
     e2fsprogs \
     nfs-utils \
     guestfs-tools \
+    iscsi-initiator-utils \
     && dnf clean all
 
 # Install Cloud Hypervisor (static binary)

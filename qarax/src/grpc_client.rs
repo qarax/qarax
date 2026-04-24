@@ -842,6 +842,7 @@ impl NodeClient {
             StoragePoolType::Local => StoragePoolKind::Local,
             StoragePoolType::Nfs => StoragePoolKind::Nfs,
             StoragePoolType::OverlayBd => StoragePoolKind::Overlaybd,
+            StoragePoolType::Block => StoragePoolKind::Block,
         };
 
         let config_json = pool.config.to_string();
@@ -889,6 +890,7 @@ impl NodeClient {
             StoragePoolType::Local => StoragePoolKind::Local,
             StoragePoolType::Nfs => StoragePoolKind::Nfs,
             StoragePoolType::OverlayBd => StoragePoolKind::Overlaybd,
+            StoragePoolType::Block => StoragePoolKind::Block,
         };
 
         let mut client = self.connect_vm_service().await?;
@@ -897,6 +899,7 @@ impl NodeClient {
             .detach_storage_pool(DetachStoragePoolRequest {
                 pool_id: pool.id.to_string(),
                 pool_kind: pool_kind as i32,
+                config_json: pool.config.to_string(),
             })
             .await
             .map_err(|s| {

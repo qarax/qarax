@@ -1286,6 +1286,43 @@ paths:
           description: No UP host attached to pool
         '500':
           description: Internal server error
+  /storage-pools/{pool_id}/luns:
+    post:
+      tags:
+      - storage-pools
+      summary: Register a pre-existing LUN on an iSCSI (BLOCK) storage pool as a disk object.
+      description: |-
+        BLOCK pools do not support disk creation because LUNs are pre-provisioned
+        on the target. Callers create the LUN out of band (e.g. via `targetcli`)
+        and then register it with qarax so VMs can consume it.
+      operationId: register_lun
+      parameters:
+      - name: pool_id
+        in: path
+        description: Storage pool ID
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterLunRequest'
+        required: true
+      responses:
+        '201':
+          description: LUN registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateDiskResponse'
+        '404':
+          description: Pool not found
+        '422':
+          description: Validation error
+        '500':
+          description: Internal server error
   /storage-pools/{pool_id}/transfers:
     get:
       tags:
@@ -3834,6 +3871,25 @@ components:
           oneOf:
           - type: 'null'
           - $ref: '#/components/schemas/TokenBucket'
+    RegisterLunRequest:
+      type: object
+      required:
+      - name
+      - lun
+      - size_bytes
+      properties:
+        lun:
+          type: integer
+          format: int32
+          description: LUN number exported by the iSCSI target for this disk.
+          minimum: 0
+        name:
+          type: string
+          description: Human-readable name for the resulting storage object.
+        size_bytes:
+          type: integer
+          format: int64
+          description: Logical size of the LUN in bytes. Informational (reported back to clients).
     RestoreRequest:
       type: object
       required:
@@ -4023,6 +4079,7 @@ components:
       - local
       - nfs
       - overlay_bd
+      - block
     TokenBucket:
       type: object
       required:
