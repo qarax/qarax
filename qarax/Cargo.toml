@@ -49,7 +49,7 @@ sha2 = "0.10"
 hex = "0.4"
 tonic = "0.10.2"
 prost = "0.12.3"
-russh = "0.57.0"
+russh = "0.60.1"
 async-stream = "0.3"
 futures = "0.3"
 tokio-stream = { version = "0.1", features = ["sync"] }
