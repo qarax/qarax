@@ -92,12 +92,10 @@ impl Drop for TestApp {
     fn drop(&mut self) {
         let (tx, rx) = std::sync::mpsc::channel();
         let db_name = self.db_name.clone();
-        let pool = self.pool.clone();
 
         std::thread::spawn(move || {
             let rt = Runtime::new().unwrap();
             rt.block_on(async {
-                pool.close().await;
                 let config = get_configuration().expect("Failed to read configuration");
                 let mut conn = PgConnection::connect_with(&config.database.without_db())
                     .await
