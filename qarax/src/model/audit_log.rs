@@ -42,6 +42,7 @@ pub enum AuditResourceType {
     StoragePool,
     StorageObject,
     Network,
+    SecurityGroup,
     BootSource,
     VmTemplate,
     InstanceType,

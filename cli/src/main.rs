@@ -93,6 +93,8 @@ pub enum Commands {
     VmTemplate(commands::vm_template::VmTemplateArgs),
     /// Network operations
     Network(commands::network::NetworkArgs),
+    /// Security group operations
+    SecurityGroup(commands::security_group::SecurityGroupArgs),
     /// Async job operations
     Job(commands::job::JobArgs),
     /// Sandbox operations (ephemeral microVM environments for AI agents)
@@ -127,6 +129,9 @@ async fn main() -> Result<()> {
             commands::storage::run_object(args, &client, cli.output).await
         }
         Commands::Network(args) => commands::network::run(args, &client, cli.output).await,
+        Commands::SecurityGroup(args) => {
+            commands::security_group::run(args, &client, cli.output).await
+        }
         Commands::Transfer(args) => commands::transfer::run(args, &client, cli.output).await,
         Commands::BootSource(args) => commands::boot_source::run(args, &client, cli.output).await,
         Commands::VmTemplate(args) => commands::vm_template::run(args, &client, cli.output).await,

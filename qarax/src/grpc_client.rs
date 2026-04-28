@@ -82,9 +82,9 @@ use node::{
     NumaPlacement, OverlayBdDiskSource, PayloadConfig, PreflightImageRequest,
     PreflightImageResponse, ReceiveMigrationRequest, RemoveDeviceRequest, ResizeDiskRequest,
     ResizeVmRequest, RestoreVmRequest, SendMigrationRequest, SnapshotVmRequest, StoragePoolKind,
-    TransferResponse, UrlDiskSource, VfioDeviceConfig, VmConfig, VmCounters, VmId, VmState,
-    VsockConfig, file_transfer_service_client::FileTransferServiceClient,
-    vm_service_client::VmServiceClient,
+    SyncNetworkIsolationRequest, SyncVmFirewallRequest, TransferResponse, UrlDiskSource,
+    VfioDeviceConfig, VmConfig, VmCounters, VmFirewallInterface, VmId, VmState, VsockConfig,
+    file_transfer_service_client::FileTransferServiceClient, vm_service_client::VmServiceClient,
 };
 
 /// Client for communicating with qarax-node via gRPC
@@ -961,7 +961,7 @@ impl NodeClient {
 
     /// Detach a network (stop DHCP server, teardown NAT, delete bridge) on the node.
     #[instrument(skip(self))]
-    pub async fn detach_network(&self, bridge_name: &str) -> Result<()> {
+    pub async fn detach_network(&self, bridge_name: &str, subnet: &str) -> Result<()> {
         debug!(
             "Detaching network bridge {} on node {}",
             bridge_name, self.address
@@ -972,6 +972,7 @@ impl NodeClient {
         client
             .detach_network(DetachNetworkRequest {
                 bridge_name: bridge_name.to_string(),
+                subnet: subnet.to_string(),
             })
             .await
             .map_err(|s| {
@@ -983,6 +984,52 @@ impl NodeClient {
             })?;
 
         debug!("Network bridge {} detached", bridge_name);
+        Ok(())
+    }
+
+    #[instrument(skip(self))]
+    pub async fn sync_network_isolation(
+        &self,
+        bridge_name: &str,
+        blocked_subnets: &[String],
+    ) -> Result<()> {
+        let mut client = self.connect_vm_service().await?;
+        client
+            .sync_network_isolation(SyncNetworkIsolationRequest {
+                bridge_name: bridge_name.to_string(),
+                blocked_subnets: blocked_subnets.to_vec(),
+            })
+            .await
+            .map_err(|s| {
+                anyhow::anyhow!(
+                    "gRPC sync_network_isolation failed: code={:?} message={}",
+                    s.code(),
+                    s.message()
+                )
+            })?;
+        Ok(())
+    }
+
+    #[instrument(skip(self, interfaces))]
+    pub async fn sync_vm_firewall(
+        &self,
+        vm_id: Uuid,
+        interfaces: &[VmFirewallInterface],
+    ) -> Result<()> {
+        let mut client = self.connect_vm_service().await?;
+        client
+            .sync_vm_firewall(SyncVmFirewallRequest {
+                vm_id: vm_id.to_string(),
+                interfaces: interfaces.to_vec(),
+            })
+            .await
+            .map_err(|s| {
+                anyhow::anyhow!(
+                    "gRPC sync_vm_firewall failed: code={:?} message={}",
+                    s.code(),
+                    s.message()
+                )
+            })?;
         Ok(())
     }
 

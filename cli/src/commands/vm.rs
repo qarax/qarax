@@ -19,7 +19,7 @@ use crate::{
 use super::{
     OutputFormat, build_accelerator_config, format_bytes, print_output, resolve_boot_source_id,
     resolve_host_id, resolve_instance_type_id, resolve_network_id, resolve_object_id,
-    resolve_pool_id, resolve_vm_id, resolve_vm_template_id,
+    resolve_pool_id, resolve_security_group_id, resolve_vm_id, resolve_vm_template_id,
 };
 
 #[derive(Args)]
@@ -94,6 +94,9 @@ enum VmCommand {
         /// Static IP address to assign to the VM (requires --network)
         #[arg(long, requires = "network")]
         ip: Option<String>,
+        /// Security group name or ID to bind to the VM. Repeat to attach multiple groups.
+        #[arg(long = "security-group")]
+        security_groups: Vec<String>,
         /// Enable TCP Segmentation Offload for the primary NIC
         #[arg(long, requires = "network")]
         offload_tso: Option<bool>,
@@ -262,6 +265,27 @@ enum VmCommand {
         /// NIC device ID to remove (e.g. "net0")
         #[arg(long)]
         device_id: String,
+    },
+    /// List security groups bound to a VM
+    ListSecurityGroups {
+        /// VM name or ID
+        vm: String,
+    },
+    /// Bind a security group to a VM
+    AttachSecurityGroup {
+        /// VM name or ID
+        vm: String,
+        /// Security group name or ID
+        #[arg(long)]
+        security_group: String,
+    },
+    /// Remove a security group from a VM
+    DetachSecurityGroup {
+        /// VM name or ID
+        vm: String,
+        /// Security group name or ID
+        #[arg(long)]
+        security_group: String,
     },
     /// Resize a disk attached to a stopped VM
     ResizeDisk {
@@ -458,6 +482,7 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
             boot_mode,
             network,
             ip,
+            security_groups,
             offload_tso,
             offload_ufo,
             offload_csum,
@@ -551,6 +576,15 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
                 Some(ref p) => Some(resolve_pool_id(client, p).await?),
                 None => None,
             };
+            let security_group_ids = if security_groups.is_empty() {
+                None
+            } else {
+                let mut ids = Vec::with_capacity(security_groups.len());
+                for group in &security_groups {
+                    ids.push(resolve_security_group_id(client, group).await?);
+                }
+                Some(ids)
+            };
 
             let new_vm = NewVm {
                 name,
@@ -569,6 +603,7 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
                 image_ref: image_ref.clone(),
                 network_id,
                 networks,
+                security_group_ids,
                 cloud_init_user_data: ci_user_data,
                 cloud_init_meta_data: ci_meta_data,
                 cloud_init_network_config: ci_network_config,
@@ -780,6 +815,39 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
             let vm_id = resolve_vm_id(client, &vm).await?;
             api::vms::remove_nic(client, vm_id, &device_id).await?;
             println!("Removed NIC {device_id} from VM {vm}");
+        }
+
+        VmCommand::ListSecurityGroups { vm } => {
+            let vm_id = resolve_vm_id(client, &vm).await?;
+            let groups = api::vms::list_security_groups(client, vm_id).await?;
+            if !matches!(output, OutputFormat::Table) {
+                print_output(&groups, output)?;
+            } else if groups.is_empty() {
+                println!("No security groups bound to VM {vm}");
+            } else {
+                for group in groups {
+                    println!(
+                        "{}\t{}\t{}",
+                        group.id,
+                        group.name,
+                        group.description.unwrap_or_else(|| "-".to_string())
+                    );
+                }
+            }
+        }
+
+        VmCommand::AttachSecurityGroup { vm, security_group } => {
+            let vm_id = resolve_vm_id(client, &vm).await?;
+            let security_group_id = resolve_security_group_id(client, &security_group).await?;
+            api::security_groups::attach_to_vm(client, vm_id, security_group_id).await?;
+            println!("Attached security group {security_group} to VM {vm}");
+        }
+
+        VmCommand::DetachSecurityGroup { vm, security_group } => {
+            let vm_id = resolve_vm_id(client, &vm).await?;
+            let security_group_id = resolve_security_group_id(client, &security_group).await?;
+            api::security_groups::detach_from_vm(client, vm_id, security_group_id).await?;
+            println!("Detached security group {security_group} from VM {vm}");
         }
 
         VmCommand::ResizeDisk { vm, disk, size } => {

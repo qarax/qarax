@@ -682,6 +682,7 @@ mod tests {
             cloud_init_network_config: None,
             network_id: None,
             networks: None,
+            security_group_ids: None,
             accelerator_config: None,
             numa_config: None,
             persistent_upper_pool_id: None,

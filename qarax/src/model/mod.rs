@@ -10,6 +10,7 @@ pub mod lifecycle_hooks;
 pub mod network_interfaces;
 pub mod networks;
 pub mod sandboxes;
+pub mod security_groups;
 pub mod snapshots;
 pub mod storage_objects;
 pub mod storage_pools;

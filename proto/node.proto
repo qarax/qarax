@@ -480,6 +480,8 @@ service VmService {
   // Network lifecycle (bridge + DHCP + NAT setup/teardown)
   rpc AttachNetwork(AttachNetworkRequest) returns (AttachNetworkResponse) {}
   rpc DetachNetwork(DetachNetworkRequest) returns (DetachNetworkResponse) {}
+  rpc SyncNetworkIsolation(SyncNetworkIsolationRequest) returns (google.protobuf.Empty) {}
+  rpc SyncVmFirewall(SyncVmFirewallRequest) returns (google.protobuf.Empty) {}
 }
 
 // ============================================================================
@@ -665,9 +667,46 @@ message AttachNetworkResponse {}
 
 message DetachNetworkRequest {
     string bridge_name = 1;
+    string subnet = 2;
 }
 
 message DetachNetworkResponse {}
+
+enum FirewallDirection {
+  FIREWALL_DIRECTION_INGRESS = 0;
+  FIREWALL_DIRECTION_EGRESS = 1;
+}
+
+enum FirewallProtocol {
+  FIREWALL_PROTOCOL_ANY = 0;
+  FIREWALL_PROTOCOL_TCP = 1;
+  FIREWALL_PROTOCOL_UDP = 2;
+  FIREWALL_PROTOCOL_ICMP = 3;
+}
+
+message VmFirewallRule {
+  FirewallDirection direction = 1;
+  FirewallProtocol protocol = 2;
+  string cidr = 3;
+  optional int32 port_start = 4;
+  optional int32 port_end = 5;
+}
+
+message VmFirewallInterface {
+  string bridge_name = 1;
+  string ip = 2;
+  repeated VmFirewallRule rules = 3;
+}
+
+message SyncNetworkIsolationRequest {
+  string bridge_name = 1;
+  repeated string blocked_subnets = 2;
+}
+
+message SyncVmFirewallRequest {
+  string vm_id = 1;
+  repeated VmFirewallInterface interfaces = 2;
+}
 
 
 message PreflightImageResponse {

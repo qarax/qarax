@@ -7,6 +7,7 @@ pub mod jobs;
 pub mod models;
 pub mod networks;
 pub mod sandboxes;
+pub mod security_groups;
 pub mod storage;
 pub mod transfers;
 pub mod vm_templates;

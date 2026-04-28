@@ -496,6 +496,13 @@ impl VmmManager for FirecrackerManager {
             Self::delete_tap_device(tap).await;
         }
 
+        if let Err(e) = crate::networking::iptables::teardown_vm_firewall(vm_id).await {
+            warn!(
+                "FC: Failed to tear down firewall state for VM {}: {}",
+                vm_id, e
+            );
+        }
+
         info!("FC: VM {} deleted", vm_id);
         Ok(())
     }

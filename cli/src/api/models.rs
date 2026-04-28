@@ -70,6 +70,8 @@ pub struct NewVm {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub networks: Option<Vec<NewVmNetwork>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub security_group_ids: Option<Vec<Uuid>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cloud_init_user_data: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cloud_init_meta_data: Option<String>,
@@ -407,6 +409,7 @@ pub struct Network {
     pub subnet: String,
     pub gateway: Option<String>,
     pub dns: Option<String>,
+    pub vpc_name: Option<String>,
     #[serde(rename = "type", alias = "network_type")]
     pub network_type: Option<String>,
     pub status: String,
@@ -420,6 +423,8 @@ pub struct NewNetwork {
     pub gateway: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dns: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vpc_name: Option<String>,
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub network_type: Option<String>,
 }
@@ -439,6 +444,51 @@ pub struct IpAllocation {
     pub ip_address: String,
     pub vm_id: Option<Uuid>,
     pub allocated_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SecurityGroup {
+    pub id: Uuid,
+    pub name: String,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct NewSecurityGroup {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SecurityGroupRule {
+    pub id: Uuid,
+    pub security_group_id: Uuid,
+    pub direction: String,
+    pub protocol: String,
+    pub cidr: Option<String>,
+    pub port_start: Option<i32>,
+    pub port_end: Option<i32>,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct NewSecurityGroupRule {
+    pub direction: String,
+    pub protocol: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cidr: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub port_start: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub port_end: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AttachSecurityGroupRequest {
+    pub security_group_id: Uuid,
 }
 
 // Jobs

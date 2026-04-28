@@ -469,6 +469,14 @@ async fn count_nics_for_vm(pool: &PgPool, vm_id: &str) -> i64 {
         .unwrap()
 }
 
+async fn count_security_groups_for_vm(pool: &PgPool, vm_id: &str) -> i64 {
+    sqlx::query_scalar("SELECT COUNT(*) FROM vm_security_groups WHERE vm_id = $1")
+        .bind(Uuid::parse_str(vm_id).unwrap())
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
 async fn set_vm_status(pool: &PgPool, vm_id: &str, status: &str) {
     sqlx::query("UPDATE vms SET status = $1::vm_status WHERE id = $2")
         .bind(status)
@@ -520,6 +528,91 @@ async fn test_attach_disk_auto_logical_name() {
     let disk: serde_json::Value = res.json().await.unwrap();
     assert_eq!(disk["logical_name"], "disk0");
     assert_eq!(disk["device_path"], "/dev/disk0");
+}
+
+#[tokio::test]
+async fn test_create_network_with_vpc_name() {
+    let app = spawn_app().await;
+    let client = reqwest::Client::new();
+
+    let res = client
+        .post(format!("{}/networks", app.address))
+        .json(&json!({
+            "name": "vpc-aware-net",
+            "subnet": "10.77.0.0/24",
+            "gateway": "10.77.0.1",
+            "vpc_name": "dev-vpc"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let network_id = res.text().await.unwrap();
+
+    let res = client
+        .get(format!("{}/networks/{}", app.address, network_id))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let network: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(network["vpc_name"], "dev-vpc");
+}
+
+#[tokio::test]
+async fn test_vm_security_group_bindings() {
+    let app = spawn_app().await;
+    let client = reqwest::Client::new();
+    ensure_host_up(&client, &app.address).await;
+
+    let res = client
+        .post(format!("{}/security-groups", app.address))
+        .json(&json!({
+            "name": "vm-bindings-sg",
+            "description": "test group"
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let security_group_id = res.text().await.unwrap();
+
+    let vm_id = create_vm(
+        &client,
+        &app.address,
+        json!({
+            "name": "vm-with-sg",
+            "hypervisor": "cloud_hv",
+            "boot_vcpus": 1,
+            "max_vcpus": 1,
+            "memory_size": 268435456,
+            "security_group_ids": [security_group_id],
+            "config": {}
+        }),
+    )
+    .await;
+
+    assert_eq!(count_security_groups_for_vm(&app.pool, &vm_id).await, 1);
+
+    let res = client
+        .get(format!("{}/vms/{}/security-groups", app.address, vm_id))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let groups: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(groups.as_array().unwrap().len(), 1);
+
+    let res = client
+        .delete(format!(
+            "{}/vms/{}/security-groups/{}",
+            app.address, vm_id, security_group_id
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    assert_eq!(count_security_groups_for_vm(&app.pool, &vm_id).await, 0);
 }
 
 #[tokio::test]

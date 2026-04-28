@@ -37,6 +37,9 @@ enum NetworkCommand {
         /// DNS server IP address
         #[arg(long)]
         dns: Option<String>,
+        /// Optional VPC name. Networks with the same VPC name on one host can route between subnets.
+        #[arg(long)]
+        vpc: Option<String>,
         /// Network type (bridge or vlan)
         #[arg(long, value_name = "TYPE", default_value = "bridge")]
         network_type: String,
@@ -89,6 +92,8 @@ struct NetworkRow {
     subnet: String,
     #[tabled(rename = "Gateway")]
     gateway: String,
+    #[tabled(rename = "VPC")]
+    vpc_name: String,
     #[tabled(rename = "Type")]
     network_type: String,
     #[tabled(rename = "Status")]
@@ -119,6 +124,7 @@ pub async fn run(args: NetworkArgs, client: &Client, output: OutputFormat) -> an
                         name: n.name.clone(),
                         subnet: n.subnet.clone(),
                         gateway: n.gateway.clone().unwrap_or_else(|| "-".to_string()),
+                        vpc_name: n.vpc_name.clone().unwrap_or_else(|| "-".to_string()),
                         network_type: n.network_type.clone().unwrap_or_else(|| "-".to_string()),
                         status: n.status.clone(),
                     })
@@ -142,6 +148,10 @@ pub async fn run(args: NetworkArgs, client: &Client, output: OutputFormat) -> an
                 );
                 println!("DNS:     {}", net.dns.unwrap_or_else(|| "-".to_string()));
                 println!(
+                    "VPC:     {}",
+                    net.vpc_name.unwrap_or_else(|| "-".to_string())
+                );
+                println!(
                     "Type:    {}",
                     net.network_type.unwrap_or_else(|| "-".to_string())
                 );
@@ -154,6 +164,7 @@ pub async fn run(args: NetworkArgs, client: &Client, output: OutputFormat) -> an
             subnet,
             gateway,
             dns,
+            vpc,
             network_type,
         } => {
             let new_net = NewNetwork {
@@ -161,6 +172,7 @@ pub async fn run(args: NetworkArgs, client: &Client, output: OutputFormat) -> an
                 subnet,
                 gateway,
                 dns,
+                vpc_name: vpc,
                 network_type: Some(network_type),
             };
             let id = api::networks::create(client, &new_net).await?;

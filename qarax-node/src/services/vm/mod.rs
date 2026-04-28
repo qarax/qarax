@@ -16,8 +16,9 @@ use crate::rpc::node::{
     GpuInfo, HypervisorType, ImportOverlayBdRequest, ImportOverlayBdResponse, NodeInfo, NumaNode,
     PreflightCheck, PreflightImageRequest, PreflightImageResponse, ReceiveMigrationRequest,
     ReceiveMigrationResponse, RemoveDeviceRequest, ResizeDiskRequest, ResizeVmRequest,
-    RestoreVmRequest, SendMigrationRequest, SnapshotVmRequest, StoragePoolKind, VmConfig,
-    VmCounters, VmId, VmList, VmState, vm_service_server::VmService,
+    RestoreVmRequest, SendMigrationRequest, SnapshotVmRequest, StoragePoolKind,
+    SyncNetworkIsolationRequest, SyncVmFirewallRequest, VmConfig, VmCounters, VmId, VmList,
+    VmState, vm_service_server::VmService,
 };
 use crate::vmm::{VmmError, VmmManager};
 use common::cpu_list::expand_cpu_list;
@@ -1037,7 +1038,7 @@ impl VmService for VmServiceImpl {
 
         // NAT is only needed in isolated mode — bridged mode shares the upstream network
         if !bridged {
-            crate::networking::nftables::setup_nat(&req.bridge_name, &req.subnet)
+            crate::networking::iptables::setup_nat(&req.bridge_name, &req.subnet)
                 .await
                 .map_err(|e| Status::internal(format!("Failed to setup NAT: {}", e)))?;
         }
@@ -1061,6 +1062,22 @@ impl VmService for VmServiceImpl {
             warn!("Failed to stop DHCP server for {}: {}", req.bridge_name, e);
         }
 
+        if let Err(e) =
+            crate::networking::iptables::teardown_network_isolation(&req.bridge_name).await
+        {
+            warn!(
+                "Failed to tear down network isolation rules for {}: {}",
+                req.bridge_name, e
+            );
+        }
+
+        if !req.subnet.is_empty()
+            && let Err(e) =
+                crate::networking::iptables::teardown_nat(&req.bridge_name, &req.subnet).await
+        {
+            warn!("Failed to tear down NAT for {}: {}", req.bridge_name, e);
+        }
+
         if crate::networking::bridge::is_bridged_interface(&req.bridge_name).await {
             // Bridged mode: move IP back to parent NIC and delete bridge
             if let Err(e) = crate::networking::bridge::unbridge_interface(&req.bridge_name).await {
@@ -1075,6 +1092,28 @@ impl VmService for VmServiceImpl {
 
         info!("Network bridge {} detached", req.bridge_name);
         Ok(Response::new(DetachNetworkResponse {}))
+    }
+
+    async fn sync_network_isolation(
+        &self,
+        request: Request<SyncNetworkIsolationRequest>,
+    ) -> Result<Response<()>, Status> {
+        let req = request.into_inner();
+        crate::networking::iptables::sync_network_isolation(&req.bridge_name, &req.blocked_subnets)
+            .await
+            .map_err(|e| Status::internal(format!("Failed to sync network isolation: {e}")))?;
+        Ok(Response::new(()))
+    }
+
+    async fn sync_vm_firewall(
+        &self,
+        request: Request<SyncVmFirewallRequest>,
+    ) -> Result<Response<()>, Status> {
+        let req = request.into_inner();
+        crate::networking::iptables::sync_vm_firewall(&req.vm_id, &req.interfaces)
+            .await
+            .map_err(|e| Status::internal(format!("Failed to sync VM firewall: {e}")))?;
+        Ok(Response::new(()))
     }
 
     async fn detach_storage_pool(

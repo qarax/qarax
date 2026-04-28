@@ -1,6 +1,6 @@
 pub mod bridge;
 pub mod dhcp;
-pub mod nftables;
+pub mod iptables;
 
 /// Validate a network interface name.
 ///
@@ -39,5 +39,12 @@ pub(super) fn validate_ipv4_cidr(cidr: &str) -> anyhow::Result<()> {
     if prefix > 32 {
         anyhow::bail!("Invalid CIDR {cidr:?}: prefix length must be 0–32");
     }
+    Ok(())
+}
+
+pub(super) fn validate_ipv4_address(ip: &str) -> anyhow::Result<()> {
+    let _: std::net::Ipv4Addr = ip
+        .parse()
+        .map_err(|_| anyhow::anyhow!("Invalid IPv4 address {ip:?}"))?;
     Ok(())
 }

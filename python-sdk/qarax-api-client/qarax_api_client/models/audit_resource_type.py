@@ -8,6 +8,7 @@ class AuditResourceType(str, Enum):
     LIFECYCLE_HOOK = "lifecycle_hook"
     NETWORK = "network"
     SANDBOX = "sandbox"
+    SECURITY_GROUP = "security_group"
     STORAGE_OBJECT = "storage_object"
     STORAGE_POOL = "storage_pool"
     TRANSFER = "transfer"

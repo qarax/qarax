@@ -966,6 +966,179 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SchedulingSettings'
+  /security-groups:
+    get:
+      tags:
+      - security-groups
+      operationId: list
+      parameters:
+      - name: name
+        in: query
+        description: Optional name filter for list queries
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      responses:
+        '200':
+          description: List security groups
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SecurityGroup'
+        '500':
+          description: Internal server error
+    post:
+      tags:
+      - security-groups
+      operationId: create
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewSecurityGroup'
+        required: true
+      responses:
+        '201':
+          description: Security group created successfully
+          content:
+            text/plain:
+              schema:
+                type: string
+        '422':
+          description: Invalid input
+        '500':
+          description: Internal server error
+  /security-groups/{security_group_id}:
+    get:
+      tags:
+      - security-groups
+      operationId: get
+      parameters:
+      - name: security_group_id
+        in: path
+        description: Security group unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Security group found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SecurityGroup'
+        '404':
+          description: Security group not found
+        '500':
+          description: Internal server error
+    delete:
+      tags:
+      - security-groups
+      operationId: delete
+      parameters:
+      - name: security_group_id
+        in: path
+        description: Security group unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '204':
+          description: Security group deleted successfully
+        '404':
+          description: Security group not found
+        '500':
+          description: Internal server error
+  /security-groups/{security_group_id}/rules:
+    get:
+      tags:
+      - security-groups
+      operationId: list_rules
+      parameters:
+      - name: security_group_id
+        in: path
+        description: Security group unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: List security-group rules
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SecurityGroupRule'
+        '404':
+          description: Security group not found
+        '500':
+          description: Internal server error
+    post:
+      tags:
+      - security-groups
+      operationId: create_rule
+      parameters:
+      - name: security_group_id
+        in: path
+        description: Security group unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewSecurityGroupRule'
+        required: true
+      responses:
+        '201':
+          description: Security-group rule created successfully
+          content:
+            text/plain:
+              schema:
+                type: string
+        '404':
+          description: Security group not found
+        '422':
+          description: Invalid input
+        '500':
+          description: Internal server error
+  /security-groups/{security_group_id}/rules/{rule_id}:
+    delete:
+      tags:
+      - security-groups
+      operationId: delete_rule
+      parameters:
+      - name: security_group_id
+        in: path
+        description: Security group unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: rule_id
+        in: path
+        description: Security-group rule unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '204':
+          description: Security-group rule deleted successfully
+        '404':
+          description: Security group or rule not found
+        '500':
+          description: Internal server error
   /storage-objects:
     get:
       tags:
@@ -2081,6 +2254,84 @@ paths:
           description: VM not found
         '500':
           description: Internal server error
+  /vms/{vm_id}/security-groups:
+    get:
+      tags:
+      - vms
+      operationId: list_security_groups
+      parameters:
+      - name: vm_id
+        in: path
+        description: VM unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: List security groups bound to the VM
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SecurityGroup'
+        '404':
+          description: VM not found
+        '500':
+          description: Internal server error
+    post:
+      tags:
+      - vms
+      operationId: attach_security_group
+      parameters:
+      - name: vm_id
+        in: path
+        description: VM unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AttachSecurityGroupRequest'
+        required: true
+      responses:
+        '204':
+          description: Security group bound to VM
+        '404':
+          description: VM or security group not found
+        '500':
+          description: Internal server error
+  /vms/{vm_id}/security-groups/{security_group_id}:
+    delete:
+      tags:
+      - vms
+      operationId: detach_security_group
+      parameters:
+      - name: vm_id
+        in: path
+        description: VM unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: security_group_id
+        in: path
+        description: Security group unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '204':
+          description: Security group removed from VM
+        '404':
+          description: VM or security group not found
+        '500':
+          description: Internal server error
   /vms/{vm_id}/snapshots:
     get:
       tags:
@@ -2292,6 +2543,14 @@ components:
         host_id:
           type: string
           format: uuid
+    AttachSecurityGroupRequest:
+      type: object
+      required:
+      - security_group_id
+      properties:
+        security_group_id:
+          type: string
+          format: uuid
     AuditAction:
       type: string
       enum:
@@ -2352,6 +2611,7 @@ components:
       - storage_pool
       - storage_object
       - network
+      - security_group
       - boot_source
       - vm_template
       - instance_type
@@ -3165,6 +3425,10 @@ components:
           type:
           - string
           - 'null'
+        vpc_name:
+          type:
+          - string
+          - 'null'
     NetworkInterface:
       type: object
       required:
@@ -3403,6 +3667,10 @@ components:
           type:
           - string
           - 'null'
+        vpc_name:
+          type:
+          - string
+          - 'null'
     NewSandbox:
       type: object
       required:
@@ -3429,6 +3697,45 @@ components:
         vm_template_id:
           type: string
           format: uuid
+    NewSecurityGroup:
+      type: object
+      required:
+      - name
+      properties:
+        description:
+          type:
+          - string
+          - 'null'
+        name:
+          type: string
+    NewSecurityGroupRule:
+      type: object
+      required:
+      - direction
+      - protocol
+      properties:
+        cidr:
+          type:
+          - string
+          - 'null'
+        description:
+          type:
+          - string
+          - 'null'
+        direction:
+          $ref: '#/components/schemas/SecurityGroupDirection'
+        port_end:
+          type:
+          - integer
+          - 'null'
+          format: int32
+        port_start:
+          type:
+          - integer
+          - 'null'
+          format: int32
+        protocol:
+          $ref: '#/components/schemas/SecurityGroupProtocol'
     NewStorageObject:
       type: object
       required:
@@ -3633,6 +3940,15 @@ components:
           - string
           - 'null'
           format: uuid
+        security_group_ids:
+          type:
+          - array
+          - 'null'
+          items:
+            type: string
+          description: |-
+            Security groups to bind to the VM. Rules apply to managed routed traffic
+            on every managed NIC attached to the VM.
         tags:
           type:
           - array
@@ -3967,6 +4283,69 @@ components:
         memory_oversubscription_ratio:
           type: number
           format: double
+    SecurityGroup:
+      type: object
+      required:
+      - id
+      - name
+      properties:
+        description:
+          type:
+          - string
+          - 'null'
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+    SecurityGroupDirection:
+      type: string
+      enum:
+      - ingress
+      - egress
+    SecurityGroupProtocol:
+      type: string
+      enum:
+      - any
+      - tcp
+      - udp
+      - icmp
+    SecurityGroupRule:
+      type: object
+      required:
+      - id
+      - security_group_id
+      - direction
+      - protocol
+      properties:
+        cidr:
+          type:
+          - string
+          - 'null'
+        description:
+          type:
+          - string
+          - 'null'
+        direction:
+          $ref: '#/components/schemas/SecurityGroupDirection'
+        id:
+          type: string
+          format: uuid
+        port_end:
+          type:
+          - integer
+          - 'null'
+          format: int32
+        port_start:
+          type:
+          - integer
+          - 'null'
+          format: int32
+        protocol:
+          $ref: '#/components/schemas/SecurityGroupProtocol'
+        security_group_id:
+          type: string
+          format: uuid
     Snapshot:
       type: object
       required:
@@ -4665,6 +5044,8 @@ tags:
   description: Async job management endpoints
 - name: networks
   description: Network management endpoints
+- name: security-groups
+  description: Security group management endpoints
 - name: hooks
   description: Lifecycle hook management endpoints
 - name: sandboxes

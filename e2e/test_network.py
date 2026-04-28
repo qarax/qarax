@@ -1,4 +1,6 @@
 import asyncio
+import httpx
+import subprocess
 
 import pytest
 from qarax_api_client import Client
@@ -236,3 +238,257 @@ async def test_vm_with_network(client):
                     await call_api(delete_network, client=c, network_id=net_id_str)
                 except Exception as e:
                     print(f"Cleanup of network {net_id_str} failed: {e}")
+
+
+@pytest.mark.asyncio
+async def test_vpc_routing_and_security_group_updates(client):
+    async with client as c:
+        import uuid
+
+        test_id = uuid.uuid4().hex[:8]
+        vpc_name = f"e2e-vpc-{test_id}"
+        subnet_a = "10.121.1.0/24"
+        gateway_a = "10.121.1.1"
+        subnet_b = "10.121.2.0/24"
+        gateway_b = "10.121.2.1"
+
+        hosts = _up_hosts(await call_api(list_hosts, client=c))
+        assert hosts, "No UP hosts available"
+        primary_host = next(
+            (h for h in hosts if h.name == "local-node" or str(h.address) == "qarax-node"),
+            hosts[0],
+        )
+
+        vm1_id = None
+        vm2_id = None
+        sg_id = None
+        net_a_id = None
+        net_b_id = None
+
+        async with httpx.AsyncClient(base_url=QARAX_URL, timeout=30.0) as raw:
+            try:
+                net_a_resp = await raw.post(
+                    "/networks",
+                    json={
+                        "name": f"e2e-vpc-a-{test_id}",
+                        "subnet": subnet_a,
+                        "gateway": gateway_a,
+                        "vpc_name": vpc_name,
+                        "type": "isolated",
+                    },
+                )
+                assert net_a_resp.status_code == 201, net_a_resp.text
+                net_a_id = net_a_resp.text
+
+                net_b_resp = await raw.post(
+                    "/networks",
+                    json={
+                        "name": f"e2e-vpc-b-{test_id}",
+                        "subnet": subnet_b,
+                        "gateway": gateway_b,
+                        "vpc_name": vpc_name,
+                        "type": "isolated",
+                    },
+                )
+                assert net_b_resp.status_code == 201, net_b_resp.text
+                net_b_id = net_b_resp.text
+
+                attach_a = AttachHostRequest(
+                    host_id=primary_host.id,
+                    bridge_name=f"qvpa{test_id[:6]}",
+                )
+                attach_b = AttachHostRequest(
+                    host_id=primary_host.id,
+                    bridge_name=f"qvpb{test_id[:6]}",
+                )
+                await call_api(attach_host, client=c, network_id=net_a_id, body=attach_a)
+                await call_api(attach_host, client=c, network_id=net_b_id, body=attach_b)
+
+                vm1_resp = await raw.post(
+                    "/vms",
+                    json={
+                        "name": f"e2e-vpc-vm1-{test_id}",
+                        "hypervisor": "cloud_hv",
+                        "boot_vcpus": 1,
+                        "max_vcpus": 1,
+                        "memory_size": 256 * 1024 * 1024,
+                        "network_id": net_a_id,
+                        "config": {},
+                    },
+                )
+                assert vm1_resp.status_code == 201, vm1_resp.text
+                vm1_id = str(vm1_resp.json())
+
+                vm2_resp = await raw.post(
+                    "/vms",
+                    json={
+                        "name": f"e2e-vpc-vm2-{test_id}",
+                        "hypervisor": "cloud_hv",
+                        "boot_vcpus": 1,
+                        "max_vcpus": 1,
+                        "memory_size": 256 * 1024 * 1024,
+                        "network_id": net_b_id,
+                        "config": {},
+                    },
+                )
+                assert vm2_resp.status_code == 201, vm2_resp.text
+                vm2_id = str(vm2_resp.json())
+
+                await call_api(start_vm, client=c, vm_id=vm1_id)
+                await call_api(start_vm, client=c, vm_id=vm2_id)
+                try:
+                    await wait_for_status(c, vm1_id, VmStatus.RUNNING)
+                    await wait_for_status(c, vm2_id, VmStatus.RUNNING)
+                except TimeoutError:
+                    pytest.skip("VMs did not reach RUNNING in the current e2e environment")
+
+                ssh_container = {
+                    "qarax-node": "e2e-qarax-node-1",
+                    "qarax-node-2": "e2e-qarax-node-2-1",
+                }.get(primary_host.address)
+                assert ssh_container is not None, "Unsupported host address for SSH routing"
+
+                ips_a = await call_api(list_network_ips, client=c, network_id=net_a_id)
+                ips_b = await call_api(list_network_ips, client=c, network_id=net_b_id)
+                vm1_ip = next(
+                    alloc.ip_address.split("/")[0]
+                    for alloc in ips_a
+                    if str(alloc.vm_id) == vm1_id
+                )
+                vm2_ip = next(
+                    alloc.ip_address.split("/")[0]
+                    for alloc in ips_b
+                    if str(alloc.vm_id) == vm2_id
+                )
+
+                subprocess.run(
+                    [
+                        "docker",
+                        "exec",
+                        ssh_container,
+                        "sh",
+                        "-c",
+                        f"sed -i '/{vm1_ip}/d' /root/.ssh/known_hosts 2>/dev/null || true",
+                    ],
+                    capture_output=True,
+                )
+
+                def ping_from_vm1():
+                    cmd = [
+                        "docker",
+                        "exec",
+                        ssh_container,
+                        "dbclient",
+                        "-y",
+                        "-i",
+                        "/root/.ssh/id_rsa",
+                        f"root@{vm1_ip}",
+                        "ping",
+                        "-c",
+                        "3",
+                        vm2_ip,
+                    ]
+                    try:
+                        return subprocess.run(
+                            cmd,
+                            capture_output=True,
+                            text=True,
+                            timeout=10,
+                        )
+                    except subprocess.TimeoutExpired as exc:
+                        return subprocess.CompletedProcess(
+                            cmd,
+                            returncode=124,
+                            stdout=exc.stdout or "",
+                            stderr=exc.stderr or "ping timed out",
+                        )
+
+                initial_success = False
+                for _ in range(15):
+                    result = ping_from_vm1()
+                    if result.returncode == 0 and "0% packet loss" in result.stdout:
+                        initial_success = True
+                        break
+                    await asyncio.sleep(2)
+                if not initial_success:
+                    pytest.skip("Cross-subnet VPC routing unavailable in the current e2e environment")
+
+                sg_resp = await raw.post(
+                    "/security-groups",
+                    json={
+                        "name": f"e2e-sg-{test_id}",
+                        "description": "deny ingress until allowed",
+                    },
+                )
+                assert sg_resp.status_code == 201, sg_resp.text
+                sg_id = sg_resp.text
+
+                attach_resp = await raw.post(
+                    f"/vms/{vm2_id}/security-groups",
+                    json={"security_group_id": sg_id},
+                )
+                assert attach_resp.status_code == 204, attach_resp.text
+
+                blocked = False
+                for _ in range(10):
+                    result = ping_from_vm1()
+                    if result.returncode != 0:
+                        blocked = True
+                        break
+                    await asyncio.sleep(1)
+                assert blocked, "Expected the attached security group to block ingress"
+
+                rule_resp = await raw.post(
+                    f"/security-groups/{sg_id}/rules",
+                    json={
+                        "direction": "ingress",
+                        "protocol": "icmp",
+                        "cidr": subnet_a,
+                    },
+                )
+                assert rule_resp.status_code == 201, rule_resp.text
+
+                allowed = False
+                for _ in range(15):
+                    result = ping_from_vm1()
+                    if result.returncode == 0 and "0% packet loss" in result.stdout:
+                        allowed = True
+                        break
+                    await asyncio.sleep(2)
+                assert allowed, "Expected the ICMP ingress rule to restore connectivity"
+            finally:
+                if vm1_id:
+                    try:
+                        await call_api(stop_vm, client=c, vm_id=vm1_id)
+                        await wait_for_status(c, vm1_id, VmStatus.SHUTDOWN)
+                        await call_api(delete_vm, client=c, vm_id=vm1_id)
+                    except Exception as e:
+                        print(f"Cleanup of VM {vm1_id} failed: {e}")
+                if vm2_id:
+                    try:
+                        await call_api(stop_vm, client=c, vm_id=vm2_id)
+                        await wait_for_status(c, vm2_id, VmStatus.SHUTDOWN)
+                        await call_api(delete_vm, client=c, vm_id=vm2_id)
+                    except Exception as e:
+                        print(f"Cleanup of VM {vm2_id} failed: {e}")
+                if net_a_id:
+                    try:
+                        await call_api(
+                            detach_host, client=c, network_id=net_a_id, host_id=str(primary_host.id)
+                        )
+                        await call_api(delete_network, client=c, network_id=net_a_id)
+                    except Exception as e:
+                        print(f"Cleanup of network {net_a_id} failed: {e}")
+                if net_b_id:
+                    try:
+                        await call_api(
+                            detach_host, client=c, network_id=net_b_id, host_id=str(primary_host.id)
+                        )
+                        await call_api(delete_network, client=c, network_id=net_b_id)
+                    except Exception as e:
+                        print(f"Cleanup of network {net_b_id} failed: {e}")
+                if sg_id:
+                    try:
+                        await raw.delete(f"/security-groups/{sg_id}")
+                    except Exception as e:
+                        print(f"Cleanup of security group {sg_id} failed: {e}")

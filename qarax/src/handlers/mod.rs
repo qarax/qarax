@@ -35,6 +35,7 @@ mod lifecycle_hook;
 mod network;
 mod sandbox;
 mod scheduling;
+mod security_group;
 mod storage_object;
 mod storage_pool;
 mod transfer;
@@ -116,6 +117,9 @@ pub struct StorageObjectListQuery {
         vm::handler::list_nics,
         vm::handler::add_nic,
         vm::handler::remove_nic,
+        vm::handler::list_security_groups,
+        vm::handler::attach_security_group,
+        vm::handler::detach_security_group,
         vm::handler::resize_vm,
         vm::handler::resize_disk,
         vm::handler::commit,
@@ -151,6 +155,13 @@ pub struct StorageObjectListQuery {
         network::handler::attach_host,
         network::handler::detach_host,
         network::handler::list_ips,
+        security_group::handler::list,
+        security_group::handler::get,
+        security_group::handler::create,
+        security_group::handler::delete,
+        security_group::handler::list_rules,
+        security_group::handler::create_rule,
+        security_group::handler::delete_rule,
         lifecycle_hook::handler::list,
         lifecycle_hook::handler::get,
         lifecycle_hook::handler::create,
@@ -234,6 +245,13 @@ pub struct StorageObjectListQuery {
             crate::model::networks::NetworkStatus,
             crate::model::networks::IpAllocation,
             crate::handlers::network::handler::AttachHostRequest,
+            crate::model::security_groups::SecurityGroup,
+            crate::model::security_groups::NewSecurityGroup,
+            crate::model::security_groups::SecurityGroupRule,
+            crate::model::security_groups::NewSecurityGroupRule,
+            crate::model::security_groups::SecurityGroupDirection,
+            crate::model::security_groups::SecurityGroupProtocol,
+            crate::handlers::vm::handler::AttachSecurityGroupRequest,
             crate::model::lifecycle_hooks::LifecycleHook,
             crate::model::lifecycle_hooks::NewLifecycleHook,
             crate::model::lifecycle_hooks::UpdateLifecycleHook,
@@ -263,6 +281,7 @@ pub struct StorageObjectListQuery {
         (name = "transfers", description = "File transfer management endpoints"),
         (name = "jobs", description = "Async job management endpoints"),
         (name = "networks", description = "Network management endpoints"),
+        (name = "security-groups", description = "Security group management endpoints"),
         (name = "hooks", description = "Lifecycle hook management endpoints"),
         (name = "sandboxes", description = "Ephemeral sandbox environments for AI agents"),
         (name = "scheduling", description = "Scheduling observability endpoints"),
@@ -323,6 +342,7 @@ pub fn app(env: App) -> Router {
         .merge(hooks())
         .merge(sandboxes())
         .merge(scheduling())
+        .merge(security_groups())
         .merge(audit_logs())
         .merge(event_stream())
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
@@ -409,6 +429,14 @@ fn vms() -> Router {
         .route(
             "/vms/{vm_id}/nics/{device_id}",
             axum::routing::delete(vm::handler::remove_nic),
+        )
+        .route(
+            "/vms/{vm_id}/security-groups",
+            get(vm::handler::list_security_groups).post(vm::handler::attach_security_group),
+        )
+        .route(
+            "/vms/{vm_id}/security-groups/{security_group_id}",
+            axum::routing::delete(vm::handler::detach_security_group),
         )
         .route(
             "/vms/{vm_id}/snapshots",
@@ -550,6 +578,26 @@ fn hooks() -> Router {
         .route(
             "/hooks/{hook_id}/executions",
             get(lifecycle_hook::handler::list_executions),
+        )
+}
+
+fn security_groups() -> Router {
+    Router::new()
+        .route(
+            "/security-groups",
+            get(security_group::handler::list).post(security_group::handler::create),
+        )
+        .route(
+            "/security-groups/{security_group_id}",
+            get(security_group::handler::get).delete(security_group::handler::delete),
+        )
+        .route(
+            "/security-groups/{security_group_id}/rules",
+            get(security_group::handler::list_rules).post(security_group::handler::create_rule),
+        )
+        .route(
+            "/security-groups/{security_group_id}/rules/{rule_id}",
+            axum::routing::delete(security_group::handler::delete_rule),
         )
 }
 

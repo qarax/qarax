@@ -19,6 +19,7 @@ class NewNetwork:
         dns (None | str | Unset):
         gateway (None | str | Unset):
         type_ (None | str | Unset):
+        vpc_name (None | str | Unset):
     """
 
     name: str
@@ -26,6 +27,7 @@ class NewNetwork:
     dns: None | str | Unset = UNSET
     gateway: None | str | Unset = UNSET
     type_: None | str | Unset = UNSET
+    vpc_name: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -51,6 +53,12 @@ class NewNetwork:
         else:
             type_ = self.type_
 
+        vpc_name: None | str | Unset
+        if isinstance(self.vpc_name, Unset):
+            vpc_name = UNSET
+        else:
+            vpc_name = self.vpc_name
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -65,6 +73,8 @@ class NewNetwork:
             field_dict["gateway"] = gateway
         if type_ is not UNSET:
             field_dict["type"] = type_
+        if vpc_name is not UNSET:
+            field_dict["vpc_name"] = vpc_name
 
         return field_dict
 
@@ -102,12 +112,22 @@ class NewNetwork:
 
         type_ = _parse_type_(d.pop("type", UNSET))
 
+        def _parse_vpc_name(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        vpc_name = _parse_vpc_name(d.pop("vpc_name", UNSET))
+
         new_network = cls(
             name=name,
             subnet=subnet,
             dns=dns,
             gateway=gateway,
             type_=type_,
+            vpc_name=vpc_name,
         )
 
         new_network.additional_properties = d

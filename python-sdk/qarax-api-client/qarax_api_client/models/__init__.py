@@ -4,6 +4,7 @@ from .accelerator_config import AcceleratorConfig
 from .attach_disk_request import AttachDiskRequest
 from .attach_host_request import AttachHostRequest
 from .attach_pool_host_request import AttachPoolHostRequest
+from .attach_security_group_request import AttachSecurityGroupRequest
 from .audit_action import AuditAction
 from .audit_log import AuditLog
 from .audit_resource_type import AuditResourceType
@@ -48,6 +49,8 @@ from .new_instance_type import NewInstanceType
 from .new_lifecycle_hook import NewLifecycleHook
 from .new_network import NewNetwork
 from .new_sandbox import NewSandbox
+from .new_security_group import NewSecurityGroup
+from .new_security_group_rule import NewSecurityGroupRule
 from .new_storage_object import NewStorageObject
 from .new_storage_pool import NewStoragePool
 from .new_transfer import NewTransfer
@@ -60,6 +63,10 @@ from .restore_request import RestoreRequest
 from .sandbox import Sandbox
 from .sandbox_status import SandboxStatus
 from .scheduling_settings import SchedulingSettings
+from .security_group import SecurityGroup
+from .security_group_direction import SecurityGroupDirection
+from .security_group_protocol import SecurityGroupProtocol
+from .security_group_rule import SecurityGroupRule
 from .snapshot import Snapshot
 from .snapshot_status import SnapshotStatus
 from .storage_object import StorageObject
@@ -94,6 +101,7 @@ __all__ = (
     "AttachDiskRequest",
     "AttachHostRequest",
     "AttachPoolHostRequest",
+    "AttachSecurityGroupRequest",
     "AuditAction",
     "AuditLog",
     "AuditResourceType",
@@ -138,6 +146,8 @@ __all__ = (
     "NewLifecycleHook",
     "NewNetwork",
     "NewSandbox",
+    "NewSecurityGroup",
+    "NewSecurityGroupRule",
     "NewStorageObject",
     "NewStoragePool",
     "NewTransfer",
@@ -150,6 +160,10 @@ __all__ = (
     "Sandbox",
     "SandboxStatus",
     "SchedulingSettings",
+    "SecurityGroup",
+    "SecurityGroupDirection",
+    "SecurityGroupProtocol",
+    "SecurityGroupRule",
     "Snapshot",
     "SnapshotStatus",
     "StorageObject",

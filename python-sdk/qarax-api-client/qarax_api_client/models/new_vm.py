@@ -68,6 +68,9 @@ class NewVm:
             this pool instead of being ephemeral. The pool must be Local or NFS and
             must be attached to the host running the VM.
         root_disk_object_id (None | Unset | UUID):
+        security_group_ids (list[str] | None | Unset): Security groups to bind to the VM. Rules apply to managed routed
+            traffic
+            on every managed NIC attached to the VM.
         tags (list[str] | None | Unset):
         vm_template_id (None | Unset | UUID):
     """
@@ -102,6 +105,7 @@ class NewVm:
     numa_config: Any | Unset = UNSET
     persistent_upper_pool_id: None | Unset | UUID = UNSET
     root_disk_object_id: None | Unset | UUID = UNSET
+    security_group_ids: list[str] | None | Unset = UNSET
     tags: list[str] | None | Unset = UNSET
     vm_template_id: None | Unset | UUID = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
@@ -287,6 +291,15 @@ class NewVm:
         else:
             root_disk_object_id = self.root_disk_object_id
 
+        security_group_ids: list[str] | None | Unset
+        if isinstance(self.security_group_ids, Unset):
+            security_group_ids = UNSET
+        elif isinstance(self.security_group_ids, list):
+            security_group_ids = self.security_group_ids
+
+        else:
+            security_group_ids = self.security_group_ids
+
         tags: list[str] | None | Unset
         if isinstance(self.tags, Unset):
             tags = UNSET
@@ -369,6 +382,8 @@ class NewVm:
             field_dict["persistent_upper_pool_id"] = persistent_upper_pool_id
         if root_disk_object_id is not UNSET:
             field_dict["root_disk_object_id"] = root_disk_object_id
+        if security_group_ids is not UNSET:
+            field_dict["security_group_ids"] = security_group_ids
         if tags is not UNSET:
             field_dict["tags"] = tags
         if vm_template_id is not UNSET:
@@ -685,6 +700,23 @@ class NewVm:
 
         root_disk_object_id = _parse_root_disk_object_id(d.pop("root_disk_object_id", UNSET))
 
+        def _parse_security_group_ids(data: object) -> list[str] | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, list):
+                    raise TypeError()
+                security_group_ids_type_0 = cast(list[str], data)
+
+                return security_group_ids_type_0
+            except (TypeError, ValueError, AttributeError, KeyError):
+                pass
+            return cast(list[str] | None | Unset, data)
+
+        security_group_ids = _parse_security_group_ids(d.pop("security_group_ids", UNSET))
+
         def _parse_tags(data: object) -> list[str] | None | Unset:
             if data is None:
                 return data
@@ -750,6 +782,7 @@ class NewVm:
             numa_config=numa_config,
             persistent_upper_pool_id=persistent_upper_pool_id,
             root_disk_object_id=root_disk_object_id,
+            security_group_ids=security_group_ids,
             tags=tags,
             vm_template_id=vm_template_id,
         )

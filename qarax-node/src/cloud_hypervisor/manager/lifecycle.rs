@@ -661,6 +661,10 @@ impl VmManager {
             Self::delete_tap_device(tap).await;
         }
 
+        if let Err(e) = crate::networking::iptables::teardown_vm_firewall(vm_id).await {
+            warn!("Failed to tear down firewall state for VM {}: {}", vm_id, e);
+        }
+
         // Stop passt backends created by qarax-node
         Self::cleanup_passt_processes(&mut instance.passt_processes).await;
 

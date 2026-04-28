@@ -6,6 +6,7 @@ use crate::{
         hosts,
         networks::{self, IpAllocation, Network, NewNetwork},
     },
+    network_policy,
 };
 use axum::{Extension, Json, extract::Path};
 use http::StatusCode;
@@ -181,6 +182,7 @@ pub async fn attach_host(
 
     // Record the attachment in the DB
     networks::attach_host(env.pool(), network_id, body.host_id, &body.bridge_name).await?;
+    network_policy::sync_host_network_isolation(&env, body.host_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -205,6 +207,7 @@ pub async fn detach_host(
     Path((network_id, host_id)): Path<(Uuid, Uuid)>,
 ) -> Result<StatusCode> {
     let host = hosts::require_by_id(env.pool(), host_id).await?;
+    let network = networks::get(env.pool(), network_id).await?;
 
     let bridge_name = networks::get_host_bridge(env.pool(), host_id, network_id)
         .await?
@@ -212,20 +215,24 @@ pub async fn detach_host(
 
     // Call gRPC to tear down bridge on the node
     let client = NodeClient::new(&host.address, host.port as u16);
-    client.detach_network(&bridge_name).await.map_err(|e| {
-        tracing::error!(
-            network_id = %network_id,
-            host_id = %host_id,
-            error = %e,
-            "gRPC detach_network failed"
-        );
-        crate::errors::Error::UnprocessableEntity(format!(
-            "Failed to detach network from node: {e}"
-        ))
-    })?;
+    client
+        .detach_network(&bridge_name, &network.subnet)
+        .await
+        .map_err(|e| {
+            tracing::error!(
+                network_id = %network_id,
+                host_id = %host_id,
+                error = %e,
+                "gRPC detach_network failed"
+            );
+            crate::errors::Error::UnprocessableEntity(format!(
+                "Failed to detach network from node: {e}"
+            ))
+        })?;
 
     // Remove the DB record
     networks::detach_host(env.pool(), network_id, host_id).await?;
+    network_policy::sync_host_network_isolation(&env, host_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

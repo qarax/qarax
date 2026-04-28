@@ -4,6 +4,18 @@ use strum_macros::{Display, EnumString};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+type HostNetworkListRow = (
+    Uuid,
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    NetworkStatus,
+    String,
+);
+
 #[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
 pub struct Network {
     pub id: Uuid,
@@ -11,6 +23,7 @@ pub struct Network {
     pub subnet: String,
     pub gateway: Option<String>,
     pub dns: Option<String>,
+    pub vpc_name: Option<String>,
     #[serde(rename = "type")]
     pub network_type: Option<String>,
     pub status: NetworkStatus,
@@ -23,6 +36,7 @@ struct NetworkRow {
     subnet: String,
     gateway: Option<String>,
     dns: Option<String>,
+    vpc_name: Option<String>,
     #[sqlx(rename = "type")]
     network_type: Option<String>,
     status: NetworkStatus,
@@ -40,6 +54,7 @@ impl From<NetworkRow> for Network {
             subnet: row.subnet,
             gateway: normalize_inet(row.gateway),
             dns: normalize_inet(row.dns),
+            vpc_name: row.vpc_name,
             network_type: row.network_type,
             status: row.status,
         }
@@ -66,6 +81,8 @@ pub struct NewNetwork {
     pub gateway: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dns: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vpc_name: Option<String>,
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub network_type: Option<String>,
 }
@@ -107,7 +124,7 @@ pub type PgTransaction<'a> = Transaction<'a, Postgres>;
 pub async fn list(pool: &PgPool, name_filter: Option<&str>) -> Result<Vec<Network>, sqlx::Error> {
     let rows: Vec<NetworkRow> = sqlx::query_as::<_, NetworkRow>(
         r#"
-SELECT id, name, subnet::text, gateway::text, dns::text, type, status
+SELECT id, name, subnet::text, gateway::text, dns::text, vpc_name, type, status
 FROM networks
 WHERE ($1::text IS NULL OR name = $1)
         "#,
@@ -122,7 +139,7 @@ WHERE ($1::text IS NULL OR name = $1)
 pub async fn get(pool: &PgPool, network_id: Uuid) -> Result<Network, sqlx::Error> {
     let row: NetworkRow = sqlx::query_as::<_, NetworkRow>(
         r#"
-SELECT id, name, subnet::text, gateway::text, dns::text, type, status
+SELECT id, name, subnet::text, gateway::text, dns::text, vpc_name, type, status
 FROM networks
 WHERE id = $1
         "#,
@@ -139,8 +156,8 @@ pub async fn create(pool: &PgPool, new: NewNetwork) -> Result<Uuid, sqlx::Error>
 
     sqlx::query(
         r#"
-INSERT INTO networks (id, name, subnet, gateway, dns, type, status)
-VALUES ($1, $2, $3::cidr, $4::inet, $5::inet, $6, $7)
+INSERT INTO networks (id, name, subnet, gateway, dns, vpc_name, type, status)
+VALUES ($1, $2, $3::cidr, $4::inet, $5::inet, $6, $7, $8)
         "#,
     )
     .bind(id)
@@ -148,6 +165,7 @@ VALUES ($1, $2, $3::cidr, $4::inet, $5::inet, $6, $7)
     .bind(&new.subnet)
     .bind(&new.gateway)
     .bind(&new.dns)
+    .bind(&new.vpc_name)
     .bind(&new.network_type)
     .bind(NetworkStatus::Active)
     .execute(pool)
@@ -234,6 +252,53 @@ pub async fn get_host_bridge(
     .await?;
 
     Ok(row.map(|(name,)| name))
+}
+
+pub async fn list_for_host(
+    pool: &PgPool,
+    host_id: Uuid,
+) -> Result<Vec<(Network, String)>, sqlx::Error> {
+    let rows: Vec<HostNetworkListRow> = sqlx::query_as(
+        r#"
+SELECT n.id,
+       n.name,
+       n.subnet::text,
+       n.gateway::text,
+       n.dns::text,
+       n.vpc_name,
+       n.type,
+       n.status,
+       hn.bridge_name
+FROM networks n
+JOIN host_networks hn ON hn.network_id = n.id
+WHERE hn.host_id = $1
+ORDER BY n.name
+            "#,
+    )
+    .bind(host_id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(
+            |(id, name, subnet, gateway, dns, vpc_name, network_type, status, bridge_name)| {
+                (
+                    Network {
+                        id,
+                        name,
+                        subnet,
+                        gateway: gateway.map(|v| v.split('/').next().unwrap_or(&v).to_string()),
+                        dns: dns.map(|v| v.split('/').next().unwrap_or(&v).to_string()),
+                        vpc_name,
+                        network_type,
+                        status,
+                    },
+                    bridge_name,
+                )
+            },
+        )
+        .collect())
 }
 
 // IPAM

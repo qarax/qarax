@@ -35,7 +35,7 @@ use crate::{
         network_interfaces::{self, NetworkInterface},
         networks,
         sandboxes::{self, SandboxStatus},
-        snapshots,
+        security_groups, snapshots,
         snapshots::{NewSnapshot, Snapshot, SnapshotStatus},
         storage_objects::{self, NewStorageObject, StorageObject, StorageObjectType},
         storage_pools::{self, OverlayBdPoolConfig},
@@ -45,6 +45,7 @@ use crate::{
         vm_templates::{self, CreateVmTemplateFromVmRequest},
         vms::{self, BootMode, NewVm, NewVmNetwork, ResolvedNewVm, Vm, VmStatus},
     },
+    network_policy,
 };
 
 use super::{ApiResponse, Result};
@@ -441,6 +442,16 @@ async fn validate_requested_static_ips_are_available(
     Ok(())
 }
 
+async fn ensure_security_groups_exist(
+    pool: &sqlx::PgPool,
+    security_group_ids: Option<&[Uuid]>,
+) -> Result<()> {
+    for security_group_id in security_group_ids.unwrap_or(&[]) {
+        security_groups::get(pool, *security_group_id).await?;
+    }
+    Ok(())
+}
+
 async fn allocate_network_ip_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     pool: &sqlx::PgPool,
@@ -743,6 +754,7 @@ pub(crate) async fn create_vm_internal(env: &App, vm: ResolvedNewVm) -> Result<U
         .unwrap_or_else(|| env.control_plane_architecture().to_string());
     persist_vm_scheduling_metadata(&mut vm, &target_architecture);
     validate_requested_static_ips_are_available(env.pool(), vm.networks.as_deref()).await?;
+    ensure_security_groups_exist(env.pool(), vm.security_group_ids.as_deref()).await?;
 
     let mut tx = env.pool().begin().await?;
     let host = pick_host(&mut tx, env, &scheduling_request).await?;
@@ -772,6 +784,9 @@ pub(crate) async fn create_vm_internal(env: &App, vm: ResolvedNewVm) -> Result<U
     }
     if let Some(network_id) = vm.network_id {
         create_managed_network_interface_tx(&mut tx, env.pool(), id, network_id).await?;
+    }
+    for security_group_id in vm.security_group_ids.as_deref().unwrap_or(&[]) {
+        security_groups::add_to_vm(&mut tx, id, *security_group_id).await?;
     }
 
     if let Some(ref accel) = accel_config {
@@ -804,6 +819,7 @@ async fn create_with_image(env: App, vm: ResolvedNewVm) -> Result<axum::response
         .unwrap_or_else(|| env.control_plane_architecture().to_string());
     persist_vm_scheduling_metadata(&mut vm, &target_architecture);
     validate_requested_static_ips_are_available(env.pool(), vm.networks.as_deref()).await?;
+    ensure_security_groups_exist(env.pool(), vm.security_group_ids.as_deref()).await?;
 
     let mut tx = env.pool().begin().await?;
     let host = pick_host(&mut tx, &env, &scheduling_request).await?;
@@ -942,6 +958,9 @@ async fn create_with_image(env: App, vm: ResolvedNewVm) -> Result<axum::response
     }
     if let Some(network_id) = vm.network_id {
         create_managed_network_interface_tx(&mut tx, env.pool(), vm_id, network_id).await?;
+    }
+    for security_group_id in vm.security_group_ids.as_deref().unwrap_or(&[]) {
+        security_groups::add_to_vm(&mut tx, vm_id, *security_group_id).await?;
     }
     if let Some(root_disk_object_id) = vm.root_disk_object_id {
         create_root_disk_record(&mut tx, vm_id, root_disk_object_id).await?;
@@ -1315,6 +1334,7 @@ pub(crate) async fn start_vm_internal(env: &App, vm_id: Uuid) -> Result<Uuid> {
     };
 
     let db_pool = env.pool_arc();
+    let env_for_start = env.clone();
 
     tokio::spawn(async move {
         tracing::info!(vm_id = %vm_id, job_id = %job_id, "Starting async VM start");
@@ -1385,6 +1405,19 @@ pub(crate) async fn start_vm_internal(env: &App, vm_id: Uuid) -> Result<Uuid> {
         if let Err(e) = node_client.start_vm(vm_id).await {
             let msg = format!("start_vm failed: {:#}", e);
             tracing::error!(vm_id = %vm_id, job_id = %job_id, error = %msg);
+            let _ = jobs::mark_failed(&db_pool, job_id, &msg).await;
+            let _ = vms::update_status(&db_pool, vm_id, original_status).await;
+            #[cfg(feature = "otel")]
+            record_vm_start_metric("failed");
+            return;
+        }
+
+        if let Err(e) =
+            network_policy::sync_vm_firewall_on_host(&env_for_start, vm_id, host.id).await
+        {
+            let msg = format!("sync_vm_firewall failed: {e}");
+            tracing::error!(vm_id = %vm_id, job_id = %job_id, error = %msg);
+            let _ = node_client.force_stop_vm(vm_id).await;
             let _ = jobs::mark_failed(&db_pool, job_id, &msg).await;
             let _ = vms::update_status(&db_pool, vm_id, original_status).await;
             #[cfg(feature = "otel")]
@@ -3116,6 +3149,8 @@ pub async fn add_nic(
         }
     }
 
+    network_policy::sync_vm_firewall(&env, vm_id).await?;
+
     Ok(ApiResponse {
         data: nic,
         code: StatusCode::CREATED,
@@ -3198,11 +3233,104 @@ pub async fn remove_nic(
     }
 
     delete_nic_and_release_ip(env.pool(), &nic).await?;
+    network_policy::sync_vm_firewall(&env, vm_id).await?;
 
     Ok(ApiResponse {
         data: (),
         code: StatusCode::NO_CONTENT,
     })
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct AttachSecurityGroupRequest {
+    pub security_group_id: Uuid,
+}
+
+#[utoipa::path(
+    get,
+    path = "/vms/{vm_id}/security-groups",
+    params(
+        ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier")
+    ),
+    responses(
+        (status = 200, description = "List security groups bound to the VM", body = Vec<crate::model::security_groups::SecurityGroup>),
+        (status = 404, description = "VM not found"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "vms"
+)]
+#[instrument(skip(env))]
+pub async fn list_security_groups(
+    Extension(env): Extension<App>,
+    Path(vm_id): Path<Uuid>,
+) -> Result<ApiResponse<Vec<security_groups::SecurityGroup>>> {
+    vms::get(env.pool(), vm_id).await?;
+    let groups = security_groups::list_by_vm(env.pool(), vm_id).await?;
+    Ok(ApiResponse {
+        data: groups,
+        code: StatusCode::OK,
+    })
+}
+
+#[utoipa::path(
+    post,
+    path = "/vms/{vm_id}/security-groups",
+    params(
+        ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier")
+    ),
+    request_body = AttachSecurityGroupRequest,
+    responses(
+        (status = 204, description = "Security group bound to VM"),
+        (status = 404, description = "VM or security group not found"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "vms"
+)]
+#[instrument(skip(env))]
+pub async fn attach_security_group(
+    Extension(env): Extension<App>,
+    Path(vm_id): Path<Uuid>,
+    Json(body): Json<AttachSecurityGroupRequest>,
+) -> Result<StatusCode> {
+    vms::get(env.pool(), vm_id).await?;
+    security_groups::get(env.pool(), body.security_group_id).await?;
+
+    let mut tx = env.pool().begin().await?;
+    security_groups::add_to_vm(&mut tx, vm_id, body.security_group_id).await?;
+    tx.commit().await?;
+
+    network_policy::sync_vm_firewall(&env, vm_id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(
+    delete,
+    path = "/vms/{vm_id}/security-groups/{security_group_id}",
+    params(
+        ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier"),
+        ("security_group_id" = uuid::Uuid, Path, description = "Security group unique identifier")
+    ),
+    responses(
+        (status = 204, description = "Security group removed from VM"),
+        (status = 404, description = "VM or security group not found"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "vms"
+)]
+#[instrument(skip(env))]
+pub async fn detach_security_group(
+    Extension(env): Extension<App>,
+    Path((vm_id, security_group_id)): Path<(Uuid, Uuid)>,
+) -> Result<StatusCode> {
+    vms::get(env.pool(), vm_id).await?;
+    security_groups::get(env.pool(), security_group_id).await?;
+
+    let mut tx = env.pool().begin().await?;
+    security_groups::remove_from_vm(&mut tx, vm_id, security_group_id).await?;
+    tx.commit().await?;
+
+    network_policy::sync_vm_firewall(&env, vm_id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// Request body for `POST /vms/{vm_id}/migrate`.

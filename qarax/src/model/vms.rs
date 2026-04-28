@@ -275,6 +275,12 @@ pub struct NewVm {
     #[serde(default)]
     pub networks: Option<Vec<NewVmNetwork>>,
 
+    /// Security groups to bind to the VM. Rules apply to managed routed traffic
+    /// on every managed NIC attached to the VM.
+    #[serde(default)]
+    #[schema(value_type = Option<Vec<String>>)]
+    pub security_group_ids: Option<Vec<Uuid>>,
+
     /// Accelerator (GPU) configuration. When set, GPU-aware scheduling picks a
     /// host with available GPUs matching these filters, and VFIO passthrough
     /// devices are attached to the VM.
@@ -323,6 +329,7 @@ pub struct ResolvedNewVm {
     pub cloud_init_network_config: Option<String>,
     pub network_id: Option<Uuid>,
     pub networks: Option<Vec<NewVmNetwork>>,
+    pub security_group_ids: Option<Vec<Uuid>>,
     pub accelerator_config: Option<serde_json::Value>,
     pub numa_config: Option<serde_json::Value>,
     pub persistent_upper_pool_id: Option<Uuid>,
@@ -379,6 +386,7 @@ pub async fn resolve_create_request(pool: &PgPool, request: NewVm) -> Result<Res
         cloud_init_network_config,
         network_id,
         networks,
+        security_group_ids,
         accelerator_config,
         numa_config,
         persistent_upper_pool_id,
@@ -574,6 +582,7 @@ pub async fn resolve_create_request(pool: &PgPool, request: NewVm) -> Result<Res
                 .as_ref()
                 .and_then(|template| template.networks.clone())
         }),
+        security_group_ids,
         accelerator_config: accelerator_config.or_else(|| {
             instance_type.as_ref().and_then(|it| {
                 let v = &it.accelerator_config;

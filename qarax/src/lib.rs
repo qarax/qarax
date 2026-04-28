@@ -6,6 +6,7 @@ pub mod handlers;
 pub mod hook_executor;
 pub mod host_deployer;
 pub mod model;
+pub mod network_policy;
 pub mod resource_monitor;
 pub mod sandbox_reaper;
 pub mod startup;

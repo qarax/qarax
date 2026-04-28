@@ -7,8 +7,9 @@ use crate::client::Client;
 use super::models::{
     AttachDiskRequest, CommitVmRequest, CommitVmResponse, CreateSnapshotRequest, CreateVmResponse,
     CreateVmResult, DiskResizeRequest, HotplugNicRequest, NetworkInterface, NewVm, RestoreRequest,
-    Snapshot, StorageObject, Vm, VmDisk, VmImagePreflightRequest, VmImagePreflightResponse,
-    VmMigrateRequest, VmMigrateResponse, VmResizeRequest, VmStartResponse,
+    SecurityGroup, Snapshot, StorageObject, Vm, VmDisk, VmImagePreflightRequest,
+    VmImagePreflightResponse, VmMigrateRequest, VmMigrateResponse, VmResizeRequest,
+    VmStartResponse,
 };
 
 pub async fn list(client: &Client, name: Option<&str>, tags: &[String]) -> anyhow::Result<Vec<Vm>> {
@@ -121,6 +122,13 @@ pub async fn remove_nic(client: &Client, vm_id: Uuid, device_id: &str) -> anyhow
 
 pub async fn list_nics(client: &Client, vm_id: Uuid) -> anyhow::Result<Vec<NetworkInterface>> {
     client.get(&format!("/vms/{vm_id}/nics")).await
+}
+
+pub async fn list_security_groups(
+    client: &Client,
+    vm_id: Uuid,
+) -> anyhow::Result<Vec<SecurityGroup>> {
+    client.get(&format!("/vms/{vm_id}/security-groups")).await
 }
 
 pub async fn create_snapshot(

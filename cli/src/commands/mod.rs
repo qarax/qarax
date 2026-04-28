@@ -7,6 +7,7 @@ pub mod instance_type;
 pub mod job;
 pub mod network;
 pub mod sandbox;
+pub mod security_group;
 pub mod storage;
 pub mod transfer;
 pub mod vm;
@@ -86,6 +87,19 @@ pub async fn resolve_network_id(client: &Client, name_or_id: &str) -> anyhow::Re
         .next()
         .map(|n| n.id)
         .ok_or_else(|| anyhow::anyhow!("no network named {:?}", name_or_id))
+}
+
+/// Resolve a security-group name or UUID string to a UUID.
+pub async fn resolve_security_group_id(client: &Client, name_or_id: &str) -> anyhow::Result<Uuid> {
+    if let Ok(id) = Uuid::parse_str(name_or_id) {
+        return Ok(id);
+    }
+    let groups = api::security_groups::list(client, Some(name_or_id)).await?;
+    groups
+        .into_iter()
+        .next()
+        .map(|group| group.id)
+        .ok_or_else(|| anyhow::anyhow!("no security group named {:?}", name_or_id))
 }
 
 /// Resolve a lifecycle hook name or UUID string to a UUID.

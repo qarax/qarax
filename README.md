@@ -41,6 +41,9 @@ See [docs/HOME_LAB.md](docs/HOME_LAB.md) for a verified cloud-image walkthrough,
 an explanation of compose mode vs VM mode, and the steps to turn the same CLI
 flow into a LAN-reachable home-lab deployment.
 
+See [docs/NETWORK_ISOLATION.md](docs/NETWORK_ISOLATION.md) for VPC-style subnet
+grouping, VM security groups, and the intended CLI workflow.
+
 ## CLI quickstart
 
 See the [CLI README](cli/) for full usage. Quick version:
