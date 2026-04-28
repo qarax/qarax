@@ -52,6 +52,20 @@ qarax vm start 3f6c2b1a-0000-0000-0000-000000000001
 
 Run `qarax <command> --help` for full usage of any command.
 
+### Sandbox pools
+
+Keep standby sandboxes ready for a template so `sandbox create` can claim one instantly:
+
+```bash
+qarax sandbox pool set --template ubuntu-base --min-ready 1
+qarax sandbox pool get --template ubuntu-base
+qarax sandbox pool list
+qarax sandbox create --template ubuntu-base --wait
+qarax sandbox pool delete --template ubuntu-base
+```
+
+Warm claims currently apply to plain template-based sandbox requests; if you pass extra create-time overrides such as `--network`, qarax falls back to the cold provisioning path.
+
 ## Provisioning a VM
 
 ### Scheduling

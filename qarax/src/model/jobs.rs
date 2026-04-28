@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::{PgPool, Type};
+use sqlx::{PgPool, Postgres, Transaction, Type};
 use strum_macros::{Display, EnumString};
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -31,6 +31,7 @@ pub struct Job {
 #[strum(serialize_all = "snake_case")]
 pub enum JobType {
     ImagePull,
+    SandboxClaim,
     VmStart,
     VmMigrate,
     DiskCreate,
@@ -53,6 +54,7 @@ pub enum JobStatus {
 
 /// Well-known resource type values for the `resource_type` column.
 pub mod resource_types {
+    pub const SANDBOX: &str = "sandbox";
     pub const VM: &str = "vm";
 }
 
@@ -64,6 +66,16 @@ pub struct NewJob {
 }
 
 pub async fn create(pool: &PgPool, new_job: NewJob) -> Result<Job, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let job = create_tx(&mut tx, new_job).await?;
+    tx.commit().await?;
+    Ok(job)
+}
+
+pub async fn create_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    new_job: NewJob,
+) -> Result<Job, sqlx::Error> {
     let id = Uuid::new_v4();
 
     sqlx::query(
@@ -77,13 +89,56 @@ VALUES ($1, $2, $3, $4, $5)
     .bind(&new_job.description)
     .bind(new_job.resource_id)
     .bind(&new_job.resource_type)
-    .execute(pool)
+    .execute(tx.as_mut())
     .await?;
 
-    get(pool, id).await
+    get_tx(tx, id).await
+}
+
+pub async fn create_completed_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    new_job: NewJob,
+    result: Option<serde_json::Value>,
+) -> Result<Job, sqlx::Error> {
+    let id = Uuid::new_v4();
+
+    sqlx::query(
+        r#"
+INSERT INTO jobs (
+    id,
+    job_type,
+    status,
+    description,
+    resource_id,
+    resource_type,
+    progress,
+    result,
+    started_at,
+    completed_at
+)
+VALUES ($1, $2, 'COMPLETED', $3, $4, $5, 100, $6, NOW(), NOW())
+        "#,
+    )
+    .bind(id)
+    .bind(&new_job.job_type)
+    .bind(&new_job.description)
+    .bind(new_job.resource_id)
+    .bind(&new_job.resource_type)
+    .bind(result.map(sqlx::types::Json))
+    .execute(tx.as_mut())
+    .await?;
+
+    get_tx(tx, id).await
 }
 
 pub async fn get(pool: &PgPool, job_id: Uuid) -> Result<Job, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let job = get_tx(&mut tx, job_id).await?;
+    tx.commit().await?;
+    Ok(job)
+}
+
+async fn get_tx(tx: &mut Transaction<'_, Postgres>, job_id: Uuid) -> Result<Job, sqlx::Error> {
     let job = sqlx::query_as::<_, Job>(
         r#"
 SELECT id,
@@ -104,7 +159,7 @@ WHERE id = $1
         "#,
     )
     .bind(job_id)
-    .fetch_one(pool)
+    .fetch_one(tx.as_mut())
     .await?;
 
     Ok(job)

@@ -842,6 +842,22 @@ paths:
                   $ref: '#/components/schemas/IpAllocation'
         '500':
           description: Internal server error
+  /sandbox-pools:
+    get:
+      tags:
+      - sandbox-pools
+      operationId: list
+      responses:
+        '200':
+          description: List configured sandbox pools
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SandboxPool'
+        '500':
+          description: Internal server error
   /sandboxes:
     get:
       tags:
@@ -1679,6 +1695,78 @@ paths:
           description: VM template deleted successfully
         '404':
           description: VM template not found
+        '500':
+          description: Internal server error
+  /vm-templates/{vm_template_id}/sandbox-pool:
+    get:
+      tags:
+      - sandbox-pools
+      operationId: get
+      parameters:
+      - name: vm_template_id
+        in: path
+        description: VM template unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Sandbox pool configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SandboxPool'
+        '404':
+          description: Sandbox pool not found
+        '500':
+          description: Internal server error
+    put:
+      tags:
+      - sandbox-pools
+      operationId: put
+      parameters:
+      - name: vm_template_id
+        in: path
+        description: VM template unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConfigureSandboxPoolRequest'
+        required: true
+      responses:
+        '200':
+          description: Sandbox pool configured
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SandboxPool'
+        '422':
+          description: Invalid pool configuration
+        '500':
+          description: Internal server error
+    delete:
+      tags:
+      - sandbox-pools
+      operationId: delete
+      parameters:
+      - name: vm_template_id
+        in: path
+        description: VM template unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '204':
+          description: Sandbox pool deleted
+        '404':
+          description: Sandbox pool not found
         '500':
           description: Internal server error
   /vms:
@@ -2677,6 +2765,14 @@ components:
         vm_id:
           type: string
           format: uuid
+    ConfigureSandboxPoolRequest:
+      type: object
+      required:
+      - min_ready
+      properties:
+        min_ready:
+          type: integer
+          format: int32
     CreateDiskRequest:
       type: object
       required:
@@ -3351,6 +3447,7 @@ components:
       type: string
       enum:
       - image_pull
+      - sandbox_claim
       - vm_start
       - vm_migrate
       - disk_create
@@ -4261,6 +4358,45 @@ components:
           - string
           - 'null'
           format: uuid
+    SandboxPool:
+      type: object
+      required:
+      - id
+      - vm_template_id
+      - vm_template_name
+      - min_ready
+      - current_ready
+      - current_provisioning
+      - current_error
+      - created_at
+      - updated_at
+      properties:
+        created_at:
+          type: string
+          format: date-time
+        current_error:
+          type: integer
+          format: int64
+        current_provisioning:
+          type: integer
+          format: int64
+        current_ready:
+          type: integer
+          format: int64
+        id:
+          type: string
+          format: uuid
+        min_ready:
+          type: integer
+          format: int32
+        updated_at:
+          type: string
+          format: date-time
+        vm_template_id:
+          type: string
+          format: uuid
+        vm_template_name:
+          type: string
     SandboxStatus:
       type: string
       enum:
@@ -5050,6 +5186,8 @@ tags:
   description: Lifecycle hook management endpoints
 - name: sandboxes
   description: Ephemeral sandbox environments for AI agents
+- name: sandbox-pools
+  description: Prewarmed sandbox pool management endpoints
 - name: scheduling
   description: Scheduling observability endpoints
 - name: audit-logs

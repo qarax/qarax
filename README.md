@@ -100,5 +100,5 @@ Working demo setups in `demos/`:
 | `gpu-passthrough/` | VFIO GPU passthrough |
 | `firecracker/` | Firecracker backend lifecycle demo |
 | `hyperconverged/` | Single-VM control plane + node |
-| `sandbox/` | Ephemeral auto-reaping VMs |
+| `sandbox/` | Ephemeral auto-reaping VMs with prewarmed pool claims |
 | `sse-events/` | Server-Sent Events stream |

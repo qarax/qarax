@@ -12,6 +12,7 @@ from .boot_mode import BootMode
 from .boot_source import BootSource
 from .commit_vm_request import CommitVmRequest
 from .commit_vm_response import CommitVmResponse
+from .configure_sandbox_pool_request import ConfigureSandboxPoolRequest
 from .create_disk_request import CreateDiskRequest
 from .create_disk_response import CreateDiskResponse
 from .create_sandbox_response import CreateSandboxResponse
@@ -61,6 +62,7 @@ from .rate_limiter_config import RateLimiterConfig
 from .register_lun_request import RegisterLunRequest
 from .restore_request import RestoreRequest
 from .sandbox import Sandbox
+from .sandbox_pool import SandboxPool
 from .sandbox_status import SandboxStatus
 from .scheduling_settings import SchedulingSettings
 from .security_group import SecurityGroup
@@ -109,6 +111,7 @@ __all__ = (
     "BootSource",
     "CommitVmRequest",
     "CommitVmResponse",
+    "ConfigureSandboxPoolRequest",
     "CreateDiskRequest",
     "CreateDiskResponse",
     "CreateSandboxResponse",
@@ -158,6 +161,7 @@ __all__ = (
     "RegisterLunRequest",
     "RestoreRequest",
     "Sandbox",
+    "SandboxPool",
     "SandboxStatus",
     "SchedulingSettings",
     "SecurityGroup",

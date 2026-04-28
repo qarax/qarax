@@ -896,6 +896,28 @@ pub async fn update_host_id(pool: &PgPool, vm_id: Uuid, host_id: Uuid) -> Result
     Ok(())
 }
 
+pub async fn update_name(pool: &PgPool, vm_id: Uuid, name: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE vms SET name = $1 WHERE id = $2")
+        .bind(name)
+        .bind(vm_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn update_name_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    vm_id: Uuid,
+    name: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE vms SET name = $1 WHERE id = $2")
+        .bind(name)
+        .bind(vm_id)
+        .execute(tx.as_mut())
+        .await?;
+    Ok(())
+}
+
 /// Update boot_vcpus and/or memory_size in a single query.
 /// At least one of the two options must be `Some`.
 pub async fn update_resize(

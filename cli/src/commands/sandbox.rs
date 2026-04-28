@@ -5,7 +5,7 @@ use uuid::Uuid;
 use crate::{
     api::{
         self,
-        models::{ExecSandboxRequest, NewSandbox},
+        models::{ConfigureSandboxPoolRequest, ExecSandboxRequest, NewSandbox},
     },
     client::Client,
 };
@@ -23,6 +23,11 @@ pub struct SandboxArgs {
 enum SandboxCommand {
     /// List all sandboxes
     List,
+    /// Manage prewarmed sandbox pools
+    Pool {
+        #[command(subcommand)]
+        command: SandboxPoolCommand,
+    },
     /// Get details of a sandbox
     Get {
         /// Sandbox name or ID
@@ -64,6 +69,33 @@ enum SandboxCommand {
     },
 }
 
+#[derive(Subcommand)]
+enum SandboxPoolCommand {
+    /// List configured sandbox pools
+    List,
+    /// Get the sandbox pool for a VM template
+    Get {
+        /// VM template name or ID
+        #[arg(long)]
+        template: String,
+    },
+    /// Configure the sandbox pool for a VM template
+    Set {
+        /// VM template name or ID
+        #[arg(long)]
+        template: String,
+        /// Keep at least this many prewarmed sandboxes ready
+        #[arg(long)]
+        min_ready: i32,
+    },
+    /// Delete the sandbox pool for a VM template
+    Delete {
+        /// VM template name or ID
+        #[arg(long)]
+        template: String,
+    },
+}
+
 #[derive(Tabled)]
 struct SandboxRow {
     #[tabled(rename = "ID")]
@@ -78,6 +110,20 @@ struct SandboxRow {
     ip: String,
     #[tabled(rename = "Idle Timeout")]
     idle_timeout: String,
+}
+
+#[derive(Tabled)]
+struct SandboxPoolRow {
+    #[tabled(rename = "Template")]
+    template: String,
+    #[tabled(rename = "Min Ready")]
+    min_ready: i32,
+    #[tabled(rename = "Ready")]
+    ready: i64,
+    #[tabled(rename = "Provisioning")]
+    provisioning: i64,
+    #[tabled(rename = "Error")]
+    error: i64,
 }
 
 pub async fn run(args: SandboxArgs, client: &Client, output: OutputFormat) -> anyhow::Result<()> {
@@ -101,6 +147,67 @@ pub async fn run(args: SandboxArgs, client: &Client, output: OutputFormat) -> an
                 println!("{}", Table::new(rows).with(Style::psql()));
             }
         }
+        SandboxCommand::Pool { command } => match command {
+            SandboxPoolCommand::List => {
+                let pools = api::sandbox_pools::list(client).await?;
+                if !matches!(output, OutputFormat::Table) {
+                    print_output(&pools, output)?;
+                } else {
+                    let rows: Vec<SandboxPoolRow> = pools
+                        .iter()
+                        .map(|pool| SandboxPoolRow {
+                            template: pool.vm_template_name.clone(),
+                            min_ready: pool.min_ready,
+                            ready: pool.current_ready,
+                            provisioning: pool.current_provisioning,
+                            error: pool.current_error,
+                        })
+                        .collect();
+                    println!("{}", Table::new(rows).with(Style::psql()));
+                }
+            }
+            SandboxPoolCommand::Get { template } => {
+                let vm_template_id = resolve_vm_template_id(client, &template).await?;
+                let pool = api::sandbox_pools::get(client, vm_template_id).await?;
+                if !matches!(output, OutputFormat::Table) {
+                    print_output(&pool, output)?;
+                } else {
+                    println!("Template:      {}", pool.vm_template_name);
+                    println!("Template ID:   {}", pool.vm_template_id);
+                    println!("Min Ready:     {}", pool.min_ready);
+                    println!("Ready:         {}", pool.current_ready);
+                    println!("Provisioning:  {}", pool.current_provisioning);
+                    println!("Error:         {}", pool.current_error);
+                    println!("Created:       {}", pool.created_at);
+                    println!("Updated:       {}", pool.updated_at);
+                }
+            }
+            SandboxPoolCommand::Set {
+                template,
+                min_ready,
+            } => {
+                let vm_template_id = resolve_vm_template_id(client, &template).await?;
+                let pool = api::sandbox_pools::put(
+                    client,
+                    vm_template_id,
+                    &ConfigureSandboxPoolRequest { min_ready },
+                )
+                .await?;
+                if !matches!(output, OutputFormat::Table) {
+                    print_output(&pool, output)?;
+                } else {
+                    println!(
+                        "Configured sandbox pool for {}: min_ready={}",
+                        pool.vm_template_name, pool.min_ready
+                    );
+                }
+            }
+            SandboxPoolCommand::Delete { template } => {
+                let vm_template_id = resolve_vm_template_id(client, &template).await?;
+                api::sandbox_pools::delete(client, vm_template_id).await?;
+                println!("Deleted sandbox pool for template: {template}");
+            }
+        },
         SandboxCommand::Get { sandbox } => {
             let id = resolve_sandbox_id(client, &sandbox).await?;
             let s = api::sandboxes::get(client, id).await?;

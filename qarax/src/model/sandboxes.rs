@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::{PgPool, Type};
+use sqlx::{PgPool, Postgres, Transaction, Type};
 use strum_macros::{Display, EnumString};
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -107,18 +107,43 @@ pub async fn create(
     name: &str,
     idle_timeout_secs: i32,
 ) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    create_tx_with_status(
+        &mut tx,
+        id,
+        vm_id,
+        vm_template_id,
+        name,
+        idle_timeout_secs,
+        SandboxStatus::Provisioning,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+pub async fn create_tx_with_status(
+    tx: &mut Transaction<'_, Postgres>,
+    id: Uuid,
+    vm_id: Uuid,
+    vm_template_id: Option<Uuid>,
+    name: &str,
+    idle_timeout_secs: i32,
+    status: SandboxStatus,
+) -> Result<(), sqlx::Error> {
     sqlx::query(
         r#"
-INSERT INTO sandboxes (id, vm_id, vm_template_id, name, idle_timeout_secs)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO sandboxes (id, vm_id, vm_template_id, name, status, idle_timeout_secs)
+VALUES ($1, $2, $3, $4, $5, $6)
         "#,
     )
     .bind(id)
     .bind(vm_id)
     .bind(vm_template_id)
     .bind(name)
+    .bind(status)
     .bind(idle_timeout_secs)
-    .execute(pool)
+    .execute(tx.as_mut())
     .await?;
     Ok(())
 }

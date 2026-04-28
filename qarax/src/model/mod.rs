@@ -9,6 +9,8 @@ pub mod jobs;
 pub mod lifecycle_hooks;
 pub mod network_interfaces;
 pub mod networks;
+pub mod sandbox_pool_members;
+pub mod sandbox_pools;
 pub mod sandboxes;
 pub mod security_groups;
 pub mod snapshots;

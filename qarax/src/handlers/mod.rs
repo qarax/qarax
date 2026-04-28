@@ -39,7 +39,7 @@ mod security_group;
 mod storage_object;
 mod storage_pool;
 mod transfer;
-mod vm;
+pub(crate) mod vm;
 mod vm_template;
 
 pub type Result<T, E = Error> = ::std::result::Result<T, E>;
@@ -173,6 +173,10 @@ pub struct StorageObjectListQuery {
         sandbox::handler::get,
         sandbox::handler::exec,
         sandbox::handler::delete,
+        sandbox::pool_handler::list,
+        sandbox::pool_handler::get,
+        sandbox::pool_handler::put,
+        sandbox::pool_handler::delete,
         scheduling::handler::config,
     ),
     components(
@@ -264,6 +268,8 @@ pub struct StorageObjectListQuery {
             crate::model::sandboxes::CreateSandboxResponse,
             crate::model::sandboxes::ExecSandboxRequest,
             crate::model::sandboxes::ExecSandboxResponse,
+            crate::model::sandbox_pools::SandboxPool,
+            crate::model::sandbox_pools::ConfigureSandboxPoolRequest,
             crate::configuration::SchedulingSettings,
         crate::model::audit_log::AuditLog,
         crate::model::audit_log::AuditAction,
@@ -284,6 +290,7 @@ pub struct StorageObjectListQuery {
         (name = "security-groups", description = "Security group management endpoints"),
         (name = "hooks", description = "Lifecycle hook management endpoints"),
         (name = "sandboxes", description = "Ephemeral sandbox environments for AI agents"),
+        (name = "sandbox-pools", description = "Prewarmed sandbox pool management endpoints"),
         (name = "scheduling", description = "Scheduling observability endpoints"),
         (name = "audit-logs", description = "Audit log endpoints")
     ),
@@ -615,6 +622,7 @@ fn boot_sources() -> Router {
 
 fn sandboxes() -> Router {
     Router::new()
+        .route("/sandbox-pools", get(sandbox::pool_handler::list))
         .route(
             "/sandboxes",
             get(sandbox::handler::list).post(sandbox::handler::create),
@@ -624,6 +632,12 @@ fn sandboxes() -> Router {
             get(sandbox::handler::get).delete(sandbox::handler::delete),
         )
         .route("/sandboxes/{sandbox_id}/exec", post(sandbox::handler::exec))
+        .route(
+            "/vm-templates/{vm_template_id}/sandbox-pool",
+            get(sandbox::pool_handler::get)
+                .put(sandbox::pool_handler::put)
+                .delete(sandbox::pool_handler::delete),
+        )
 }
 
 fn scheduling() -> Router {

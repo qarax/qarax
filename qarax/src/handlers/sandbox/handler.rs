@@ -8,14 +8,17 @@ use crate::{
     App,
     handlers::{ApiResponse, Result},
     model::{
-        hosts, network_interfaces,
+        hosts,
+        jobs::{self, JobType, NewJob},
+        network_interfaces, sandbox_pool_members,
         sandboxes::{
             self, CreateSandboxResponse, ExecSandboxRequest, ExecSandboxResponse, NewSandbox,
             Sandbox, SandboxStatus,
         },
-        vm_templates,
-        vms::{self, Hypervisor, NewVm, VmStatus},
+        vms::{self, VmStatus},
     },
+    sandbox_pool_manager,
+    sandbox_runtime::{destroy_vm, resolve_sandbox_vm},
 };
 
 use super::super::vm::handler::{create_vm_internal, start_vm_internal};
@@ -37,58 +40,15 @@ pub async fn create(
     Json(req): Json<NewSandbox>,
 ) -> Result<axum::response::Response> {
     let idle_timeout_secs = req.idle_timeout_secs.unwrap_or(300);
-    let sandbox_hypervisor = vm_templates::get(env.pool(), req.vm_template_id)
-        .await
-        .map_err(crate::errors::Error::Sqlx)?
-        .hypervisor
-        .unwrap_or(Hypervisor::Firecracker);
-
-    // Build a NewVm from the sandbox request — template provides all defaults,
-    // but sandboxes default to Firecracker when the template leaves hypervisor unset.
-    let new_vm = NewVm {
-        name: req.name.clone(),
-        tags: None,
-        vm_template_id: Some(req.vm_template_id),
-        instance_type_id: req.instance_type_id,
-        hypervisor: Some(sandbox_hypervisor),
-        architecture: None,
-        boot_vcpus: None,
-        max_vcpus: None,
-        cpu_topology: None,
-        kvm_hyperv: None,
-        memory_size: None,
-        memory_hotplug_size: None,
-        memory_mergeable: None,
-        memory_shared: None,
-        memory_hugepages: None,
-        memory_hugepage_size: None,
-        memory_prefault: None,
-        memory_thp: None,
-        boot_source_id: None,
-        root_disk_object_id: None,
-        boot_mode: None,
-        description: None,
-        image_ref: None,
-        cloud_init_user_data: None,
-        cloud_init_meta_data: None,
-        cloud_init_network_config: None,
-        network_id: req.network_id,
-        networks: None,
-        security_group_ids: None,
-        accelerator_config: None,
-        numa_config: None,
-        persistent_upper_pool_id: None,
-        config: serde_json::json!({ "sandbox_exec": true }),
-    };
-
-    let resolved_vm = vms::resolve_create_request(env.pool(), new_vm).await?;
-
-    if resolved_vm.image_ref.is_some() {
-        return Err(crate::errors::Error::UnprocessableEntity(
-            "sandbox VM templates with OCI image_ref are not supported yet".into(),
-        ));
+    if let Some(response) = try_claim_prewarmed_sandbox(&env, &req, idle_timeout_secs).await? {
+        return Ok(ApiResponse {
+            data: response,
+            code: StatusCode::ACCEPTED,
+        }
+        .into_response());
     }
 
+    let resolved_vm = resolve_sandbox_vm(&env, &req).await?;
     let vm_id = create_vm_internal(&env, resolved_vm).await?;
 
     // Create the sandbox record
@@ -103,7 +63,7 @@ pub async fn create(
     )
     .await
     {
-        destroy_sandbox_vm(&env, vm_id).await;
+        destroy_vm(env.pool(), vm_id).await;
         return Err(crate::errors::Error::Sqlx(e));
     }
 
@@ -111,79 +71,13 @@ pub async fn create(
     let job_id = match start_vm_internal(&env, vm_id).await {
         Ok(job_id) => job_id,
         Err(e) => {
-            destroy_sandbox_vm(&env, vm_id).await;
+            destroy_vm(env.pool(), vm_id).await;
             let _ = sandboxes::delete(env.pool(), sandbox_id).await;
             return Err(e);
         }
     };
 
-    // Spawn a watcher that transitions the sandbox to READY/ERROR once the VM settles
-    let db_pool = env.pool_arc();
-    tokio::spawn(async move {
-        let mut ticker = interval(Duration::from_secs(2));
-        let mut attempts = 0u32;
-        loop {
-            ticker.tick().await;
-            attempts += 1;
-            // 5-minute timeout
-            if attempts > 150 {
-                tracing::warn!(
-                    sandbox_id = %sandbox_id,
-                    vm_id = %vm_id,
-                    "Timed out waiting for sandbox VM to start"
-                );
-                let _ = sandboxes::update_status(
-                    &db_pool,
-                    sandbox_id,
-                    SandboxStatus::Error,
-                    Some("timed out waiting for VM to start".to_string()),
-                )
-                .await;
-                break;
-            }
-            match vms::get(&db_pool, vm_id).await {
-                Ok(vm) => match vm.status {
-                    VmStatus::Running => {
-                        let _ = sandboxes::update_status(
-                            &db_pool,
-                            sandbox_id,
-                            SandboxStatus::Ready,
-                            None,
-                        )
-                        .await;
-                        tracing::info!(sandbox_id = %sandbox_id, vm_id = %vm_id, "Sandbox ready");
-                        break;
-                    }
-                    VmStatus::Shutdown | VmStatus::Unknown => {
-                        let _ = sandboxes::update_status(
-                            &db_pool,
-                            sandbox_id,
-                            SandboxStatus::Error,
-                            Some("VM failed to start".to_string()),
-                        )
-                        .await;
-                        tracing::warn!(
-                            sandbox_id = %sandbox_id,
-                            vm_id = %vm_id,
-                            status = ?vm.status,
-                            "Sandbox VM entered error state"
-                        );
-                        break;
-                    }
-                    _ => continue,
-                },
-                Err(sqlx::Error::RowNotFound) => break,
-                Err(e) => {
-                    tracing::warn!(
-                        sandbox_id = %sandbox_id,
-                        vm_id = %vm_id,
-                        error = %e,
-                        "Sandbox watcher: failed to poll VM status"
-                    );
-                }
-            }
-        }
-    });
+    spawn_sandbox_ready_watcher(env.pool_arc(), sandbox_id, vm_id);
 
     Ok(ApiResponse {
         data: CreateSandboxResponse {
@@ -273,6 +167,145 @@ pub async fn exec(
         },
         code: StatusCode::OK,
     })
+}
+
+async fn try_claim_prewarmed_sandbox(
+    env: &App,
+    req: &NewSandbox,
+    idle_timeout_secs: i32,
+) -> Result<Option<CreateSandboxResponse>> {
+    if req.instance_type_id.is_some() || req.network_id.is_some() {
+        return Ok(None);
+    }
+
+    let mut tx = env
+        .pool()
+        .begin()
+        .await
+        .map_err(crate::errors::Error::Sqlx)?;
+    let Some(member) =
+        sandbox_pool_members::claim_ready_for_template_tx(&mut tx, req.vm_template_id)
+            .await
+            .map_err(crate::errors::Error::Sqlx)?
+    else {
+        return Ok(None);
+    };
+
+    let sandbox_id = Uuid::new_v4();
+    let job = jobs::create_completed_tx(
+        &mut tx,
+        NewJob {
+            job_type: JobType::SandboxClaim,
+            description: Some(format!("Claimed prewarmed sandbox {}", req.name)),
+            resource_id: Some(sandbox_id),
+            resource_type: Some(jobs::resource_types::SANDBOX.to_string()),
+        },
+        Some(serde_json::json!({ "source": "prewarmed_pool" })),
+    )
+    .await
+    .map_err(crate::errors::Error::Sqlx)?;
+
+    vms::update_name_tx(&mut tx, member.vm_id, &req.name)
+        .await
+        .map_err(crate::errors::Error::Sqlx)?;
+    sandboxes::create_tx_with_status(
+        &mut tx,
+        sandbox_id,
+        member.vm_id,
+        Some(req.vm_template_id),
+        &req.name,
+        idle_timeout_secs,
+        SandboxStatus::Ready,
+    )
+    .await
+    .map_err(crate::errors::Error::Sqlx)?;
+    sandbox_pool_members::delete_tx(&mut tx, member.id)
+        .await
+        .map_err(crate::errors::Error::Sqlx)?;
+    tx.commit().await.map_err(crate::errors::Error::Sqlx)?;
+
+    let env_for_refill = env.clone();
+    let vm_template_id = req.vm_template_id;
+    tokio::spawn(async move {
+        let _ = sandbox_pool_manager::sync_pool_for_template(&env_for_refill, vm_template_id).await;
+    });
+
+    Ok(Some(CreateSandboxResponse {
+        id: sandbox_id,
+        vm_id: member.vm_id,
+        job_id: job.id,
+    }))
+}
+
+fn spawn_sandbox_ready_watcher(
+    db_pool: std::sync::Arc<sqlx::PgPool>,
+    sandbox_id: Uuid,
+    vm_id: Uuid,
+) {
+    tokio::spawn(async move {
+        let mut ticker = interval(Duration::from_secs(2));
+        let mut attempts = 0u32;
+        loop {
+            ticker.tick().await;
+            attempts += 1;
+            if attempts > 150 {
+                tracing::warn!(
+                    sandbox_id = %sandbox_id,
+                    vm_id = %vm_id,
+                    "Timed out waiting for sandbox VM to start"
+                );
+                let _ = sandboxes::update_status(
+                    &db_pool,
+                    sandbox_id,
+                    SandboxStatus::Error,
+                    Some("timed out waiting for VM to start".to_string()),
+                )
+                .await;
+                break;
+            }
+            match vms::get(&db_pool, vm_id).await {
+                Ok(vm) => match vm.status {
+                    VmStatus::Running => {
+                        let _ = sandboxes::update_status(
+                            &db_pool,
+                            sandbox_id,
+                            SandboxStatus::Ready,
+                            None,
+                        )
+                        .await;
+                        tracing::info!(sandbox_id = %sandbox_id, vm_id = %vm_id, "Sandbox ready");
+                        break;
+                    }
+                    VmStatus::Created | VmStatus::Shutdown | VmStatus::Unknown => {
+                        let _ = sandboxes::update_status(
+                            &db_pool,
+                            sandbox_id,
+                            SandboxStatus::Error,
+                            Some("VM failed to start".to_string()),
+                        )
+                        .await;
+                        tracing::warn!(
+                            sandbox_id = %sandbox_id,
+                            vm_id = %vm_id,
+                            status = ?vm.status,
+                            "Sandbox VM entered error state"
+                        );
+                        break;
+                    }
+                    _ => continue,
+                },
+                Err(sqlx::Error::RowNotFound) => break,
+                Err(e) => {
+                    tracing::warn!(
+                        sandbox_id = %sandbox_id,
+                        vm_id = %vm_id,
+                        error = %e,
+                        "Sandbox watcher: failed to poll VM status"
+                    );
+                }
+            }
+        }
+    });
 }
 
 #[utoipa::path(
@@ -370,48 +403,10 @@ pub async fn delete(
         .await
         .map_err(crate::errors::Error::Sqlx)?;
 
-    destroy_sandbox_vm(&env, vm_id).await;
+    destroy_vm(env.pool(), vm_id).await;
 
     Ok(ApiResponse {
         data: (),
         code: StatusCode::NO_CONTENT,
     })
-}
-
-/// Stop and delete the VM backing a sandbox. Best-effort: errors are logged but not returned.
-pub(crate) async fn destroy_sandbox_vm(env: &App, vm_id: Uuid) {
-    use crate::grpc_client::NodeClient;
-    use crate::model::{host_gpus, hosts};
-
-    if let Err(e) = host_gpus::deallocate_by_vm(env.pool(), vm_id).await {
-        tracing::warn!(vm_id = %vm_id, error = %e, "Failed to deallocate GPUs for sandbox VM");
-    }
-
-    let vm = match vms::get(env.pool(), vm_id).await {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::warn!(vm_id = %vm_id, error = %e, "Failed to get sandbox VM for deletion");
-            let _ = vms::delete(env.pool(), vm_id).await;
-            return;
-        }
-    };
-
-    if let Some(host_id) = vm.host_id
-        && let Ok(Some(host)) = hosts::get_by_id(env.pool(), host_id).await
-    {
-        let client = NodeClient::new(&host.address, host.port as u16);
-        if let Err(e) = client.delete_vm(vm_id).await {
-            let not_found = e
-                .downcast_ref::<crate::errors::Error>()
-                .map(|err| matches!(err, crate::errors::Error::NotFound))
-                .unwrap_or(false);
-            if !not_found {
-                tracing::warn!(vm_id = %vm_id, error = %e, "delete_vm on node failed (ignoring)");
-            }
-        }
-    }
-
-    if let Err(e) = vms::delete(env.pool(), vm_id).await {
-        tracing::error!(vm_id = %vm_id, error = %e, "Failed to delete sandbox VM from DB");
-    }
 }

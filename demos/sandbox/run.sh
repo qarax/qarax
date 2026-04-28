@@ -9,9 +9,10 @@
 #   2. Create one sandbox from each template and measure time-to-ready
 #   3. Inspect the Firecracker sandbox (default managed backend)
 #   4. Execute a command inside the Firecracker sandbox
-#   5. Create a second Firecracker sandbox — demonstrating rapid provisioning
-#   6. Delete one sandbox manually
-#   7. Watch the remaining sandbox auto-expire after its short idle timeout
+#   5. Configure a prewarmed sandbox pool for the Firecracker template
+#   6. Claim a second Firecracker sandbox from the prewarmed pool
+#   7. Delete one sandbox manually
+#   8. Watch the remaining sandbox auto-expire after its short idle timeout
 #
 # Each sandbox creates its own underlying VM automatically; no manual VM
 # lifecycle management is required.
@@ -35,6 +36,7 @@ source "${REPO_ROOT}/demos/lib.sh"
 
 SERVER="${QARAX_SERVER:-http://localhost:8000}"
 IDLE_TIMEOUT="${SANDBOX_IDLE_TIMEOUT:-90}"
+POOL_MIN_READY="${SANDBOX_POOL_MIN_READY:-1}"
 TEMPLATE_NAME="sandbox-demo-template"
 CLOUDHV_TEMPLATE_NAME="sandbox-demo-template-cloudhv"
 BOOT_SOURCE_NAME="sandbox-demo-boot"
@@ -71,6 +73,7 @@ MANAGE_TEMPLATE_ASSETS=1
 CLEANUP_ONLY=0
 FC_READY_MS=""
 CH_READY_MS=""
+WARM_READY_MS=""
 RUN_SUFFIX="$(date +%s)-$$"
 
 TEMPLATE_NAME="${MANAGED_TEMPLATE_PREFIX}-${RUN_SUFFIX}"
@@ -163,6 +166,8 @@ cleanup() {
 	if [[ -n "$CLOUDHV_SANDBOX_ID" ]]; then
 		$QARAX sandbox delete "$CLOUDHV_SANDBOX_ID" 2>/dev/null || true
 	fi
+	$QARAX sandbox pool delete --template "$TEMPLATE_NAME" 2>/dev/null || true
+	$QARAX sandbox pool delete --template "$CLOUDHV_TEMPLATE_NAME" 2>/dev/null || true
 	if [[ "$TEMPLATE_CREATED" -eq 1 ]]; then
 		$QARAX vm-template delete "$TEMPLATE_NAME" 2>/dev/null || true
 	fi
@@ -225,6 +230,35 @@ for sandbox in json.load(sys.stdin):
 else:
     print("gone")
 ' "$sandbox_id" 2>/dev/null || echo "gone"
+}
+
+sandbox_pool_ready_count() {
+	local template_name="$1"
+	$QARAX sandbox pool get --template "$template_name" -o json 2>/dev/null | python3 -c '
+import json, sys
+data = json.load(sys.stdin)
+print(data.get("current_ready", 0))
+' 2>/dev/null || echo "0"
+}
+
+wait_for_sandbox_pool_ready() {
+	local template_name="$1"
+	local target_ready="$2"
+	local timeout="$3"
+	local elapsed=0
+	local ready=0
+	while ((elapsed < timeout)); do
+		ready=$(sandbox_pool_ready_count "$template_name")
+		if ((ready >= target_ready)); then
+			echo ""
+			return 0
+		fi
+		echo -ne "\r[pool ready=${ready}/${target_ready}]   "
+		sleep 2
+		elapsed=$((elapsed + 2))
+	done
+	echo ""
+	return 1
 }
 
 delete_matching_names() {
@@ -445,7 +479,7 @@ if [[ "$MANAGE_TEMPLATE_ASSETS" -eq 1 ]]; then
 	start_ms=$(now_ms)
 	SANDBOX1_ID=$(create_sandbox "$TEMPLATE_NAME" "$SANDBOX1_NAME")
 	wait_for_sandbox_status "$SANDBOX1_ID" ready || die "Sandbox $SANDBOX1_ID failed to become ready"
-	FC_READY_MS=$(( $(now_ms) - start_ms ))
+	FC_READY_MS=$(($(now_ms) - start_ms))
 	echo ""
 	info "Firecracker sandbox ready in ${FC_READY_MS} ms"
 	echo ""
@@ -455,26 +489,43 @@ if [[ "$MANAGE_TEMPLATE_ASSETS" -eq 1 ]]; then
 	start_ms=$(now_ms)
 	CLOUDHV_SANDBOX_ID=$(create_sandbox "$CLOUDHV_TEMPLATE_NAME" "$CLOUDHV_SANDBOX_NAME")
 	wait_for_sandbox_status "$CLOUDHV_SANDBOX_ID" ready || die "Sandbox $CLOUDHV_SANDBOX_ID failed to become ready"
-	CH_READY_MS=$(( $(now_ms) - start_ms ))
+	CH_READY_MS=$(($(now_ms) - start_ms))
 	echo ""
 	info "Cloud Hypervisor sandbox ready in ${CH_READY_MS} ms"
 	echo ""
 
-	if (( FC_READY_MS < CH_READY_MS )); then
+	if ((FC_READY_MS < CH_READY_MS)); then
 		info "In this run, Firecracker reached READY $((CH_READY_MS - FC_READY_MS)) ms faster than Cloud Hypervisor."
-	elif (( CH_READY_MS < FC_READY_MS )); then
+	elif ((CH_READY_MS < FC_READY_MS)); then
 		info "In this run, Cloud Hypervisor reached READY $((FC_READY_MS - CH_READY_MS)) ms faster than Firecracker."
 	else
 		info "In this run, Firecracker and Cloud Hypervisor reached READY in the same time."
 	fi
 
-	banner "Step 3 — Inspect Firecracker Sandbox"
+	banner "Step 3 — Configure Prewarmed Sandbox Pool"
+	step "Keeping ${POOL_MIN_READY} Firecracker sandbox(s) ready for instant claims..."
+	echo ""
+	run $QARAX sandbox pool set --template "$TEMPLATE_NAME" --min-ready "$POOL_MIN_READY"
+	wait_for_sandbox_pool_ready "$TEMPLATE_NAME" "$POOL_MIN_READY" 120 || die "Sandbox pool for '$TEMPLATE_NAME' did not become ready"
+	echo ""
+	step "Current sandbox pool status:"
+	run $QARAX sandbox pool get --template "$TEMPLATE_NAME"
+	echo ""
+
+	banner "Step 4 — Inspect Firecracker Sandbox"
 else
 	banner "Step 2 — Create Sandbox"
 	step "Creating sandbox from template '$TEMPLATE_NAME' (idle timeout: ${IDLE_TIMEOUT}s)..."
 	echo ""
 	SANDBOX1_ID=$(create_sandbox "$TEMPLATE_NAME" "$SANDBOX1_NAME")
 	wait_for_sandbox_status "$SANDBOX1_ID" ready || die "Sandbox $SANDBOX1_ID failed to become ready"
+	echo ""
+
+	banner "Step 3 — Configure Prewarmed Sandbox Pool"
+	step "Keeping ${POOL_MIN_READY} sandbox(s) ready for instant claims..."
+	echo ""
+	run $QARAX sandbox pool set --template "$TEMPLATE_NAME" --min-ready "$POOL_MIN_READY"
+	wait_for_sandbox_pool_ready "$TEMPLATE_NAME" "$POOL_MIN_READY" 120 || die "Sandbox pool for '$TEMPLATE_NAME' did not become ready"
 	echo ""
 fi
 
@@ -487,7 +538,7 @@ run $QARAX sandbox get "$SANDBOX1_ID"
 echo ""
 
 if [[ "$MANAGE_TEMPLATE_ASSETS" -eq 1 ]]; then
-	banner "Step 4 — Execute Inside Firecracker Sandbox"
+	banner "Step 5 — Execute Inside Firecracker Sandbox"
 	step "Running a command inside sandbox #1..."
 	echo ""
 	run $QARAX sandbox exec "$SANDBOX1_ID" -- /bin/sh -c 'printf sandbox-demo && uname -s'
@@ -499,28 +550,36 @@ if [[ "$MANAGE_TEMPLATE_ASSETS" -eq 1 ]]; then
 	CLOUDHV_SANDBOX_ID=""
 	echo ""
 
-	banner "Step 5 — Rapid Provisioning (second Firecracker sandbox)"
+	banner "Step 6 — Claim a Prewarmed Firecracker Sandbox"
 else
-	banner "Step 3 — Execute Inside Sandbox"
+	banner "Step 4 — Execute Inside Sandbox"
 	step "Running a command inside sandbox #1..."
 	echo ""
 	run $QARAX sandbox exec "$SANDBOX1_ID" -- /bin/sh -c 'printf sandbox-demo && uname -s'
 	echo ""
 
-	banner "Step 4 — Rapid Provisioning (second sandbox)"
+	banner "Step 5 — Claim a Prewarmed Sandbox"
 fi
 
-info "Demonstrating that multiple sandboxes can be provisioned from the same template concurrently."
+info "The second sandbox should claim the already-running standby VM from the pool."
 echo ""
 
-step "Creating sandbox #2..."
+step "Creating sandbox #2 from the prewarmed pool..."
 echo ""
+start_ms=$(now_ms)
 SANDBOX2_ID=$(create_sandbox "$TEMPLATE_NAME" "$SANDBOX2_NAME")
 wait_for_sandbox_status "$SANDBOX2_ID" ready || die "Sandbox $SANDBOX2_ID failed to become ready"
+WARM_READY_MS=$(($(now_ms) - start_ms))
+echo ""
+info "Prewarmed sandbox ready in ${WARM_READY_MS} ms"
 echo ""
 
 [[ -n "$SANDBOX2_ID" ]] || die "Could not determine sandbox #2 ID from list"
 info "Sandbox 2 ID: $SANDBOX2_ID"
+echo ""
+
+step "Sandbox pool after the claim:"
+run $QARAX sandbox pool get --template "$TEMPLATE_NAME"
 echo ""
 
 step "All sandboxes:"
@@ -528,9 +587,9 @@ run $QARAX sandbox list
 echo ""
 
 if [[ "$MANAGE_TEMPLATE_ASSETS" -eq 1 ]]; then
-	banner "Step 6 — Manual Delete"
+	banner "Step 7 — Manual Delete"
 else
-	banner "Step 5 — Manual Delete"
+	banner "Step 6 — Manual Delete"
 fi
 
 step "Deleting sandbox #1 (${SANDBOX1_ID::8}...) manually..."
@@ -544,9 +603,9 @@ run $QARAX sandbox list
 echo ""
 
 if [[ "$MANAGE_TEMPLATE_ASSETS" -eq 1 ]]; then
-	banner "Step 7 — Auto-Reap via Idle Timeout"
+	banner "Step 8 — Auto-Reap via Idle Timeout"
 else
-	banner "Step 6 — Auto-Reap via Idle Timeout"
+	banner "Step 7 — Auto-Reap via Idle Timeout"
 fi
 
 info "Sandbox #2 has an idle timeout of ${IDLE_TIMEOUT}s."
@@ -581,9 +640,10 @@ echo -e "${GREEN}What we demonstrated:${NC}"
 echo "  ✓ Create sandbox templates from a shared boot source"
 echo "  ✓ Default managed sandboxes to Firecracker"
 echo "  ✓ Benchmark Firecracker vs Cloud Hypervisor time-to-ready"
+echo "  ✓ Prewarm a Firecracker sandbox pool"
 echo "  ✓ Inspect a running Firecracker sandbox"
 echo "  ✓ Execute a command inside the sandbox over the guest agent"
-echo "  ✓ Provision a second sandbox from the same template"
+echo "  ✓ Claim a second sandbox from the prewarmed pool"
 echo "  ✓ Delete a sandbox manually"
 echo "  ✓ Watch idle-timeout auto-reap kick in"
 echo ""
@@ -591,12 +651,21 @@ if [[ -n "$FC_READY_MS" && -n "$CH_READY_MS" ]]; then
 	echo "Measured performance in this run:"
 	echo "  Firecracker ready time:      ${FC_READY_MS} ms"
 	echo "  Cloud Hypervisor ready time: ${CH_READY_MS} ms"
+	if [[ -n "$WARM_READY_MS" ]]; then
+		echo "  Prewarmed claim ready time:  ${WARM_READY_MS} ms"
+	fi
+	echo ""
+elif [[ -n "$WARM_READY_MS" ]]; then
+	echo "Measured performance in this run:"
+	echo "  Cold sandbox ready time:     ${FC_READY_MS:-n/a} ms"
+	echo "  Prewarmed claim ready time:  ${WARM_READY_MS} ms"
 	echo ""
 fi
 echo "Useful commands:"
 echo "  qarax sandbox list                 # list all sandboxes"
 echo "  qarax sandbox get <id>             # inspect a sandbox"
 echo "  qarax sandbox create --template T  # create a new sandbox"
+echo "  qarax sandbox pool get --template T # inspect the prewarmed pool"
 echo "  qarax sandbox exec <id> -- cmd     # run a command inside a sandbox"
 echo "  qarax sandbox delete <id>          # delete a sandbox immediately"
 echo "  qarax vm-template list             # list all VM templates"

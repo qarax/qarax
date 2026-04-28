@@ -709,6 +709,24 @@ pub struct ExecSandboxResponse {
     pub timed_out: bool,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SandboxPool {
+    pub id: Uuid,
+    pub vm_template_id: Uuid,
+    pub vm_template_name: String,
+    pub min_ready: i32,
+    pub current_ready: i64,
+    pub current_provisioning: i64,
+    pub current_error: i64,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ConfigureSandboxPoolRequest {
+    pub min_ready: i32,
+}
+
 // Lifecycle Hooks
 
 #[derive(Debug, Serialize, Deserialize)]

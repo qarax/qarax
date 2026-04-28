@@ -244,6 +244,24 @@ async def wait_for_sandbox_status(
     )
 
 
+async def wait_for_sandbox_pool_ready(client, vm_template_id, min_ready=1, timeout=SANDBOX_READY_TIMEOUT):
+    """Poll the sandbox pool endpoint until the requested number of warm members are ready."""
+    httpx_client = client.get_async_httpx_client()
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        response = await httpx_client.get(f"{QARAX_URL}/vm-templates/{vm_template_id}/sandbox-pool")
+        assert response.status_code == 200, (
+            f"Expected sandbox pool GET to succeed, got {response.status_code}: {response.text}"
+        )
+        body = response.json()
+        if body["current_ready"] >= min_ready:
+            return body
+        await asyncio.sleep(2)
+    raise TimeoutError(
+        f"Sandbox pool for template {vm_template_id} did not reach {min_ready} ready member(s)"
+    )
+
+
 @pytest.mark.asyncio
 async def test_sandbox_create_returns_202(client, sandbox_template):
     """POST /sandboxes returns 202 with id, vm_id, job_id."""
@@ -446,6 +464,57 @@ async def test_sandbox_exec_runs_command(client, sandbox_template):
             assert result.stderr == ""
         finally:
             await delete_sandbox.asyncio_detailed(client=c, sandbox_id=resp.id)
+
+
+@pytest.mark.asyncio
+async def test_sandbox_pool_claim_returns_completed_claim_job(client, sandbox_template):
+    """Configured sandbox pools hand out a ready sandbox via the warm-claim path."""
+    async with client as c:
+        httpx_client = c.get_async_httpx_client()
+        configured = None
+        created = None
+
+        try:
+            response = await httpx_client.put(
+                f"{QARAX_URL}/vm-templates/{sandbox_template}/sandbox-pool",
+                json={"min_ready": 1},
+            )
+            assert response.status_code == 200, (
+                f"Expected pool configure to succeed, got {response.status_code}: {response.text}"
+            )
+            configured = response.json()
+            assert configured["min_ready"] == 1
+
+            await wait_for_sandbox_pool_ready(c, sandbox_template, min_ready=1)
+
+            created = await create_sandbox.asyncio(
+                client=c,
+                body=NewSandbox(
+                    name=f"e2e-sandbox-pool-claim-{uuid.uuid4().hex[:8]}",
+                    vm_template_id=sandbox_template,
+                    idle_timeout_secs=120,
+                ),
+            )
+            assert created is not None
+
+            job_response = await httpx_client.get(f"{QARAX_URL}/jobs/{created.job_id}")
+            assert job_response.status_code == 200
+            job = job_response.json()
+            assert job["status"] == "completed"
+            assert job["job_type"] == "sandbox_claim"
+
+            sandbox = await wait_for_sandbox_status(
+                c, created.id, SandboxStatus.READY, timeout=10
+            )
+            assert sandbox is not None
+            assert sandbox.status == SandboxStatus.READY
+        finally:
+            if created is not None:
+                await delete_sandbox.asyncio_detailed(client=c, sandbox_id=created.id)
+            if configured is not None:
+                await httpx_client.delete(
+                    f"{QARAX_URL}/vm-templates/{sandbox_template}/sandbox-pool"
+                )
 
 
 @pytest.mark.asyncio
