@@ -4,6 +4,7 @@ use common::telemtry::{get_subscriber, init_subscriber};
 use once_cell::sync::Lazy;
 use qarax::{
     configuration::{DatabaseSettings, default_control_plane_architecture, get_configuration},
+    model::networks as network_model,
     startup::run,
 };
 use reqwest::StatusCode;
@@ -451,6 +452,17 @@ async fn create_network(
         .unwrap();
     assert_eq!(res.status(), StatusCode::CREATED);
     res.text().await.unwrap()
+}
+
+async fn attach_network_to_host(pool: &PgPool, network_id: &str, host_id: &str, bridge_name: &str) {
+    network_model::attach_host(
+        pool,
+        Uuid::parse_str(network_id).unwrap(),
+        Uuid::parse_str(host_id).unwrap(),
+        bridge_name,
+    )
+    .await
+    .unwrap();
 }
 
 async fn count_ip_allocations_for_vm(pool: &PgPool, vm_id: &str) -> i64 {
@@ -1050,7 +1062,7 @@ async fn test_start_with_conflicting_disk_keeps_vm_created() {
 async fn test_remove_nic_releases_ip_allocation() {
     let app = spawn_app().await;
     let client = reqwest::Client::new();
-    ensure_host_up(&client, &app.address).await;
+    let host_id = ensure_host_up(&client, &app.address).await;
 
     let network_id = create_network(
         &client,
@@ -1060,6 +1072,7 @@ async fn test_remove_nic_releases_ip_allocation() {
         "10.91.0.1",
     )
     .await;
+    attach_network_to_host(&app.pool, &network_id, &host_id, "testbr91").await;
 
     let vm_id = create_vm(
         &client,
@@ -1094,7 +1107,7 @@ async fn test_remove_nic_releases_ip_allocation() {
 async fn test_add_nic_hotplug_failure_cleans_up_allocation_and_record() {
     let app = spawn_app().await;
     let client = reqwest::Client::new();
-    ensure_host_up_with_name(&client, &app.address, "hotplug-host", 59999).await;
+    let host_id = ensure_host_up_with_name(&client, &app.address, "hotplug-host", 59999).await;
 
     let network_id = create_network(
         &client,
@@ -1104,6 +1117,7 @@ async fn test_add_nic_hotplug_failure_cleans_up_allocation_and_record() {
         "10.92.0.1",
     )
     .await;
+    attach_network_to_host(&app.pool, &network_id, &host_id, "testbr92").await;
 
     let vm_id = create_vm(
         &client,

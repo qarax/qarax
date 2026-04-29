@@ -16,6 +16,21 @@ type HostNetworkListRow = (
     String,
 );
 
+type AttachedNetworkRow = (
+    Uuid,
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    NetworkStatus,
+    Uuid,
+    String,
+    i32,
+    String,
+);
+
 #[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
 pub struct Network {
     pub id: Uuid,
@@ -94,6 +109,15 @@ pub struct IpAllocation {
     pub ip_address: String,
     pub vm_id: Option<Uuid>,
     pub allocated_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AttachedNetwork {
+    pub host_id: Uuid,
+    pub host_address: String,
+    pub host_port: i32,
+    pub network: Network,
+    pub bridge_name: String,
 }
 
 #[derive(sqlx::FromRow)]
@@ -299,6 +323,82 @@ ORDER BY n.name
             },
         )
         .collect())
+}
+
+pub async fn list_attached(pool: &PgPool) -> Result<Vec<AttachedNetwork>, sqlx::Error> {
+    let rows: Vec<AttachedNetworkRow> = sqlx::query_as(
+        r#"
+SELECT n.id,
+       n.name,
+       n.subnet::text,
+       n.gateway::text,
+       n.dns::text,
+       n.vpc_name,
+       n.type,
+       n.status,
+       h.id,
+       h.address,
+       h.port,
+       hn.bridge_name
+FROM networks n
+JOIN host_networks hn ON hn.network_id = n.id
+JOIN hosts h ON h.id = hn.host_id
+ORDER BY h.id, n.name
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(
+            |(
+                id,
+                name,
+                subnet,
+                gateway,
+                dns,
+                vpc_name,
+                network_type,
+                status,
+                host_id,
+                host_address,
+                host_port,
+                bridge_name,
+            )| AttachedNetwork {
+                host_id,
+                host_address,
+                host_port,
+                bridge_name,
+                network: Network {
+                    id,
+                    name,
+                    subnet,
+                    gateway: gateway.map(|v| v.split('/').next().unwrap_or(&v).to_string()),
+                    dns: dns.map(|v| v.split('/').next().unwrap_or(&v).to_string()),
+                    vpc_name,
+                    network_type,
+                    status,
+                },
+            },
+        )
+        .collect())
+}
+
+pub async fn list_vpc_host_ids(pool: &PgPool) -> Result<Vec<Uuid>, sqlx::Error> {
+    let rows = sqlx::query_as::<_, (Uuid,)>(
+        r#"
+SELECT DISTINCT hn.host_id
+FROM host_networks hn
+JOIN networks n ON n.id = hn.network_id
+WHERE n.vpc_name IS NOT NULL
+ORDER BY hn.host_id
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows.into_iter().map(|(host_id,)| host_id).collect())
 }
 
 // IPAM

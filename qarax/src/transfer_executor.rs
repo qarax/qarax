@@ -76,7 +76,6 @@ impl TransferExecutor for FilesystemTransferExecutor {
         pool: &StoragePool,
         db_pool: &PgPool,
     ) -> Result<TransferResult, TransferError> {
-        // 1. Find a host attached to this pool
         let host_id = storage_pools::find_host_for_pool(db_pool, pool.id)
             .await?
             .ok_or(TransferError::NoHostAttached)?;
@@ -84,7 +83,6 @@ impl TransferExecutor for FilesystemTransferExecutor {
             .await?
             .ok_or_else(|| TransferError::HostNotFound(host_id.to_string()))?;
 
-        // 2. Compute destination path from pool config
         let pool_path = pool
             .config
             .as_object()
@@ -99,7 +97,6 @@ impl TransferExecutor for FilesystemTransferExecutor {
             "Resolved destination path"
         );
 
-        // 3. Call the node to perform the transfer
         let node_client = NodeClient::new(&host.address, host.port as u16);
         let transfer_id_str = transfer.id.to_string();
 

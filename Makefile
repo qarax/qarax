@@ -1,4 +1,4 @@
-.PHONY: build test test-deps clean openapi sdk help lint fmt shfmt ruff-check ruff-fmt appliance-build appliance-push run-local stop-local
+.PHONY: build test test-deps clean openapi sdk help lint fmt shfmt ruff-check ruff-fmt ci-checks appliance-build appliance-push run-local stop-local
 
 # On macOS, override default musl target (linker fails cross-compiling from Mac)
 UNAME_S := $(shell uname -s)
@@ -27,6 +27,7 @@ help:
 	@echo "  make clean      - Clean build artifacts"
 	@echo "  make lint       - Run cargo clippy (lint)"
 	@echo "  make fmt        - Run cargo fmt + shfmt (format)"
+	@echo "  make ci-checks  - Run the same Dagger validation path as the GitHub CI Checks job"
 	@echo "  make ruff-check - Run ruff check on Python SDK"
 	@echo "  make ruff-fmt   - Run ruff format on Python SDK"
 	@echo "  make appliance-build - Build bootc appliance image locally"
@@ -80,6 +81,9 @@ lint: ruff-check
 fmt: ruff-fmt shfmt
 	cargo fmt
 	cd ci && gofmt -w .
+
+ci-checks:
+	CI=1 dagger --progress plain call --mod ./ci all --src=.
 
 shfmt:
 	shfmt -w -i 0 hack/*.sh scripts/*.sh

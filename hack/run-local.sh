@@ -37,6 +37,8 @@ cd "$REPO_ROOT"
 
 CH_VERSION_FILE="${REPO_ROOT}/versions/cloud-hypervisor-version"
 export CLOUD_HYPERVISOR_VERSION="${CLOUD_HYPERVISOR_VERSION:-$(tr -d '\n' <"$CH_VERSION_FILE")}"
+FC_VERSION_FILE="${REPO_ROOT}/versions/firecracker-version"
+export FIRECRACKER_VERSION="${FIRECRACKER_VERSION:-$(tr -d '\n' <"$FC_VERSION_FILE")}"
 
 COMPOSE_ARGS=()
 E2E_COMPOSE_ARGS=(-f "${REPO_ROOT}/e2e/docker-compose.yml")

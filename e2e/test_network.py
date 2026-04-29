@@ -258,6 +258,9 @@ async def test_vpc_routing_and_security_group_updates(client):
             (h for h in hosts if h.name == "local-node" or str(h.address) == "qarax-node"),
             hosts[0],
         )
+        secondary_host = next((h for h in hosts if h.id != primary_host.id), None)
+        if secondary_host is None:
+            pytest.skip("Cross-host VPC test requires at least two UP hosts")
 
         vm1_id = None
         vm2_id = None
@@ -298,7 +301,7 @@ async def test_vpc_routing_and_security_group_updates(client):
                     bridge_name=f"qvpa{test_id[:6]}",
                 )
                 attach_b = AttachHostRequest(
-                    host_id=primary_host.id,
+                    host_id=secondary_host.id,
                     bridge_name=f"qvpb{test_id[:6]}",
                 )
                 await call_api(attach_host, client=c, network_id=net_a_id, body=attach_a)
@@ -341,6 +344,11 @@ async def test_vpc_routing_and_security_group_updates(client):
                     await wait_for_status(c, vm2_id, VmStatus.RUNNING)
                 except TimeoutError:
                     pytest.skip("VMs did not reach RUNNING in the current e2e environment")
+
+                vm1 = await call_api(get_vm, client=c, vm_id=vm1_id)
+                vm2 = await call_api(get_vm, client=c, vm_id=vm2_id)
+                assert str(vm1.host_id) == str(primary_host.id)
+                assert str(vm2.host_id) == str(secondary_host.id)
 
                 ssh_container = {
                     "qarax-node": "e2e-qarax-node-1",
@@ -411,7 +419,7 @@ async def test_vpc_routing_and_security_group_updates(client):
                         break
                     await asyncio.sleep(2)
                 if not initial_success:
-                    pytest.skip("Cross-subnet VPC routing unavailable in the current e2e environment")
+                    pytest.skip("Cross-host VPC routing unavailable in the current e2e environment")
 
                 sg_resp = await raw.post(
                     "/security-groups",
@@ -482,7 +490,7 @@ async def test_vpc_routing_and_security_group_updates(client):
                 if net_b_id:
                     try:
                         await call_api(
-                            detach_host, client=c, network_id=net_b_id, host_id=str(primary_host.id)
+                            detach_host, client=c, network_id=net_b_id, host_id=str(secondary_host.id)
                         )
                         await call_api(delete_network, client=c, network_id=net_b_id)
                     except Exception as e:

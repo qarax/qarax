@@ -139,6 +139,7 @@ pub async fn attach_host(
     // passt-backed networks don't require bridge/DHCP/NAT provisioning.
     if network.network_type.as_deref() == Some("passt") {
         networks::attach_host(env.pool(), network_id, body.host_id, &body.bridge_name).await?;
+        network_policy::sync_cluster_vpc_state(&env, &network, &[body.host_id]).await?;
         return Ok(StatusCode::NO_CONTENT);
     }
 
@@ -182,7 +183,7 @@ pub async fn attach_host(
 
     // Record the attachment in the DB
     networks::attach_host(env.pool(), network_id, body.host_id, &body.bridge_name).await?;
-    network_policy::sync_host_network_isolation(&env, body.host_id).await?;
+    network_policy::sync_cluster_vpc_state(&env, &network, &[body.host_id]).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -232,7 +233,7 @@ pub async fn detach_host(
 
     // Remove the DB record
     networks::detach_host(env.pool(), network_id, host_id).await?;
-    network_policy::sync_host_network_isolation(&env, host_id).await?;
+    network_policy::sync_cluster_vpc_state(&env, &network, &[host_id]).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

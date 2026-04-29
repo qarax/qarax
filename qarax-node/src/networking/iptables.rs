@@ -105,13 +105,23 @@ pub async fn teardown_nat(bridge: &str, subnet: &str) -> Result<()> {
         &["-D", FORWARD_CHAIN, "-o", bridge, "-j", "ACCEPT"],
     )
     .await;
+    let _ = remove_nat_exemption_rules(bridge, subnet).await;
 
     Ok(())
 }
 
-pub async fn sync_network_isolation(bridge: &str, blocked_subnets: &[String]) -> Result<()> {
+pub async fn sync_network_isolation(
+    bridge: &str,
+    local_subnet: &str,
+    blocked_subnets: &[String],
+    nat_exempt_subnets: &[String],
+) -> Result<()> {
     super::validate_iface_name(bridge)?;
+    super::validate_ipv4_cidr(local_subnet)?;
     for subnet in blocked_subnets {
+        super::validate_ipv4_cidr(subnet)?;
+    }
+    for subnet in nat_exempt_subnets {
         super::validate_ipv4_cidr(subnet)?;
     }
 
@@ -133,6 +143,7 @@ pub async fn sync_network_isolation(bridge: &str, blocked_subnets: &[String]) ->
 
     run_cmd("iptables", &["-A", &out_chain, "-j", "RETURN"]).await?;
     run_cmd("iptables", &["-A", &in_chain, "-j", "RETURN"]).await?;
+    sync_nat_exemption_rules(bridge, local_subnet, nat_exempt_subnets).await?;
     Ok(())
 }
 
@@ -395,7 +406,7 @@ async fn sync_forward_jump_rules(parent_chain: &str, desired_rules: &[Vec<String
     {
         if desired_rules
             .iter()
-            .any(|desired_rule| forward_rule_matches(line, desired_rule))
+            .any(|desired_rule| rule_matches(line, desired_rule))
         {
             continue;
         }
@@ -411,11 +422,110 @@ async fn sync_forward_jump_rules(parent_chain: &str, desired_rules: &[Vec<String
     Ok(())
 }
 
-fn forward_rule_matches(line: &str, desired_rule: &[String]) -> bool {
+async fn ensure_nat_exemption_rule(
+    bridge: &str,
+    local_subnet: &str,
+    exempt_subnet: &str,
+) -> Result<()> {
+    let rule = [
+        "-s",
+        local_subnet,
+        "-d",
+        exempt_subnet,
+        "!",
+        "-o",
+        bridge,
+        "-j",
+        "RETURN",
+    ];
+
+    let mut check_args = vec!["-t", "nat", "-C", "POSTROUTING"];
+    check_args.extend_from_slice(&rule);
+    if run_cmd("iptables", &check_args).await.is_ok() {
+        return Ok(());
+    }
+
+    let mut insert_args = vec!["-t", "nat", "-I", "POSTROUTING", "1"];
+    insert_args.extend_from_slice(&rule);
+    run_cmd("iptables", &insert_args).await
+}
+
+async fn sync_nat_exemption_rules(
+    bridge: &str,
+    local_subnet: &str,
+    nat_exempt_subnets: &[String],
+) -> Result<()> {
+    for subnet in nat_exempt_subnets {
+        ensure_nat_exemption_rule(bridge, local_subnet, subnet).await?;
+    }
+
+    let desired_rules: Vec<Vec<String>> = nat_exempt_subnets
+        .iter()
+        .map(|subnet| {
+            vec![
+                "-s".to_string(),
+                local_subnet.to_string(),
+                "-d".to_string(),
+                subnet.clone(),
+                "!".to_string(),
+                "-o".to_string(),
+                bridge.to_string(),
+                "-j".to_string(),
+                "RETURN".to_string(),
+            ]
+        })
+        .collect();
+
+    let rules = run_cmd_capture("iptables", &["-t", "nat", "-S", "POSTROUTING"]).await?;
+    for line in rules.lines().filter(|line| {
+        line.contains(&format!("-s {local_subnet}"))
+            && line.contains(&format!("! -o {bridge}"))
+            && line.contains("-j RETURN")
+    }) {
+        if desired_rules
+            .iter()
+            .any(|desired_rule| rule_matches(line, desired_rule))
+        {
+            continue;
+        }
+
+        let mut parts: Vec<String> = line.split_whitespace().map(ToString::to_string).collect();
+        if parts.first().is_some_and(|part| part == "-A") {
+            parts[0] = "-D".to_string();
+            parts.insert(0, "nat".to_string());
+            parts.insert(0, "-t".to_string());
+            let refs: Vec<&str> = parts.iter().map(String::as_str).collect();
+            run_cmd("iptables", &refs).await?;
+        }
+    }
+
+    Ok(())
+}
+
+fn rule_matches(line: &str, desired_rule: &[String]) -> bool {
     let parts: HashSet<&str> = line.split_whitespace().collect();
     desired_rule
         .iter()
         .all(|token| parts.contains(token.as_str()))
+}
+
+async fn remove_nat_exemption_rules(bridge: &str, local_subnet: &str) -> Result<()> {
+    let rules = run_cmd_capture("iptables", &["-t", "nat", "-S", "POSTROUTING"]).await?;
+    for line in rules.lines().filter(|line| {
+        line.contains(&format!("-s {local_subnet}"))
+            && line.contains(&format!("! -o {bridge}"))
+            && line.contains("-j RETURN")
+    }) {
+        let mut parts: Vec<String> = line.split_whitespace().map(ToString::to_string).collect();
+        if parts.first().is_some_and(|part| part == "-A") {
+            parts[0] = "-D".to_string();
+            parts.insert(0, "nat".to_string());
+            parts.insert(0, "-t".to_string());
+            let refs: Vec<&str> = parts.iter().map(String::as_str).collect();
+            let _ = run_cmd("iptables", &refs).await;
+        }
+    }
+    Ok(())
 }
 
 async fn remove_forward_rules_referencing(chain: &str) -> Result<()> {

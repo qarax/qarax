@@ -23,6 +23,7 @@ Communication flow: control plane -> gRPC (`proto/node.proto`) -> qarax-node -> 
 make build       # build all packages and generate OpenAPI spec
 make test        # run tests (auto-starts Postgres via Docker)
 make lint        # cargo clippy --workspace -- -D warnings
+make ci-checks   # run the same Dagger validation path as GitHub CI Checks
 ```
 
 ## Running locally
@@ -42,7 +43,8 @@ an explanation of compose mode vs VM mode, and the steps to turn the same CLI
 flow into a LAN-reachable home-lab deployment.
 
 See [docs/NETWORK_ISOLATION.md](docs/NETWORK_ISOLATION.md) for VPC-style subnet
-grouping, VM security groups, and the intended CLI workflow.
+grouping, cross-host VXLAN-backed private routing, VM security groups, and the
+intended CLI workflow.
 
 ## CLI quickstart
 

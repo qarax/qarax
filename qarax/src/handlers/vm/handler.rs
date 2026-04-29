@@ -185,12 +185,25 @@ async fn scheduling_request_for_vm(
 ) -> Result<hosts::SchedulingRequest> {
     let (disk_bytes, storage_pool_id) =
         root_disk_scheduling_requirements(env, vm.root_disk_object_id).await?;
+    let required_network_ids = vm
+        .network_id
+        .into_iter()
+        .chain(
+            vm.networks
+                .iter()
+                .flatten()
+                .filter_map(|network| network.network_id),
+        )
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
     Ok(hosts::SchedulingRequest {
         memory_bytes: vm.memory_size,
         vcpus: vm.boot_vcpus,
         disk_bytes,
         architecture: Some(resolved_vm_architecture(env, vm.architecture.as_deref())),
         storage_pool_id,
+        required_network_ids,
         gpu: gpu_request(accel),
     })
 }
@@ -257,6 +270,7 @@ async fn select_preflight_host(
                     disk_bytes: 0,
                     architecture: Some(architecture.to_string()),
                     storage_pool_id: None,
+                    required_network_ids: vec![],
                     gpu: None,
                 },
             )

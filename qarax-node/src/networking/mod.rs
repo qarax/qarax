@@ -1,6 +1,7 @@
 pub mod bridge;
 pub mod dhcp;
 pub mod iptables;
+pub mod vxlan;
 
 /// Validate a network interface name.
 ///

@@ -7,18 +7,19 @@ networks:
 - **Security groups** attached to VMs
 
 These features are designed to work with Qarax-managed networks and managed VM
-NICs. They do not introduce a separate fabric or overlay network.
+NICs. When the same VPC spans multiple hosts, Qarax now uses a VXLAN transport
+between hosts so the VPC remains private across the cluster.
 
 ## Mental model
 
 - A **network** is a managed subnet in Qarax.
 - A **VPC** is an optional label on a network. Networks with the same VPC name
-  can route between their subnets **when attached to the same host**.
+  can route between their subnets across hosts.
 - A **security group** is a reusable set of firewall rules attached to a VM.
 
 In practice:
 
-- same VPC name + same host => cross-subnet routing allowed
+- same VPC name => cross-subnet routing allowed across attached hosts
 - different VPC names => cross-subnet traffic blocked
 - no VPC name => legacy behavior stays in place
 
@@ -26,8 +27,10 @@ In practice:
 
 Current behavior is intentionally narrow:
 
-- VPC routing/isolation is enforced for managed subnets attached to the **same
-  host**
+- VPC routing/isolation is enforced for managed subnets attached to hosts in the
+  same Qarax cluster
+- cross-host traffic uses a Qarax-managed VXLAN transport; VMs still keep their
+  existing per-subnet gateway model
 - security groups apply to **managed routed traffic** on managed NICs
 - empty security groups still take effect and give you **default-deny ingress**
 - if a VM has no explicit egress rules, egress remains allowed
@@ -51,15 +54,16 @@ qarax network create \
   --vpc demo
 ```
 
-### 2. Attach both networks to the same host
+### 2. Attach the networks to hosts
 
 ```bash
-qarax network attach-host --network app-a --host local-node --bridge-name qappa
-qarax network attach-host --network app-b --host local-node --bridge-name qappb
+qarax network attach-host --network app-a --host node-a --bridge-name qappa
+qarax network attach-host --network app-b --host node-b --bridge-name qappb
 ```
 
-This is what creates the bridge/DHCP/NAT state on the host and gives Qarax a
-place to enforce isolation.
+This creates the bridge/DHCP/NAT state on each host. If both networks share a
+VPC, Qarax also programs the host-to-host VXLAN transport and remote subnet
+routes automatically.
 
 ### 3. Create a security group
 
@@ -171,7 +175,7 @@ That sync happens when:
 - a security group is attached or detached
 - a security-group rule is created or deleted
 
-## Example: isolate environments on one host
+## Example: isolate environments across hosts
 
 Put production subnets in one VPC and staging subnets in another:
 
@@ -181,7 +185,7 @@ qarax network create --name prod-b --subnet 10.20.2.0/24 --gateway 10.20.2.1 --v
 qarax network create --name stage-a --subnet 10.30.1.0/24 --gateway 10.30.1.1 --vpc stage
 ```
 
-Result on the same host:
+Result across attached hosts:
 
 - `prod-a` <-> `prod-b`: allowed
 - `prod-a` <-> `stage-a`: blocked

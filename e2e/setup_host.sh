@@ -51,41 +51,48 @@ for host in json.load(sys.stdin):
 
 echo "Registering host (${QARAX_NODE_HOST}:${QARAX_NODE_PORT})..."
 
-add_attempts=10
-add_delay=2
-for add_attempt in $(seq 1 "$add_attempts"); do
-	add_output=""
-	if add_output=$(
-		$QARAX host add \
-			--name "$HOST_NAME" \
-			--address "$QARAX_NODE_HOST" \
-			--port "$QARAX_NODE_PORT" \
-			--user root \
-			--password "" 2>&1
-	); then
-		[[ -n "$add_output" ]] && echo "$add_output"
-		break
-	fi
+resolved_name="$(resolve_existing_host_name || true)"
+if [[ -n "$resolved_name" ]]; then
+	HOST_NAME="$resolved_name"
+	echo "Host already registered as '${HOST_NAME}', continuing with init." >&2
+else
 
-	# Uniqueness conflict: host already exists from a previous run — reuse it.
-	if echo "$add_output" | grep -qi "already exists\|conflict\|unique"; then
-		resolved_name="$(resolve_existing_host_name || true)"
-		if [[ -n "$resolved_name" ]]; then
-			HOST_NAME="$resolved_name"
-			echo "Host already exists as '${HOST_NAME}', continuing with init." >&2
+	add_attempts=10
+	add_delay=2
+	for add_attempt in $(seq 1 "$add_attempts"); do
+		add_output=""
+		if add_output=$(
+			$QARAX host add \
+				--name "$HOST_NAME" \
+				--address "$QARAX_NODE_HOST" \
+				--port "$QARAX_NODE_PORT" \
+				--user root \
+				--password "" 2>&1
+		); then
+			[[ -n "$add_output" ]] && echo "$add_output"
 			break
 		fi
-		echo "Host already exists, but could not resolve its canonical name." >&2
-	fi
 
-	echo "Host add attempt ${add_attempt}/${add_attempts} failed: ${add_output}" >&2
-	if [[ "$add_attempt" -lt "$add_attempts" ]]; then
-		sleep "$add_delay"
-	else
-		echo "Host add failed after ${add_attempts} attempts for ${HOST_NAME}" >&2
-		exit 1
-	fi
-done
+		# Uniqueness conflict: host already exists from a previous run — reuse it.
+		if echo "$add_output" | grep -qi "already exists\|conflict\|unique"; then
+			resolved_name="$(resolve_existing_host_name || true)"
+			if [[ -n "$resolved_name" ]]; then
+				HOST_NAME="$resolved_name"
+				echo "Host already exists as '${HOST_NAME}', continuing with init." >&2
+				break
+			fi
+			echo "Host already exists, but could not resolve its canonical name." >&2
+		fi
+
+		echo "Host add attempt ${add_attempt}/${add_attempts} failed: ${add_output}" >&2
+		if [[ "$add_attempt" -lt "$add_attempts" ]]; then
+			sleep "$add_delay"
+		else
+			echo "Host add failed after ${add_attempts} attempts for ${HOST_NAME}" >&2
+			exit 1
+		fi
+	done
+fi
 
 attempts=10
 delay_secs=2

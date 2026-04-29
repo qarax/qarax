@@ -481,6 +481,7 @@ service VmService {
   rpc AttachNetwork(AttachNetworkRequest) returns (AttachNetworkResponse) {}
   rpc DetachNetwork(DetachNetworkRequest) returns (DetachNetworkResponse) {}
   rpc SyncNetworkIsolation(SyncNetworkIsolationRequest) returns (google.protobuf.Empty) {}
+  rpc SyncVpcOverlays(SyncVpcOverlaysRequest) returns (google.protobuf.Empty) {}
   rpc SyncVmFirewall(SyncVmFirewallRequest) returns (google.protobuf.Empty) {}
 }
 
@@ -701,6 +702,27 @@ message VmFirewallInterface {
 message SyncNetworkIsolationRequest {
   string bridge_name = 1;
   repeated string blocked_subnets = 2;
+  string local_subnet = 3;
+  repeated string nat_exempt_subnets = 4;
+}
+
+message VpcOverlayRoute {
+  string subnet = 1;
+  string via_ip = 2;
+}
+
+message VpcOverlayConfig {
+  string vpc_name = 1;
+  string interface_name = 2;
+  uint32 vni = 3;
+  string local_underlay_ip = 4;
+  string local_overlay_cidr = 5;
+  repeated string peer_underlay_ips = 6;
+  repeated VpcOverlayRoute routes = 7;
+}
+
+message SyncVpcOverlaysRequest {
+  repeated VpcOverlayConfig overlays = 1;
 }
 
 message SyncVmFirewallRequest {

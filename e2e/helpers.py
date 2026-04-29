@@ -20,6 +20,15 @@ async def call_api(endpoint_module, **kwargs):
     detailed_fn = getattr(endpoint_module, "asyncio_detailed", None)
     if callable(detailed_fn):
         response = await detailed_fn(**kwargs)
+        status_code = getattr(response, "status_code", None)
+        code = getattr(status_code, "value", status_code)
+        if code is not None and code >= 400:
+            body = getattr(response, "content", b"")
+            if isinstance(body, bytes):
+                body = body.decode(errors="replace")
+            raise AssertionError(
+                f"{endpoint_module.__name__} failed with HTTP {code}: {body}"
+            )
         return response.parsed
 
     raise AttributeError(f"{endpoint_module.__name__} has no async entrypoint")

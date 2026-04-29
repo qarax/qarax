@@ -188,6 +188,7 @@ pub struct SchedulingRequest {
     pub disk_bytes: i64,
     pub architecture: Option<String>,
     pub storage_pool_id: Option<Uuid>,
+    pub required_network_ids: Vec<Uuid>,
     pub gpu: Option<GpuRequest>,
 }
 
@@ -332,6 +333,12 @@ LEFT JOIN (
         qb.push("AND hsp.storage_pool_id = ");
         qb.push_bind(storage_pool_id);
         qb.push(' ');
+    }
+
+    for network_id in &request.required_network_ids {
+        qb.push("AND EXISTS (SELECT 1 FROM host_networks hn WHERE hn.host_id = h.id AND hn.network_id = ");
+        qb.push_bind(*network_id);
+        qb.push(") ");
     }
 
     if let Some(architecture) = request.architecture.as_deref() {
@@ -540,7 +547,10 @@ mod tests {
     use super::{DeployHostRequest, HostStatus, NewHost, SchedulingRequest};
     use crate::{
         configuration::{SchedulingSettings, get_configuration},
-        model::vms::{self, Hypervisor, ResolvedNewVm},
+        model::{
+            networks::{self, NewNetwork},
+            vms::{self, Hypervisor, ResolvedNewVm},
+        },
     };
 
     struct TestDatabase {
@@ -617,6 +627,22 @@ mod tests {
             .expect("Failed to persist host resources");
 
             host_id
+        }
+
+        async fn create_network(&self, name: &str, subnet: &str, gateway: &str) -> Uuid {
+            networks::create(
+                &self.pool,
+                NewNetwork {
+                    name: name.to_string(),
+                    subnet: subnet.to_string(),
+                    gateway: Some(gateway.to_string()),
+                    dns: None,
+                    vpc_name: None,
+                    network_type: Some("isolated".to_string()),
+                },
+            )
+            .await
+            .expect("create network")
         }
     }
 
@@ -739,6 +765,7 @@ mod tests {
                 disk_bytes: 100,
                 architecture: Some("aarch64".to_string()),
                 storage_pool_id: None,
+                required_network_ids: vec![],
                 gpu: None,
             },
             &scheduling_config(),
@@ -770,6 +797,7 @@ mod tests {
                 disk_bytes: 250,
                 architecture: Some("x86_64".to_string()),
                 storage_pool_id: None,
+                required_network_ids: vec![],
                 gpu: None,
             },
             &scheduling_config(),
@@ -794,6 +822,7 @@ mod tests {
             disk_bytes: 0,
             architecture: Some("x86_64".to_string()),
             storage_pool_id: None,
+            required_network_ids: vec![],
             gpu: None,
         };
 
@@ -867,5 +896,43 @@ mod tests {
         assert_eq!(capacity.host_id, host_id);
         assert_eq!(capacity.allocated_vcpus, 3);
         assert_eq!(capacity.allocated_memory_bytes, 1536);
+    }
+
+    #[tokio::test]
+    async fn pick_host_respects_required_network_attachments() {
+        let db = TestDatabase::new().await;
+        let attached_host_id = db
+            .insert_up_host("attached-host", Some("x86_64"), 8, 16 * 1024, 10_000, 1.0)
+            .await;
+        let unattached_host_id = db
+            .insert_up_host("unattached-host", Some("x86_64"), 8, 16 * 1024, 10_000, 0.1)
+            .await;
+        let network_id = db
+            .create_network("sched-net", "10.77.0.0/24", "10.77.0.1")
+            .await;
+        networks::attach_host(&db.pool, network_id, attached_host_id, "qtnet0")
+            .await
+            .expect("attach network to host");
+
+        let mut tx = db.pool.begin().await.expect("begin tx");
+        let host = super::pick_host_tx(
+            &mut tx,
+            &SchedulingRequest {
+                memory_bytes: 1024,
+                vcpus: 2,
+                disk_bytes: 100,
+                architecture: Some("x86_64".to_string()),
+                storage_pool_id: None,
+                required_network_ids: vec![network_id],
+                gpu: None,
+            },
+            &scheduling_config(),
+        )
+        .await
+        .expect("pick host")
+        .expect("expected host");
+
+        assert_eq!(host.id, attached_host_id);
+        assert_ne!(host.id, unattached_host_id);
     }
 }

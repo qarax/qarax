@@ -37,7 +37,7 @@ enum NetworkCommand {
         /// DNS server IP address
         #[arg(long)]
         dns: Option<String>,
-        /// Optional VPC name. Networks with the same VPC name on one host can route between subnets.
+        /// Optional VPC name. Networks with the same VPC name can route between subnets across attached hosts.
         #[arg(long)]
         vpc: Option<String>,
         /// Network type (bridge or vlan)

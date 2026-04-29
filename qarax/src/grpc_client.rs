@@ -82,9 +82,10 @@ use node::{
     NumaPlacement, OverlayBdDiskSource, PayloadConfig, PreflightImageRequest,
     PreflightImageResponse, ReceiveMigrationRequest, RemoveDeviceRequest, ResizeDiskRequest,
     ResizeVmRequest, RestoreVmRequest, SendMigrationRequest, SnapshotVmRequest, StoragePoolKind,
-    SyncNetworkIsolationRequest, SyncVmFirewallRequest, TransferResponse, UrlDiskSource,
-    VfioDeviceConfig, VmConfig, VmCounters, VmFirewallInterface, VmId, VmState, VsockConfig,
-    file_transfer_service_client::FileTransferServiceClient, vm_service_client::VmServiceClient,
+    SyncNetworkIsolationRequest, SyncVmFirewallRequest, SyncVpcOverlaysRequest, TransferResponse,
+    UrlDiskSource, VfioDeviceConfig, VmConfig, VmCounters, VmFirewallInterface, VmId, VmState,
+    VpcOverlayConfig, VsockConfig, file_transfer_service_client::FileTransferServiceClient,
+    vm_service_client::VmServiceClient,
 };
 
 /// Client for communicating with qarax-node via gRPC
@@ -991,18 +992,40 @@ impl NodeClient {
     pub async fn sync_network_isolation(
         &self,
         bridge_name: &str,
+        local_subnet: &str,
         blocked_subnets: &[String],
+        nat_exempt_subnets: &[String],
     ) -> Result<()> {
         let mut client = self.connect_vm_service().await?;
         client
             .sync_network_isolation(SyncNetworkIsolationRequest {
                 bridge_name: bridge_name.to_string(),
                 blocked_subnets: blocked_subnets.to_vec(),
+                local_subnet: local_subnet.to_string(),
+                nat_exempt_subnets: nat_exempt_subnets.to_vec(),
             })
             .await
             .map_err(|s| {
                 anyhow::anyhow!(
                     "gRPC sync_network_isolation failed: code={:?} message={}",
+                    s.code(),
+                    s.message()
+                )
+            })?;
+        Ok(())
+    }
+
+    #[instrument(skip(self, overlays))]
+    pub async fn sync_vpc_overlays(&self, overlays: &[VpcOverlayConfig]) -> Result<()> {
+        let mut client = self.connect_vm_service().await?;
+        client
+            .sync_vpc_overlays(SyncVpcOverlaysRequest {
+                overlays: overlays.to_vec(),
+            })
+            .await
+            .map_err(|s| {
+                anyhow::anyhow!(
+                    "gRPC sync_vpc_overlays failed: code={:?} message={}",
                     s.code(),
                     s.message()
                 )

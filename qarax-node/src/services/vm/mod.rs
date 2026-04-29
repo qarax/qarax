@@ -17,8 +17,8 @@ use crate::rpc::node::{
     PreflightCheck, PreflightImageRequest, PreflightImageResponse, ReceiveMigrationRequest,
     ReceiveMigrationResponse, RemoveDeviceRequest, ResizeDiskRequest, ResizeVmRequest,
     RestoreVmRequest, SendMigrationRequest, SnapshotVmRequest, StoragePoolKind,
-    SyncNetworkIsolationRequest, SyncVmFirewallRequest, VmConfig, VmCounters, VmId, VmList,
-    VmState, vm_service_server::VmService,
+    SyncNetworkIsolationRequest, SyncVmFirewallRequest, SyncVpcOverlaysRequest, VmConfig,
+    VmCounters, VmId, VmList, VmState, vm_service_server::VmService,
 };
 use crate::vmm::{VmmError, VmmManager};
 use common::cpu_list::expand_cpu_list;
@@ -1099,9 +1099,25 @@ impl VmService for VmServiceImpl {
         request: Request<SyncNetworkIsolationRequest>,
     ) -> Result<Response<()>, Status> {
         let req = request.into_inner();
-        crate::networking::iptables::sync_network_isolation(&req.bridge_name, &req.blocked_subnets)
+        crate::networking::iptables::sync_network_isolation(
+            &req.bridge_name,
+            &req.local_subnet,
+            &req.blocked_subnets,
+            &req.nat_exempt_subnets,
+        )
+        .await
+        .map_err(|e| Status::internal(format!("Failed to sync network isolation: {e}")))?;
+        Ok(Response::new(()))
+    }
+
+    async fn sync_vpc_overlays(
+        &self,
+        request: Request<SyncVpcOverlaysRequest>,
+    ) -> Result<Response<()>, Status> {
+        let req = request.into_inner();
+        crate::networking::vxlan::sync_vpc_overlays(&req.overlays)
             .await
-            .map_err(|e| Status::internal(format!("Failed to sync network isolation: {e}")))?;
+            .map_err(|e| Status::internal(format!("Failed to sync VPC overlays: {e}")))?;
         Ok(Response::new(()))
     }
 
