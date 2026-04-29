@@ -31,6 +31,7 @@ pub enum AuditAction {
     RestoreSnapshot,
     CreateTemplate,
     NodeUpgrade,
+    Evacuate,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Display, EnumString, ToSchema, PartialEq, Eq)]

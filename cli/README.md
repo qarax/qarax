@@ -70,7 +70,7 @@ Warm claims currently apply to plain template-based sandbox requests; if you pas
 
 ### Scheduling
 
-When creating a VM, qarax picks a host in `up` state. Subsequent operations route to whichever host the VM was scheduled on. Add and initialize a host first to make scheduling work.
+When creating a VM, qarax picks a host in `up` state. Hosts in `maintenance` stay manageable but are excluded from new scheduling. Subsequent operations route to whichever host the VM was scheduled on. Add and initialize a host first to make scheduling work.
 
 ### Hosts
 
@@ -86,6 +86,13 @@ qarax host init node-01
 
 # Deploy a bootc image
 qarax host deploy node-01 --image ghcr.io/example/qarax-node:latest --ssh-key ~/.ssh/id_ed25519
+
+# Keep a host out of new placement
+qarax host maintenance enter node-01
+qarax host maintenance exit node-01
+
+# Live-evacuate running/paused VMs and leave the host in maintenance
+qarax host evacuate node-01
 
 # Inspect
 qarax host list

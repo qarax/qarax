@@ -660,6 +660,48 @@ WHERE ($1::text IS NULL OR name = $1)
     Ok(vms)
 }
 
+pub async fn list_by_host(pool: &PgPool, host_id: Uuid) -> Result<Vec<Vm>, sqlx::Error> {
+    let vms: Vec<VmRow> = sqlx::query_as!(
+        VmRow,
+        r#"
+SELECT id,
+        name,
+        tags as "tags!",
+        status as "status: _",
+        host_id as "host_id?",
+        hypervisor as "hypervisor: _",
+        boot_source_id as "boot_source_id?",
+        boot_mode as "boot_mode: _",
+        description as "description?",
+        boot_vcpus,
+        max_vcpus,
+        cpu_topology as "cpu_topology: _",
+        kvm_hyperv as "kvm_hyperv!",
+        memory_size,
+        memory_hotplug_size as "memory_hotplug_size?",
+        memory_mergeable as "memory_mergeable!",
+        memory_shared as "memory_shared!",
+        memory_hugepages as "memory_hugepages!",
+        memory_hugepage_size as "memory_hugepage_size?",
+        memory_prefault as "memory_prefault!",
+        memory_thp as "memory_thp!",
+        image_ref as "image_ref?",
+        cloud_init_user_data as "cloud_init_user_data?",
+        cloud_init_meta_data as "cloud_init_meta_data?",
+        cloud_init_network_config as "cloud_init_network_config?",
+        config as "config: _"
+FROM vms
+WHERE host_id = $1
+ORDER BY name
+        "#,
+        host_id
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(vms.into_iter().map(Into::into).collect())
+}
+
 pub async fn get(pool: &PgPool, vm_id: Uuid) -> Result<Vm, sqlx::Error> {
     let vm: VmRow = sqlx::query_as!(
         VmRow,

@@ -7,6 +7,7 @@ use http::StatusCode;
 #[cfg(feature = "otel")]
 use opentelemetry::KeyValue;
 use serde::{Deserialize, Serialize};
+use sqlx::PgPool;
 #[cfg(feature = "otel")]
 use std::time::Instant;
 use tracing::{error, info, instrument, warn};
@@ -43,7 +44,7 @@ use crate::{
         vm_disks::{self, NewVmDisk},
         vm_rng,
         vm_templates::{self, CreateVmTemplateFromVmRequest},
-        vms::{self, BootMode, NewVm, NewVmNetwork, ResolvedNewVm, Vm, VmStatus},
+        vms::{self, BootMode, Hypervisor, NewVm, NewVmNetwork, ResolvedNewVm, Vm, VmStatus},
     },
     network_policy,
 };
@@ -205,6 +206,7 @@ async fn scheduling_request_for_vm(
         storage_pool_id,
         required_network_ids,
         gpu: gpu_request(accel),
+        excluded_host_ids: vec![],
     })
 }
 
@@ -272,6 +274,7 @@ async fn select_preflight_host(
                     storage_pool_id: None,
                     required_network_ids: vec![],
                     gpu: None,
+                    excluded_host_ids: vec![],
                 },
             )
             .await
@@ -3360,6 +3363,254 @@ pub struct VmMigrateResponse {
     pub job_id: Uuid,
 }
 
+pub(crate) struct PlannedVmMigration {
+    pub vm_id: Uuid,
+    pub vm_name: String,
+    pub source_host: Host,
+    pub target_host: Host,
+    pub original_status: VmStatus,
+    pub create_req: CreateVmRequest,
+}
+
+pub(crate) async fn plan_vm_migration(
+    env: &App,
+    vm_id: Uuid,
+    target_host_id: Uuid,
+) -> Result<PlannedVmMigration> {
+    let vm = vms::get(env.pool(), vm_id).await?;
+
+    match vm.status {
+        VmStatus::Running | VmStatus::Paused => {}
+        _ => {
+            return Err(crate::errors::Error::UnprocessableEntity(format!(
+                "VM must be running or paused to migrate (current status: {})",
+                vm.status
+            )));
+        }
+    }
+
+    if vm.hypervisor != Hypervisor::CloudHv {
+        return Err(crate::errors::Error::UnprocessableEntity(
+            "live migration is currently only supported for cloud_hv VMs".into(),
+        ));
+    }
+
+    let source_host = host_for_vm(env, vm_id).await?;
+    let target_host = hosts::require_by_id(env.pool(), target_host_id).await?;
+
+    if source_host.id == target_host.id {
+        return Err(crate::errors::Error::UnprocessableEntity(
+            "Source and destination hosts are the same".into(),
+        ));
+    }
+
+    if let Some(architecture) = persisted_vm_architecture(&vm) {
+        ensure_host_matches_architecture(&target_host, &architecture)?;
+    }
+
+    if !host_gpus::list_by_vm(env.pool(), vm_id).await?.is_empty() {
+        return Err(crate::errors::Error::UnprocessableEntity(
+            "live migration is not supported for VMs with attached GPUs".into(),
+        ));
+    }
+
+    // Live migration requires all disks to be on shared storage pools.
+    let db_disks = vm_disks::list_by_vm(env.pool(), vm_id).await?;
+
+    let so_ids: Vec<Uuid> = db_disks
+        .iter()
+        .filter_map(|d| d.storage_object_id)
+        .collect();
+    if !so_ids.is_empty() {
+        let objects = storage_objects::get_batch(env.pool(), &so_ids).await?;
+        let pool_ids: Vec<Uuid> = objects
+            .iter()
+            .map(|o| o.storage_pool_id)
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+        let pools = storage_pools::get_batch(env.pool(), &pool_ids).await?;
+        for pool in &pools {
+            if !pool.pool_type.supports_live_migration() {
+                return Err(crate::errors::Error::UnprocessableEntity(format!(
+                    "live migration is not supported for pool '{}' (type: {:?})",
+                    pool.name, pool.pool_type
+                )));
+            }
+            let dest_has_pool =
+                storage_pools::host_has_pool(env.pool(), target_host.id, pool.id).await?;
+            if !dest_has_pool {
+                return Err(crate::errors::Error::UnprocessableEntity(format!(
+                    "destination host {} does not have pool '{}' ({:?}) attached",
+                    target_host.id, pool.name, pool.pool_type
+                )));
+            }
+        }
+    }
+
+    let upper_so_ids: Vec<Uuid> = db_disks
+        .iter()
+        .filter_map(|d| d.upper_storage_object_id)
+        .collect();
+    if !upper_so_ids.is_empty() {
+        let upper_objects = storage_objects::get_batch(env.pool(), &upper_so_ids).await?;
+        let upper_pool_ids: Vec<Uuid> = upper_objects
+            .iter()
+            .map(|o| o.storage_pool_id)
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+        let upper_pools = storage_pools::get_batch(env.pool(), &upper_pool_ids).await?;
+        for pool in &upper_pools {
+            if !pool.pool_type.supports_live_migration() {
+                return Err(crate::errors::Error::UnprocessableEntity(format!(
+                    "live migration is not supported: persistent upper layer is on local pool '{}'",
+                    pool.name
+                )));
+            }
+            let dest_has_pool =
+                storage_pools::host_has_pool(env.pool(), target_host.id, pool.id).await?;
+            if !dest_has_pool {
+                return Err(crate::errors::Error::UnprocessableEntity(format!(
+                    "destination host {} does not have upper layer pool '{}' attached",
+                    target_host.id, pool.name
+                )));
+            }
+        }
+    }
+
+    let mut target_vm = vm.clone();
+    target_vm.host_id = Some(target_host.id);
+    let create_req = build_create_vm_request(env, &target_vm).await?;
+
+    Ok(PlannedVmMigration {
+        vm_id,
+        vm_name: vm.name,
+        source_host,
+        target_host,
+        original_status: vm.status,
+        create_req,
+    })
+}
+
+pub(crate) async fn execute_planned_vm_migration(
+    db_pool: &PgPool,
+    plan: PlannedVmMigration,
+    job_id: Option<Uuid>,
+) -> std::result::Result<(), String> {
+    let PlannedVmMigration {
+        vm_id,
+        source_host,
+        target_host,
+        original_status,
+        create_req,
+        ..
+    } = plan;
+    let source_client = NodeClient::new(&source_host.address, source_host.port as u16);
+    let dest_client = NodeClient::new(&target_host.address, target_host.port as u16);
+
+    let vm_config = crate::grpc_client::node::VmConfig {
+        vm_id: vm_id.to_string(),
+        hypervisor: crate::grpc_client::node::HypervisorType::CloudHv as i32,
+        cpus: Some(crate::grpc_client::node::CpusConfig {
+            boot_vcpus: create_req.boot_vcpus,
+            max_vcpus: create_req.max_vcpus,
+            topology: None,
+            kvm_hyperv: None,
+            max_phys_bits: None,
+        }),
+        memory: Some(crate::grpc_client::node::MemoryConfig {
+            size: create_req.memory_size,
+            hotplug_size: create_req.memory_hotplug_size,
+            mergeable: None,
+            shared: if create_req.memory_shared {
+                Some(true)
+            } else {
+                None
+            },
+            hugepages: if create_req.memory_hugepages {
+                Some(true)
+            } else {
+                None
+            },
+            hugepage_size: None,
+            prefault: None,
+            thp: None,
+        }),
+        payload: Some(crate::grpc_client::node::PayloadConfig {
+            kernel: create_req.kernel.filter(|s| !s.is_empty()),
+            cmdline: create_req.cmdline.filter(|s| !s.is_empty()),
+            initramfs: create_req.initramfs.filter(|s| !s.trim().is_empty()),
+            firmware: create_req.firmware.filter(|s| !s.is_empty()),
+        }),
+        disks: create_req.disks,
+        networks: create_req.networks,
+        rng: create_req.rng,
+        serial: create_req
+            .serial
+            .or(Some(crate::grpc_client::node::ConsoleConfig {
+                mode: crate::grpc_client::node::ConsoleMode::Pty as i32,
+                file: None,
+                socket: None,
+                iommu: None,
+            })),
+        console: create_req.console,
+        rate_limit_groups: vec![],
+        cloud_init: create_req.cloud_init_user_data.as_ref().map(|user_data| {
+            crate::grpc_client::node::CloudInitConfig {
+                user_data: user_data.clone(),
+                meta_data: create_req.cloud_init_meta_data.clone().unwrap_or_default(),
+                network_config: create_req
+                    .cloud_init_network_config
+                    .clone()
+                    .unwrap_or_default(),
+            }
+        }),
+        devices: create_req.devices,
+        vsock: create_req.vsock,
+        numa_placement: None,
+    };
+
+    let receiver_url = dest_client
+        .receive_migration(vm_id, vm_config, 0)
+        .await
+        .map_err(|e| format!("receive_migration failed: {:#}", e))?;
+
+    if let Some(job_id) = job_id {
+        let _ = jobs::update_progress(db_pool, job_id, 25).await;
+    }
+
+    let actual_receiver_url = receiver_url.replace("0.0.0.0", &target_host.address);
+
+    source_client
+        .send_migration(vm_id, &actual_receiver_url)
+        .await
+        .map_err(|e| format!("send_migration failed: {:#}", e))?;
+
+    if let Some(job_id) = job_id {
+        let _ = jobs::update_progress(db_pool, job_id, 75).await;
+    }
+
+    if let Err(e) = vms::update_host_id(db_pool, vm_id, target_host.id).await {
+        tracing::error!(
+            vm_id = %vm_id,
+            error = %e,
+            "Failed to update host_id after migration"
+        );
+    }
+    let _ = vms::update_status(db_pool, vm_id, original_status).await;
+
+    if let Err(e) = source_client.delete_vm(vm_id).await {
+        tracing::warn!(
+            vm_id = %vm_id,
+            error = %e,
+            "Source cleanup (delete_vm) failed after migration — manual cleanup may be needed"
+        );
+    }
+
+    Ok(())
+}
+
 #[utoipa::path(
     post,
     path = "/vms/{vm_id}/template",
@@ -3406,102 +3657,7 @@ pub async fn migrate(
     Path(vm_id): Path<Uuid>,
     Json(req): Json<VmMigrateRequest>,
 ) -> Result<axum::response::Response> {
-    let vm = vms::get(env.pool(), vm_id).await?;
-
-    match vm.status {
-        VmStatus::Running | VmStatus::Paused => {}
-        _ => {
-            return Err(crate::errors::Error::UnprocessableEntity(format!(
-                "VM must be running or paused to migrate (current status: {})",
-                vm.status
-            )));
-        }
-    }
-
-    let source_host = host_for_vm(&env, vm_id).await?;
-    let target_host = hosts::require_by_id(env.pool(), req.target_host_id).await?;
-
-    if source_host.id == target_host.id {
-        return Err(crate::errors::Error::UnprocessableEntity(
-            "Source and destination hosts are the same".into(),
-        ));
-    }
-
-    // Live migration requires all disks to be on shared storage pools.
-    // NFS pools share the same filesystem path; OverlayBD pools share
-    // the same OCI registry (the destination mounts a fresh TCMU device).
-    // Local pools are node-local and cannot be migrated.
-    let db_disks = vm_disks::list_by_vm(env.pool(), vm_id).await?;
-
-    // Check primary storage objects.
-    let so_ids: Vec<Uuid> = db_disks
-        .iter()
-        .filter_map(|d| d.storage_object_id)
-        .collect();
-    if !so_ids.is_empty() {
-        let objects = storage_objects::get_batch(env.pool(), &so_ids).await?;
-        let pool_ids: Vec<Uuid> = objects
-            .iter()
-            .map(|o| o.storage_pool_id)
-            .collect::<std::collections::HashSet<_>>()
-            .into_iter()
-            .collect();
-        let pools = storage_pools::get_batch(env.pool(), &pool_ids).await?;
-        for pool in &pools {
-            if !pool.pool_type.supports_live_migration() {
-                return Err(crate::errors::Error::UnprocessableEntity(format!(
-                    "live migration is not supported for pool '{}' (type: {:?})",
-                    pool.name, pool.pool_type
-                )));
-            }
-            let dest_has_pool =
-                storage_pools::host_has_pool(env.pool(), target_host.id, pool.id).await?;
-            if !dest_has_pool {
-                return Err(crate::errors::Error::UnprocessableEntity(format!(
-                    "destination host {} does not have pool '{}' ({:?}) attached",
-                    target_host.id, pool.name, pool.pool_type
-                )));
-            }
-        }
-    }
-
-    // Check upper layer storage objects (persistent OverlayBD).
-    // Local upper layers cannot be live-migrated; NFS upper layers can.
-    let upper_so_ids: Vec<Uuid> = db_disks
-        .iter()
-        .filter_map(|d| d.upper_storage_object_id)
-        .collect();
-    if !upper_so_ids.is_empty() {
-        let upper_objects = storage_objects::get_batch(env.pool(), &upper_so_ids).await?;
-        let upper_pool_ids: Vec<Uuid> = upper_objects
-            .iter()
-            .map(|o| o.storage_pool_id)
-            .collect::<std::collections::HashSet<_>>()
-            .into_iter()
-            .collect();
-        let upper_pools = storage_pools::get_batch(env.pool(), &upper_pool_ids).await?;
-        for pool in &upper_pools {
-            if !pool.pool_type.supports_live_migration() {
-                return Err(crate::errors::Error::UnprocessableEntity(format!(
-                    "live migration is not supported: persistent upper layer is on local pool '{}'",
-                    pool.name
-                )));
-            }
-            let dest_has_pool =
-                storage_pools::host_has_pool(env.pool(), target_host.id, pool.id).await?;
-            if !dest_has_pool {
-                return Err(crate::errors::Error::UnprocessableEntity(format!(
-                    "destination host {} does not have upper layer pool '{}' attached",
-                    target_host.id, pool.name
-                )));
-            }
-        }
-    }
-
-    // Build the VmConfig that the destination node needs to set up infrastructure.
-    let create_req = build_create_vm_request(&env, &vm).await?;
-
-    let original_status = vm.status.clone();
+    let plan = plan_vm_migration(&env, vm_id, req.target_host_id).await?;
 
     vms::update_status(env.pool(), vm_id, VmStatus::Migrating).await?;
 
@@ -3511,7 +3667,7 @@ pub async fn migrate(
             job_type: JobType::VmMigrate,
             description: Some(format!(
                 "Migrating VM {} from host {} to {}",
-                vm.name, source_host.id, target_host.id
+                plan.vm_name, plan.source_host.id, plan.target_host.id
             )),
             resource_id: Some(vm_id),
             resource_type: Some(jobs::resource_types::VM.to_string()),
@@ -3529,123 +3685,12 @@ pub async fn migrate(
             return;
         }
 
-        let source_client = NodeClient::new(&source_host.address, source_host.port as u16);
-        let dest_client = NodeClient::new(&target_host.address, target_host.port as u16);
-
-        // Build the VmConfig proto for the destination node.  We reuse the
-        // same fields built for create_vm, but rebuild the bridge references
-        // for the destination host.
-        let vm_config = crate::grpc_client::node::VmConfig {
-            vm_id: vm_id.to_string(),
-            hypervisor: crate::grpc_client::node::HypervisorType::CloudHv as i32,
-            cpus: Some(crate::grpc_client::node::CpusConfig {
-                boot_vcpus: create_req.boot_vcpus,
-                max_vcpus: create_req.max_vcpus,
-                topology: None,
-                kvm_hyperv: None,
-                max_phys_bits: None,
-            }),
-            memory: Some(crate::grpc_client::node::MemoryConfig {
-                size: create_req.memory_size,
-                hotplug_size: create_req.memory_hotplug_size,
-                mergeable: None,
-                shared: if create_req.memory_shared {
-                    Some(true)
-                } else {
-                    None
-                },
-                hugepages: if create_req.memory_hugepages {
-                    Some(true)
-                } else {
-                    None
-                },
-                hugepage_size: None,
-                prefault: None,
-                thp: None,
-            }),
-            payload: Some(crate::grpc_client::node::PayloadConfig {
-                kernel: create_req.kernel.filter(|s| !s.is_empty()),
-                cmdline: create_req.cmdline.filter(|s| !s.is_empty()),
-                initramfs: create_req.initramfs.filter(|s| !s.trim().is_empty()),
-                firmware: create_req.firmware.filter(|s| !s.is_empty()),
-            }),
-            disks: create_req.disks,
-            networks: create_req.networks,
-            rng: create_req.rng,
-            serial: create_req
-                .serial
-                .or(Some(crate::grpc_client::node::ConsoleConfig {
-                    mode: crate::grpc_client::node::ConsoleMode::Pty as i32,
-                    file: None,
-                    socket: None,
-                    iommu: None,
-                })),
-            console: create_req.console,
-            rate_limit_groups: vec![],
-            cloud_init: create_req.cloud_init_user_data.as_ref().map(|user_data| {
-                crate::grpc_client::node::CloudInitConfig {
-                    user_data: user_data.clone(),
-                    meta_data: create_req.cloud_init_meta_data.clone().unwrap_or_default(),
-                    network_config: create_req
-                        .cloud_init_network_config
-                        .clone()
-                        .unwrap_or_default(),
-                }
-            }),
-            devices: create_req.devices,
-            vsock: create_req.vsock,
-            // NUMA placement is not carried across migration — the destination node
-            // will handle its own NUMA topology.
-            numa_placement: None,
-        };
-
-        // Step 1: Prepare the destination node.
-        let receiver_url = match dest_client.receive_migration(vm_id, vm_config, 0).await {
-            Ok(url) => url,
-            Err(e) => {
-                let msg = format!("receive_migration failed: {:#}", e);
-                tracing::error!(vm_id = %vm_id, job_id = %job_id, error = %msg);
-                let _ = jobs::mark_failed(&db_pool, job_id, &msg).await;
-                let _ = vms::update_status(&db_pool, vm_id, original_status.clone()).await;
-                return;
-            }
-        };
-
-        let _ = jobs::update_progress(&db_pool, job_id, 25).await;
-
-        // Replace 0.0.0.0 with the destination host's real IP so the source
-        // CH can connect to it.
-        let actual_receiver_url = receiver_url.replace("0.0.0.0", &target_host.address);
-
-        // Step 2: Initiate the migration on the source node.
-        if let Err(e) = source_client
-            .send_migration(vm_id, &actual_receiver_url)
-            .await
-        {
-            let msg = format!("send_migration failed: {:#}", e);
+        let original_status = plan.original_status.clone();
+        if let Err(msg) = execute_planned_vm_migration(db_pool.as_ref(), plan, Some(job_id)).await {
             tracing::error!(vm_id = %vm_id, job_id = %job_id, error = %msg);
             let _ = jobs::mark_failed(&db_pool, job_id, &msg).await;
             let _ = vms::update_status(&db_pool, vm_id, original_status).await;
             return;
-        }
-
-        let _ = jobs::update_progress(&db_pool, job_id, 75).await;
-
-        // Step 3: Update the DB to point to the destination host.
-        if let Err(e) = vms::update_host_id(&db_pool, vm_id, target_host.id).await {
-            tracing::error!(vm_id = %vm_id, job_id = %job_id, error = %e, "Failed to update host_id after migration");
-        }
-        let _ = vms::update_status(&db_pool, vm_id, original_status).await;
-
-        // Step 4: Clean up source node resources (TAP devices, persisted config).
-        // delete_vm on the source is best-effort — the CH process has already
-        // exited after migration, so shutdown/kill will fail gracefully.
-        if let Err(e) = source_client.delete_vm(vm_id).await {
-            tracing::warn!(
-                vm_id = %vm_id,
-                error = %e,
-                "Source cleanup (delete_vm) failed after migration — manual cleanup may be needed"
-            );
         }
 
         let _ = jobs::mark_completed(&db_pool, job_id, None).await;

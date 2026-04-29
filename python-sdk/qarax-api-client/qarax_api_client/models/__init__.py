@@ -27,6 +27,7 @@ from .hook_execution import HookExecution
 from .hook_execution_status import HookExecutionStatus
 from .hook_scope import HookScope
 from .host import Host
+from .host_evacuate_response import HostEvacuateResponse
 from .host_gpu import HostGpu
 from .host_numa_node import HostNumaNode
 from .host_resource_capacity import HostResourceCapacity
@@ -126,6 +127,7 @@ __all__ = (
     "HookExecutionStatus",
     "HookScope",
     "Host",
+    "HostEvacuateResponse",
     "HostGpu",
     "HostNumaNode",
     "HostResourceCapacity",

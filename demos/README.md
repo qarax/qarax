@@ -12,6 +12,7 @@ Each demo lives in its own directory with a `run.sh` and a `README.md`.
 | [gpu-passthrough/](gpu-passthrough/) | GPU passthrough via VFIO to an OCI-booted VM | `make run-local` + VFIO GPU |
 | [hyperconverged/](hyperconverged/) | Control plane running inside a Cloud Hypervisor VM on bare metal (defaults to `passt` for workload VMs) | KVM + podman + root |
 | [cross-host-vpc/](cross-host-vpc/) | Cross-host same-VPC routing plus live security-group updates across two hosts | two-node e2e stack |
+| [host-evacuation/](host-evacuation/) | Manual host evacuation: move a VM off one host, leave it in maintenance, and prove new scheduling avoids it | two-node e2e stack |
 | [network-isolation/](network-isolation/) | Same-VPC subnet routing plus VM security groups with live firewall updates | `./hack/run-local.sh` |
 | [sandbox/](sandbox/) | Ephemeral VMs from templates with idle-timeout auto-reap and prewarmed pool claims | `./hack/run-local.sh` |
 | [firecracker/](firecracker/) | Firecracker backend lifecycle demo (create/start/pause/resume/stop/delete) | `./hack/run-local.sh` |
@@ -31,8 +32,14 @@ Each demo lives in its own directory with a `run.sh` and a `README.md`.
 # Run the network isolation demo
 ./demos/network-isolation/run.sh
 
+# For two-host demos, start the two-node e2e stack first
+# (example: cd e2e && KEEP=1 ./run_e2e_tests.sh test_live_migration.py::test_host_evacuation_marks_maintenance_and_avoids_rescheduling)
+
 # Run the cross-host VPC demo
 ./demos/cross-host-vpc/run.sh
+
+# Run the host evacuation demo
+./demos/host-evacuation/run.sh
 
 # Run the Firecracker backend demo
 ./demos/firecracker/run.sh

@@ -26,8 +26,10 @@ from uuid import UUID
 import pytest
 from qarax_api_client import Client
 from qarax_api_client.api.hosts import add as add_host
+from qarax_api_client.api.hosts import evacuate as evacuate_host
 from qarax_api_client.api.hosts import init as init_host
 from qarax_api_client.api.hosts import list_ as list_hosts
+from qarax_api_client.api.hosts import update as update_host
 from qarax_api_client.api.jobs import get as get_job
 from qarax_api_client.api.storage_objects import (
     create as create_storage_object,
@@ -44,7 +46,14 @@ from qarax_api_client.api.vms import get as get_vm
 from qarax_api_client.api.vms import migrate
 from qarax_api_client.api.vms import start as start_vm
 from qarax_api_client.api.vms import stop as stop_vm
-from qarax_api_client.models import Hypervisor, NewStoragePool, NewVm, StoragePoolType
+from qarax_api_client.models import (
+    HostStatus,
+    Hypervisor,
+    NewStoragePool,
+    NewVm,
+    StoragePoolType,
+    UpdateHostRequest,
+)
 from qarax_api_client.models.attach_host_request import AttachHostRequest
 from qarax_api_client.models.job_status import JobStatus
 from qarax_api_client.models.new_host import NewHost
@@ -140,6 +149,22 @@ async def _wait_for_job(c, job_id, timeout=MIGRATION_TIMEOUT):
             raise RuntimeError(f"Migration job {job_id} failed: {error}")
         await asyncio.sleep(1)
     raise TimeoutError(f"Migration job {job_id} did not complete within {timeout}s")
+
+
+async def _wait_for_host_status(c, host_id, expected_status, timeout=MIGRATION_TIMEOUT):
+    start = time.time()
+    while time.time() - start < timeout:
+        hosts = await list_hosts.asyncio(client=c)
+        host = next((h for h in hosts or [] if h.id == host_id), None)
+        if host is not None and host.status == expected_status:
+            return host
+        await asyncio.sleep(1)
+    hosts = await list_hosts.asyncio(client=c)
+    host = next((h for h in hosts or [] if h.id == host_id), None)
+    current = host.status if host is not None else "missing"
+    raise TimeoutError(
+        f"Host {host_id} did not reach {expected_status} within {timeout}s. Current: {current}"
+    )
 
 
 # Negative tests (no VM boot required)────────
@@ -318,6 +343,114 @@ async def test_live_migration(client, two_hosts):
         finally:
             if vm_id is not None:
                 await delete_vm.asyncio_detailed(client=c, vm_id=vm_id)
+            if disk_id is not None:
+                try:
+                    await delete_storage_object.asyncio_detailed(
+                        client=c, object_id=disk_id
+                    )
+                except Exception:
+                    pass
+            if pool_id is not None:
+                try:
+                    await delete_pool.asyncio_detailed(client=c, pool_id=pool_id)
+                except Exception:
+                    pass
+
+
+@pytest.mark.asyncio
+async def test_host_evacuation_marks_maintenance_and_avoids_rescheduling(client, two_hosts):
+    host1_id, host2_id = two_hosts
+    pool_id = None
+    disk_id = None
+    vm_id = None
+    extra_vm_id = None
+    source_host_id = None
+
+    async with client as c:
+        try:
+            pool = NewStoragePool(
+                name=f"e2e-evacuate-nfs-{uuid.uuid4().hex[:6]}",
+                pool_type=StoragePoolType.NFS,
+                config={"url": f"{NFS_SERVER_HOST}:{NFS_EXPORT_PATH}"},
+            )
+            pool_id_raw = await create_pool.asyncio(client=c, body=pool)
+            pool_id = UUID(str(pool_id_raw).strip('"'))
+
+            for host_id in (host1_id, host2_id):
+                resp = await attach_pool_host.asyncio_detailed(
+                    client=c,
+                    pool_id=pool_id,
+                    body=AttachHostRequest(host_id=host_id, bridge_name="unused"),
+                )
+                assert resp.status_code in (200, 201, 204), (
+                    f"Failed to attach NFS pool to host {host_id}: HTTP {resp.status_code}"
+                )
+
+            obj = NewStorageObject(
+                name=f"e2e-evacuate-disk-{uuid.uuid4().hex[:6]}",
+                storage_pool_id=str(pool_id),
+                object_type=StorageObjectType.DISK,
+                size_bytes=512 * 1024 * 1024,
+            )
+            disk_id_raw = await create_storage_object.asyncio(client=c, body=obj)
+            disk_id = UUID(str(disk_id_raw).strip('"'))
+
+            vm_body = NewVm(
+                name=f"e2e-host-evacuate-{uuid.uuid4().hex[:6]}",
+                hypervisor=Hypervisor.CLOUD_HV,
+                boot_vcpus=1,
+                max_vcpus=1,
+                memory_size=256 * 1024 * 1024,
+            )
+            result = await create_vm.asyncio(client=c, body=vm_body)
+            vm_id = UUID(str(result).strip('"'))
+
+            await start_vm.asyncio_detailed(client=c, vm_id=vm_id)
+            vm = await _wait_for_vm_status(c, vm_id, VmStatus.RUNNING)
+            source_host_id = vm.host_id
+            assert source_host_id is not None, "VM should have an assigned host"
+
+            evacuate_resp = await evacuate_host.asyncio_detailed(
+                client=c,
+                host_id=source_host_id,
+            )
+            assert evacuate_resp.status_code == 202, (
+                f"Expected 202 from evacuate, got {evacuate_resp.status_code}: {evacuate_resp.content}"
+            )
+            await _wait_for_job(c, evacuate_resp.parsed.job_id)
+
+            await _wait_for_host_status(c, source_host_id, HostStatus.MAINTENANCE)
+            vm = await _wait_for_vm_status(c, vm_id, VmStatus.RUNNING)
+            assert vm.host_id != source_host_id, "VM should move off the evacuated host"
+
+            extra_vm = NewVm(
+                name=f"e2e-post-evacuate-{uuid.uuid4().hex[:6]}",
+                hypervisor=Hypervisor.CLOUD_HV,
+                boot_vcpus=1,
+                max_vcpus=1,
+                memory_size=256 * 1024 * 1024,
+            )
+            extra_result = await create_vm.asyncio(client=c, body=extra_vm)
+            extra_vm_id = UUID(str(extra_result).strip('"'))
+            extra_vm_state = await get_vm.asyncio(client=c, vm_id=extra_vm_id)
+            assert (
+                extra_vm_state.host_id != source_host_id
+            ), "maintenance host should be excluded from new scheduling"
+        finally:
+            if source_host_id is not None:
+                await update_host.asyncio_detailed(
+                    host_id=source_host_id,
+                    client=c,
+                    body=UpdateHostRequest(status=HostStatus.UP),
+                )
+            if vm_id is not None:
+                try:
+                    await stop_vm.asyncio_detailed(client=c, vm_id=vm_id)
+                except Exception:
+                    pass
+                await delete_vm.asyncio_detailed(client=c, vm_id=vm_id)
+            if extra_vm_id is not None:
+                await delete_vm.asyncio_detailed(client=c, vm_id=extra_vm_id)
             if disk_id is not None:
                 try:
                     await delete_storage_object.asyncio_detailed(

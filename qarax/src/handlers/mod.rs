@@ -86,6 +86,7 @@ pub struct StorageObjectListQuery {
         host::handler::update,
         host::handler::deploy,
         host::handler::init,
+        host::handler::evacuate,
         host::handler::node_upgrade,
         host::handler::list_gpus,
         host::handler::list_numa_nodes,
@@ -185,6 +186,7 @@ pub struct StorageObjectListQuery {
             crate::model::hosts::NewHost,
             crate::model::hosts::UpdateHostRequest,
             crate::model::hosts::DeployHostRequest,
+            crate::handlers::host::handler::HostEvacuateResponse,
             crate::model::hosts::HostStatus,
             crate::model::host_gpus::HostGpu,
             crate::model::host_gpus::AcceleratorConfig,
@@ -392,6 +394,7 @@ fn hosts() -> Router {
         .route("/hosts/{host_id}", patch(host::handler::update))
         .route("/hosts/{host_id}/deploy", post(host::handler::deploy))
         .route("/hosts/{host_id}/init", post(host::handler::init))
+        .route("/hosts/{host_id}/evacuate", post(host::handler::evacuate))
         .route(
             "/hosts/{host_id}/upgrade",
             post(host::handler::node_upgrade),

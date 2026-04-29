@@ -34,6 +34,7 @@ pub enum JobType {
     SandboxClaim,
     VmStart,
     VmMigrate,
+    HostEvacuate,
     DiskCreate,
     VmCommit,
 }
@@ -54,6 +55,7 @@ pub enum JobStatus {
 
 /// Well-known resource type values for the `resource_type` column.
 pub mod resource_types {
+    pub const HOST: &str = "host";
     pub const SANDBOX: &str = "sandbox";
     pub const VM: &str = "vm";
 }
@@ -207,11 +209,21 @@ WHERE id = $1
 }
 
 pub async fn mark_failed(pool: &PgPool, job_id: Uuid, error: &str) -> Result<(), sqlx::Error> {
+    mark_failed_with_result(pool, job_id, error, None).await
+}
+
+pub async fn mark_failed_with_result(
+    pool: &PgPool,
+    job_id: Uuid,
+    error: &str,
+    result: Option<serde_json::Value>,
+) -> Result<(), sqlx::Error> {
     sqlx::query(
         r#"
 UPDATE jobs
 SET status = 'FAILED',
     error = $2,
+    result = $3,
     completed_at = NOW(),
     updated_at = NOW()
 WHERE id = $1
@@ -219,6 +231,7 @@ WHERE id = $1
     )
     .bind(job_id)
     .bind(error)
+    .bind(result.map(sqlx::types::Json))
     .execute(pool)
     .await?;
 

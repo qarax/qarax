@@ -295,6 +295,16 @@ pub struct DeployHostRequest {
     pub reboot: Option<bool>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct UpdateHostRequest {
+    pub status: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct HostEvacuateResponse {
+    pub job_id: Uuid,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct HostGpu {
     pub id: Uuid,

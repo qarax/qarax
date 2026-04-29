@@ -98,6 +98,10 @@ async fn handle_probe_result(pool: &PgPool, host: &Host, node_info: Result<NodeI
                 host.name, e
             );
 
+            if host.status == HostStatus::Maintenance {
+                return;
+            }
+
             if let Err(update_error) = hosts::update_status(pool, host.id, HostStatus::Down).await {
                 warn!(
                     "Resource monitor: failed to mark host {} DOWN after probe failure: {}",
@@ -118,10 +122,10 @@ pub async fn start_resource_monitor(pool: Arc<PgPool>) {
         #[cfg(feature = "otel")]
         let _cycle_start = std::time::Instant::now();
 
-        let up_hosts = match hosts::list_up(&pool).await {
+        let up_hosts = match hosts::list_probeable(&pool).await {
             Ok(h) => h,
             Err(e) => {
-                warn!("Resource monitor: failed to list UP hosts: {}", e);
+                warn!("Resource monitor: failed to list probeable hosts: {}", e);
                 continue;
             }
         };
@@ -248,6 +252,27 @@ mod tests {
             .expect("Failed to fetch updated host")
             .expect("Updated host not found");
         assert_eq!(updated.status, HostStatus::Down);
+    }
+
+    #[tokio::test]
+    async fn probe_failure_keeps_maintenance_host_in_maintenance() {
+        let db = TestDatabase::new().await;
+        let host = db.insert_up_host().await;
+        hosts::update_status(&db.pool, host.id, HostStatus::Maintenance)
+            .await
+            .expect("mark maintenance");
+        let host = hosts::get_by_id(&db.pool, host.id)
+            .await
+            .expect("fetch maintenance host")
+            .expect("maintenance host exists");
+
+        handle_probe_result(&db.pool, &host, Err(anyhow!("host unreachable"))).await;
+
+        let updated = hosts::get_by_id(&db.pool, host.id)
+            .await
+            .expect("Failed to fetch updated host")
+            .expect("Updated host not found");
+        assert_eq!(updated.status, HostStatus::Maintenance);
     }
 
     #[tokio::test]

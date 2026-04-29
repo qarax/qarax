@@ -10,6 +10,7 @@ class AuditAction(str, Enum):
     CREATE_TEMPLATE = "create_template"
     DELETE = "delete"
     DEPLOY = "deploy"
+    EVACUATE = "evacuate"
     FORCE_STOP = "force_stop"
     INIT = "init"
     MIGRATE = "migrate"

@@ -6,6 +6,7 @@ class HostStatus(str, Enum):
     INITIALIZING = "initializing"
     INSTALLATION_FAILED = "installation_failed"
     INSTALLING = "installing"
+    MAINTENANCE = "maintenance"
     UNKNOWN = "unknown"
     UP = "up"
 

@@ -88,6 +88,7 @@ pub enum HostStatus {
     Installing,
     InstallationFailed,
     Initializing,
+    Maintenance,
     Up,
 }
 
@@ -190,6 +191,8 @@ pub struct SchedulingRequest {
     pub storage_pool_id: Option<Uuid>,
     pub required_network_ids: Vec<Uuid>,
     pub gpu: Option<GpuRequest>,
+    #[serde(default)]
+    pub excluded_host_ids: Vec<Uuid>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -335,6 +338,12 @@ LEFT JOIN (
         qb.push(' ');
     }
 
+    if !request.excluded_host_ids.is_empty() {
+        qb.push("AND NOT (h.id = ANY(");
+        qb.push_bind(&request.excluded_host_ids);
+        qb.push(")) ");
+    }
+
     for network_id in &request.required_network_ids {
         qb.push("AND EXISTS (SELECT 1 FROM host_networks hn WHERE hn.host_id = h.id AND hn.network_id = ");
         qb.push_bind(*network_id);
@@ -401,6 +410,17 @@ LEFT JOIN (
 pub async fn list_up(pool: &PgPool) -> Result<Vec<Host>, sqlx::Error> {
     let rows = sqlx::query(&format!(
         "SELECT {HOST_COLUMNS} FROM hosts WHERE status = 'UP'"
+    ))
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows.into_iter().map(|r| host_from_row(&r)).collect())
+}
+
+/// Return hosts that should continue receiving health/resource probes.
+pub async fn list_probeable(pool: &PgPool) -> Result<Vec<Host>, sqlx::Error> {
+    let rows = sqlx::query(&format!(
+        "SELECT {HOST_COLUMNS} FROM hosts WHERE status IN ('UP', 'MAINTENANCE')"
     ))
     .fetch_all(pool)
     .await?;
@@ -767,6 +787,7 @@ mod tests {
                 storage_pool_id: None,
                 required_network_ids: vec![],
                 gpu: None,
+                excluded_host_ids: vec![],
             },
             &scheduling_config(),
         )
@@ -799,6 +820,7 @@ mod tests {
                 storage_pool_id: None,
                 required_network_ids: vec![],
                 gpu: None,
+                excluded_host_ids: vec![],
             },
             &scheduling_config(),
         )
@@ -824,6 +846,7 @@ mod tests {
             storage_pool_id: None,
             required_network_ids: vec![],
             gpu: None,
+            excluded_host_ids: vec![],
         };
 
         let mut tx1 = db.pool.begin().await.expect("begin tx1");
@@ -925,6 +948,7 @@ mod tests {
                 storage_pool_id: None,
                 required_network_ids: vec![network_id],
                 gpu: None,
+                excluded_host_ids: vec![],
             },
             &scheduling_config(),
         )
@@ -934,5 +958,38 @@ mod tests {
 
         assert_eq!(host.id, attached_host_id);
         assert_ne!(host.id, unattached_host_id);
+    }
+
+    #[tokio::test]
+    async fn pick_host_skips_excluded_hosts() {
+        let db = TestDatabase::new().await;
+        let excluded_host_id = db
+            .insert_up_host("excluded-host", Some("x86_64"), 8, 16 * 1024, 10_000, 0.1)
+            .await;
+        let allowed_host_id = db
+            .insert_up_host("allowed-host", Some("x86_64"), 8, 16 * 1024, 10_000, 0.2)
+            .await;
+
+        let mut tx = db.pool.begin().await.expect("begin tx");
+        let host = super::pick_host_tx(
+            &mut tx,
+            &SchedulingRequest {
+                memory_bytes: 1024,
+                vcpus: 2,
+                disk_bytes: 100,
+                architecture: Some("x86_64".to_string()),
+                storage_pool_id: None,
+                required_network_ids: vec![],
+                gpu: None,
+                excluded_host_ids: vec![excluded_host_id],
+            },
+            &scheduling_config(),
+        )
+        .await
+        .expect("pick host")
+        .expect("expected host");
+
+        assert_eq!(host.id, allowed_host_id);
+        assert_ne!(host.id, excluded_host_id);
     }
 }

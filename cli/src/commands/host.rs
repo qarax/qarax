@@ -1,10 +1,11 @@
 use clap::{Args, Subcommand};
 use tabled::{Table, Tabled, settings::Style};
+use uuid::Uuid;
 
 use crate::{
     api::{
         self,
-        models::{DeployHostRequest, NewHost},
+        models::{DeployHostRequest, NewHost, UpdateHostRequest},
     },
     client::Client,
 };
@@ -84,6 +85,16 @@ enum HostCommand {
         /// Host name or ID
         host: String,
     },
+    /// Mark a host in or out of maintenance mode
+    Maintenance {
+        #[command(subcommand)]
+        command: MaintenanceCommand,
+    },
+    /// Evacuate running or paused VMs from a host and leave it in maintenance
+    Evacuate {
+        /// Host name or ID
+        host: String,
+    },
     /// List GPUs on a host
     Gpus {
         /// Host name or ID
@@ -91,6 +102,20 @@ enum HostCommand {
     },
     /// Show computed allocated vs total resources for a host
     Resources {
+        /// Host name or ID
+        host: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum MaintenanceCommand {
+    /// Put a host into maintenance mode
+    Enter {
+        /// Host name or ID
+        host: String,
+    },
+    /// Return a host to the UP state
+    Exit {
         /// Host name or ID
         host: String,
     },
@@ -313,6 +338,59 @@ pub async fn run(args: HostArgs, client: &Client, output: OutputFormat) -> anyho
             println!("Node upgrade started: {host}");
         }
 
+        HostCommand::Maintenance { command } => match command {
+            MaintenanceCommand::Enter { host } => {
+                let id = resolve_host_id(client, &host).await?;
+                api::hosts::update(
+                    client,
+                    id,
+                    &UpdateHostRequest {
+                        status: "maintenance".to_string(),
+                    },
+                )
+                .await?;
+                if !matches!(output, OutputFormat::Table) {
+                    print_output(
+                        &serde_json::json!({ "host_id": id, "status": "maintenance" }),
+                        output,
+                    )?;
+                } else {
+                    println!("Host entered maintenance: {host}");
+                }
+            }
+            MaintenanceCommand::Exit { host } => {
+                let id = resolve_host_id(client, &host).await?;
+                api::hosts::update(
+                    client,
+                    id,
+                    &UpdateHostRequest {
+                        status: "up".to_string(),
+                    },
+                )
+                .await?;
+                if !matches!(output, OutputFormat::Table) {
+                    print_output(
+                        &serde_json::json!({ "host_id": id, "status": "up" }),
+                        output,
+                    )?;
+                } else {
+                    println!("Host returned to UP: {host}");
+                }
+            }
+        },
+
+        HostCommand::Evacuate { host } => {
+            let id = resolve_host_id(client, &host).await?;
+            let resp = api::hosts::evacuate(client, id).await?;
+            if !matches!(output, OutputFormat::Table) {
+                print_output(&resp, output)?;
+            } else {
+                println!("Evacuating host: {host}");
+                println!("Job:            {}", resp.job_id);
+                poll_job(client, resp.job_id).await?;
+            }
+        }
+
         HostCommand::Gpus { host } => {
             let id = resolve_host_id(client, &host).await?;
             let gpus = api::hosts::list_gpus(client, id).await?;
@@ -396,4 +474,18 @@ pub async fn run(args: HostArgs, client: &Client, output: OutputFormat) -> anyho
     }
 
     Ok(())
+}
+
+async fn poll_job(client: &Client, job_id: Uuid) -> anyhow::Result<()> {
+    loop {
+        let job = api::jobs::get(client, job_id).await?;
+        match job.status.as_str() {
+            "completed" => return Ok(()),
+            "failed" => {
+                let error = job.error.unwrap_or_else(|| "job failed".to_string());
+                return Err(anyhow::anyhow!(error));
+            }
+            _ => tokio::time::sleep(std::time::Duration::from_secs(2)).await,
+        }
+    }
 }

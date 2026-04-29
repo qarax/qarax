@@ -2,7 +2,10 @@ use uuid::Uuid;
 
 use crate::client::Client;
 
-use super::models::{DeployHostRequest, Host, HostGpu, HostResourceCapacity, NewHost};
+use super::models::{
+    DeployHostRequest, Host, HostEvacuateResponse, HostGpu, HostResourceCapacity, NewHost,
+    UpdateHostRequest,
+};
 
 pub async fn list(
     client: &Client,
@@ -56,6 +59,11 @@ pub async fn deploy(client: &Client, host_id: Uuid, req: &DeployHostRequest) -> 
     Ok(())
 }
 
+pub async fn update(client: &Client, host_id: Uuid, req: &UpdateHostRequest) -> anyhow::Result<()> {
+    let _: serde_json::Value = client.patch(&format!("/hosts/{host_id}"), req).await?;
+    Ok(())
+}
+
 /// Initialize a host (connect via gRPC, populate version info, mark UP).
 /// Returns the updated Host.
 pub async fn init(client: &Client, host_id: Uuid) -> anyhow::Result<Host> {
@@ -68,6 +76,12 @@ pub async fn init(client: &Client, host_id: Uuid) -> anyhow::Result<Host> {
 pub async fn upgrade(client: &Client, host_id: Uuid) -> anyhow::Result<()> {
     client
         .post_empty(&format!("/hosts/{host_id}/upgrade"))
+        .await
+}
+
+pub async fn evacuate(client: &Client, host_id: Uuid) -> anyhow::Result<HostEvacuateResponse> {
+    client
+        .post_empty_json(&format!("/hosts/{host_id}/evacuate"))
         .await
 }
 
