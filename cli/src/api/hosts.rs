@@ -4,7 +4,7 @@ use crate::client::Client;
 
 use super::models::{
     DeployHostRequest, Host, HostEvacuateResponse, HostGpu, HostResourceCapacity, NewHost,
-    UpdateHostRequest,
+    UpdateHostPlacementRequest, UpdateHostRequest,
 };
 
 pub async fn list(
@@ -61,6 +61,17 @@ pub async fn deploy(client: &Client, host_id: Uuid, req: &DeployHostRequest) -> 
 
 pub async fn update(client: &Client, host_id: Uuid, req: &UpdateHostRequest) -> anyhow::Result<()> {
     let _: serde_json::Value = client.patch(&format!("/hosts/{host_id}"), req).await?;
+    Ok(())
+}
+
+pub async fn update_placement(
+    client: &Client,
+    host_id: Uuid,
+    req: &UpdateHostPlacementRequest,
+) -> anyhow::Result<()> {
+    let _: serde_json::Value = client
+        .put(&format!("/hosts/{host_id}/placement"), req)
+        .await?;
     Ok(())
 }
 

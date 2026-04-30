@@ -206,6 +206,7 @@ async fn scheduling_request_for_vm(
         storage_pool_id,
         required_network_ids,
         gpu: gpu_request(accel),
+        placement_policy: vm.placement_policy.clone(),
         excluded_host_ids: vec![],
     })
 }
@@ -274,6 +275,7 @@ async fn select_preflight_host(
                     storage_pool_id: None,
                     required_network_ids: vec![],
                     gpu: None,
+                    placement_policy: None,
                     excluded_host_ids: vec![],
                 },
             )
@@ -283,6 +285,7 @@ async fn select_preflight_host(
 }
 
 fn persist_vm_scheduling_metadata(vm: &mut ResolvedNewVm, architecture: &str) {
+    vms::persist_placement_policy(&mut vm.config, vm.placement_policy.as_ref());
     if let serde_json::Value::Object(map) = &mut vm.config {
         map.insert(
             "architecture".to_string(),

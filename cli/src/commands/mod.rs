@@ -13,6 +13,7 @@ pub mod transfer;
 pub mod vm;
 pub mod vm_template;
 
+use std::collections::BTreeMap;
 use uuid::Uuid;
 
 #[derive(clap::ValueEnum, Clone, Copy, Default, Debug)]
@@ -203,6 +204,30 @@ pub fn parse_size(s: &str) -> anyhow::Result<i64> {
         .parse()
         .map_err(|_| anyhow::anyhow!("Invalid size: {s}"))?;
     Ok(value * mult)
+}
+
+/// Parse a key=value assignment into trimmed owned strings.
+pub fn parse_assignment(s: &str) -> anyhow::Result<(String, String)> {
+    let (key, value) = s
+        .split_once('=')
+        .ok_or_else(|| anyhow::anyhow!("expected key=value, got '{s}'"))?;
+    let key = key.trim();
+    let value = value.trim();
+    if key.is_empty() {
+        return Err(anyhow::anyhow!("assignment key cannot be empty"));
+    }
+    if value.is_empty() {
+        return Err(anyhow::anyhow!("assignment value cannot be empty"));
+    }
+    Ok((key.to_string(), value.to_string()))
+}
+
+/// Parse a list of key=value assignments into a sorted map.
+pub fn parse_key_value_pairs(pairs: &[String]) -> anyhow::Result<BTreeMap<String, String>> {
+    pairs
+        .iter()
+        .map(|pair| parse_assignment(pair))
+        .collect::<anyhow::Result<BTreeMap<_, _>>>()
 }
 
 /// Format a byte count as a human-readable string (GiB / MiB / KiB / B).

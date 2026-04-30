@@ -30,6 +30,7 @@ from .host import Host
 from .host_evacuate_response import HostEvacuateResponse
 from .host_gpu import HostGpu
 from .host_numa_node import HostNumaNode
+from .host_placement_labels import HostPlacementLabels
 from .host_resource_capacity import HostResourceCapacity
 from .host_status import HostStatus
 from .hypervisor import Hypervisor
@@ -47,6 +48,7 @@ from .network_interface import NetworkInterface
 from .network_status import NetworkStatus
 from .new_boot_source import NewBootSource
 from .new_host import NewHost
+from .new_host_placement_labels import NewHostPlacementLabels
 from .new_instance_type import NewInstanceType
 from .new_lifecycle_hook import NewLifecycleHook
 from .new_network import NewNetwork
@@ -59,6 +61,9 @@ from .new_transfer import NewTransfer
 from .new_vm import NewVm
 from .new_vm_network import NewVmNetwork
 from .new_vm_template import NewVmTemplate
+from .placement_policy import PlacementPolicy
+from .placement_policy_preferred_host_labels import PlacementPolicyPreferredHostLabels
+from .placement_policy_required_host_labels import PlacementPolicyRequiredHostLabels
 from .rate_limiter_config import RateLimiterConfig
 from .register_lun_request import RegisterLunRequest
 from .restore_request import RestoreRequest
@@ -81,6 +86,8 @@ from .token_bucket import TokenBucket
 from .transfer import Transfer
 from .transfer_status import TransferStatus
 from .transfer_type import TransferType
+from .update_host_placement_request import UpdateHostPlacementRequest
+from .update_host_placement_request_placement_labels import UpdateHostPlacementRequestPlacementLabels
 from .update_host_request import UpdateHostRequest
 from .update_lifecycle_hook import UpdateLifecycleHook
 from .vhost_mode import VhostMode
@@ -130,6 +137,7 @@ __all__ = (
     "HostEvacuateResponse",
     "HostGpu",
     "HostNumaNode",
+    "HostPlacementLabels",
     "HostResourceCapacity",
     "HostStatus",
     "Hypervisor",
@@ -147,6 +155,7 @@ __all__ = (
     "NetworkStatus",
     "NewBootSource",
     "NewHost",
+    "NewHostPlacementLabels",
     "NewInstanceType",
     "NewLifecycleHook",
     "NewNetwork",
@@ -159,6 +168,9 @@ __all__ = (
     "NewVm",
     "NewVmNetwork",
     "NewVmTemplate",
+    "PlacementPolicy",
+    "PlacementPolicyPreferredHostLabels",
+    "PlacementPolicyRequiredHostLabels",
     "RateLimiterConfig",
     "RegisterLunRequest",
     "RestoreRequest",
@@ -181,6 +193,8 @@ __all__ = (
     "Transfer",
     "TransferStatus",
     "TransferType",
+    "UpdateHostPlacementRequest",
+    "UpdateHostPlacementRequestPlacementLabels",
     "UpdateHostRequest",
     "UpdateLifecycleHook",
     "VhostMode",

@@ -8,46 +8,26 @@ from attrs import field as _attrs_field
 from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
-    from ..models.new_host_placement_labels import NewHostPlacementLabels
+    from ..models.update_host_placement_request_placement_labels import UpdateHostPlacementRequestPlacementLabels
 
 
-T = TypeVar("T", bound="NewHost")
+T = TypeVar("T", bound="UpdateHostPlacementRequest")
 
 
 @_attrs_define
-class NewHost:
+class UpdateHostPlacementRequest:
     """
     Attributes:
-        address (str):
-        host_user (str):
-        name (str):
-        password (str):
-        port (int):
-        placement_labels (NewHostPlacementLabels | Unset): Arbitrary placement labels for scheduler filters and
-            preferences.
+        placement_labels (UpdateHostPlacementRequestPlacementLabels | Unset): Arbitrary placement labels for scheduler
+            filters and preferences.
         reservation_class (None | str | Unset): Optional reservation class this host belongs to.
     """
 
-    address: str
-    host_user: str
-    name: str
-    password: str
-    port: int
-    placement_labels: NewHostPlacementLabels | Unset = UNSET
+    placement_labels: UpdateHostPlacementRequestPlacementLabels | Unset = UNSET
     reservation_class: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        address = self.address
-
-        host_user = self.host_user
-
-        name = self.name
-
-        password = self.password
-
-        port = self.port
-
         placement_labels: dict[str, Any] | Unset = UNSET
         if not isinstance(self.placement_labels, Unset):
             placement_labels = self.placement_labels.to_dict()
@@ -60,15 +40,7 @@ class NewHost:
 
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
-        field_dict.update(
-            {
-                "address": address,
-                "host_user": host_user,
-                "name": name,
-                "password": password,
-                "port": port,
-            }
-        )
+        field_dict.update({})
         if placement_labels is not UNSET:
             field_dict["placement_labels"] = placement_labels
         if reservation_class is not UNSET:
@@ -78,25 +50,15 @@ class NewHost:
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Any) -> T:
-        from ..models.new_host_placement_labels import NewHostPlacementLabels
+        from ..models.update_host_placement_request_placement_labels import UpdateHostPlacementRequestPlacementLabels
 
         d = dict(src_dict)
-        address = d.pop("address")
-
-        host_user = d.pop("host_user")
-
-        name = d.pop("name")
-
-        password = d.pop("password")
-
-        port = d.pop("port")
-
         _placement_labels = d.pop("placement_labels", UNSET)
-        placement_labels: NewHostPlacementLabels | Unset
+        placement_labels: UpdateHostPlacementRequestPlacementLabels | Unset
         if isinstance(_placement_labels, Unset):
             placement_labels = UNSET
         else:
-            placement_labels = NewHostPlacementLabels.from_dict(_placement_labels)
+            placement_labels = UpdateHostPlacementRequestPlacementLabels.from_dict(_placement_labels)
 
         def _parse_reservation_class(data: object) -> None | str | Unset:
             if data is None:
@@ -107,18 +69,13 @@ class NewHost:
 
         reservation_class = _parse_reservation_class(d.pop("reservation_class", UNSET))
 
-        new_host = cls(
-            address=address,
-            host_user=host_user,
-            name=name,
-            password=password,
-            port=port,
+        update_host_placement_request = cls(
             placement_labels=placement_labels,
             reservation_class=reservation_class,
         )
 
-        new_host.additional_properties = d
-        return new_host
+        update_host_placement_request.additional_properties = d
+        return update_host_placement_request
 
     @property
     def additional_keys(self) -> list[str]:

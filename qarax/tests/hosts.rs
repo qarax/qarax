@@ -99,6 +99,8 @@ async fn test_add_host() {
         port: 8080,
         host_user: String::from("root"),
         password: String::from("pass"),
+        reservation_class: None,
+        placement_labels: std::collections::BTreeMap::new(),
     };
     let client = reqwest::Client::new();
     let res = client

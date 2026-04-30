@@ -4,7 +4,7 @@ use axum::{
     body::Body,
     middleware,
     response::{self, IntoResponse, Response},
-    routing::{get, patch, post},
+    routing::{get, patch, post, put},
 };
 #[cfg(feature = "otel")]
 use axum::{extract::MatchedPath, middleware::Next};
@@ -87,6 +87,7 @@ pub struct StorageObjectListQuery {
         host::handler::deploy,
         host::handler::init,
         host::handler::evacuate,
+        host::handler::update_placement,
         host::handler::node_upgrade,
         host::handler::list_gpus,
         host::handler::list_numa_nodes,
@@ -185,6 +186,7 @@ pub struct StorageObjectListQuery {
             crate::model::hosts::Host,
             crate::model::hosts::NewHost,
             crate::model::hosts::UpdateHostRequest,
+            crate::model::hosts::UpdateHostPlacementRequest,
             crate::model::hosts::DeployHostRequest,
             crate::handlers::host::handler::HostEvacuateResponse,
             crate::model::hosts::HostStatus,
@@ -196,6 +198,7 @@ pub struct StorageObjectListQuery {
             crate::model::instance_types::NewInstanceType,
             crate::model::vms::Vm,
             crate::model::vms::NewVm,
+            crate::model::vms::PlacementPolicy,
             crate::model::vms::NewVmNetwork,
             crate::model::vms::VmStatus,
             crate::model::vms::Hypervisor,
@@ -392,6 +395,10 @@ fn hosts() -> Router {
     Router::new()
         .route("/hosts", get(host::handler::list).post(host::handler::add))
         .route("/hosts/{host_id}", patch(host::handler::update))
+        .route(
+            "/hosts/{host_id}/placement",
+            put(host::handler::update_placement),
+        )
         .route("/hosts/{host_id}/deploy", post(host::handler::deploy))
         .route("/hosts/{host_id}/init", post(host::handler::init))
         .route("/hosts/{host_id}/evacuate", post(host::handler::evacuate))

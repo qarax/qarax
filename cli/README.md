@@ -70,13 +70,21 @@ Warm claims currently apply to plain template-based sandbox requests; if you pas
 
 ### Scheduling
 
-When creating a VM, qarax picks a host in `up` state. Hosts in `maintenance` stay manageable but are excluded from new scheduling. Subsequent operations route to whichever host the VM was scheduled on. Add and initialize a host first to make scheduling work.
+When creating a VM, qarax picks a host in `up` state. Hosts in `maintenance` stay manageable but are excluded from new scheduling. You can now steer placement with host reservation classes and labels plus VM reservation, affinity, anti-affinity, and spread policies. Subsequent operations route to whichever host the VM was scheduled on. Add and initialize a host first to make scheduling work.
+
+For a full explanation of how reservation classes, labels, affinity,
+anti-affinity, spread, and maintenance-aware placement interact, see
+[`docs/PLACEMENT_POLICIES.md`](../docs/PLACEMENT_POLICIES.md).
 
 ### Hosts
 
 ```bash
 # Add a host (password auth)
 qarax host add --name node-01 --address 192.168.1.10 --user root --password secret
+
+# Add a host with placement metadata
+qarax host add --name node-02 --address 192.168.1.11 --user root \
+  --reservation-class reserved --label zone=west --label rack=r1
 
 # Add a host (SSH key auth, no password needed)
 qarax host add --name node-01 --address 192.168.1.10 --user root
@@ -90,6 +98,9 @@ qarax host deploy node-01 --image ghcr.io/example/qarax-node:latest --ssh-key ~/
 # Keep a host out of new placement
 qarax host maintenance enter node-01
 qarax host maintenance exit node-01
+
+# Update placement metadata later
+qarax host placement set node-01 --reservation-class reserved --label zone=west
 
 # Live-evacuate running/paused VMs and leave the host in maintenance
 qarax host evacuate node-01
@@ -148,6 +159,25 @@ qarax boot-source create --name linux-6.1 --kernel vmlinux \
 ```
 
 If you omit `--boot-source` when creating a VM, the server falls back to `vm_defaults` from the YAML config.
+
+### Placement policies
+
+Use VM tags plus placement flags to keep replicas apart, bias them toward existing peers, or reserve classes of hosts:
+
+```bash
+# Place only on hosts from the "reserved" class
+qarax vm create --name api-0 --vcpus 2 --memory 2GiB \
+  --reservation-class reserved
+
+# Keep replicas off hosts already carrying the same tag
+qarax vm create --name api-1 --tag app=api --vcpus 2 --memory 2GiB \
+  --anti-affinity-tag app=api
+
+# Prefer the least-populated host for a replica set, but only inside zone=west
+qarax vm create --name api-2 --tag app=api --vcpus 2 --memory 2GiB \
+  --require-host-label zone=west \
+  --spread-tag app=api
+```
 
 ### Instance types and VM templates
 

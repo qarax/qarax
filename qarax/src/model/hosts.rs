@@ -1,5 +1,10 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
-use sqlx::{PgPool, Postgres, QueryBuilder, Row, Transaction, Type, types::Uuid};
+use sqlx::{
+    PgPool, Postgres, QueryBuilder, Row, Transaction, Type,
+    types::{Json, Uuid},
+};
 use strum_macros::{Display, EnumString};
 use utoipa::ToSchema;
 use validator::{Validate, ValidationError, ValidationErrors};
@@ -9,7 +14,7 @@ use crate::errors;
 /// The version of the control-plane binary, used to detect out-of-date nodes.
 pub const CONTROL_PLANE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-const HOST_COLUMNS: &str = "id, name, address, port, host_user, password, status, cloud_hypervisor_version, firecracker_version, kernel_version, node_version, last_deployed_image, architecture, total_cpus, total_memory_bytes, available_memory_bytes, load_average, disk_total_bytes, disk_available_bytes, resources_updated_at";
+const HOST_COLUMNS: &str = "id, name, address, port, host_user, password, status, cloud_hypervisor_version, firecracker_version, kernel_version, node_version, last_deployed_image, reservation_class, placement_labels, architecture, total_cpus, total_memory_bytes, available_memory_bytes, load_average, disk_total_bytes, disk_available_bytes, resources_updated_at";
 
 /// Build a Host from a sqlx Row containing all host columns.
 fn host_from_row(r: &sqlx::postgres::PgRow) -> Host {
@@ -31,6 +36,10 @@ fn host_from_row(r: &sqlx::postgres::PgRow) -> Host {
         node_version,
         last_deployed_image: r.get("last_deployed_image"),
         update_available,
+        reservation_class: r.get("reservation_class"),
+        placement_labels: r
+            .get::<Json<BTreeMap<String, String>>, _>("placement_labels")
+            .0,
         architecture: r.get("architecture"),
         total_cpus: r.get("total_cpus"),
         total_memory_bytes: r.get("total_memory_bytes"),
@@ -63,6 +72,11 @@ pub struct Host {
     pub last_deployed_image: Option<String>,
     /// True when `node_version` differs from the control-plane version.
     pub update_available: bool,
+    /// Optional reservation class used by policy-based placement.
+    pub reservation_class: Option<String>,
+    /// Arbitrary placement labels used by policy-based placement.
+    #[serde(default)]
+    pub placement_labels: BTreeMap<String, String>,
     pub architecture: Option<String>,
 
     // Resource metrics
@@ -95,6 +109,15 @@ pub enum HostStatus {
 #[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
 pub struct UpdateHostRequest {
     pub status: HostStatus,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, ToSchema)]
+pub struct UpdateHostPlacementRequest {
+    /// Optional reservation class this host belongs to.
+    pub reservation_class: Option<String>,
+    /// Arbitrary placement labels for scheduler filters and preferences.
+    #[serde(default)]
+    pub placement_labels: BTreeMap<String, String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
@@ -180,6 +203,11 @@ pub struct NewHost {
 
     pub host_user: String,
     pub password: String,
+    /// Optional reservation class this host belongs to.
+    pub reservation_class: Option<String>,
+    /// Arbitrary placement labels for scheduler filters and preferences.
+    #[serde(default)]
+    pub placement_labels: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -191,6 +219,7 @@ pub struct SchedulingRequest {
     pub storage_pool_id: Option<Uuid>,
     pub required_network_ids: Vec<Uuid>,
     pub gpu: Option<GpuRequest>,
+    pub placement_policy: Option<crate::model::vms::PlacementPolicy>,
     #[serde(default)]
     pub excluded_host_ids: Vec<Uuid>,
 }
@@ -230,6 +259,45 @@ impl NewHost {
 
         Ok(())
     }
+
+    pub fn validate_placement(&self) -> Result<(), errors::Error> {
+        validate_placement_fields(self.reservation_class.as_deref(), &self.placement_labels)
+    }
+}
+
+impl UpdateHostPlacementRequest {
+    pub fn validate(&self) -> Result<(), errors::Error> {
+        validate_placement_fields(self.reservation_class.as_deref(), &self.placement_labels)
+    }
+}
+
+fn validate_placement_fields(
+    reservation_class: Option<&str>,
+    placement_labels: &BTreeMap<String, String>,
+) -> Result<(), errors::Error> {
+    if let Some(class) = reservation_class
+        && class.trim().is_empty()
+    {
+        return Err(errors::Error::UnprocessableEntity(
+            "reservation_class cannot be empty".to_string(),
+        ));
+    }
+
+    for (key, value) in placement_labels {
+        if key.trim().is_empty() {
+            return Err(errors::Error::UnprocessableEntity(
+                "placement label keys cannot be empty".to_string(),
+            ));
+        }
+        if value.trim().is_empty() {
+            return Err(errors::Error::UnprocessableEntity(format!(
+                "placement label '{}' cannot have an empty value",
+                key
+            )));
+        }
+    }
+
+    Ok(())
 }
 
 pub async fn list(
@@ -252,8 +320,17 @@ pub async fn list(
 pub async fn add(pool: &PgPool, host: &NewHost) -> Result<Uuid, sqlx::Error> {
     let row = sqlx::query(
         r#"
-        INSERT INTO hosts (name, address, port, host_user, password, status)
-        VALUES ($1, $2, $3, $4, $5, $6)
+        INSERT INTO hosts (
+            name,
+            address,
+            port,
+            host_user,
+            password,
+            status,
+            reservation_class,
+            placement_labels
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         RETURNING id
         "#,
     )
@@ -263,6 +340,8 @@ pub async fn add(pool: &PgPool, host: &NewHost) -> Result<Uuid, sqlx::Error> {
     .bind(&host.host_user)
     .bind(host.password.as_bytes())
     .bind(HostStatus::Down)
+    .bind(host.reservation_class.as_deref())
+    .bind(Json(&host.placement_labels))
     .fetch_one(pool)
     .await
     .map_err(|e| {
@@ -276,6 +355,20 @@ pub async fn add(pool: &PgPool, host: &NewHost) -> Result<Uuid, sqlx::Error> {
 pub async fn update_status(pool: &PgPool, id: Uuid, status: HostStatus) -> Result<(), sqlx::Error> {
     sqlx::query("UPDATE hosts SET status = $1 WHERE id = $2")
         .bind(status)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn update_placement(
+    pool: &PgPool,
+    id: Uuid,
+    request: &UpdateHostPlacementRequest,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE hosts SET reservation_class = $1, placement_labels = $2 WHERE id = $3")
+        .bind(request.reservation_class.as_deref())
+        .bind(Json(&request.placement_labels))
         .bind(id)
         .execute(pool)
         .await?;
@@ -307,8 +400,9 @@ pub async fn pick_host_tx(
     let mut qb = QueryBuilder::<Postgres>::new(
         r#"
 SELECT h.id, h.name, h.address, h.port, h.host_user, h.password,
-       h.status, h.cloud_hypervisor_version, h.firecracker_version, h.kernel_version,
-       h.node_version, h.last_deployed_image, h.architecture,
+        h.status, h.cloud_hypervisor_version, h.firecracker_version, h.kernel_version,
+       h.node_version, h.last_deployed_image, h.reservation_class, h.placement_labels,
+       h.architecture,
        h.total_cpus, h.total_memory_bytes, h.available_memory_bytes,
        h.load_average, h.disk_total_bytes, h.disk_available_bytes,
        h.resources_updated_at
@@ -356,6 +450,33 @@ LEFT JOIN (
         qb.push(") ");
     }
 
+    if let Some(policy) = request.placement_policy.as_ref() {
+        if let Some(reservation_class) = policy.reservation_class.as_deref() {
+            qb.push("AND h.reservation_class = ");
+            qb.push_bind(reservation_class);
+            qb.push(' ');
+        }
+
+        if !policy.required_host_labels.is_empty() {
+            qb.push("AND h.placement_labels @> CAST(");
+            qb.push_bind(serde_json::json!(policy.required_host_labels));
+            qb.push(" AS jsonb) ");
+        }
+
+        if !policy.anti_affinity_tags.is_empty() {
+            qb.push(
+                "AND NOT EXISTS (
+                    SELECT 1
+                    FROM vms policy_vms
+                    WHERE policy_vms.host_id = h.id
+                      AND policy_vms.status NOT IN ('SHUTDOWN', 'UNKNOWN')
+                      AND policy_vms.tags && ",
+            );
+            qb.push_bind(&policy.anti_affinity_tags);
+            qb.push(") ");
+        }
+    }
+
     qb.push("AND (h.total_memory_bytes IS NULL OR ((h.total_memory_bytes::double precision * ");
     qb.push_bind(config.memory_oversubscription_ratio);
     qb.push(") - COALESCE(alloc.allocated_memory_bytes, 0)::double precision) >= ");
@@ -400,7 +521,40 @@ LEFT JOIN (
         qb.push(") ");
     }
 
-    qb.push("ORDER BY h.load_average ASC NULLS LAST LIMIT 1 FOR UPDATE OF h SKIP LOCKED");
+    qb.push("ORDER BY ");
+    if let Some(policy) = request.placement_policy.as_ref() {
+        if !policy.preferred_host_labels.is_empty() {
+            qb.push("(h.placement_labels @> CAST(");
+            qb.push_bind(serde_json::json!(policy.preferred_host_labels));
+            qb.push(" AS jsonb)) DESC, ");
+        }
+
+        if !policy.affinity_tags.is_empty() {
+            qb.push(
+                "(SELECT COUNT(*)
+                  FROM vms policy_vms
+                  WHERE policy_vms.host_id = h.id
+                    AND policy_vms.status NOT IN ('SHUTDOWN', 'UNKNOWN')
+                    AND policy_vms.tags @> ",
+            );
+            qb.push_bind(&policy.affinity_tags);
+            qb.push(") DESC, ");
+        }
+
+        if !policy.spread_tags.is_empty() {
+            qb.push(
+                "(SELECT COUNT(*)
+                  FROM vms policy_vms
+                  WHERE policy_vms.host_id = h.id
+                    AND policy_vms.status NOT IN ('SHUTDOWN', 'UNKNOWN')
+                    AND policy_vms.tags @> ",
+            );
+            qb.push_bind(&policy.spread_tags);
+            qb.push(") ASC, ");
+        }
+    }
+
+    qb.push("h.load_average ASC NULLS LAST, h.name ASC LIMIT 1 FOR UPDATE OF h SKIP LOCKED");
 
     let row = qb.build().fetch_optional(tx.as_mut()).await?;
     Ok(row.map(|r| host_from_row(&r)))
@@ -561,15 +715,19 @@ WHERE h.id = $1
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use sqlx::{Connection, Executor, PgConnection, PgPool};
     use uuid::Uuid;
 
-    use super::{DeployHostRequest, HostStatus, NewHost, SchedulingRequest};
+    use super::{
+        DeployHostRequest, HostStatus, NewHost, SchedulingRequest, UpdateHostPlacementRequest,
+    };
     use crate::{
         configuration::{SchedulingSettings, get_configuration},
         model::{
             networks::{self, NewNetwork},
-            vms::{self, Hypervisor, ResolvedNewVm},
+            vms::{self, Hypervisor, PlacementPolicy, ResolvedNewVm},
         },
     };
 
@@ -624,6 +782,8 @@ mod tests {
                     port: 50051,
                     host_user: "root".to_string(),
                     password: String::new(),
+                    reservation_class: None,
+                    placement_labels: BTreeMap::new(),
                 },
             )
             .await
@@ -663,6 +823,24 @@ mod tests {
             )
             .await
             .expect("create network")
+        }
+
+        async fn set_host_placement(
+            &self,
+            host_id: Uuid,
+            reservation_class: Option<&str>,
+            placement_labels: BTreeMap<String, String>,
+        ) {
+            super::update_placement(
+                &self.pool,
+                host_id,
+                &UpdateHostPlacementRequest {
+                    reservation_class: reservation_class.map(str::to_string),
+                    placement_labels,
+                },
+            )
+            .await
+            .expect("update host placement");
         }
     }
 
@@ -732,6 +910,7 @@ mod tests {
             accelerator_config: None,
             numa_config: None,
             persistent_upper_pool_id: None,
+            placement_policy: None,
             config: serde_json::json!({}),
         }
     }
@@ -766,6 +945,28 @@ mod tests {
         assert!(request.validate().is_err());
     }
 
+    #[test]
+    fn placement_validation_rejects_empty_reservation_class() {
+        let request = UpdateHostPlacementRequest {
+            reservation_class: Some("   ".to_string()),
+            placement_labels: BTreeMap::new(),
+        };
+
+        assert!(request.validate().is_err());
+    }
+
+    #[test]
+    fn placement_validation_rejects_empty_label_values() {
+        let mut placement_labels = BTreeMap::new();
+        placement_labels.insert("zone".to_string(), " ".to_string());
+        let request = UpdateHostPlacementRequest {
+            reservation_class: Some("general".to_string()),
+            placement_labels,
+        };
+
+        assert!(request.validate().is_err());
+    }
+
     #[tokio::test]
     async fn pick_host_respects_architecture_filter() {
         let db = TestDatabase::new().await;
@@ -787,6 +988,7 @@ mod tests {
                 storage_pool_id: None,
                 required_network_ids: vec![],
                 gpu: None,
+                placement_policy: None,
                 excluded_host_ids: vec![],
             },
             &scheduling_config(),
@@ -820,6 +1022,7 @@ mod tests {
                 storage_pool_id: None,
                 required_network_ids: vec![],
                 gpu: None,
+                placement_policy: None,
                 excluded_host_ids: vec![],
             },
             &scheduling_config(),
@@ -846,6 +1049,7 @@ mod tests {
             storage_pool_id: None,
             required_network_ids: vec![],
             gpu: None,
+            placement_policy: None,
             excluded_host_ids: vec![],
         };
 
@@ -948,6 +1152,7 @@ mod tests {
                 storage_pool_id: None,
                 required_network_ids: vec![network_id],
                 gpu: None,
+                placement_policy: None,
                 excluded_host_ids: vec![],
             },
             &scheduling_config(),
@@ -981,6 +1186,7 @@ mod tests {
                 storage_pool_id: None,
                 required_network_ids: vec![],
                 gpu: None,
+                placement_policy: None,
                 excluded_host_ids: vec![excluded_host_id],
             },
             &scheduling_config(),
@@ -991,5 +1197,248 @@ mod tests {
 
         assert_eq!(host.id, allowed_host_id);
         assert_ne!(host.id, excluded_host_id);
+    }
+
+    #[tokio::test]
+    async fn pick_host_respects_reservation_class() {
+        let db = TestDatabase::new().await;
+        let reserved_host_id = db
+            .insert_up_host("reserved-host", Some("x86_64"), 8, 16 * 1024, 10_000, 0.9)
+            .await;
+        let general_host_id = db
+            .insert_up_host("general-host", Some("x86_64"), 8, 16 * 1024, 10_000, 0.1)
+            .await;
+        db.set_host_placement(reserved_host_id, Some("batch"), BTreeMap::new())
+            .await;
+        db.set_host_placement(general_host_id, Some("general"), BTreeMap::new())
+            .await;
+
+        let mut tx = db.pool.begin().await.expect("begin tx");
+        let host = super::pick_host_tx(
+            &mut tx,
+            &SchedulingRequest {
+                memory_bytes: 1024,
+                vcpus: 1,
+                disk_bytes: 100,
+                architecture: Some("x86_64".to_string()),
+                storage_pool_id: None,
+                required_network_ids: vec![],
+                gpu: None,
+                placement_policy: Some(PlacementPolicy {
+                    reservation_class: Some("batch".to_string()),
+                    required_host_labels: BTreeMap::new(),
+                    preferred_host_labels: BTreeMap::new(),
+                    affinity_tags: vec![],
+                    anti_affinity_tags: vec![],
+                    spread_tags: vec![],
+                }),
+                excluded_host_ids: vec![],
+            },
+            &scheduling_config(),
+        )
+        .await
+        .expect("pick host")
+        .expect("expected host");
+
+        assert_eq!(host.id, reserved_host_id);
+        assert_ne!(host.id, general_host_id);
+    }
+
+    #[tokio::test]
+    async fn pick_host_respects_required_host_labels() {
+        let db = TestDatabase::new().await;
+        let west_host_id = db
+            .insert_up_host("west-host", Some("x86_64"), 8, 16 * 1024, 10_000, 0.9)
+            .await;
+        let east_host_id = db
+            .insert_up_host("east-host", Some("x86_64"), 8, 16 * 1024, 10_000, 0.1)
+            .await;
+        let mut west_labels = BTreeMap::new();
+        west_labels.insert("zone".to_string(), "west".to_string());
+        let mut east_labels = BTreeMap::new();
+        east_labels.insert("zone".to_string(), "east".to_string());
+        db.set_host_placement(west_host_id, None, west_labels).await;
+        db.set_host_placement(east_host_id, None, east_labels).await;
+
+        let mut required_labels = BTreeMap::new();
+        required_labels.insert("zone".to_string(), "west".to_string());
+        let mut tx = db.pool.begin().await.expect("begin tx");
+        let host = super::pick_host_tx(
+            &mut tx,
+            &SchedulingRequest {
+                memory_bytes: 1024,
+                vcpus: 1,
+                disk_bytes: 100,
+                architecture: Some("x86_64".to_string()),
+                storage_pool_id: None,
+                required_network_ids: vec![],
+                gpu: None,
+                placement_policy: Some(PlacementPolicy {
+                    reservation_class: None,
+                    required_host_labels: required_labels,
+                    preferred_host_labels: BTreeMap::new(),
+                    affinity_tags: vec![],
+                    anti_affinity_tags: vec![],
+                    spread_tags: vec![],
+                }),
+                excluded_host_ids: vec![],
+            },
+            &scheduling_config(),
+        )
+        .await
+        .expect("pick host")
+        .expect("expected host");
+
+        assert_eq!(host.id, west_host_id);
+        assert_ne!(host.id, east_host_id);
+    }
+
+    #[tokio::test]
+    async fn pick_host_respects_anti_affinity_tags() {
+        let db = TestDatabase::new().await;
+        let crowded_host_id = db
+            .insert_up_host("crowded-host", Some("x86_64"), 8, 16 * 1024, 10_000, 0.1)
+            .await;
+        let empty_host_id = db
+            .insert_up_host("empty-host", Some("x86_64"), 8, 16 * 1024, 10_000, 0.9)
+            .await;
+
+        let mut tx = db.pool.begin().await.expect("begin tx");
+        let mut existing_vm = resolved_vm("resident-vm", 256, 1);
+        existing_vm.tags = vec!["tenant:blue".to_string()];
+        vms::create_tx(&mut tx, &existing_vm, Some(crowded_host_id))
+            .await
+            .expect("insert resident vm");
+        tx.commit().await.expect("commit tx");
+
+        let mut tx = db.pool.begin().await.expect("begin tx");
+        let host = super::pick_host_tx(
+            &mut tx,
+            &SchedulingRequest {
+                memory_bytes: 512,
+                vcpus: 1,
+                disk_bytes: 100,
+                architecture: Some("x86_64".to_string()),
+                storage_pool_id: None,
+                required_network_ids: vec![],
+                gpu: None,
+                placement_policy: Some(PlacementPolicy {
+                    reservation_class: None,
+                    required_host_labels: BTreeMap::new(),
+                    preferred_host_labels: BTreeMap::new(),
+                    affinity_tags: vec![],
+                    anti_affinity_tags: vec!["tenant:blue".to_string()],
+                    spread_tags: vec![],
+                }),
+                excluded_host_ids: vec![],
+            },
+            &scheduling_config(),
+        )
+        .await
+        .expect("pick host")
+        .expect("expected host");
+
+        assert_eq!(host.id, empty_host_id);
+        assert_ne!(host.id, crowded_host_id);
+    }
+
+    #[tokio::test]
+    async fn pick_host_prefers_affinity_tags_over_lower_load() {
+        let db = TestDatabase::new().await;
+        let affinity_host_id = db
+            .insert_up_host("affinity-host", Some("x86_64"), 8, 16 * 1024, 10_000, 0.9)
+            .await;
+        let lower_load_host_id = db
+            .insert_up_host("lower-load-host", Some("x86_64"), 8, 16 * 1024, 10_000, 0.1)
+            .await;
+
+        let mut tx = db.pool.begin().await.expect("begin tx");
+        let mut existing_vm = resolved_vm("affinity-peer", 256, 1);
+        existing_vm.tags = vec!["stack:web".to_string()];
+        vms::create_tx(&mut tx, &existing_vm, Some(affinity_host_id))
+            .await
+            .expect("insert affinity vm");
+        tx.commit().await.expect("commit tx");
+
+        let mut tx = db.pool.begin().await.expect("begin tx");
+        let host = super::pick_host_tx(
+            &mut tx,
+            &SchedulingRequest {
+                memory_bytes: 512,
+                vcpus: 1,
+                disk_bytes: 100,
+                architecture: Some("x86_64".to_string()),
+                storage_pool_id: None,
+                required_network_ids: vec![],
+                gpu: None,
+                placement_policy: Some(PlacementPolicy {
+                    reservation_class: None,
+                    required_host_labels: BTreeMap::new(),
+                    preferred_host_labels: BTreeMap::new(),
+                    affinity_tags: vec!["stack:web".to_string()],
+                    anti_affinity_tags: vec![],
+                    spread_tags: vec![],
+                }),
+                excluded_host_ids: vec![],
+            },
+            &scheduling_config(),
+        )
+        .await
+        .expect("pick host")
+        .expect("expected host");
+
+        assert_eq!(host.id, affinity_host_id);
+        assert_ne!(host.id, lower_load_host_id);
+    }
+
+    #[tokio::test]
+    async fn pick_host_prefers_spread_tags_over_lower_load() {
+        let db = TestDatabase::new().await;
+        let crowded_host_id = db
+            .insert_up_host("crowded-spread", Some("x86_64"), 8, 16 * 1024, 10_000, 0.1)
+            .await;
+        let empty_host_id = db
+            .insert_up_host("empty-spread", Some("x86_64"), 8, 16 * 1024, 10_000, 0.9)
+            .await;
+
+        let mut tx = db.pool.begin().await.expect("begin tx");
+        for idx in 0..2 {
+            let mut existing_vm = resolved_vm(&format!("spread-peer-{idx}"), 256, 1);
+            existing_vm.tags = vec!["spread:web".to_string()];
+            vms::create_tx(&mut tx, &existing_vm, Some(crowded_host_id))
+                .await
+                .expect("insert spread vm");
+        }
+        tx.commit().await.expect("commit tx");
+
+        let mut tx = db.pool.begin().await.expect("begin tx");
+        let host = super::pick_host_tx(
+            &mut tx,
+            &SchedulingRequest {
+                memory_bytes: 512,
+                vcpus: 1,
+                disk_bytes: 100,
+                architecture: Some("x86_64".to_string()),
+                storage_pool_id: None,
+                required_network_ids: vec![],
+                gpu: None,
+                placement_policy: Some(PlacementPolicy {
+                    reservation_class: None,
+                    required_host_labels: BTreeMap::new(),
+                    preferred_host_labels: BTreeMap::new(),
+                    affinity_tags: vec![],
+                    anti_affinity_tags: vec![],
+                    spread_tags: vec!["spread:web".to_string()],
+                }),
+                excluded_host_ids: vec![],
+            },
+            &scheduling_config(),
+        )
+        .await
+        .expect("pick host")
+        .expect("expected host");
+
+        assert_eq!(host.id, empty_host_id);
+        assert_ne!(host.id, crowded_host_id);
     }
 }

@@ -12,6 +12,7 @@ from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
     from ..models.new_vm_network import NewVmNetwork
+    from ..models.placement_policy import PlacementPolicy
 
 
 T = TypeVar("T", bound="NewVm")
@@ -67,6 +68,7 @@ class NewVm:
             upper.index) is stored as a persistent `OverlaybdUpper` StorageObject on
             this pool instead of being ephemeral. The pool must be Local or NFS and
             must be attached to the host running the VM.
+        placement_policy (None | PlacementPolicy | Unset):
         root_disk_object_id (None | Unset | UUID):
         security_group_ids (list[str] | None | Unset): Security groups to bind to the VM. Rules apply to managed routed
             traffic
@@ -104,6 +106,7 @@ class NewVm:
     networks: list[NewVmNetwork] | None | Unset = UNSET
     numa_config: Any | Unset = UNSET
     persistent_upper_pool_id: None | Unset | UUID = UNSET
+    placement_policy: None | PlacementPolicy | Unset = UNSET
     root_disk_object_id: None | Unset | UUID = UNSET
     security_group_ids: list[str] | None | Unset = UNSET
     tags: list[str] | None | Unset = UNSET
@@ -111,6 +114,8 @@ class NewVm:
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        from ..models.placement_policy import PlacementPolicy
+
         name = self.name
 
         accelerator_config = self.accelerator_config
@@ -283,6 +288,14 @@ class NewVm:
         else:
             persistent_upper_pool_id = self.persistent_upper_pool_id
 
+        placement_policy: dict[str, Any] | None | Unset
+        if isinstance(self.placement_policy, Unset):
+            placement_policy = UNSET
+        elif isinstance(self.placement_policy, PlacementPolicy):
+            placement_policy = self.placement_policy.to_dict()
+        else:
+            placement_policy = self.placement_policy
+
         root_disk_object_id: None | str | Unset
         if isinstance(self.root_disk_object_id, Unset):
             root_disk_object_id = UNSET
@@ -380,6 +393,8 @@ class NewVm:
             field_dict["numa_config"] = numa_config
         if persistent_upper_pool_id is not UNSET:
             field_dict["persistent_upper_pool_id"] = persistent_upper_pool_id
+        if placement_policy is not UNSET:
+            field_dict["placement_policy"] = placement_policy
         if root_disk_object_id is not UNSET:
             field_dict["root_disk_object_id"] = root_disk_object_id
         if security_group_ids is not UNSET:
@@ -394,6 +409,7 @@ class NewVm:
     @classmethod
     def from_dict(cls: type[T], src_dict: Any) -> T:
         from ..models.new_vm_network import NewVmNetwork
+        from ..models.placement_policy import PlacementPolicy
 
         d = dict(src_dict)
         name = d.pop("name")
@@ -683,6 +699,23 @@ class NewVm:
 
         persistent_upper_pool_id = _parse_persistent_upper_pool_id(d.pop("persistent_upper_pool_id", UNSET))
 
+        def _parse_placement_policy(data: object) -> None | PlacementPolicy | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, dict):
+                    raise TypeError()
+                placement_policy_type_1 = PlacementPolicy.from_dict(data)
+
+                return placement_policy_type_1
+            except (TypeError, ValueError, AttributeError, KeyError):
+                pass
+            return cast(None | PlacementPolicy | Unset, data)
+
+        placement_policy = _parse_placement_policy(d.pop("placement_policy", UNSET))
+
         def _parse_root_disk_object_id(data: object) -> None | Unset | UUID:
             if data is None:
                 return data
@@ -781,6 +814,7 @@ class NewVm:
             networks=networks,
             numa_config=numa_config,
             persistent_upper_pool_id=persistent_upper_pool_id,
+            placement_policy=placement_policy,
             root_disk_object_id=root_disk_object_id,
             security_group_ids=security_group_ids,
             tags=tags,

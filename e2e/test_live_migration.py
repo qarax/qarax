@@ -23,6 +23,7 @@ import time
 import uuid
 from uuid import UUID
 
+import httpx
 import pytest
 from qarax_api_client import Client
 from qarax_api_client.api.hosts import add as add_host
@@ -165,6 +166,50 @@ async def _wait_for_host_status(c, host_id, expected_status, timeout=MIGRATION_T
     raise TimeoutError(
         f"Host {host_id} did not reach {expected_status} within {timeout}s. Current: {current}"
     )
+
+
+async def _update_host_placement(
+    http_client: httpx.AsyncClient,
+    host_id: UUID,
+    reservation_class: str | None = None,
+    placement_labels: dict[str, str] | None = None,
+):
+    resp = await http_client.put(
+        f"/hosts/{host_id}/placement",
+        json={
+            "reservation_class": reservation_class,
+            "placement_labels": placement_labels or {},
+        },
+    )
+    assert resp.status_code == 200, (
+        f"Failed to update placement for host {host_id}: "
+        f"HTTP {resp.status_code} {resp.text}"
+    )
+
+
+async def _create_vm_raw(
+    http_client: httpx.AsyncClient,
+    *,
+    name: str,
+    tags: list[str] | None = None,
+    placement_policy: dict | None = None,
+) -> UUID:
+    resp = await http_client.post(
+        "/vms",
+        json={
+            "name": name,
+            "hypervisor": "cloud_hv",
+            "boot_vcpus": 1,
+            "max_vcpus": 1,
+            "memory_size": 256 * 1024 * 1024,
+            "tags": tags,
+            "placement_policy": placement_policy,
+        },
+    )
+    assert resp.status_code == 201, (
+        f"Failed to create VM {name}: HTTP {resp.status_code} {resp.text}"
+    )
+    return UUID(resp.text.strip('"'))
 
 
 # Negative tests (no VM boot required)────────
@@ -461,5 +506,113 @@ async def test_host_evacuation_marks_maintenance_and_avoids_rescheduling(client,
             if pool_id is not None:
                 try:
                     await delete_pool.asyncio_detailed(client=c, pool_id=pool_id)
+                except Exception:
+                    pass
+
+
+@pytest.mark.asyncio
+async def test_scheduler_placement_policy_reservation_anti_affinity_and_spread(
+    client, two_hosts
+):
+    host1_id, host2_id = two_hosts
+    reservation_class = f"reserved-{uuid.uuid4().hex[:6]}"
+    anti_affinity_tag = f"tenant:red-{uuid.uuid4().hex[:6]}"
+    spread_tag = f"spread:web-{uuid.uuid4().hex[:6]}"
+    reserved_vm_id = None
+    anti_vm_id = None
+    spread_vm_ids: list[UUID] = []
+
+    async with client as c, httpx.AsyncClient(base_url=QARAX_URL) as http_client:
+        try:
+            await _update_host_placement(
+                http_client, host1_id, reservation_class=reservation_class
+            )
+            await _update_host_placement(http_client, host2_id, reservation_class="general")
+
+            reserved_vm_id = await _create_vm_raw(
+                http_client,
+                name=f"e2e-placement-reserved-{uuid.uuid4().hex[:6]}",
+                tags=[anti_affinity_tag],
+                placement_policy={"reservation_class": reservation_class},
+            )
+            reserved_vm = await get_vm.asyncio(client=c, vm_id=reserved_vm_id)
+            assert (
+                reserved_vm.host_id == host1_id
+            ), "reservation_class should pin placement to the matching host"
+
+            anti_vm_id = await _create_vm_raw(
+                http_client,
+                name=f"e2e-placement-anti-{uuid.uuid4().hex[:6]}",
+                tags=[anti_affinity_tag],
+                placement_policy={"anti_affinity_tags": [anti_affinity_tag]},
+            )
+            anti_vm = await get_vm.asyncio(client=c, vm_id=anti_vm_id)
+            assert (
+                anti_vm.host_id == host2_id
+            ), "anti-affinity should avoid the host that already carries the tag"
+
+            await update_host.asyncio_detailed(
+                client=c,
+                host_id=host2_id,
+                body=UpdateHostRequest(status=HostStatus.MAINTENANCE),
+            )
+            await _wait_for_host_status(c, host2_id, HostStatus.MAINTENANCE)
+
+            for _ in range(2):
+                spread_vm_id = await _create_vm_raw(
+                    http_client,
+                    name=f"e2e-placement-spread-seed-{uuid.uuid4().hex[:6]}",
+                    tags=[spread_tag],
+                )
+                spread_vm_ids.append(spread_vm_id)
+                spread_vm = await get_vm.asyncio(client=c, vm_id=spread_vm_id)
+                assert (
+                    spread_vm.host_id == host1_id
+                ), "maintenance host should be excluded from new placement"
+
+            await update_host.asyncio_detailed(
+                client=c,
+                host_id=host2_id,
+                body=UpdateHostRequest(status=HostStatus.UP),
+            )
+            await _wait_for_host_status(c, host2_id, HostStatus.UP)
+
+            spread_vm_id = await _create_vm_raw(
+                http_client,
+                name=f"e2e-placement-spread-{uuid.uuid4().hex[:6]}",
+                tags=[spread_tag],
+                placement_policy={"spread_tags": [spread_tag]},
+            )
+            spread_vm_ids.append(spread_vm_id)
+            spread_vm = await get_vm.asyncio(client=c, vm_id=spread_vm_id)
+            assert (
+                spread_vm.host_id == host2_id
+            ), "spread policy should pick the less-populated host once it is schedulable"
+        finally:
+            await update_host.asyncio_detailed(
+                client=c,
+                host_id=host1_id,
+                body=UpdateHostRequest(status=HostStatus.UP),
+            )
+            await update_host.asyncio_detailed(
+                client=c,
+                host_id=host2_id,
+                body=UpdateHostRequest(status=HostStatus.UP),
+            )
+            await _update_host_placement(http_client, host1_id)
+            await _update_host_placement(http_client, host2_id)
+            for vm_id in spread_vm_ids:
+                try:
+                    await delete_vm.asyncio_detailed(client=c, vm_id=vm_id)
+                except Exception:
+                    pass
+            if anti_vm_id is not None:
+                try:
+                    await delete_vm.asyncio_detailed(client=c, vm_id=anti_vm_id)
+                except Exception:
+                    pass
+            if reserved_vm_id is not None:
+                try:
+                    await delete_vm.asyncio_detailed(client=c, vm_id=reserved_vm_id)
                 except Exception:
                     pass

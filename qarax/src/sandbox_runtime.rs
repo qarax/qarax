@@ -56,6 +56,7 @@ pub(crate) async fn resolve_sandbox_vm(
         accelerator_config: None,
         numa_config: None,
         persistent_upper_pool_id: None,
+        placement_policy: None,
         config: serde_json::json!({ "sandbox_exec": true }),
     };
 

@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use clap::{Args, Subcommand};
 use tabled::{Table, Tabled, settings::Style};
 use uuid::Uuid;
@@ -5,12 +7,12 @@ use uuid::Uuid;
 use crate::{
     api::{
         self,
-        models::{DeployHostRequest, NewHost, UpdateHostRequest},
+        models::{DeployHostRequest, NewHost, UpdateHostPlacementRequest, UpdateHostRequest},
     },
     client::Client,
 };
 
-use super::{OutputFormat, format_bytes, print_output, resolve_host_id};
+use super::{OutputFormat, format_bytes, parse_key_value_pairs, print_output, resolve_host_id};
 
 #[derive(Args)]
 pub struct HostArgs {
@@ -48,6 +50,12 @@ enum HostCommand {
         /// SSH password (omit for key-based auth)
         #[arg(long, default_value = "")]
         password: String,
+        /// Optional reservation class for policy-based placement
+        #[arg(long)]
+        reservation_class: Option<String>,
+        /// Placement label in key=value form. Repeat to set multiple labels.
+        #[arg(long = "label")]
+        labels: Vec<String>,
     },
     /// Deploy a bootc image to a host
     Deploy {
@@ -90,6 +98,11 @@ enum HostCommand {
         #[command(subcommand)]
         command: MaintenanceCommand,
     },
+    /// Manage host placement metadata used by the scheduler
+    Placement {
+        #[command(subcommand)]
+        command: PlacementCommand,
+    },
     /// Evacuate running or paused VMs from a host and leave it in maintenance
     Evacuate {
         /// Host name or ID
@@ -121,6 +134,27 @@ enum MaintenanceCommand {
     },
 }
 
+#[derive(Subcommand)]
+enum PlacementCommand {
+    /// Update scheduler placement metadata for a host
+    Set {
+        /// Host name or ID
+        host: String,
+        /// Reservation class to assign to the host
+        #[arg(long)]
+        reservation_class: Option<String>,
+        /// Clear the host reservation class
+        #[arg(long, conflicts_with = "reservation_class")]
+        clear_reservation_class: bool,
+        /// Placement label in key=value form. Repeat to replace all labels.
+        #[arg(long = "label")]
+        labels: Vec<String>,
+        /// Clear all placement labels
+        #[arg(long, conflicts_with = "labels")]
+        clear_labels: bool,
+    },
+}
+
 #[derive(Tabled)]
 struct HostRow {
     #[tabled(rename = "ID")]
@@ -147,6 +181,8 @@ struct HostRow {
     memory: String,
     #[tabled(rename = "Load")]
     load: String,
+    #[tabled(rename = "Reservation")]
+    reservation_class: String,
     #[tabled(rename = "Arch")]
     architecture: String,
 }
@@ -225,6 +261,10 @@ pub async fn run(args: HostArgs, client: &Client, output: OutputFormat) -> anyho
                             .load_average
                             .map(|l| format!("{:.2}", l))
                             .unwrap_or_else(|| "-".to_string()),
+                        reservation_class: h
+                            .reservation_class
+                            .clone()
+                            .unwrap_or_else(|| "-".to_string()),
                         architecture: h.architecture.clone().unwrap_or_else(|| "-".to_string()),
                     })
                     .collect();
@@ -244,6 +284,16 @@ pub async fn run(args: HostArgs, client: &Client, output: OutputFormat) -> anyho
                 println!("Status:  {}", h.status);
                 println!("User:    {}", h.host_user);
                 println!("Arch:    {}", h.architecture.as_deref().unwrap_or("-"));
+                println!("Reserve: {}", h.reservation_class.as_deref().unwrap_or("-"));
+                if !h.placement_labels.is_empty() {
+                    let labels = h
+                        .placement_labels
+                        .iter()
+                        .map(|(key, value)| format!("{key}={value}"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    println!("Labels:  {labels}");
+                }
                 if let Some(ch) = &h.cloud_hypervisor_version {
                     println!("CH:      {ch}");
                 }
@@ -266,13 +316,18 @@ pub async fn run(args: HostArgs, client: &Client, output: OutputFormat) -> anyho
             port,
             user,
             password,
+            reservation_class,
+            labels,
         } => {
+            let placement_labels = parse_key_value_pairs(&labels)?;
             let new_host = NewHost {
                 name,
                 address,
                 port,
                 host_user: user,
                 password,
+                reservation_class,
+                placement_labels,
             };
             let id = api::hosts::add(client, &new_host).await?;
             if !matches!(output, OutputFormat::Table) {
@@ -375,6 +430,45 @@ pub async fn run(args: HostArgs, client: &Client, output: OutputFormat) -> anyho
                     )?;
                 } else {
                     println!("Host returned to UP: {host}");
+                }
+            }
+        },
+
+        HostCommand::Placement { command } => match command {
+            PlacementCommand::Set {
+                host,
+                reservation_class,
+                clear_reservation_class,
+                labels,
+                clear_labels,
+            } => {
+                let current = api::hosts::get(client, &host).await?;
+                let request = UpdateHostPlacementRequest {
+                    reservation_class: if clear_reservation_class {
+                        None
+                    } else {
+                        reservation_class.or(current.reservation_class.clone())
+                    },
+                    placement_labels: if clear_labels {
+                        BTreeMap::new()
+                    } else if labels.is_empty() {
+                        current.placement_labels.clone()
+                    } else {
+                        parse_key_value_pairs(&labels)?
+                    },
+                };
+                api::hosts::update_placement(client, current.id, &request).await?;
+                if !matches!(output, OutputFormat::Table) {
+                    print_output(
+                        &serde_json::json!({
+                            "host_id": current.id,
+                            "reservation_class": request.reservation_class,
+                            "placement_labels": request.placement_labels,
+                        }),
+                        output,
+                    )?;
+                } else {
+                    println!("Updated placement metadata: {}", current.name);
                 }
             }
         },

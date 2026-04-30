@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Postgres, Transaction, Type, types::Json};
 use strum_macros::{Display, EnumString};
@@ -20,6 +22,102 @@ pub struct CpuTopology {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
+pub struct PlacementPolicy {
+    /// Require placement on hosts from this reservation class.
+    pub reservation_class: Option<String>,
+    /// Hard host-label filter. Every listed label must exist on the host.
+    #[serde(default)]
+    pub required_host_labels: BTreeMap<String, String>,
+    /// Soft host-label preference. Hosts matching all labels sort ahead of others.
+    #[serde(default)]
+    pub preferred_host_labels: BTreeMap<String, String>,
+    /// Prefer hosts already running active VMs that have all of these tags.
+    #[serde(default)]
+    pub affinity_tags: Vec<String>,
+    /// Exclude hosts running active VMs that have any of these tags.
+    #[serde(default)]
+    pub anti_affinity_tags: Vec<String>,
+    /// Prefer hosts with fewer active VMs that have all of these tags.
+    #[serde(default)]
+    pub spread_tags: Vec<String>,
+}
+
+impl PlacementPolicy {
+    pub fn validate(&self) -> Result<(), Error> {
+        if let Some(class) = &self.reservation_class
+            && class.trim().is_empty()
+        {
+            return Err(Error::UnprocessableEntity(
+                "placement_policy.reservation_class cannot be empty".into(),
+            ));
+        }
+
+        validate_label_map(
+            "placement_policy.required_host_labels",
+            &self.required_host_labels,
+        )?;
+        validate_label_map(
+            "placement_policy.preferred_host_labels",
+            &self.preferred_host_labels,
+        )?;
+        validate_tag_list("placement_policy.affinity_tags", &self.affinity_tags)?;
+        validate_tag_list(
+            "placement_policy.anti_affinity_tags",
+            &self.anti_affinity_tags,
+        )?;
+        validate_tag_list("placement_policy.spread_tags", &self.spread_tags)?;
+        Ok(())
+    }
+}
+
+fn validate_label_map(field: &str, labels: &BTreeMap<String, String>) -> Result<(), Error> {
+    for (key, value) in labels {
+        if key.trim().is_empty() {
+            return Err(Error::UnprocessableEntity(format!(
+                "{field} keys cannot be empty"
+            )));
+        }
+        if value.trim().is_empty() {
+            return Err(Error::UnprocessableEntity(format!(
+                "{field}.{key} cannot be empty"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_tag_list(field: &str, tags: &[String]) -> Result<(), Error> {
+    if tags.iter().any(|tag| tag.trim().is_empty()) {
+        return Err(Error::UnprocessableEntity(format!(
+            "{field} cannot contain empty tags"
+        )));
+    }
+    Ok(())
+}
+
+pub fn placement_policy_from_config(config: &serde_json::Value) -> Option<PlacementPolicy> {
+    config
+        .get("placement_policy")
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+}
+
+pub fn persist_placement_policy(
+    config: &mut serde_json::Value,
+    placement_policy: Option<&PlacementPolicy>,
+) {
+    if let serde_json::Value::Object(map) = config {
+        match placement_policy {
+            Some(policy) => {
+                map.insert("placement_policy".to_string(), serde_json::json!(policy));
+            }
+            None => {
+                map.remove("placement_policy");
+            }
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
 pub struct Vm {
     pub id: Uuid,
     pub name: String,
@@ -30,6 +128,7 @@ pub struct Vm {
     pub boot_source_id: Option<Uuid>,
     pub boot_mode: BootMode,
     pub description: Option<String>,
+    pub placement_policy: Option<PlacementPolicy>,
 
     // CPU configuration
     pub boot_vcpus: i32,
@@ -108,6 +207,7 @@ impl From<VmRow> for Vm {
             boot_source_id: row.boot_source_id,
             boot_mode: row.boot_mode,
             description: row.description,
+            placement_policy: placement_policy_from_config(&row.config.0),
 
             boot_vcpus: row.boot_vcpus,
             max_vcpus: row.max_vcpus,
@@ -297,6 +397,10 @@ pub struct NewVm {
     /// must be attached to the host running the VM.
     pub persistent_upper_pool_id: Option<Uuid>,
 
+    /// Placement policy controlling host reservation classes, labels, affinity,
+    /// anti-affinity, and spread preferences during scheduling.
+    pub placement_policy: Option<PlacementPolicy>,
+
     #[serde(default = "default_vm_config")]
     pub config: serde_json::Value,
 }
@@ -333,6 +437,7 @@ pub struct ResolvedNewVm {
     pub accelerator_config: Option<serde_json::Value>,
     pub numa_config: Option<serde_json::Value>,
     pub persistent_upper_pool_id: Option<Uuid>,
+    pub placement_policy: Option<PlacementPolicy>,
     pub config: serde_json::Value,
 }
 
@@ -390,6 +495,7 @@ pub async fn resolve_create_request(pool: &PgPool, request: NewVm) -> Result<Res
         accelerator_config,
         numa_config,
         persistent_upper_pool_id,
+        placement_policy,
         config,
     } = request;
 
@@ -452,6 +558,13 @@ pub async fn resolve_create_request(pool: &PgPool, request: NewVm) -> Result<Res
                     .into(),
             )
         })?;
+
+    let placement_policy = placement_policy
+        .map(|policy| -> Result<PlacementPolicy, Error> {
+            policy.validate()?;
+            Ok(policy)
+        })
+        .transpose()?;
 
     Ok(ResolvedNewVm {
         name,
@@ -600,6 +713,7 @@ pub async fn resolve_create_request(pool: &PgPool, request: NewVm) -> Result<Res
                 .filter(|v| !v.is_null())
         }),
         persistent_upper_pool_id,
+        placement_policy,
         // NOTE: numa_config is intentionally not merged into `config` here;
         // the handler merges it in create_vm_internal before persisting.
         config: merge_config(

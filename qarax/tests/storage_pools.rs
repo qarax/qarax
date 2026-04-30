@@ -149,6 +149,8 @@ async fn create_test_host(pool: &PgPool, status: HostStatus) -> Uuid {
             port: 1,
             host_user: "root".to_string(),
             password: String::new(),
+            reservation_class: None,
+            placement_labels: std::collections::BTreeMap::new(),
         },
     )
     .await

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import datetime
-from typing import Any, TypeVar, cast
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 from uuid import UUID
 
 from attrs import define as _attrs_define
@@ -10,6 +10,10 @@ from dateutil.parser import isoparse
 
 from ..models.host_status import HostStatus
 from ..types import UNSET, Unset
+
+if TYPE_CHECKING:
+    from ..models.host_placement_labels import HostPlacementLabels
+
 
 T = TypeVar("T", bound="Host")
 
@@ -35,6 +39,8 @@ class Host:
         last_deployed_image (None | str | Unset): Last bootc image deployed to this host via the `/deploy` endpoint.
         load_average (float | None | Unset):
         node_version (None | str | Unset): Version of the qarax-node agent running on this host.
+        placement_labels (HostPlacementLabels | Unset): Arbitrary placement labels used by policy-based placement.
+        reservation_class (None | str | Unset): Optional reservation class used by policy-based placement.
         resources_updated_at (datetime.datetime | None | Unset):
         total_cpus (int | None | Unset):
         total_memory_bytes (int | None | Unset):
@@ -57,6 +63,8 @@ class Host:
     last_deployed_image: None | str | Unset = UNSET
     load_average: float | None | Unset = UNSET
     node_version: None | str | Unset = UNSET
+    placement_labels: HostPlacementLabels | Unset = UNSET
+    reservation_class: None | str | Unset = UNSET
     resources_updated_at: datetime.datetime | None | Unset = UNSET
     total_cpus: int | None | Unset = UNSET
     total_memory_bytes: int | None | Unset = UNSET
@@ -137,6 +145,16 @@ class Host:
         else:
             node_version = self.node_version
 
+        placement_labels: dict[str, Any] | Unset = UNSET
+        if not isinstance(self.placement_labels, Unset):
+            placement_labels = self.placement_labels.to_dict()
+
+        reservation_class: None | str | Unset
+        if isinstance(self.reservation_class, Unset):
+            reservation_class = UNSET
+        else:
+            reservation_class = self.reservation_class
+
         resources_updated_at: None | str | Unset
         if isinstance(self.resources_updated_at, Unset):
             resources_updated_at = UNSET
@@ -190,6 +208,10 @@ class Host:
             field_dict["load_average"] = load_average
         if node_version is not UNSET:
             field_dict["node_version"] = node_version
+        if placement_labels is not UNSET:
+            field_dict["placement_labels"] = placement_labels
+        if reservation_class is not UNSET:
+            field_dict["reservation_class"] = reservation_class
         if resources_updated_at is not UNSET:
             field_dict["resources_updated_at"] = resources_updated_at
         if total_cpus is not UNSET:
@@ -201,6 +223,8 @@ class Host:
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Any) -> T:
+        from ..models.host_placement_labels import HostPlacementLabels
+
         d = dict(src_dict)
         address = d.pop("address")
 
@@ -306,6 +330,22 @@ class Host:
 
         node_version = _parse_node_version(d.pop("node_version", UNSET))
 
+        _placement_labels = d.pop("placement_labels", UNSET)
+        placement_labels: HostPlacementLabels | Unset
+        if isinstance(_placement_labels, Unset):
+            placement_labels = UNSET
+        else:
+            placement_labels = HostPlacementLabels.from_dict(_placement_labels)
+
+        def _parse_reservation_class(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        reservation_class = _parse_reservation_class(d.pop("reservation_class", UNSET))
+
         def _parse_resources_updated_at(data: object) -> datetime.datetime | None | Unset:
             if data is None:
                 return data
@@ -359,6 +399,8 @@ class Host:
             last_deployed_image=last_deployed_image,
             load_average=load_average,
             node_version=node_version,
+            placement_labels=placement_labels,
+            reservation_class=reservation_class,
             resources_updated_at=resources_updated_at,
             total_cpus=total_cpus,
             total_memory_bytes=total_memory_bytes,

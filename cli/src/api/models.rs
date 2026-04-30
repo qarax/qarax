@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use serde_with::rust::double_option;
 use uuid::Uuid;
@@ -15,6 +17,7 @@ pub struct Vm {
     pub boot_source_id: Option<Uuid>,
     pub boot_mode: String,
     pub description: Option<String>,
+    pub placement_policy: Option<serde_json::Value>,
     pub boot_vcpus: i32,
     pub max_vcpus: i32,
     pub memory_size: i64,
@@ -85,6 +88,8 @@ pub struct NewVm {
     pub numa_config: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub persistent_upper_pool_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub placement_policy: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -246,6 +251,9 @@ pub struct Host {
     pub node_version: Option<String>,
     pub last_deployed_image: Option<String>,
     pub update_available: bool,
+    pub reservation_class: Option<String>,
+    #[serde(default)]
+    pub placement_labels: BTreeMap<String, String>,
     pub architecture: Option<String>,
     pub total_cpus: Option<i32>,
     pub total_memory_bytes: Option<i64>,
@@ -276,6 +284,10 @@ pub struct NewHost {
     pub port: i32,
     pub host_user: String,
     pub password: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reservation_class: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub placement_labels: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Serialize, Default)]
@@ -298,6 +310,14 @@ pub struct DeployHostRequest {
 #[derive(Debug, Serialize)]
 pub struct UpdateHostRequest {
     pub status: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UpdateHostPlacementRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reservation_class: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub placement_labels: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

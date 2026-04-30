@@ -9,7 +9,10 @@ use crate::{
         audit_log::{AuditAction, AuditResourceType},
         host_gpus::{self, HostGpu},
         host_numa::{self, HostNumaNode},
-        hosts::{self, DeployHostRequest, Host, HostStatus, NewHost, UpdateHostRequest},
+        hosts::{
+            self, DeployHostRequest, Host, HostStatus, NewHost, UpdateHostPlacementRequest,
+            UpdateHostRequest,
+        },
         jobs::{self, JobType, NewJob},
         network_interfaces, storage_pools,
         vms::{self, Vm, VmStatus},
@@ -83,6 +86,10 @@ fn persisted_vm_architecture(vm: &Vm) -> Option<String> {
         .and_then(common::architecture::normalize_architecture)
 }
 
+fn persisted_vm_placement_policy(vm: &Vm) -> Option<crate::model::vms::PlacementPolicy> {
+    crate::model::vms::placement_policy_from_config(&vm.config)
+}
+
 async fn evacuation_scheduling_request(
     env: &App,
     vm: &Vm,
@@ -104,6 +111,7 @@ async fn evacuation_scheduling_request(
         storage_pool_id: None,
         required_network_ids,
         gpu: None,
+        placement_policy: persisted_vm_placement_policy(vm),
         excluded_host_ids: vec![source_host_id],
     })
 }
@@ -257,6 +265,7 @@ pub async fn add(
     Json(host): Json<NewHost>,
 ) -> Result<axum::response::Response> {
     host.validate_unique_name(env.pool()).await?;
+    host.validate_placement()?;
     let host_name = host.name.clone();
     let id = hosts::add(env.pool(), &host).await?;
 
@@ -292,6 +301,36 @@ pub async fn update(
     Json(body): Json<UpdateHostRequest>,
 ) -> Result<ApiResponse<()>> {
     hosts::update_status(env.pool(), host_id, body.status).await?;
+    Ok(ApiResponse {
+        data: (),
+        code: StatusCode::OK,
+    })
+}
+
+#[utoipa::path(
+    put,
+    path = "/hosts/{host_id}/placement",
+    params(
+        ("host_id" = uuid::Uuid, Path, description = "Host unique identifier")
+    ),
+    request_body = UpdateHostPlacementRequest,
+    responses(
+        (status = 200, description = "Host placement metadata updated successfully"),
+        (status = 404, description = "Host not found"),
+        (status = 422, description = "Invalid placement metadata"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "hosts"
+)]
+#[instrument(skip(env))]
+pub async fn update_placement(
+    Extension(env): Extension<App>,
+    Path(host_id): Path<Uuid>,
+    Json(body): Json<UpdateHostPlacementRequest>,
+) -> Result<ApiResponse<()>> {
+    body.validate()?;
+    hosts::require_by_id(env.pool(), host_id).await?;
+    hosts::update_placement(env.pool(), host_id, &body).await?;
     Ok(ApiResponse {
         data: (),
         code: StatusCode::OK,
@@ -728,6 +767,8 @@ mod tests {
                     port: 50051,
                     host_user: "root".to_string(),
                     password: String::new(),
+                    reservation_class: None,
+                    placement_labels: std::collections::BTreeMap::new(),
                 },
             )
             .await

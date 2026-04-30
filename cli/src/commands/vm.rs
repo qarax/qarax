@@ -17,9 +17,10 @@ use crate::{
 };
 
 use super::{
-    OutputFormat, build_accelerator_config, format_bytes, print_output, resolve_boot_source_id,
-    resolve_host_id, resolve_instance_type_id, resolve_network_id, resolve_object_id,
-    resolve_pool_id, resolve_security_group_id, resolve_vm_id, resolve_vm_template_id,
+    OutputFormat, build_accelerator_config, format_bytes, parse_key_value_pairs, print_output,
+    resolve_boot_source_id, resolve_host_id, resolve_instance_type_id, resolve_network_id,
+    resolve_object_id, resolve_pool_id, resolve_security_group_id, resolve_vm_id,
+    resolve_vm_template_id,
 };
 
 #[derive(Args)]
@@ -136,6 +137,24 @@ enum VmCommand {
         /// Pool must be Local or NFS and attached to the host running the VM.
         #[arg(long, requires = "image_ref")]
         persistent_upper_pool: Option<String>,
+        /// Require a host from this reservation class
+        #[arg(long)]
+        reservation_class: Option<String>,
+        /// Require a host label in key=value form. Repeat to require multiple labels.
+        #[arg(long = "require-host-label")]
+        required_host_labels: Vec<String>,
+        /// Prefer hosts with this label set in key=value form. Repeat for multiple labels.
+        #[arg(long = "prefer-host-label")]
+        preferred_host_labels: Vec<String>,
+        /// Prefer hosts already running VMs with this tag. Repeat to match a tag set.
+        #[arg(long = "affinity-tag")]
+        affinity_tags: Vec<String>,
+        /// Exclude hosts already running VMs with this tag. Repeat to add more tags.
+        #[arg(long = "anti-affinity-tag")]
+        anti_affinity_tags: Vec<String>,
+        /// Prefer hosts with fewer VMs carrying this tag. Repeat to match a tag set.
+        #[arg(long = "spread-tag")]
+        spread_tags: Vec<String>,
     },
     /// Delete a VM
     Delete {
@@ -335,6 +354,36 @@ enum VmCommand {
     },
 }
 
+fn build_placement_policy(
+    reservation_class: Option<String>,
+    required_host_labels: &[String],
+    preferred_host_labels: &[String],
+    affinity_tags: &[String],
+    anti_affinity_tags: &[String],
+    spread_tags: &[String],
+) -> anyhow::Result<Option<serde_json::Value>> {
+    let required_host_labels = parse_key_value_pairs(required_host_labels)?;
+    let preferred_host_labels = parse_key_value_pairs(preferred_host_labels)?;
+    if reservation_class.is_none()
+        && required_host_labels.is_empty()
+        && preferred_host_labels.is_empty()
+        && affinity_tags.is_empty()
+        && anti_affinity_tags.is_empty()
+        && spread_tags.is_empty()
+    {
+        return Ok(None);
+    }
+
+    Ok(Some(serde_json::json!({
+        "reservation_class": reservation_class,
+        "required_host_labels": required_host_labels,
+        "preferred_host_labels": preferred_host_labels,
+        "affinity_tags": affinity_tags,
+        "anti_affinity_tags": anti_affinity_tags,
+        "spread_tags": spread_tags,
+    })))
+}
+
 #[derive(Subcommand)]
 enum SnapshotCommand {
     /// Create a snapshot of a running VM
@@ -495,6 +544,12 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
             min_vram,
             numa_node,
             persistent_upper_pool,
+            reservation_class,
+            required_host_labels,
+            preferred_host_labels,
+            affinity_tags,
+            anti_affinity_tags,
+            spread_tags,
         } => {
             let vm_template_id = match template {
                 Some(ref template) => Some(resolve_vm_template_id(client, template).await?),
@@ -576,6 +631,14 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
                 Some(ref p) => Some(resolve_pool_id(client, p).await?),
                 None => None,
             };
+            let placement_policy = build_placement_policy(
+                reservation_class,
+                &required_host_labels,
+                &preferred_host_labels,
+                &affinity_tags,
+                &anti_affinity_tags,
+                &spread_tags,
+            )?;
             let security_group_ids = if security_groups.is_empty() {
                 None
             } else {
@@ -611,6 +674,7 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
                 accelerator_config,
                 numa_config,
                 persistent_upper_pool_id,
+                placement_policy,
             };
 
             let result = api::vms::create(client, &new_vm).await?;

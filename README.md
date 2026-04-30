@@ -46,6 +46,10 @@ See [docs/NETWORK_ISOLATION.md](docs/NETWORK_ISOLATION.md) for VPC-style subnet
 grouping, cross-host VXLAN-backed private routing, VM security groups, and the
 intended CLI workflow.
 
+See [docs/PLACEMENT_POLICIES.md](docs/PLACEMENT_POLICIES.md) for host
+reservation classes, placement labels, VM placement policies, scheduler
+ordering, and CLI/API examples.
+
 ## CLI quickstart
 
 See the [CLI README](cli/) for full usage. Quick version:

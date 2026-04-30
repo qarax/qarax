@@ -533,6 +533,34 @@ paths:
           description: Host not found
         '500':
           description: Internal server error
+  /hosts/{host_id}/placement:
+    put:
+      tags:
+      - hosts
+      operationId: update_placement
+      parameters:
+      - name: host_id
+        in: path
+        description: Host unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateHostPlacementRequest'
+        required: true
+      responses:
+        '200':
+          description: Host placement metadata updated successfully
+        '404':
+          description: Host not found
+        '422':
+          description: Invalid placement metadata
+        '500':
+          description: Internal server error
   /hosts/{host_id}/resources:
     get:
       tags:
@@ -3115,9 +3143,21 @@ components:
           - string
           - 'null'
           description: Version of the qarax-node agent running on this host.
+        placement_labels:
+          type: object
+          description: Arbitrary placement labels used by policy-based placement.
+          additionalProperties:
+            type: string
+          propertyNames:
+            type: string
         port:
           type: integer
           format: int32
+        reservation_class:
+          type:
+          - string
+          - 'null'
+          description: Optional reservation class used by policy-based placement.
         resources_updated_at:
           type:
           - string
@@ -3686,9 +3726,21 @@ components:
           type: string
         password:
           type: string
+        placement_labels:
+          type: object
+          description: Arbitrary placement labels for scheduler filters and preferences.
+          additionalProperties:
+            type: string
+          propertyNames:
+            type: string
         port:
           type: integer
           format: int32
+        reservation_class:
+          type:
+          - string
+          - 'null'
+          description: Optional reservation class this host belongs to.
     NewInstanceType:
       type: object
       required:
@@ -4067,6 +4119,13 @@ components:
             upper.index) is stored as a persistent `OverlaybdUpper` StorageObject on
             this pool instead of being ephemeral. The pool must be Local or NFS and
             must be attached to the host running the VM.
+        placement_policy:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/PlacementPolicy'
+            description: |-
+              Placement policy controlling host reservation classes, labels, affinity,
+              anti-affinity, and spread preferences during scheduling.
         root_disk_object_id:
           type:
           - string
@@ -4308,6 +4367,43 @@ components:
           - string
           - 'null'
           format: uuid
+    PlacementPolicy:
+      type: object
+      properties:
+        affinity_tags:
+          type: array
+          items:
+            type: string
+          description: Prefer hosts already running active VMs that have all of these tags.
+        anti_affinity_tags:
+          type: array
+          items:
+            type: string
+          description: Exclude hosts running active VMs that have any of these tags.
+        preferred_host_labels:
+          type: object
+          description: Soft host-label preference. Hosts matching all labels sort ahead of others.
+          additionalProperties:
+            type: string
+          propertyNames:
+            type: string
+        required_host_labels:
+          type: object
+          description: Hard host-label filter. Every listed label must exist on the host.
+          additionalProperties:
+            type: string
+          propertyNames:
+            type: string
+        reservation_class:
+          type:
+          - string
+          - 'null'
+          description: Require placement on hosts from this reservation class.
+        spread_tags:
+          type: array
+          items:
+            type: string
+          description: Prefer hosts with fewer active VMs that have all of these tags.
     RateLimiterConfig:
       type: object
       properties:
@@ -4724,6 +4820,21 @@ components:
       enum:
       - download
       - local_copy
+    UpdateHostPlacementRequest:
+      type: object
+      properties:
+        placement_labels:
+          type: object
+          description: Arbitrary placement labels for scheduler filters and preferences.
+          additionalProperties:
+            type: string
+          propertyNames:
+            type: string
+        reservation_class:
+          type:
+          - string
+          - 'null'
+          description: Optional reservation class this host belongs to.
     UpdateHostRequest:
       type: object
       required:
@@ -4857,6 +4968,10 @@ components:
           type: boolean
         name:
           type: string
+        placement_policy:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/PlacementPolicy'
         status:
           $ref: '#/components/schemas/VmStatus'
         tags:

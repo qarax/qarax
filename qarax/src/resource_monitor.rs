@@ -199,6 +199,8 @@ mod tests {
                     port: 50051,
                     host_user: "root".to_string(),
                     password: String::new(),
+                    reservation_class: None,
+                    placement_labels: std::collections::BTreeMap::new(),
                 },
             )
             .await

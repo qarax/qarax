@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, TypeVar, cast
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 from uuid import UUID
 
 from attrs import define as _attrs_define
@@ -10,6 +10,10 @@ from ..models.boot_mode import BootMode
 from ..models.hypervisor import Hypervisor
 from ..models.vm_status import VmStatus
 from ..types import UNSET, Unset
+
+if TYPE_CHECKING:
+    from ..models.placement_policy import PlacementPolicy
+
 
 T = TypeVar("T", bound="Vm")
 
@@ -44,6 +48,7 @@ class Vm:
         image_ref (None | str | Unset):
         memory_hotplug_size (int | None | Unset):
         memory_hugepage_size (int | None | Unset):
+        placement_policy (None | PlacementPolicy | Unset):
     """
 
     boot_mode: BootMode
@@ -72,9 +77,12 @@ class Vm:
     image_ref: None | str | Unset = UNSET
     memory_hotplug_size: int | None | Unset = UNSET
     memory_hugepage_size: int | None | Unset = UNSET
+    placement_policy: None | PlacementPolicy | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        from ..models.placement_policy import PlacementPolicy
+
         boot_mode = self.boot_mode.value
 
         boot_vcpus = self.boot_vcpus
@@ -167,6 +175,14 @@ class Vm:
         else:
             memory_hugepage_size = self.memory_hugepage_size
 
+        placement_policy: dict[str, Any] | None | Unset
+        if isinstance(self.placement_policy, Unset):
+            placement_policy = UNSET
+        elif isinstance(self.placement_policy, PlacementPolicy):
+            placement_policy = self.placement_policy.to_dict()
+        else:
+            placement_policy = self.placement_policy
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -209,11 +225,15 @@ class Vm:
             field_dict["memory_hotplug_size"] = memory_hotplug_size
         if memory_hugepage_size is not UNSET:
             field_dict["memory_hugepage_size"] = memory_hugepage_size
+        if placement_policy is not UNSET:
+            field_dict["placement_policy"] = placement_policy
 
         return field_dict
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Any) -> T:
+        from ..models.placement_policy import PlacementPolicy
+
         d = dict(src_dict)
         boot_mode = BootMode(d.pop("boot_mode"))
 
@@ -346,6 +366,23 @@ class Vm:
 
         memory_hugepage_size = _parse_memory_hugepage_size(d.pop("memory_hugepage_size", UNSET))
 
+        def _parse_placement_policy(data: object) -> None | PlacementPolicy | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, dict):
+                    raise TypeError()
+                placement_policy_type_1 = PlacementPolicy.from_dict(data)
+
+                return placement_policy_type_1
+            except (TypeError, ValueError, AttributeError, KeyError):
+                pass
+            return cast(None | PlacementPolicy | Unset, data)
+
+        placement_policy = _parse_placement_policy(d.pop("placement_policy", UNSET))
+
         vm = cls(
             boot_mode=boot_mode,
             boot_vcpus=boot_vcpus,
@@ -373,6 +410,7 @@ class Vm:
             image_ref=image_ref,
             memory_hotplug_size=memory_hotplug_size,
             memory_hugepage_size=memory_hugepage_size,
+            placement_policy=placement_policy,
         )
 
         vm.additional_properties = d
