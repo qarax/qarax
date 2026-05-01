@@ -19,6 +19,21 @@ pub async fn start_hook_executor(env: App) {
         .build()
         .expect("failed to build reqwest client for hook executor");
 
+    // Best-effort: reset rows orphaned in PROCESSING by a previous crash.
+    // The real double-delivery guard is the atomic FOR UPDATE SKIP LOCKED claim loop;
+    // this only recovers rows that would otherwise sit stuck after a hard restart.
+    match lifecycle_hooks::reset_processing_to_pending(env.pool()).await {
+        Ok(n) if n > 0 => info!(
+            "hook executor: reset {} stale PROCESSING rows to PENDING",
+            n
+        ),
+        Ok(_) => {}
+        Err(e) => warn!(
+            "hook executor: failed to reset stale PROCESSING rows: {}",
+            e
+        ),
+    }
+
     let mut ticker = interval(time::Duration::from_secs(2));
 
     loop {
@@ -31,10 +46,10 @@ pub async fn start_hook_executor(env: App) {
         #[cfg(feature = "otel")]
         let _cycle_start = std::time::Instant::now();
 
-        let pending = match lifecycle_hooks::fetch_pending_executions(env.pool(), 20).await {
+        let pending = match lifecycle_hooks::claim_pending_executions(env.pool(), 20).await {
             Ok(execs) => execs,
             Err(e) => {
-                warn!("hook executor: failed to fetch pending executions: {}", e);
+                warn!("hook executor: failed to claim pending executions: {}", e);
                 continue;
             }
         };

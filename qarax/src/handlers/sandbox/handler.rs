@@ -77,7 +77,7 @@ pub async fn create(
         }
     };
 
-    spawn_sandbox_ready_watcher(env.pool_arc(), sandbox_id, vm_id);
+    spawn_sandbox_ready_watcher(env.pool_arc(), sandbox_id, vm_id, job_id);
 
     Ok(ApiResponse {
         data: CreateSandboxResponse {
@@ -241,6 +241,7 @@ fn spawn_sandbox_ready_watcher(
     db_pool: std::sync::Arc<sqlx::PgPool>,
     sandbox_id: Uuid,
     vm_id: Uuid,
+    job_id: Uuid,
 ) {
     tokio::spawn(async move {
         let mut ticker = interval(Duration::from_secs(2));
@@ -276,7 +277,7 @@ fn spawn_sandbox_ready_watcher(
                         tracing::info!(sandbox_id = %sandbox_id, vm_id = %vm_id, "Sandbox ready");
                         break;
                     }
-                    VmStatus::Created | VmStatus::Shutdown | VmStatus::Unknown => {
+                    VmStatus::Shutdown | VmStatus::Unknown => {
                         let _ = sandboxes::update_status(
                             &db_pool,
                             sandbox_id,
@@ -292,7 +293,32 @@ fn spawn_sandbox_ready_watcher(
                         );
                         break;
                     }
-                    _ => continue,
+                    _ => {
+                        // VmStatus::Created or Pending: start job may still be in-flight.
+                        // Check the job status before declaring failure to avoid a race
+                        // where the job fails and reverts to Created before the first poll.
+                        if let Ok(job) = jobs::get(&db_pool, job_id).await
+                            && job.status == jobs::JobStatus::Failed
+                        {
+                            let msg = job
+                                .error
+                                .unwrap_or_else(|| "VM failed to start".to_string());
+                            tracing::warn!(
+                                sandbox_id = %sandbox_id,
+                                vm_id = %vm_id,
+                                error = %msg,
+                                "Sandbox start job failed"
+                            );
+                            let _ = sandboxes::update_status(
+                                &db_pool,
+                                sandbox_id,
+                                SandboxStatus::Error,
+                                Some(msg),
+                            )
+                            .await;
+                            break;
+                        }
+                    }
                 },
                 Err(sqlx::Error::RowNotFound) => break,
                 Err(e) => {

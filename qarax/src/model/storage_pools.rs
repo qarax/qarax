@@ -225,7 +225,7 @@ pub async fn pick_active_non_overlaybd(
         }
     }
     let row = sqlx::query_as::<_, (Uuid,)>(
-        "SELECT id FROM storage_pools WHERE status = 'ACTIVE' AND pool_type != 'OVERLAYBD' ORDER BY RANDOM() LIMIT 1",
+        "SELECT id FROM storage_pools WHERE status = 'ACTIVE' AND pool_type != 'OVERLAYBD' LIMIT 1",
     )
     .fetch_optional(pool)
     .await?;
@@ -251,17 +251,17 @@ pub async fn pick_active_local_pool(
         }
     }
     let row = sqlx::query_as::<_, (Uuid,)>(
-        "SELECT id FROM storage_pools WHERE status = 'ACTIVE' AND pool_type = 'LOCAL' ORDER BY RANDOM() LIMIT 1",
+        "SELECT id FROM storage_pools WHERE status = 'ACTIVE' AND pool_type = 'LOCAL' LIMIT 1",
     )
     .fetch_optional(pool)
     .await?;
     Ok(row.map(|(id,)| id))
 }
 
-/// Return a random active storage pool ID (used when none is specified for disk creation).
+/// Return an active storage pool ID (used when none is specified for disk creation).
 pub async fn pick_active(pool: &PgPool) -> Result<Option<Uuid>, sqlx::Error> {
     let row = sqlx::query_as::<_, (Uuid,)>(
-        "SELECT id FROM storage_pools WHERE status = 'ACTIVE' ORDER BY RANDOM() LIMIT 1",
+        "SELECT id FROM storage_pools WHERE status = 'ACTIVE' LIMIT 1",
     )
     .fetch_optional(pool)
     .await?;

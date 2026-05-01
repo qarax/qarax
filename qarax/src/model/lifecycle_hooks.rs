@@ -30,6 +30,7 @@ pub enum HookScope {
 #[strum(serialize_all = "snake_case")]
 pub enum HookExecutionStatus {
     Pending,
+    Processing,
     Delivered,
     Failed,
 }
@@ -320,29 +321,44 @@ VALUES ($1, $2, $3, $4, $5)
     Ok(())
 }
 
-/// Fetch pending executions ready for delivery.
-pub async fn fetch_pending_executions(
+/// Atomically claim pending executions for delivery, marking them PROCESSING.
+/// Uses FOR UPDATE SKIP LOCKED so concurrent executor instances cannot double-deliver.
+pub async fn claim_pending_executions(
     pool: &PgPool,
     limit: i64,
 ) -> Result<Vec<HookExecution>, sqlx::Error> {
-    let executions = sqlx::query_as::<_, HookExecution>(
+    sqlx::query_as::<_, HookExecution>(
         r#"
-SELECT id, hook_id, vm_id, previous_status, new_status, status,
-       attempt_count, max_attempts, next_retry_at, payload,
-       response_status, response_body, last_error,
-       created_at, delivered_at
-FROM hook_executions
-WHERE status = 'PENDING'
-  AND next_retry_at <= NOW()
-ORDER BY next_retry_at
-LIMIT $1
+UPDATE hook_executions
+SET status = 'PROCESSING'
+WHERE id IN (
+    SELECT id
+    FROM hook_executions
+    WHERE status = 'PENDING'
+      AND next_retry_at <= NOW()
+    ORDER BY next_retry_at
+    LIMIT $1
+    FOR UPDATE SKIP LOCKED
+)
+RETURNING id, hook_id, vm_id, previous_status, new_status, status,
+          attempt_count, max_attempts, next_retry_at, payload,
+          response_status, response_body, last_error,
+          created_at, delivered_at
         "#,
     )
     .bind(limit)
     .fetch_all(pool)
-    .await?;
+    .await
+}
 
-    Ok(executions)
+/// Reset any PROCESSING rows to PENDING (called on executor startup to recover
+/// from rows orphaned by a previous process crash).
+pub async fn reset_processing_to_pending(pool: &PgPool) -> Result<u64, sqlx::Error> {
+    let result =
+        sqlx::query("UPDATE hook_executions SET status = 'PENDING' WHERE status = 'PROCESSING'")
+            .execute(pool)
+            .await?;
+    Ok(result.rows_affected())
 }
 
 pub async fn mark_delivered(
@@ -379,7 +395,8 @@ pub async fn mark_retry(
     sqlx::query(
         r#"
 UPDATE hook_executions
-SET attempt_count = attempt_count + 1,
+SET status        = 'PENDING',
+    attempt_count = attempt_count + 1,
     last_error    = $2,
     next_retry_at = $3
 WHERE id = $1

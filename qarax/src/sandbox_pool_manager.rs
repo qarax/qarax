@@ -9,6 +9,7 @@ use crate::{
     App,
     handlers::vm::handler::{create_vm_internal, start_vm_internal},
     model::{
+        jobs::{self, JobStatus},
         sandbox_pool_members::{self, SandboxPoolMember, SandboxPoolMemberStatus},
         sandbox_pools::{self, SandboxPool},
         sandboxes::NewSandbox,
@@ -164,7 +165,7 @@ async fn provision_pool_member(env: &App, pool: &SandboxPool) -> Result<(), crat
                 job_id = %job_id,
                 "Sandbox pool manager: prewarming sandbox VM"
             );
-            spawn_member_ready_watcher(env.pool_arc(), member.id, vm_id);
+            spawn_member_ready_watcher(env.pool_arc(), member.id, vm_id, job_id);
         }
         Err(e) => {
             let _ = sandbox_pool_members::update_status(
@@ -180,7 +181,7 @@ async fn provision_pool_member(env: &App, pool: &SandboxPool) -> Result<(), crat
     Ok(())
 }
 
-fn spawn_member_ready_watcher(pool: Arc<PgPool>, member_id: Uuid, vm_id: Uuid) {
+fn spawn_member_ready_watcher(pool: Arc<PgPool>, member_id: Uuid, vm_id: Uuid, job_id: Uuid) {
     tokio::spawn(async move {
         let mut ticker = interval(Duration::from_secs(2));
         let mut attempts = 0u32;
@@ -210,7 +211,7 @@ fn spawn_member_ready_watcher(pool: Arc<PgPool>, member_id: Uuid, vm_id: Uuid) {
                         .await;
                         break;
                     }
-                    VmStatus::Created | VmStatus::Shutdown | VmStatus::Unknown => {
+                    VmStatus::Shutdown | VmStatus::Unknown => {
                         let _ = sandbox_pool_members::update_status(
                             &pool,
                             member_id,
@@ -220,7 +221,29 @@ fn spawn_member_ready_watcher(pool: Arc<PgPool>, member_id: Uuid, vm_id: Uuid) {
                         .await;
                         break;
                     }
-                    _ => continue,
+                    _ => {
+                        if let Ok(job) = jobs::get(&pool, job_id).await
+                            && job.status == JobStatus::Failed
+                        {
+                            let msg = job
+                                .error
+                                .unwrap_or_else(|| "VM failed to start".to_string());
+                            warn!(
+                                member_id = %member_id,
+                                vm_id = %vm_id,
+                                error = %msg,
+                                "Sandbox pool member start job failed"
+                            );
+                            let _ = sandbox_pool_members::update_status(
+                                &pool,
+                                member_id,
+                                SandboxPoolMemberStatus::Error,
+                                Some(msg),
+                            )
+                            .await;
+                            break;
+                        }
+                    }
                 },
                 Err(sqlx::Error::RowNotFound) => break,
                 Err(e) => {

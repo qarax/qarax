@@ -1,0 +1,1 @@
+ALTER TYPE hook_execution_status ADD VALUE IF NOT EXISTS 'PROCESSING';

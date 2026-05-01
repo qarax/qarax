@@ -141,9 +141,18 @@ pub async fn start_resource_monitor(env: App) {
             continue;
         }
 
+        let mut join_set = tokio::task::JoinSet::new();
         for host in up_hosts {
-            let client = NodeClient::new(&host.address, host.port as u16);
-            handle_probe_result(&env, &host, client.get_node_info().await).await;
+            let env = env.clone();
+            join_set.spawn(async move {
+                let client = NodeClient::new(&host.address, host.port as u16);
+                handle_probe_result(&env, &host, client.get_node_info().await).await;
+            });
+        }
+        while let Some(result) = join_set.join_next().await {
+            if let Err(e) = result {
+                warn!("Resource monitor: host probe task panicked: {}", e);
+            }
         }
 
         #[cfg(feature = "otel")]

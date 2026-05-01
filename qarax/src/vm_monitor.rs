@@ -48,60 +48,79 @@ pub async fn start_vm_monitor(env: App) {
             }
         }
 
+        let mut join_set = tokio::task::JoinSet::new();
+
         for (host_id, vms) in by_host {
-            let host = match hosts::get_by_id(env.pool(), host_id).await {
-                Ok(Some(h)) => h,
-                Ok(None) => {
-                    warn!("VM monitor: host {} not found in DB", host_id);
-                    continue;
-                }
-                Err(e) => {
-                    warn!("VM monitor: failed to look up host {}: {}", host_id, e);
-                    continue;
-                }
-            };
-
-            let client = NodeClient::new(&host.address, host.port as u16);
-
-            for vm in vms {
-                match client.get_vm_info(vm.id).await {
-                    Ok(state) => {
-                        let previous_status = vm.status.clone();
-                        let live_status = proto_status_to_db(state.status, previous_status.clone());
-                        if live_status != previous_status {
-                            info!(
-                                "VM monitor: VM {} status changed from {:?} to {:?}",
-                                vm.id, previous_status, live_status
-                            );
-                            if let Err(e) = vms::update_status(env.pool(), vm.id, live_status).await
-                            {
-                                warn!("VM monitor: failed to update VM {} status: {}", vm.id, e);
-                            }
-                        }
+            let env = env.clone();
+            join_set.spawn(async move {
+                let host = match hosts::get_by_id(env.pool(), host_id).await {
+                    Ok(Some(h)) => h,
+                    Ok(None) => {
+                        warn!("VM monitor: host {} not found in DB", host_id);
+                        return;
                     }
                     Err(e) => {
-                        let e_str = format!("{}", e);
-                        if e_str.to_lowercase().contains("not found") {
-                            info!(
-                                "VM monitor: VM {} not found on node, marking as Unknown",
-                                vm.id
-                            );
-                            if let Err(db_err) =
-                                vms::update_status(env.pool(), vm.id, VmStatus::Unknown).await
+                        warn!("VM monitor: failed to look up host {}: {}", host_id, e);
+                        return;
+                    }
+                };
+
+                // One channel per host per tick; reused for all VMs on this host.
+                let client = NodeClient::new(&host.address, host.port as u16);
+
+                for vm in vms {
+                    match client.get_vm_info(vm.id).await {
+                        Ok(state) => {
+                            let previous_status = vm.status.clone();
+                            let live_status =
+                                proto_status_to_db(state.status, previous_status.clone());
+                            if live_status != previous_status {
+                                info!(
+                                    "VM monitor: VM {} status changed from {:?} to {:?}",
+                                    vm.id, previous_status, live_status
+                                );
+                                if let Err(e) =
+                                    vms::update_status(env.pool(), vm.id, live_status).await
+                                {
+                                    warn!(
+                                        "VM monitor: failed to update VM {} status: {}",
+                                        vm.id, e
+                                    );
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            if e.downcast_ref::<crate::errors::Error>()
+                                .map(|e| matches!(e, crate::errors::Error::NotFound))
+                                .unwrap_or(false)
                             {
+                                info!(
+                                    "VM monitor: VM {} not found on node, marking as Unknown",
+                                    vm.id
+                                );
+                                if let Err(db_err) =
+                                    vms::update_status(env.pool(), vm.id, VmStatus::Unknown).await
+                                {
+                                    warn!(
+                                        "VM monitor: failed to update VM {} status: {}",
+                                        vm.id, db_err
+                                    );
+                                }
+                            } else {
                                 warn!(
-                                    "VM monitor: failed to update VM {} status: {}",
-                                    vm.id, db_err
+                                    "VM monitor: failed to get VM {} info from host {} (node may be down): {}",
+                                    vm.id, host.name, e
                                 );
                             }
-                        } else {
-                            warn!(
-                                "VM monitor: failed to get VM {} info from host {} (node may be down): {}",
-                                vm.id, host.name, e
-                            );
                         }
                     }
                 }
+            });
+        }
+
+        while let Some(result) = join_set.join_next().await {
+            if let Err(e) = result {
+                warn!("VM monitor: host task panicked: {}", e);
             }
         }
 

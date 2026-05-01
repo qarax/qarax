@@ -88,9 +88,12 @@ use node::{
     vm_service_client::VmServiceClient,
 };
 
-/// Client for communicating with qarax-node via gRPC
+/// Client for communicating with qarax-node via gRPC.
+/// The VM service channel is lazily connected and cached so that multiple
+/// RPCs in the same monitor tick share a single TCP connection.
 pub struct NodeClient {
     address: String,
+    vm_channel: tokio::sync::OnceCell<tonic::transport::Channel>,
 }
 
 /// Parameters for creating a VM on the node
@@ -192,6 +195,7 @@ impl NodeClient {
     pub fn new(host: &str, port: u16) -> Self {
         Self {
             address: format!("http://{}:{}", host, port),
+            vm_channel: tokio::sync::OnceCell::new(),
         }
     }
 
@@ -199,26 +203,33 @@ impl NodeClient {
     pub fn from_address(address: &str) -> Self {
         Self {
             address: format!("http://{}", address),
+            vm_channel: tokio::sync::OnceCell::new(),
         }
     }
 
     async fn connect_vm_service(&self) -> Result<VmClient> {
-        let channel = tonic::transport::Channel::from_shared(self.address.clone())
-            .context("invalid qarax-node address")?
-            .connect()
-            .await
-            .context("Failed to connect to qarax-node")?;
+        // OnceCell only stores on success; a failed init is retried on the next call.
+        let channel = self
+            .vm_channel
+            .get_or_try_init(|| async {
+                tonic::transport::Channel::from_shared(self.address.clone())
+                    .context("invalid qarax-node address")?
+                    .connect()
+                    .await
+                    .context("Failed to connect to qarax-node")
+            })
+            .await?;
 
         #[cfg(feature = "otel")]
         {
             Ok(VmServiceClient::with_interceptor(
-                channel,
+                channel.clone(),
                 trace_propagation::inject_trace_context as fn(_) -> _,
             ))
         }
         #[cfg(not(feature = "otel"))]
         {
-            Ok(VmServiceClient::new(channel))
+            Ok(VmServiceClient::new(channel.clone()))
         }
     }
 
@@ -556,7 +567,9 @@ impl NodeClient {
         Ok(())
     }
 
-    /// Get live VM info from the qarax-node
+    /// Get live VM info from the qarax-node.
+    /// Returns `Error::NotFound` (typed) when the node reports the VM is gone,
+    /// so callers can match on it without string parsing.
     #[instrument(skip(self))]
     pub async fn get_vm_info(&self, vm_id: Uuid) -> Result<VmState> {
         debug!("Getting VM info {} from node {}", vm_id, self.address);
@@ -568,7 +581,10 @@ impl NodeClient {
                 id: vm_id.to_string(),
             })
             .await
-            .context("Failed to get VM info from qarax-node")?;
+            .map_err(|s| match s.code() {
+                tonic::Code::NotFound => crate::errors::Error::NotFound.into(),
+                _ => anyhow::anyhow!("Failed to get VM info from qarax-node: {}", s),
+            })?;
 
         Ok(response.into_inner())
     }
