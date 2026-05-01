@@ -2,29 +2,31 @@
 /// and the live state reported by qarax-node. Detects drift caused by node
 /// restarts or unexpected VM terminations and updates the DB accordingly.
 use std::collections::HashMap;
-use std::sync::Arc;
-
-use sqlx::PgPool;
 use tokio::time::{Duration, interval};
 use tracing::{info, warn};
 use uuid::Uuid;
 
+use crate::App;
 use crate::grpc_client::NodeClient;
 use crate::model::{
     hosts,
     vms::{self, VmStatus},
 };
 
-pub async fn start_vm_monitor(pool: Arc<PgPool>) {
+pub async fn start_vm_monitor(env: App) {
     let mut ticker = interval(Duration::from_secs(30));
 
     loop {
         ticker.tick().await;
 
+        if env.maintenance_mode() {
+            continue;
+        }
+
         #[cfg(feature = "otel")]
         let _cycle_start = std::time::Instant::now();
 
-        let active_vms = match vms::list_active(&pool).await {
+        let active_vms = match vms::list_active(env.pool()).await {
             Ok(vms) => vms,
             Err(e) => {
                 warn!("VM monitor: failed to list active VMs: {}", e);
@@ -47,7 +49,7 @@ pub async fn start_vm_monitor(pool: Arc<PgPool>) {
         }
 
         for (host_id, vms) in by_host {
-            let host = match hosts::get_by_id(&pool, host_id).await {
+            let host = match hosts::get_by_id(env.pool(), host_id).await {
                 Ok(Some(h)) => h,
                 Ok(None) => {
                     warn!("VM monitor: host {} not found in DB", host_id);
@@ -71,7 +73,8 @@ pub async fn start_vm_monitor(pool: Arc<PgPool>) {
                                 "VM monitor: VM {} status changed from {:?} to {:?}",
                                 vm.id, previous_status, live_status
                             );
-                            if let Err(e) = vms::update_status(&pool, vm.id, live_status).await {
+                            if let Err(e) = vms::update_status(env.pool(), vm.id, live_status).await
+                            {
                                 warn!("VM monitor: failed to update VM {} status: {}", vm.id, e);
                             }
                         }
@@ -84,7 +87,7 @@ pub async fn start_vm_monitor(pool: Arc<PgPool>) {
                                 vm.id
                             );
                             if let Err(db_err) =
-                                vms::update_status(&pool, vm.id, VmStatus::Unknown).await
+                                vms::update_status(env.pool(), vm.id, VmStatus::Unknown).await
                             {
                                 warn!(
                                     "VM monitor: failed to update VM {} status: {}",

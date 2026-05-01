@@ -1,20 +1,24 @@
 /// Background task that periodically deletes sandboxes that have exceeded their idle timeout.
-use std::sync::Arc;
-
-use sqlx::PgPool;
 use tokio::time::{Duration, interval};
 use tracing::{info, warn};
 
-use crate::model::{sandboxes, sandboxes::SandboxStatus};
 use crate::sandbox_runtime::destroy_vm;
+use crate::{
+    App,
+    model::{sandboxes, sandboxes::SandboxStatus},
+};
 
-pub async fn start_sandbox_reaper(pool: Arc<PgPool>) {
+pub async fn start_sandbox_reaper(env: App) {
     let mut ticker = interval(Duration::from_secs(15));
 
     loop {
         ticker.tick().await;
 
-        let expired = match sandboxes::list_expired(&pool).await {
+        if env.maintenance_mode() {
+            continue;
+        }
+
+        let expired = match sandboxes::list_expired(env.pool()).await {
             Ok(list) => list,
             Err(e) => {
                 warn!("Sandbox reaper: failed to query expired sandboxes: {}", e);
@@ -30,7 +34,8 @@ pub async fn start_sandbox_reaper(pool: Arc<PgPool>) {
             );
 
             if let Err(e) =
-                sandboxes::update_status(&pool, sandbox.id, SandboxStatus::Destroying, None).await
+                sandboxes::update_status(env.pool(), sandbox.id, SandboxStatus::Destroying, None)
+                    .await
             {
                 warn!(
                     sandbox_id = %sandbox.id,
@@ -40,7 +45,7 @@ pub async fn start_sandbox_reaper(pool: Arc<PgPool>) {
                 continue;
             }
 
-            destroy_vm(&pool, sandbox.vm_id).await;
+            destroy_vm(env.pool(), sandbox.vm_id).await;
         }
     }
 }

@@ -29,6 +29,8 @@ use crate::{
     handlers::audit::{AuditEvent, AuditEventExt},
     model::{
         audit_log::{AuditAction, AuditResourceType},
+        backups,
+        backups::{Backup, BackupStatus, BackupType, NewBackup},
         boot_sources, host_gpus, host_numa, hosts,
         hosts::Host,
         jobs::{self, JobType, NewJob},
@@ -1713,27 +1715,28 @@ pub struct CreateSnapshotRequest {
     pub storage_pool_id: Option<Uuid>,
 }
 
-#[utoipa::path(
-    post,
-    path = "/vms/{vm_id}/snapshots",
-    params(
-        ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier")
-    ),
-    request_body = CreateSnapshotRequest,
-    responses(
-        (status = 201, description = "Snapshot created", body = Snapshot),
-        (status = 404, description = "VM not found"),
-        (status = 500, description = "Internal server error")
-    ),
-    tag = "vms"
-)]
-#[instrument(skip(env))]
-pub async fn create_snapshot(
-    Extension(env): Extension<App>,
-    Path(vm_id): Path<Uuid>,
-    Json(body): Json<CreateSnapshotRequest>,
-) -> Result<ApiResponse<Snapshot>> {
-    let host = host_for_vm(&env, vm_id).await?;
+async fn record_ready_vm_backup(pool: &PgPool, snapshot: &Snapshot) -> Result<Backup> {
+    backups::create(
+        pool,
+        &NewBackup {
+            name: snapshot.name.clone(),
+            backup_type: BackupType::Vm,
+            status: BackupStatus::Ready,
+            vm_id: Some(snapshot.vm_id),
+            snapshot_id: Some(snapshot.id),
+            storage_object_id: snapshot.storage_object_id,
+        },
+    )
+    .await
+    .map_err(Into::into)
+}
+
+pub(crate) async fn create_vm_snapshot(
+    env: &App,
+    vm_id: Uuid,
+    body: &CreateSnapshotRequest,
+) -> Result<Snapshot> {
+    let host = host_for_vm(env, vm_id).await?;
 
     // Resolve the storage pool: explicit → VM's primary disk's pool → any active non-OverlayBD.
     let preferred_pool_id = if body.storage_pool_id.is_some() {
@@ -1837,7 +1840,31 @@ pub async fn create_snapshot(
         }
     }
 
-    let snapshot = snapshots::get(env.pool(), id).await?;
+    snapshots::get(env.pool(), id).await.map_err(Into::into)
+}
+
+#[utoipa::path(
+    post,
+    path = "/vms/{vm_id}/snapshots",
+    params(
+        ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier")
+    ),
+    request_body = CreateSnapshotRequest,
+    responses(
+        (status = 201, description = "Snapshot created", body = Snapshot),
+        (status = 404, description = "VM not found"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "vms"
+)]
+#[instrument(skip(env))]
+pub async fn create_snapshot(
+    Extension(env): Extension<App>,
+    Path(vm_id): Path<Uuid>,
+    Json(body): Json<CreateSnapshotRequest>,
+) -> Result<ApiResponse<Snapshot>> {
+    let snapshot = create_vm_snapshot(&env, vm_id, &body).await?;
+    let _backup = record_ready_vm_backup(env.pool(), &snapshot).await?;
 
     Ok(ApiResponse {
         data: snapshot,
@@ -1850,27 +1877,11 @@ pub struct RestoreRequest {
     pub snapshot_id: Uuid,
 }
 
-#[utoipa::path(
-    post,
-    path = "/vms/{vm_id}/restore",
-    params(
-        ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier")
-    ),
-    request_body = RestoreRequest,
-    responses(
-        (status = 200, description = "VM restored from snapshot", body = Vm),
-        (status = 404, description = "VM or snapshot not found"),
-        (status = 422, description = "VM not in a restoreable state or snapshot not ready"),
-        (status = 500, description = "Internal server error")
-    ),
-    tag = "vms"
-)]
-#[instrument(skip(env))]
-pub async fn restore(
-    Extension(env): Extension<App>,
-    Path(vm_id): Path<Uuid>,
-    Json(body): Json<RestoreRequest>,
-) -> Result<ApiResponse<Vm>> {
+pub(crate) async fn restore_vm_from_snapshot(
+    env: &App,
+    vm_id: Uuid,
+    snapshot_id: Uuid,
+) -> Result<Vm> {
     let vm = vms::get(env.pool(), vm_id).await?;
 
     match vm.status {
@@ -1882,7 +1893,7 @@ pub async fn restore(
         VmStatus::Shutdown | VmStatus::Created | VmStatus::Unknown | VmStatus::Migrating => {}
     }
 
-    let snapshot = snapshots::get(env.pool(), body.snapshot_id)
+    let snapshot = snapshots::get(env.pool(), snapshot_id)
         .await
         .map_err(|e| match e {
             sqlx::Error::RowNotFound => crate::errors::Error::NotFound,
@@ -1899,7 +1910,7 @@ pub async fn restore(
         ));
     }
 
-    let host = host_for_vm(&env, vm_id).await?;
+    let host = host_for_vm(env, vm_id).await?;
     let node_client = NodeClient::new(&host.address, host.port as u16);
 
     vms::update_status(env.pool(), vm_id, VmStatus::Pending).await?;
@@ -1923,7 +1934,31 @@ pub async fn restore(
 
     vms::update_status(env.pool(), vm_id, VmStatus::Running).await?;
 
-    let updated_vm = vms::get(env.pool(), vm_id).await?;
+    vms::get(env.pool(), vm_id).await.map_err(Into::into)
+}
+
+#[utoipa::path(
+    post,
+    path = "/vms/{vm_id}/restore",
+    params(
+        ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier")
+    ),
+    request_body = RestoreRequest,
+    responses(
+        (status = 200, description = "VM restored from snapshot", body = Vm),
+        (status = 404, description = "VM or snapshot not found"),
+        (status = 422, description = "VM not in a restoreable state or snapshot not ready"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "vms"
+)]
+#[instrument(skip(env))]
+pub async fn restore(
+    Extension(env): Extension<App>,
+    Path(vm_id): Path<Uuid>,
+    Json(body): Json<RestoreRequest>,
+) -> Result<ApiResponse<Vm>> {
+    let updated_vm = restore_vm_from_snapshot(&env, vm_id, body.snapshot_id).await?;
     Ok(ApiResponse {
         data: updated_vm,
         code: StatusCode::OK,

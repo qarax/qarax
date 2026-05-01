@@ -17,6 +17,7 @@ Each demo lives in its own directory with a `run.sh` and a `README.md`.
 | [sandbox/](sandbox/) | Ephemeral VMs from templates with idle-timeout auto-reap and prewarmed pool claims | `./hack/run-local.sh` |
 | [firecracker/](firecracker/) | Firecracker backend lifecycle demo (create/start/pause/resume/stop/delete) | `./hack/run-local.sh` |
 | [vm-exec/](vm-exec/) | Regular VM guest exec: create a guest-agent-enabled VM, boot it, and run a command inside the guest | `./hack/run-local.sh` |
+| [backups/](backups/) | First-class top-level VM and control-plane database backups via `qarax backup` | `./hack/run-local.sh` |
 
 ## Quick start
 
@@ -47,6 +48,9 @@ Each demo lives in its own directory with a `run.sh` and a `README.md`.
 
 # Run the regular VM guest exec demo
 ./demos/vm-exec/run.sh
+
+# Run the top-level backups demo
+./demos/backups/run.sh
 ```
 
 Networking note:

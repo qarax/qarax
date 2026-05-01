@@ -2,7 +2,7 @@
 FROM alpine:latest
 
 # Install runtime dependencies
-RUN apk add --no-cache libgcc curl
+RUN apk add --no-cache libgcc curl postgresql16-client
 
 WORKDIR /app
 

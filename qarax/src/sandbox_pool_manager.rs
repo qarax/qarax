@@ -22,6 +22,9 @@ pub async fn start_sandbox_pool_manager(env: App) {
 
     loop {
         ticker.tick().await;
+        if env.maintenance_mode() {
+            continue;
+        }
         if let Err(e) = sync_all_pools(&env).await {
             warn!("Sandbox pool manager: failed to sync pools: {}", e);
         }

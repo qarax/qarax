@@ -5,13 +5,14 @@ use sqlx::PgPool;
 
 use crate::{
     App,
-    configuration::{SchedulingSettings, VmDefaultsSettings},
+    configuration::{DatabaseSettings, SchedulingSettings, VmDefaultsSettings},
     handlers::app,
 };
 
 pub async fn run(
     listener: TcpListener,
     db_pool: PgPool,
+    database: DatabaseSettings,
     vm_defaults: VmDefaultsSettings,
     scheduling: SchedulingSettings,
     control_plane_architecture: String,
@@ -19,21 +20,25 @@ pub async fn run(
 {
     crate::model::events::init_event_bus();
 
-    let a = App::new(db_pool, vm_defaults, scheduling, control_plane_architecture);
+    let a = App::new(
+        db_pool,
+        database,
+        vm_defaults,
+        scheduling,
+        control_plane_architecture,
+    );
 
     // Spawn background task to reconcile VM status with the live node state
-    tokio::spawn(crate::vm_monitor::start_vm_monitor(a.pool_arc()));
+    tokio::spawn(crate::vm_monitor::start_vm_monitor(a.clone()));
 
     // Spawn background task to poll host resource metrics
-    tokio::spawn(crate::resource_monitor::start_resource_monitor(
-        a.pool_arc(),
-    ));
+    tokio::spawn(crate::resource_monitor::start_resource_monitor(a.clone()));
 
     // Spawn background task to deliver lifecycle hook webhooks
-    tokio::spawn(crate::hook_executor::start_hook_executor(a.pool_arc()));
+    tokio::spawn(crate::hook_executor::start_hook_executor(a.clone()));
 
     // Spawn background task to reap idle sandboxes
-    tokio::spawn(crate::sandbox_reaper::start_sandbox_reaper(a.pool_arc()));
+    tokio::spawn(crate::sandbox_reaper::start_sandbox_reaper(a.clone()));
 
     // Spawn background task to keep configured sandbox pools prewarmed
     tokio::spawn(crate::sandbox_pool_manager::start_sandbox_pool_manager(

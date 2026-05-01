@@ -70,6 +70,7 @@ async fn main() -> std::io::Result<()> {
     match run(
         listener,
         connection_pool,
+        configuration.database.clone(),
         vm_defaults,
         scheduling,
         default_control_plane_architecture(),

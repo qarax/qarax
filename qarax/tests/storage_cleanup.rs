@@ -70,6 +70,7 @@ async fn spawn_app() -> TestApp {
     let server = run(
         listener,
         connection_pool.clone(),
+        configuration.database.clone(),
         configuration.vm_defaults.clone(),
         configuration.scheduling.clone(),
         default_control_plane_architecture(),

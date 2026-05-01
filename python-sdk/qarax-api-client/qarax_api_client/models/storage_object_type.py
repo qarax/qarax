@@ -2,6 +2,7 @@ from enum import Enum
 
 
 class StorageObjectType(str, Enum):
+    DATABASE_BACKUP = "database_backup"
     DISK = "disk"
     INITRD = "initrd"
     ISO = "iso"

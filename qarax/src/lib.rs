@@ -16,9 +16,12 @@ pub mod transfer_executor;
 pub mod vm_monitor;
 
 use sqlx::PgPool;
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
-use crate::configuration::{SchedulingSettings, VmDefaultsSettings};
+use crate::configuration::{DatabaseSettings, SchedulingSettings, VmDefaultsSettings};
 
 #[cfg(feature = "otel")]
 use common::metrics::Metrics;
@@ -26,9 +29,11 @@ use common::metrics::Metrics;
 #[derive(Clone)]
 pub struct App {
     pool: Arc<PgPool>,
+    database: DatabaseSettings,
     vm_defaults: VmDefaultsSettings,
     scheduling: SchedulingSettings,
     control_plane_architecture: Arc<str>,
+    maintenance_mode: Arc<AtomicBool>,
     #[cfg(feature = "otel")]
     metrics: Arc<Metrics>,
 }
@@ -50,21 +55,25 @@ impl App {
     #[cfg(not(feature = "otel"))]
     pub fn new(
         pool: PgPool,
+        database: DatabaseSettings,
         vm_defaults: VmDefaultsSettings,
         scheduling: SchedulingSettings,
         control_plane_architecture: String,
     ) -> Self {
         Self {
             pool: Arc::new(pool),
+            database,
             vm_defaults,
             scheduling,
             control_plane_architecture: Arc::from(control_plane_architecture),
+            maintenance_mode: Arc::new(AtomicBool::new(false)),
         }
     }
 
     #[cfg(feature = "otel")]
     pub fn new(
         pool: PgPool,
+        database: DatabaseSettings,
         vm_defaults: VmDefaultsSettings,
         scheduling: SchedulingSettings,
         control_plane_architecture: String,
@@ -72,9 +81,11 @@ impl App {
         let meter = opentelemetry::global::meter("qarax");
         Self {
             pool: Arc::new(pool),
+            database,
             vm_defaults,
             scheduling,
             control_plane_architecture: Arc::from(control_plane_architecture),
+            maintenance_mode: Arc::new(AtomicBool::new(false)),
             metrics: Arc::new(Metrics::new(&meter)),
         }
     }
@@ -87,6 +98,10 @@ impl App {
         self.pool.clone()
     }
 
+    pub fn database(&self) -> &DatabaseSettings {
+        &self.database
+    }
+
     pub fn vm_defaults(&self) -> &VmDefaultsSettings {
         &self.vm_defaults
     }
@@ -97,6 +112,14 @@ impl App {
 
     pub fn control_plane_architecture(&self) -> &str {
         &self.control_plane_architecture
+    }
+
+    pub fn maintenance_mode(&self) -> bool {
+        self.maintenance_mode.load(Ordering::SeqCst)
+    }
+
+    pub fn set_maintenance_mode(&self, enabled: bool) {
+        self.maintenance_mode.store(enabled, Ordering::SeqCst);
     }
 
     #[cfg(feature = "otel")]

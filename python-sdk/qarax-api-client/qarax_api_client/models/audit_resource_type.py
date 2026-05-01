@@ -2,6 +2,7 @@ from enum import Enum
 
 
 class AuditResourceType(str, Enum):
+    BACKUP = "backup"
     BOOT_SOURCE = "boot_source"
     HOST = "host"
     INSTANCE_TYPE = "instance_type"

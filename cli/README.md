@@ -36,6 +36,7 @@ qarax vm start 3f6c2b1a-0000-0000-0000-000000000001
 
 | Command | Description |
 |---|---|
+| `qarax backup` | VM and control-plane database backups |
 | `qarax vm` | Virtual machine operations |
 | `qarax host` | Hypervisor host operations |
 | `qarax storage-pool` | Storage pool operations |
@@ -296,6 +297,26 @@ qarax vm snapshot create my-vm --name snap-1
 qarax vm snapshot list my-vm
 qarax vm snapshot restore my-vm --snapshot snap-1
 ```
+
+The legacy `vm snapshot` surface remains available, but new top-level backups are
+available under `qarax backup`.
+
+### Backups
+
+```bash
+# VM backups
+qarax backup create vm --vm my-vm --name nightly-vm-backup --pool local-pool
+qarax backup list --type vm
+qarax backup restore nightly-vm-backup
+
+# Control-plane database backups
+qarax backup create database --name nightly-db-backup --pool local-pool
+qarax backup list --type database
+qarax backup restore nightly-db-backup
+```
+
+Database backups currently require a **local** storage pool whose configured
+path is writable from the qarax control-plane process.
 
 ### Live migration
 

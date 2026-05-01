@@ -1,4 +1,5 @@
 pub mod audit_log;
+pub mod backups;
 pub mod boot_sources;
 pub mod hooks;
 pub mod hosts;

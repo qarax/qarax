@@ -50,6 +50,7 @@ pub enum AuditResourceType {
     LifecycleHook,
     Transfer,
     Sandbox,
+    Backup,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]

@@ -84,6 +84,112 @@ paths:
           description: Not found
         '500':
           description: Internal server error
+  /backups:
+    get:
+      tags:
+      - backups
+      operationId: list
+      parameters:
+      - name: name
+        in: query
+        description: Optional name filter
+        required: false
+        schema:
+          type:
+          - string
+          - 'null'
+      - name: backup_type
+        in: query
+        description: Filter by backup type
+        required: false
+        schema:
+          oneOf:
+          - type: 'null'
+          - $ref: '#/components/schemas/BackupType'
+      responses:
+        '200':
+          description: List backups
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Backup'
+        '500':
+          description: Internal server error
+    post:
+      tags:
+      - backups
+      operationId: create
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateBackupRequest'
+        required: true
+      responses:
+        '201':
+          description: Backup created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Backup'
+        '404':
+          description: VM not found
+        '422':
+          description: Invalid backup request
+        '500':
+          description: Internal server error
+  /backups/{backup_id}:
+    get:
+      tags:
+      - backups
+      operationId: get
+      parameters:
+      - name: backup_id
+        in: path
+        description: Backup unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Backup details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Backup'
+        '404':
+          description: Backup not found
+        '500':
+          description: Internal server error
+  /backups/{backup_id}/restore:
+    post:
+      tags:
+      - backups
+      operationId: restore
+      parameters:
+      - name: backup_id
+        in: path
+        description: Backup unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Backup restored
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RestoreBackupResponse'
+        '404':
+          description: Backup not found
+        '422':
+          description: Backup cannot be restored
+        '500':
+          description: Internal server error
   /boot-sources:
     get:
       tags:
@@ -2791,6 +2897,61 @@ components:
       - lifecycle_hook
       - transfer
       - sandbox
+      - backup
+    Backup:
+      type: object
+      required:
+      - id
+      - name
+      - backup_type
+      - status
+      - storage_object_id
+      - created_at
+      - updated_at
+      properties:
+        backup_type:
+          $ref: '#/components/schemas/BackupType'
+        created_at:
+          type: string
+          format: date-time
+        error_message:
+          type:
+          - string
+          - 'null'
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        snapshot_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+        status:
+          $ref: '#/components/schemas/BackupStatus'
+        storage_object_id:
+          type: string
+          format: uuid
+        updated_at:
+          type: string
+          format: date-time
+        vm_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+    BackupStatus:
+      type: string
+      enum:
+      - creating
+      - ready
+      - failed
+    BackupType:
+      type: string
+      enum:
+      - vm
+      - database
     BootMode:
       type: string
       enum:
@@ -2858,6 +3019,31 @@ components:
         min_ready:
           type: integer
           format: int32
+    CreateBackupRequest:
+      type: object
+      required:
+      - backup_type
+      properties:
+        backup_type:
+          $ref: '#/components/schemas/BackupType'
+          description: Backup type to create.
+        name:
+          type:
+          - string
+          - 'null'
+          description: Human-readable backup name. Defaults to a generated name when omitted.
+        storage_pool_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+          description: Preferred storage pool for the backup artifact.
+        vm_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+          description: VM to back up when `backup_type=vm`.
     CreateDiskRequest:
       type: object
       required:
@@ -4503,6 +4689,26 @@ components:
           type: integer
           format: int64
           description: Logical size of the LUN in bytes. Informational (reported back to clients).
+    RestoreBackupResponse:
+      type: object
+      required:
+      - backup_id
+      - backup_type
+      properties:
+        backup_id:
+          type: string
+          format: uuid
+        backup_type:
+          $ref: '#/components/schemas/BackupType'
+        database_name:
+          type:
+          - string
+          - 'null'
+        vm_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
     RestoreRequest:
       type: object
       required:
@@ -4751,6 +4957,7 @@ components:
       - initrd
       - iso
       - snapshot
+      - database_backup
       - oci_image
       - overlaybd_upper
     StoragePool:
@@ -5398,6 +5605,8 @@ tags:
   description: Boot source management endpoints
 - name: transfers
   description: File transfer management endpoints
+- name: backups
+  description: Backup management endpoints
 - name: jobs
   description: Async job management endpoints
 - name: networks

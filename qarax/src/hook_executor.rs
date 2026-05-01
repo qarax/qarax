@@ -1,18 +1,19 @@
 /// Background task that polls for pending webhook executions and delivers them.
 /// Follows the same pattern as `vm_monitor.rs`.
-use std::sync::Arc;
-
 use chrono::{Duration, Utc};
 use sqlx::PgPool;
 use tokio::time::{self, interval};
 use tracing::{info, warn};
 
-use crate::model::lifecycle_hooks::{self, HookExecution};
+use crate::{
+    App,
+    model::lifecycle_hooks::{self, HookExecution},
+};
 
 /// Backoff durations for retries: 5s, 30s, 2m, 10m, 30m
 const BACKOFF_SECS: [i64; 5] = [5, 30, 120, 600, 1800];
 
-pub async fn start_hook_executor(pool: Arc<PgPool>) {
+pub async fn start_hook_executor(env: App) {
     let client = reqwest::Client::builder()
         .timeout(time::Duration::from_secs(10))
         .build()
@@ -23,10 +24,14 @@ pub async fn start_hook_executor(pool: Arc<PgPool>) {
     loop {
         ticker.tick().await;
 
+        if env.maintenance_mode() {
+            continue;
+        }
+
         #[cfg(feature = "otel")]
         let _cycle_start = std::time::Instant::now();
 
-        let pending = match lifecycle_hooks::fetch_pending_executions(&pool, 20).await {
+        let pending = match lifecycle_hooks::fetch_pending_executions(env.pool(), 20).await {
             Ok(execs) => execs,
             Err(e) => {
                 warn!("hook executor: failed to fetch pending executions: {}", e);
@@ -35,7 +40,7 @@ pub async fn start_hook_executor(pool: Arc<PgPool>) {
         };
 
         for execution in pending {
-            let pool = pool.clone();
+            let pool = env.pool_arc();
             let client = client.clone();
             tokio::spawn(async move {
                 deliver_hook(&pool, &client, execution).await;

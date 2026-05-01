@@ -57,6 +57,7 @@ pub enum StorageObjectType {
     Initrd,
     Iso,
     Snapshot,
+    DatabaseBackup,
     OciImage,
     /// Persistent writable upper layer (upper.data + upper.index) for a
     /// linked-persistent OverlayBD VM. Stored on a Local or NFS pool.
@@ -228,7 +229,8 @@ async fn resolve_new_object(
             new_object.config.clone()
         }
     } else if (new_object.object_type == StorageObjectType::Disk
-        || new_object.object_type == StorageObjectType::Snapshot)
+        || new_object.object_type == StorageObjectType::Snapshot
+        || new_object.object_type == StorageObjectType::DatabaseBackup)
         && new_object.config.get("path").is_none()
         && new_object.config.get("lun").is_none()
     {
@@ -238,10 +240,20 @@ async fn resolve_new_object(
                     .config
                     .get("path")
                     .and_then(|v| v.as_str())
-                    .map(|base| format!("{}/{}", base, id)),
-                storage_pools::StoragePoolType::Nfs => {
-                    Some(format!("/var/lib/qarax/pools/{}/{}", pool_id, id))
-                }
+                    .map(|base| {
+                        if new_object.object_type == StorageObjectType::DatabaseBackup {
+                            format!("{}/{}.dump", base, id)
+                        } else {
+                            format!("{}/{}", base, id)
+                        }
+                    }),
+                storage_pools::StoragePoolType::Nfs => Some(
+                    if new_object.object_type == StorageObjectType::DatabaseBackup {
+                        format!("/var/lib/qarax/pools/{}/{}.dump", pool_id, id)
+                    } else {
+                        format!("/var/lib/qarax/pools/{}/{}", pool_id, id)
+                    },
+                ),
                 _ => None,
             };
             if let Some(path) = derived_path {

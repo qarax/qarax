@@ -32,7 +32,8 @@
                 "ISO",
                 "SNAPSHOT",
                 "OCI_IMAGE",
-                "OVERLAYBD_UPPER"
+                "OVERLAYBD_UPPER",
+                "DATABASE_BACKUP"
               ]
             }
           }

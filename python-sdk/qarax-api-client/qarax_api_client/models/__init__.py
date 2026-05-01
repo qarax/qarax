@@ -8,11 +8,15 @@ from .attach_security_group_request import AttachSecurityGroupRequest
 from .audit_action import AuditAction
 from .audit_log import AuditLog
 from .audit_resource_type import AuditResourceType
+from .backup import Backup
+from .backup_status import BackupStatus
+from .backup_type import BackupType
 from .boot_mode import BootMode
 from .boot_source import BootSource
 from .commit_vm_request import CommitVmRequest
 from .commit_vm_response import CommitVmResponse
 from .configure_sandbox_pool_request import ConfigureSandboxPoolRequest
+from .create_backup_request import CreateBackupRequest
 from .create_disk_request import CreateDiskRequest
 from .create_disk_response import CreateDiskResponse
 from .create_sandbox_response import CreateSandboxResponse
@@ -68,6 +72,7 @@ from .placement_policy_preferred_host_labels import PlacementPolicyPreferredHost
 from .placement_policy_required_host_labels import PlacementPolicyRequiredHostLabels
 from .rate_limiter_config import RateLimiterConfig
 from .register_lun_request import RegisterLunRequest
+from .restore_backup_response import RestoreBackupResponse
 from .restore_request import RestoreRequest
 from .sandbox import Sandbox
 from .sandbox_pool import SandboxPool
@@ -117,11 +122,15 @@ __all__ = (
     "AuditAction",
     "AuditLog",
     "AuditResourceType",
+    "Backup",
+    "BackupStatus",
+    "BackupType",
     "BootMode",
     "BootSource",
     "CommitVmRequest",
     "CommitVmResponse",
     "ConfigureSandboxPoolRequest",
+    "CreateBackupRequest",
     "CreateDiskRequest",
     "CreateDiskResponse",
     "CreateSandboxResponse",
@@ -177,6 +186,7 @@ __all__ = (
     "PlacementPolicyRequiredHostLabels",
     "RateLimiterConfig",
     "RegisterLunRequest",
+    "RestoreBackupResponse",
     "RestoreRequest",
     "Sandbox",
     "SandboxPool",

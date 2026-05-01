@@ -73,6 +73,8 @@ pub struct Cli {
 #[derive(Subcommand)]
 #[allow(clippy::large_enum_variant)]
 pub enum Commands {
+    /// Backup operations
+    Backup(commands::backup::BackupArgs),
     /// Virtual machine operations
     Vm(commands::vm::VmArgs),
     /// Hypervisor host operations
@@ -119,6 +121,7 @@ async fn main() -> Result<()> {
     let client = client::Client::new(&server);
 
     match cli.command {
+        Commands::Backup(args) => commands::backup::run(args, &client, cli.output).await,
         Commands::Vm(args) => commands::vm::run(args, &client, cli.output).await,
         Commands::Host(args) => commands::host::run(args, &client, cli.output).await,
         Commands::InstanceType(args) => {

@@ -1,22 +1,22 @@
 /// Background task that periodically polls resource metrics from UP hosts
 /// and persists them in the database for resource-aware scheduling.
-use std::sync::Arc;
-
 use anyhow::Result;
-use sqlx::PgPool;
 use tokio::time::{Duration, Instant, interval_at};
 use tracing::warn;
 
-use crate::grpc_client::{NodeClient, node::NodeInfo};
 use crate::model::host_gpus::{self, GpuDiscovery};
 use crate::model::host_numa::{self, NumaNodeDiscovery};
 use crate::model::hosts::{self, Host, HostStatus};
+use crate::{
+    App,
+    grpc_client::{NodeClient, node::NodeInfo},
+};
 
-async fn handle_probe_result(pool: &PgPool, host: &Host, node_info: Result<NodeInfo>) {
+async fn handle_probe_result(env: &App, host: &Host, node_info: Result<NodeInfo>) {
     match node_info {
         Ok(info) => {
             if let Err(e) = hosts::update_versions(
-                pool,
+                env.pool(),
                 host.id,
                 &info.cloud_hypervisor_version,
                 info.firecracker_version.as_deref(),
@@ -32,7 +32,7 @@ async fn handle_probe_result(pool: &PgPool, host: &Host, node_info: Result<NodeI
             }
 
             if let Err(e) = hosts::update_resources(
-                pool,
+                env.pool(),
                 host.id,
                 Some(&info.architecture),
                 info.total_cpus,
@@ -63,7 +63,7 @@ async fn handle_probe_result(pool: &PgPool, host: &Host, node_info: Result<NodeI
                     numa_node: g.numa_node,
                 })
                 .collect();
-            if let Err(e) = host_gpus::sync_gpus(pool, host.id, &gpu_discoveries).await {
+            if let Err(e) = host_gpus::sync_gpus(env.pool(), host.id, &gpu_discoveries).await {
                 warn!(
                     "Resource monitor: failed to sync GPUs for host {}: {}",
                     host.name, e
@@ -85,7 +85,8 @@ async fn handle_probe_result(pool: &PgPool, host: &Host, node_info: Result<NodeI
                     distances: n.distances.clone(),
                 })
                 .collect();
-            if let Err(e) = host_numa::sync_numa_nodes(pool, host.id, &numa_discoveries).await {
+            if let Err(e) = host_numa::sync_numa_nodes(env.pool(), host.id, &numa_discoveries).await
+            {
                 warn!(
                     "Resource monitor: failed to sync NUMA topology for host {}: {}",
                     host.name, e
@@ -102,7 +103,9 @@ async fn handle_probe_result(pool: &PgPool, host: &Host, node_info: Result<NodeI
                 return;
             }
 
-            if let Err(update_error) = hosts::update_status(pool, host.id, HostStatus::Down).await {
+            if let Err(update_error) =
+                hosts::update_status(env.pool(), host.id, HostStatus::Down).await
+            {
                 warn!(
                     "Resource monitor: failed to mark host {} DOWN after probe failure: {}",
                     host.name, update_error
@@ -112,17 +115,21 @@ async fn handle_probe_result(pool: &PgPool, host: &Host, node_info: Result<NodeI
     }
 }
 
-pub async fn start_resource_monitor(pool: Arc<PgPool>) {
+pub async fn start_resource_monitor(env: App) {
     let period = Duration::from_secs(30);
     let mut ticker = interval_at(Instant::now() + period, period);
 
     loop {
         ticker.tick().await;
 
+        if env.maintenance_mode() {
+            continue;
+        }
+
         #[cfg(feature = "otel")]
         let _cycle_start = std::time::Instant::now();
 
-        let up_hosts = match hosts::list_probeable(&pool).await {
+        let up_hosts = match hosts::list_probeable(env.pool()).await {
             Ok(h) => h,
             Err(e) => {
                 warn!("Resource monitor: failed to list probeable hosts: {}", e);
@@ -136,7 +143,7 @@ pub async fn start_resource_monitor(pool: Arc<PgPool>) {
 
         for host in up_hosts {
             let client = NodeClient::new(&host.address, host.port as u16);
-            handle_probe_result(&pool, &host, client.get_node_info().await).await;
+            handle_probe_result(&env, &host, client.get_node_info().await).await;
         }
 
         #[cfg(feature = "otel")]
@@ -152,7 +159,8 @@ mod tests {
 
     use super::handle_probe_result;
     use crate::{
-        configuration::get_configuration,
+        App,
+        configuration::{default_control_plane_architecture, get_configuration},
         grpc_client::node::NodeInfo,
         model::hosts::{self, HostStatus, NewHost},
     };
@@ -215,6 +223,18 @@ mod tests {
                 .expect("Failed to fetch host")
                 .expect("Host not found")
         }
+
+        fn app(&self) -> App {
+            let mut configuration = get_configuration().expect("Failed to read configuration");
+            configuration.database.name = self.name.clone();
+            App::new(
+                self.pool.clone(),
+                configuration.database,
+                configuration.vm_defaults,
+                configuration.scheduling,
+                default_control_plane_architecture(),
+            )
+        }
     }
 
     impl Drop for TestDatabase {
@@ -247,7 +267,7 @@ mod tests {
         let db = TestDatabase::new().await;
         let host = db.insert_up_host().await;
 
-        handle_probe_result(&db.pool, &host, Err(anyhow!("host unreachable"))).await;
+        handle_probe_result(&db.app(), &host, Err(anyhow!("host unreachable"))).await;
 
         let updated = hosts::get_by_id(&db.pool, host.id)
             .await
@@ -268,7 +288,7 @@ mod tests {
             .expect("fetch maintenance host")
             .expect("maintenance host exists");
 
-        handle_probe_result(&db.pool, &host, Err(anyhow!("host unreachable"))).await;
+        handle_probe_result(&db.app(), &host, Err(anyhow!("host unreachable"))).await;
 
         let updated = hosts::get_by_id(&db.pool, host.id)
             .await
@@ -283,7 +303,7 @@ mod tests {
         let host = db.insert_up_host().await;
 
         handle_probe_result(
-            &db.pool,
+            &db.app(),
             &host,
             Ok(NodeInfo {
                 hostname: "node-1".to_string(),

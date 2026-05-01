@@ -1,4 +1,5 @@
 pub mod audit_log;
+pub mod backup;
 pub mod boot_source;
 pub mod configure;
 pub mod hook;
@@ -170,6 +171,19 @@ pub async fn resolve_snapshot_id(
         .next()
         .map(|s| s.id)
         .ok_or_else(|| anyhow::anyhow!("no snapshot named {:?}", name_or_id))
+}
+
+/// Resolve a backup name or UUID string to a UUID.
+pub async fn resolve_backup_id(client: &Client, name_or_id: &str) -> anyhow::Result<Uuid> {
+    if let Ok(id) = Uuid::parse_str(name_or_id) {
+        return Ok(id);
+    }
+    let backups = api::backups::list(client, Some(name_or_id), None).await?;
+    backups
+        .into_iter()
+        .next()
+        .map(|backup| backup.id)
+        .ok_or_else(|| anyhow::anyhow!("no backup named {:?}", name_or_id))
 }
 
 /// Parse a human-readable size string into bytes.

@@ -26,6 +26,7 @@ use validator::ValidationErrors;
 
 mod audit;
 mod audit_log;
+mod backup;
 mod boot_source;
 mod events;
 mod host;
@@ -76,11 +77,23 @@ pub struct StorageObjectListQuery {
     pub object_type: Option<crate::model::storage_objects::StorageObjectType>,
 }
 
+#[derive(serde::Deserialize, utoipa::IntoParams, Debug)]
+pub struct BackupListQuery {
+    /// Optional name filter
+    pub name: Option<String>,
+    /// Filter by backup type
+    pub backup_type: Option<crate::model::backups::BackupType>,
+}
+
 #[derive(OpenApi)]
 #[openapi(
     paths(
         audit_log::handler::list,
         audit_log::handler::get,
+        backup::handler::list,
+        backup::handler::get,
+        backup::handler::create,
+        backup::handler::restore,
         host::handler::list,
         host::handler::add,
         host::handler::update,
@@ -232,8 +245,13 @@ pub struct StorageObjectListQuery {
             crate::model::jobs::Job,
             crate::model::jobs::JobStatus,
             crate::model::jobs::JobType,
+            crate::model::backups::Backup,
+            crate::model::backups::BackupStatus,
+            crate::model::backups::BackupType,
             crate::model::snapshots::Snapshot,
             crate::model::snapshots::SnapshotStatus,
+            crate::handlers::backup::handler::CreateBackupRequest,
+            crate::handlers::backup::handler::RestoreBackupResponse,
             crate::handlers::vm::handler::CreateVmResponse,
             crate::handlers::vm::handler::VmImagePreflightRequest,
             crate::handlers::vm::handler::VmImagePreflightResponse,
@@ -293,6 +311,7 @@ pub struct StorageObjectListQuery {
         (name = "storage-pools", description = "Storage pool management endpoints"),
         (name = "boot-sources", description = "Boot source management endpoints"),
         (name = "transfers", description = "File transfer management endpoints"),
+        (name = "backups", description = "Backup management endpoints"),
         (name = "jobs", description = "Async job management endpoints"),
         (name = "networks", description = "Network management endpoints"),
         (name = "security-groups", description = "Security group management endpoints"),
@@ -340,11 +359,29 @@ async fn record_http_metrics(
     response
 }
 
+async fn reject_maintenance_requests(
+    axum::extract::State(env): axum::extract::State<App>,
+    request: Request<Body>,
+    next: axum::middleware::Next,
+) -> Response {
+    let path = request.uri().path();
+    if env.maintenance_mode() && path != "/" {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database restore in progress; retry when maintenance mode clears",
+        )
+            .into_response();
+    }
+
+    next.run(request).await
+}
+
 pub fn app(env: App) -> Router {
     let x_request_id = HeaderName::from_static("x-request-id");
     let router = Router::new()
         .route("/", get(|| async { "hello" }))
         .merge(hosts())
+        .merge(backups())
         .merge(instance_types())
         .merge(vms())
         .merge(vm_templates())
@@ -382,6 +419,10 @@ pub fn app(env: App) -> Router {
                     }),
                 ),
         )
+        .layer(middleware::from_fn_with_state(
+            env.clone(),
+            reject_maintenance_requests,
+        ))
         .layer(Extension(env.clone()))
         .layer(middleware::from_fn_with_state(
             env.clone(),
@@ -412,6 +453,19 @@ fn hosts() -> Router {
         .route("/hosts/{host_id}/gpus", get(host::handler::list_gpus))
         .route("/hosts/{host_id}/numa", get(host::handler::list_numa_nodes))
         .route("/hosts/{host_id}/resources", get(host::handler::resources))
+}
+
+fn backups() -> Router {
+    Router::new()
+        .route(
+            "/backups",
+            get(backup::handler::list).post(backup::handler::create),
+        )
+        .route("/backups/{backup_id}", get(backup::handler::get))
+        .route(
+            "/backups/{backup_id}/restore",
+            post(backup::handler::restore),
+        )
 }
 
 fn vms() -> Router {

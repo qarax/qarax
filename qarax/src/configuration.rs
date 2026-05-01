@@ -104,7 +104,7 @@ pub struct Settings {
     pub telemetry: TelemetrySettings,
 }
 
-#[derive(serde::Deserialize, Debug)]
+#[derive(serde::Deserialize, Debug, Clone)]
 pub struct DatabaseSettings {
     pub username: String,
     pub password: Secret<String>,

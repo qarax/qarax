@@ -668,6 +668,43 @@ pub struct RestoreRequest {
     pub snapshot_id: Uuid,
 }
 
+// Backups
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Backup {
+    pub id: Uuid,
+    pub name: String,
+    pub backup_type: String,
+    pub status: String,
+    pub vm_id: Option<Uuid>,
+    pub snapshot_id: Option<Uuid>,
+    pub storage_object_id: Uuid,
+    pub error_message: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    #[serde(default)]
+    pub database_name: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CreateBackupRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub storage_pool_id: Option<Uuid>,
+    pub backup_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vm_id: Option<Uuid>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RestoreBackupResponse {
+    pub backup_id: Uuid,
+    pub backup_type: String,
+    pub vm_id: Option<Uuid>,
+    pub database_name: Option<String>,
+}
+
 // Storage pool import
 
 #[derive(Debug, Serialize, Deserialize)]
