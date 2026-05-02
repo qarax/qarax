@@ -184,13 +184,63 @@ async fn validate_root_disk_for_host(
     Ok(())
 }
 
+/// Return the storage pool (and whether it is Local) that should constrain host
+/// scheduling for the boot source.  Checks both kernel and initrd images.
+/// Local pools are the most restrictive — returned immediately on first match.
+/// OverlayBD is skipped (globally accessible).
+async fn boot_source_pool_constraint(
+    env: &App,
+    boot_source_id: Option<Uuid>,
+) -> Result<(Option<Uuid>, bool)> {
+    let Some(id) = boot_source_id else {
+        return Ok((None, false));
+    };
+    let boot_source = boot_sources::get(env.pool(), id).await.map_err(|e| {
+        crate::errors::Error::UnprocessableEntity(format!("invalid boot_source_id: {e}"))
+    })?;
+    let mut constraint: Option<Uuid> = None;
+    for image_id in [
+        Some(boot_source.kernel_image_id),
+        boot_source.initrd_image_id,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let obj = storage_objects::get(env.pool(), image_id).await?;
+        let pool = storage_pools::get(env.pool(), obj.storage_pool_id).await?;
+        match pool.pool_type {
+            // Local requires the exact node — strongest constraint, return immediately.
+            storage_pools::StoragePoolType::Local => return Ok((Some(pool.id), true)),
+            // OverlayBD is globally accessible; no scheduling constraint needed.
+            storage_pools::StoragePoolType::OverlayBd => {}
+            // NFS / Block require host attachment but may be shared across nodes.
+            _ => {
+                if constraint.is_none() {
+                    constraint = Some(pool.id);
+                }
+            }
+        }
+    }
+    Ok((constraint, false))
+}
+
 async fn scheduling_request_for_vm(
     env: &App,
     vm: &ResolvedNewVm,
     accel: Option<&host_gpus::AcceleratorConfig>,
 ) -> Result<hosts::SchedulingRequest> {
-    let (disk_bytes, storage_pool_id) =
+    let (disk_bytes, root_pool_id) =
         root_disk_scheduling_requirements(env, vm.root_disk_object_id).await?;
+    let (boot_pool_id, boot_is_local) = boot_source_pool_constraint(env, vm.boot_source_id).await?;
+    // Merge root-disk and boot-source pool constraints, preferring Local over shared:
+    //   - Local boot source beats everything (files must be on that exact node).
+    //   - Otherwise, keep the root-disk constraint if it exists.
+    //   - Fall back to a shared boot-source pool when there is no root-disk constraint.
+    let storage_pool_id = match (root_pool_id, boot_pool_id) {
+        (_, Some(bp)) if boot_is_local => Some(bp),
+        (Some(rp), _) => Some(rp),
+        (None, bp) => bp,
+    };
     let required_network_ids = vm
         .network_id
         .into_iter()
