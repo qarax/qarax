@@ -465,7 +465,7 @@ pub async fn evacuate(
                 return;
             }
 
-            let original_status = plan.original_status.clone();
+            let original_status = plan.original_status;
             if let Err(msg) = execute_planned_vm_migration(db_pool.as_ref(), plan, None).await {
                 let _ = vms::update_status(&db_pool, vm_id, original_status).await;
                 fail_host_evacuation(

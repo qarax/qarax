@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use sqlx::{PgPool, Postgres, Transaction};
+use sqlx::{PgPool, Postgres, QueryBuilder, Transaction};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
@@ -101,29 +101,30 @@ pub async fn sync_gpus(
 ) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
 
-    for gpu in gpus {
-        sqlx::query(
-            r#"
-INSERT INTO host_gpus (host_id, pci_address, model, vendor, vram_bytes, iommu_group, numa_node, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
-ON CONFLICT (host_id, pci_address)
-DO UPDATE SET model = EXCLUDED.model,
-              vendor = EXCLUDED.vendor,
-              vram_bytes = EXCLUDED.vram_bytes,
-              iommu_group = EXCLUDED.iommu_group,
-              numa_node = EXCLUDED.numa_node,
-              updated_at = NOW()
-            "#,
-        )
-        .bind(host_id)
-        .bind(&gpu.pci_address)
-        .bind(&gpu.model)
-        .bind(&gpu.vendor)
-        .bind(gpu.vram_bytes)
-        .bind(gpu.iommu_group)
-        .bind(gpu.numa_node)
-        .execute(tx.as_mut())
-        .await?;
+    if !gpus.is_empty() {
+        let mut qb = QueryBuilder::<Postgres>::new(
+            "INSERT INTO host_gpus (host_id, pci_address, model, vendor, vram_bytes, iommu_group, numa_node, updated_at) ",
+        );
+        qb.push_values(gpus.iter(), |mut row, gpu| {
+            row.push_bind(host_id)
+                .push_bind(&gpu.pci_address)
+                .push_bind(&gpu.model)
+                .push_bind(&gpu.vendor)
+                .push_bind(gpu.vram_bytes)
+                .push_bind(gpu.iommu_group)
+                .push_bind(gpu.numa_node)
+                .push("NOW()");
+        });
+        qb.push(
+            " ON CONFLICT (host_id, pci_address) \
+             DO UPDATE SET model = EXCLUDED.model, \
+                           vendor = EXCLUDED.vendor, \
+                           vram_bytes = EXCLUDED.vram_bytes, \
+                           iommu_group = EXCLUDED.iommu_group, \
+                           numa_node = EXCLUDED.numa_node, \
+                           updated_at = NOW()",
+        );
+        qb.build().execute(tx.as_mut()).await?;
     }
 
     // Remove GPUs that are no longer present on the host (stale entries)

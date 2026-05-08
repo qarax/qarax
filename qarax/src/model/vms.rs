@@ -290,7 +290,17 @@ pub enum BootMode {
 }
 
 #[derive(
-    Deserialize, Serialize, Debug, Clone, Eq, PartialEq, Type, EnumString, Display, ToSchema,
+    Deserialize,
+    Serialize,
+    Debug,
+    Clone,
+    Copy,
+    Eq,
+    PartialEq,
+    Type,
+    EnumString,
+    Display,
+    ToSchema,
 )]
 #[sqlx(rename_all = "SCREAMING_SNAKE_CASE")]
 #[sqlx(type_name = "vm_status")]
@@ -1040,7 +1050,7 @@ pub async fn update_status(
     let vm = get(pool, vm_id).await.ok();
 
     sqlx::query("UPDATE vms SET status = $1 WHERE id = $2")
-        .bind(&status)
+        .bind(status)
         .bind(vm_id)
         .execute(pool)
         .await?;

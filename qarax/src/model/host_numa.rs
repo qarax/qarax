@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres, QueryBuilder};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
@@ -46,25 +46,26 @@ pub async fn sync_numa_nodes(
 ) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
 
-    for node in nodes {
-        sqlx::query(
-            r#"
-INSERT INTO host_numa_nodes (host_id, node_id, cpu_list, memory_bytes, distances, updated_at)
-VALUES ($1, $2, $3, $4, $5, NOW())
-ON CONFLICT (host_id, node_id)
-DO UPDATE SET cpu_list     = EXCLUDED.cpu_list,
-              memory_bytes = EXCLUDED.memory_bytes,
-              distances    = EXCLUDED.distances,
-              updated_at   = NOW()
-            "#,
-        )
-        .bind(host_id)
-        .bind(node.node_id)
-        .bind(&node.cpu_list)
-        .bind(node.memory_bytes)
-        .bind(&node.distances)
-        .execute(tx.as_mut())
-        .await?;
+    if !nodes.is_empty() {
+        let mut qb = QueryBuilder::<Postgres>::new(
+            "INSERT INTO host_numa_nodes (host_id, node_id, cpu_list, memory_bytes, distances, updated_at) ",
+        );
+        qb.push_values(nodes.iter(), |mut row, node| {
+            row.push_bind(host_id)
+                .push_bind(node.node_id)
+                .push_bind(&node.cpu_list)
+                .push_bind(node.memory_bytes)
+                .push_bind(&node.distances)
+                .push("NOW()");
+        });
+        qb.push(
+            " ON CONFLICT (host_id, node_id) \
+             DO UPDATE SET cpu_list     = EXCLUDED.cpu_list, \
+                           memory_bytes = EXCLUDED.memory_bytes, \
+                           distances    = EXCLUDED.distances, \
+                           updated_at   = NOW()",
+        );
+        qb.build().execute(tx.as_mut()).await?;
     }
 
     // Remove nodes that are no longer reported by the host

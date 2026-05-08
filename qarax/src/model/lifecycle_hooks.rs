@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_with::rust::double_option;
-use sqlx::{PgPool, Type};
+use sqlx::{PgPool, Postgres, QueryBuilder, Type};
 use strum_macros::{Display, EnumString};
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -302,21 +302,17 @@ WHERE active = TRUE
 
     let payload = build_payload(vm, previous_status, new_status);
 
-    for hook in hooks {
-        sqlx::query(
-            r#"
-INSERT INTO hook_executions (hook_id, vm_id, previous_status, new_status, payload)
-VALUES ($1, $2, $3, $4, $5)
-            "#,
-        )
-        .bind(hook.id)
-        .bind(vm.id)
-        .bind(previous_status)
-        .bind(new_status)
-        .bind(&payload)
-        .execute(pool)
-        .await?;
-    }
+    let mut qb = QueryBuilder::<Postgres>::new(
+        "INSERT INTO hook_executions (hook_id, vm_id, previous_status, new_status, payload) ",
+    );
+    qb.push_values(hooks.iter(), |mut row, hook| {
+        row.push_bind(hook.id)
+            .push_bind(vm.id)
+            .push_bind(previous_status)
+            .push_bind(new_status)
+            .push_bind(&payload);
+    });
+    qb.build().execute(pool).await?;
 
     Ok(())
 }

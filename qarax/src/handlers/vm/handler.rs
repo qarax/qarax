@@ -1323,7 +1323,7 @@ pub async fn start(
 /// Returns the job ID.
 pub(crate) async fn start_vm_internal(env: &App, vm_id: Uuid) -> Result<Uuid> {
     let vm = vms::get(env.pool(), vm_id).await?;
-    let original_status = vm.status.clone();
+    let original_status = vm.status;
     #[cfg(feature = "otel")]
     let metrics = env.metrics_arc();
     #[cfg(feature = "otel")]
@@ -3844,7 +3844,7 @@ pub async fn migrate(
             return;
         }
 
-        let original_status = plan.original_status.clone();
+        let original_status = plan.original_status;
         if let Err(msg) = execute_planned_vm_migration(db_pool.as_ref(), plan, Some(job_id)).await {
             tracing::error!(vm_id = %vm_id, job_id = %job_id, error = %msg);
             let _ = jobs::mark_failed(&db_pool, job_id, &msg).await;
@@ -4263,7 +4263,7 @@ async fn run_vm_commit(
 
     if let Err(e) = jobs::mark_running(db_pool, job_id).await {
         error!(job_id = %job_id, error = %e, "Failed to mark commit job as running");
-        let _ = vms::update_status(db_pool, vm_id, params.previous_status.clone()).await;
+        let _ = vms::update_status(db_pool, vm_id, params.previous_status).await;
         return;
     }
 
@@ -4295,7 +4295,7 @@ async fn run_vm_commit(
     }
 
     // Restore VM to its previous status now that commit is done
-    let _ = vms::update_status(db_pool, vm_id, params.previous_status.clone()).await;
+    let _ = vms::update_status(db_pool, vm_id, params.previous_status).await;
 }
 
 async fn run_vm_commit_inner(

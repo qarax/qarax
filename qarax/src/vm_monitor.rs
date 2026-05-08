@@ -71,9 +71,8 @@ pub async fn start_vm_monitor(env: App) {
                 for vm in vms {
                     match client.get_vm_info(vm.id).await {
                         Ok(state) => {
-                            let previous_status = vm.status.clone();
-                            let live_status =
-                                proto_status_to_db(state.status, previous_status.clone());
+                            let previous_status = vm.status;
+                            let live_status = proto_status_to_db(state.status, previous_status);
                             if live_status != previous_status {
                                 info!(
                                     "VM monitor: VM {} status changed from {:?} to {:?}",
