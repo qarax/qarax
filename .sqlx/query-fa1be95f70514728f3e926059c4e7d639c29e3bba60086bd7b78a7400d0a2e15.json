@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nSELECT id,\n        name,\n        description as \"description?\",\n        kernel_image_id,\n        kernel_params as \"kernel_params?\",\n        initrd_image_id as \"initrd_image_id?\"\nFROM boot_sources\nWHERE id = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "description?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "kernel_image_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 4,
+        "name": "kernel_params?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "initrd_image_id?",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "fa1be95f70514728f3e926059c4e7d639c29e3bba60086bd7b78a7400d0a2e15"
+}
