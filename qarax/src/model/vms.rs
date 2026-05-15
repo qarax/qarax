@@ -290,17 +290,7 @@ pub enum BootMode {
 }
 
 #[derive(
-    Deserialize,
-    Serialize,
-    Debug,
-    Clone,
-    Copy,
-    Eq,
-    PartialEq,
-    Type,
-    EnumString,
-    Display,
-    ToSchema,
+    Deserialize, Serialize, Debug, Clone, Copy, Eq, PartialEq, Type, EnumString, Display, ToSchema,
 )]
 #[sqlx(rename_all = "SCREAMING_SNAKE_CASE")]
 #[sqlx(type_name = "vm_status")]
