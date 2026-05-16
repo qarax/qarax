@@ -348,12 +348,40 @@ pub async fn get(
     let row = sandboxes::get_with_details(env.pool(), sandbox_id).await?;
     let sandbox: Sandbox = row.into();
 
-    // Bump last_activity_at so this GET counts as activity
-    let _ = sandboxes::touch_activity(env.pool(), sandbox_id).await;
-
     Ok(ApiResponse {
         data: sandbox,
         code: StatusCode::OK,
+    })
+}
+
+#[utoipa::path(
+    post,
+    path = "/sandboxes/{sandbox_id}/keepalive",
+    params(
+        ("sandbox_id" = uuid::Uuid, Path, description = "Sandbox unique identifier")
+    ),
+    responses(
+        (status = 204, description = "Sandbox idle clock reset"),
+        (status = 404, description = "Sandbox not found"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "sandboxes"
+)]
+#[instrument(skip(env))]
+pub async fn keepalive(
+    Extension(env): Extension<App>,
+    Path(sandbox_id): Path<Uuid>,
+) -> Result<ApiResponse<()>> {
+    // Ensure the sandbox exists so the caller gets 404 instead of a silent no-op.
+    let _ = sandboxes::get(env.pool(), sandbox_id).await?;
+
+    sandboxes::touch_activity(env.pool(), sandbox_id)
+        .await
+        .map_err(crate::errors::Error::Sqlx)?;
+
+    Ok(ApiResponse {
+        data: (),
+        code: StatusCode::NO_CONTENT,
     })
 }
 

@@ -64,8 +64,11 @@ The `sandbox_reaper` background task runs every 15 seconds and queries for
 sandboxes where `last_activity_at + idle_timeout_secs < NOW()`.  Any matching
 sandbox transitions to `destroying` and its VM is stopped and deleted.
 
-Fetching a sandbox via `qarax sandbox get <id>` bumps `last_activity_at`,
-resetting the idle clock — useful for keeping a sandbox alive while in use.
+To reset the idle clock without fetching the full record, call
+`qarax sandbox keepalive <id>` (POST `/sandboxes/{id}/keepalive`). Plain
+`qarax sandbox get` no longer extends the lifetime — that side effect was
+removed so monitoring tools don't accidentally keep sandboxes alive.
+`qarax sandbox exec` continues to count as activity.
 
 ## Benchmark notes
 
