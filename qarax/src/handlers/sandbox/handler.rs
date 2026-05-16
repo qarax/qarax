@@ -10,7 +10,7 @@ use crate::{
     model::{
         hosts,
         jobs::{self, JobType, NewJob},
-        network_interfaces, sandbox_pool_members,
+        sandbox_pool_members,
         sandboxes::{
             self, CreateSandboxResponse, ExecSandboxRequest, ExecSandboxResponse, NewSandbox,
             Sandbox, SandboxStatus,
@@ -345,24 +345,12 @@ fn spawn_sandbox_ready_watcher(
 )]
 #[instrument(skip(env))]
 pub async fn list(Extension(env): Extension<App>) -> Result<ApiResponse<Vec<Sandbox>>> {
-    let rows = sandboxes::list(env.pool())
+    let rows = sandboxes::list_with_details(env.pool())
         .await
         .map_err(crate::errors::Error::Sqlx)?;
 
-    let mut sandboxes_out = Vec::with_capacity(rows.len());
-    for row in rows {
-        let mut sandbox: Sandbox = row.into();
-        if let Ok(vm) = vms::get(env.pool(), sandbox.vm_id).await {
-            sandbox.vm_status = Some(vm.status);
-        }
-        if let Ok(interfaces) = network_interfaces::list_by_vm(env.pool(), sandbox.vm_id).await {
-            sandbox.ip_address = interfaces.into_iter().find_map(|i| i.ip_address);
-        }
-        sandboxes_out.push(sandbox);
-    }
-
     Ok(ApiResponse {
-        data: sandboxes_out,
+        data: rows.into_iter().map(Into::into).collect(),
         code: StatusCode::OK,
     })
 }
@@ -385,15 +373,8 @@ pub async fn get(
     Extension(env): Extension<App>,
     Path(sandbox_id): Path<Uuid>,
 ) -> Result<ApiResponse<Sandbox>> {
-    let row = sandboxes::get(env.pool(), sandbox_id).await?;
-    let mut sandbox: Sandbox = row.into();
-
-    if let Ok(vm) = vms::get(env.pool(), sandbox.vm_id).await {
-        sandbox.vm_status = Some(vm.status);
-    }
-    if let Ok(interfaces) = network_interfaces::list_by_vm(env.pool(), sandbox.vm_id).await {
-        sandbox.ip_address = interfaces.into_iter().find_map(|i| i.ip_address);
-    }
+    let row = sandboxes::get_with_details(env.pool(), sandbox_id).await?;
+    let sandbox: Sandbox = row.into();
 
     // Bump last_activity_at so this GET counts as activity
     let _ = sandboxes::touch_activity(env.pool(), sandbox_id).await;
