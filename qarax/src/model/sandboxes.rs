@@ -303,12 +303,12 @@ pub async fn update_status(
     Ok(())
 }
 
-pub async fn touch_activity(pool: &PgPool, sandbox_id: Uuid) -> Result<(), sqlx::Error> {
-    sqlx::query(r#"UPDATE sandboxes SET last_activity_at = NOW() WHERE id = $1"#)
+pub async fn touch_activity(pool: &PgPool, sandbox_id: Uuid) -> Result<u64, sqlx::Error> {
+    let result = sqlx::query(r#"UPDATE sandboxes SET last_activity_at = NOW() WHERE id = $1"#)
         .bind(sandbox_id)
         .execute(pool)
         .await?;
-    Ok(())
+    Ok(result.rows_affected())
 }
 
 pub async fn list_expired(pool: &PgPool) -> Result<Vec<SandboxRow>, sqlx::Error> {
