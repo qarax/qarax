@@ -1,15 +1,17 @@
 use sqlx::PgPool;
+use tokio::time::{Duration, Instant, interval, sleep_until};
 use uuid::Uuid;
 
 use crate::{
     App,
     errors::Error,
     grpc_client::NodeClient,
+    handlers::vm::handler::start_vm_internal,
     model::{
-        hosts,
+        events, hosts, jobs,
         sandboxes::NewSandbox,
         vm_templates,
-        vms::{self, Hypervisor, NewVm, ResolvedNewVm},
+        vms::{self, Hypervisor, NewVm, ResolvedNewVm, VmStatus},
     },
 };
 
@@ -62,13 +64,169 @@ pub(crate) async fn resolve_sandbox_vm(
     };
 
     let resolved_vm = vms::resolve_create_request(env.pool(), new_vm).await?;
-    if resolved_vm.image_ref.is_some() {
-        return Err(Error::UnprocessableEntity(
-            "sandbox VM templates with OCI image_ref are not supported yet".into(),
-        ));
+    Ok(resolved_vm)
+}
+
+#[derive(Debug)]
+pub(crate) enum ReadyOutcome {
+    Ready,
+    Failed(String),
+    TimedOut,
+    Gone,
+}
+
+/// Event-driven wait until the sandbox VM either reaches Running or fails.
+///
+/// Listens on the broadcast event bus emitted by `vms::update_status`, with a
+/// low-cadence job-status poll as a backstop for failures that don't transition
+/// the VM (e.g. `start_vm` failing reverts the VM to its previous state and only
+/// marks the job as failed). For OCI sandboxes, transitioning to `Created`
+/// triggers `start_vm_internal` exactly once.
+pub(crate) async fn watch_for_ready(
+    env: &App,
+    vm_id: Uuid,
+    initial_job_id: Uuid,
+    is_oci: bool,
+) -> ReadyOutcome {
+    // Subscribe first so we don't miss events between the initial poll and the loop.
+    let mut events_rx = events::subscribe();
+
+    let cfg = env.sandbox();
+    let deadline = Instant::now()
+        + Duration::from_secs(
+            cfg.ready_watcher_interval_secs * cfg.ready_watcher_max_attempts as u64,
+        );
+    // Backstop poll just for the current job, used to detect start-job failures
+    // that don't change VM state. Cadence is intentionally coarse.
+    let mut job_backstop = interval(Duration::from_secs(cfg.ready_watcher_interval_secs.max(5)));
+    job_backstop.tick().await; // consume the immediate first tick
+
+    let mut start_kicked = !is_oci;
+    let mut current_job_id = initial_job_id;
+
+    // Initial state check (covers races where the VM is already Running/failed by
+    // the time we subscribe, and gets OCI sandboxes off the launchpad).
+    match vms::get(env.pool(), vm_id).await {
+        Ok(vm) => {
+            if let Some(outcome) = handle_vm_status(
+                env,
+                vm.status,
+                is_oci,
+                &mut start_kicked,
+                &mut current_job_id,
+                vm_id,
+            )
+            .await
+            {
+                return outcome;
+            }
+        }
+        Err(sqlx::Error::RowNotFound) => return ReadyOutcome::Gone,
+        Err(e) => {
+            tracing::warn!(vm_id = %vm_id, error = %e, "watch_for_ready: initial VM fetch failed");
+        }
     }
 
-    Ok(resolved_vm)
+    loop {
+        tokio::select! {
+            biased;
+
+            _ = sleep_until(deadline) => return ReadyOutcome::TimedOut,
+
+            evt = events_rx.recv() => {
+                match evt {
+                    Ok(evt) if evt.vm_id == vm_id => {
+                        let parsed: Option<VmStatus> = evt.new_status.parse().ok();
+                        if let Some(status) = parsed
+                            && let Some(outcome) = handle_vm_status(
+                                env,
+                                status,
+                                is_oci,
+                                &mut start_kicked,
+                                &mut current_job_id,
+                                vm_id,
+                            ).await
+                        {
+                            return outcome;
+                        }
+                    }
+                    Ok(_) => { /* event for a different VM */ }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        // We may have missed events; re-sync from the DB.
+                        match vms::get(env.pool(), vm_id).await {
+                            Ok(vm) => {
+                                if let Some(outcome) = handle_vm_status(
+                                    env,
+                                    vm.status,
+                                    is_oci,
+                                    &mut start_kicked,
+                                    &mut current_job_id,
+                                    vm_id,
+                                )
+                                .await
+                                {
+                                    return outcome;
+                                }
+                            }
+                            Err(sqlx::Error::RowNotFound) => return ReadyOutcome::Gone,
+                            Err(e) => {
+                                tracing::warn!(vm_id = %vm_id, error = %e, "watch_for_ready: lagged re-sync failed");
+                            }
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        // Should not happen — bus is a static; treat as timeout to be safe.
+                        return ReadyOutcome::TimedOut;
+                    }
+                }
+            }
+
+            _ = job_backstop.tick() => {
+                if current_job_id.is_nil() {
+                    continue;
+                }
+                if let Ok(job) = jobs::get(env.pool(), current_job_id).await
+                    && job.status == jobs::JobStatus::Failed
+                {
+                    let msg = job.error.unwrap_or_else(|| "VM failed to start".to_string());
+                    return ReadyOutcome::Failed(msg);
+                }
+            }
+        }
+    }
+}
+
+/// React to a VM status. Returns Some(outcome) when the wait should terminate.
+async fn handle_vm_status(
+    env: &App,
+    status: VmStatus,
+    is_oci: bool,
+    start_kicked: &mut bool,
+    current_job_id: &mut Uuid,
+    vm_id: Uuid,
+) -> Option<ReadyOutcome> {
+    match status {
+        VmStatus::Running => Some(ReadyOutcome::Ready),
+        VmStatus::Shutdown | VmStatus::Unknown => {
+            Some(ReadyOutcome::Failed("VM failed to start".to_string()))
+        }
+        VmStatus::Created if is_oci && !*start_kicked => {
+            match start_vm_internal(env, vm_id).await {
+                Ok(start_job_id) => {
+                    *current_job_id = start_job_id;
+                    *start_kicked = true;
+                    tracing::info!(
+                        vm_id = %vm_id,
+                        job_id = %start_job_id,
+                        "OCI sandbox image pulled; starting VM"
+                    );
+                    None
+                }
+                Err(e) => Some(ReadyOutcome::Failed(e.to_string())),
+            }
+        }
+        _ => None,
+    }
 }
 
 pub(crate) async fn destroy_vm(pool: &PgPool, vm_id: Uuid) {

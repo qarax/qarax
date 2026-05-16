@@ -875,11 +875,32 @@ pub(crate) async fn create_vm_internal(env: &App, vm: ResolvedNewVm) -> Result<U
 
 /// Async path: pull OCI image and create VM in a background job, return 202 immediately.
 async fn create_with_image(env: App, vm: ResolvedNewVm) -> Result<axum::response::Response> {
+    let vm_name = vm.name.clone();
+    let (vm_id, job_id) = create_vm_with_image_internal(&env, vm).await?;
+
+    Ok(ApiResponse {
+        data: CreateVmResponse { vm_id, job_id },
+        code: StatusCode::ACCEPTED,
+    }
+    .with_audit_event(AuditEvent {
+        action: AuditAction::Create,
+        resource_type: AuditResourceType::Vm,
+        resource_id: vm_id,
+        resource_name: Some(vm_name),
+        metadata: None,
+    }))
+}
+
+/// Resolve, schedule, persist, and kick off the OCI image-pull background task.
+/// Returns (vm_id, image_pull_job_id). VM is left in `Created` once the pull completes.
+pub(crate) async fn create_vm_with_image_internal(
+    env: &App,
+    vm: ResolvedNewVm,
+) -> Result<(Uuid, Uuid)> {
     let image_ref = vm
         .image_ref
         .clone()
-        .expect("image_ref checked before calling");
-    let vm_name = vm.name.clone();
+        .expect("image_ref must be set when calling create_vm_with_image_internal");
 
     // Pick host eagerly so we return 422 immediately if none are UP
     let accel_config = vm
@@ -887,7 +908,7 @@ async fn create_with_image(env: App, vm: ResolvedNewVm) -> Result<axum::response
         .as_ref()
         .and_then(host_gpus::AcceleratorConfig::from_value);
     let mut vm = vm;
-    let scheduling_request = scheduling_request_for_vm(&env, &vm, accel_config.as_ref()).await?;
+    let scheduling_request = scheduling_request_for_vm(env, &vm, accel_config.as_ref()).await?;
     let target_architecture = scheduling_request
         .architecture
         .clone()
@@ -897,11 +918,11 @@ async fn create_with_image(env: App, vm: ResolvedNewVm) -> Result<axum::response
     ensure_security_groups_exist(env.pool(), vm.security_group_ids.as_deref()).await?;
 
     let mut tx = env.pool().begin().await?;
-    let host = pick_host(&mut tx, &env, &scheduling_request).await?;
+    let host = pick_host(&mut tx, env, &scheduling_request).await?;
     ensure_host_matches_architecture(&host, &target_architecture)?;
     if let Some(root_disk_object_id) = vm.root_disk_object_id {
         validate_root_disk_for_host(
-            &env,
+            env,
             host.id,
             root_disk_object_id,
             scheduling_request.storage_pool_id,
@@ -1061,18 +1082,6 @@ async fn create_with_image(env: App, vm: ResolvedNewVm) -> Result<axum::response
     .await?;
     let job_id = job.id;
 
-    let response = ApiResponse {
-        data: CreateVmResponse { vm_id, job_id },
-        code: StatusCode::ACCEPTED,
-    }
-    .with_audit_event(AuditEvent {
-        action: AuditAction::Create,
-        resource_type: AuditResourceType::Vm,
-        resource_id: vm_id,
-        resource_name: Some(vm_name),
-        metadata: None,
-    });
-
     // Spawn background task
     let db_pool = env.pool_arc();
 
@@ -1099,7 +1108,7 @@ async fn create_with_image(env: App, vm: ResolvedNewVm) -> Result<axum::response
         .await;
     });
 
-    Ok(response)
+    Ok((vm_id, job_id))
 }
 
 /// Allocate an IP from the given network and create the default network interface record for a VM.

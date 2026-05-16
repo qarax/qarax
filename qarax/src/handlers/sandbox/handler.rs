@@ -1,6 +1,5 @@
 use axum::{Extension, Json, extract::Path, response::IntoResponse};
 use http::StatusCode;
-use tokio::time::{Duration, interval};
 use tracing::instrument;
 use uuid::Uuid;
 
@@ -10,7 +9,7 @@ use crate::{
     model::{
         hosts,
         jobs::{self, JobType, NewJob},
-        network_interfaces, sandbox_pool_members,
+        sandbox_pool_members,
         sandboxes::{
             self, CreateSandboxResponse, ExecSandboxRequest, ExecSandboxResponse, NewSandbox,
             Sandbox, SandboxStatus,
@@ -18,10 +17,12 @@ use crate::{
         vms::{self, VmStatus},
     },
     sandbox_pool_manager,
-    sandbox_runtime::{destroy_vm, resolve_sandbox_vm},
+    sandbox_runtime::{self, ReadyOutcome, destroy_vm, resolve_sandbox_vm},
 };
 
-use super::super::vm::handler::{create_vm_internal, start_vm_internal};
+use super::super::vm::handler::{
+    create_vm_internal, create_vm_with_image_internal, start_vm_internal,
+};
 
 #[utoipa::path(
     post,
@@ -39,7 +40,9 @@ pub async fn create(
     Extension(env): Extension<App>,
     Json(req): Json<NewSandbox>,
 ) -> Result<axum::response::Response> {
-    let idle_timeout_secs = req.idle_timeout_secs.unwrap_or(300);
+    let idle_timeout_secs = req
+        .idle_timeout_secs
+        .unwrap_or(env.sandbox().default_idle_timeout_secs);
     if let Some(response) = try_claim_prewarmed_sandbox(&env, &req, idle_timeout_secs).await? {
         return Ok(ApiResponse {
             data: response,
@@ -49,7 +52,15 @@ pub async fn create(
     }
 
     let resolved_vm = resolve_sandbox_vm(&env, &req).await?;
-    let vm_id = create_vm_internal(&env, resolved_vm).await?;
+    let is_oci = resolved_vm.image_ref.is_some();
+
+    let (vm_id, initial_job_id) = if is_oci {
+        create_vm_with_image_internal(&env, resolved_vm).await?
+    } else {
+        let id = create_vm_internal(&env, resolved_vm).await?;
+        // Placeholder; replaced by the start job below for the non-OCI path.
+        (id, Uuid::nil())
+    };
 
     // Create the sandbox record
     let sandbox_id = Uuid::new_v4();
@@ -67,17 +78,23 @@ pub async fn create(
         return Err(crate::errors::Error::Sqlx(e));
     }
 
-    // Kick off async VM start
-    let job_id = match start_vm_internal(&env, vm_id).await {
-        Ok(job_id) => job_id,
-        Err(e) => {
-            destroy_vm(env.pool(), vm_id).await;
-            let _ = sandboxes::delete(env.pool(), sandbox_id).await;
-            return Err(e);
+    // For OCI: the image-pull job is the user-visible job; start_vm_internal
+    // is invoked later by the watcher once the VM transitions to Created.
+    // For non-OCI: start the VM eagerly.
+    let job_id = if is_oci {
+        initial_job_id
+    } else {
+        match start_vm_internal(&env, vm_id).await {
+            Ok(job_id) => job_id,
+            Err(e) => {
+                destroy_vm(env.pool(), vm_id).await;
+                let _ = sandboxes::delete(env.pool(), sandbox_id).await;
+                return Err(e);
+            }
         }
     };
 
-    spawn_sandbox_ready_watcher(env.pool_arc(), sandbox_id, vm_id, job_id);
+    spawn_sandbox_ready_watcher(env.clone(), sandbox_id, vm_id, job_id, is_oci);
 
     Ok(ApiResponse {
         data: CreateSandboxResponse {
@@ -238,97 +255,52 @@ async fn try_claim_prewarmed_sandbox(
 }
 
 fn spawn_sandbox_ready_watcher(
-    db_pool: std::sync::Arc<sqlx::PgPool>,
+    env: App,
     sandbox_id: Uuid,
     vm_id: Uuid,
     job_id: Uuid,
+    is_oci: bool,
 ) {
     tokio::spawn(async move {
-        let mut ticker = interval(Duration::from_secs(2));
-        let mut attempts = 0u32;
-        loop {
-            ticker.tick().await;
-            attempts += 1;
-            if attempts > 150 {
+        let outcome = sandbox_runtime::watch_for_ready(&env, vm_id, job_id, is_oci).await;
+        match outcome {
+            ReadyOutcome::Ready => {
+                let _ =
+                    sandboxes::update_status(env.pool(), sandbox_id, SandboxStatus::Ready, None)
+                        .await;
+                tracing::info!(sandbox_id = %sandbox_id, vm_id = %vm_id, "Sandbox ready");
+            }
+            ReadyOutcome::Failed(msg) => {
+                tracing::warn!(
+                    sandbox_id = %sandbox_id,
+                    vm_id = %vm_id,
+                    error = %msg,
+                    "Sandbox watcher: VM failed"
+                );
+                let _ = sandboxes::update_status(
+                    env.pool(),
+                    sandbox_id,
+                    SandboxStatus::Error,
+                    Some(msg),
+                )
+                .await;
+            }
+            ReadyOutcome::TimedOut => {
                 tracing::warn!(
                     sandbox_id = %sandbox_id,
                     vm_id = %vm_id,
                     "Timed out waiting for sandbox VM to start"
                 );
                 let _ = sandboxes::update_status(
-                    &db_pool,
+                    env.pool(),
                     sandbox_id,
                     SandboxStatus::Error,
                     Some("timed out waiting for VM to start".to_string()),
                 )
                 .await;
-                break;
             }
-            match vms::get(&db_pool, vm_id).await {
-                Ok(vm) => match vm.status {
-                    VmStatus::Running => {
-                        let _ = sandboxes::update_status(
-                            &db_pool,
-                            sandbox_id,
-                            SandboxStatus::Ready,
-                            None,
-                        )
-                        .await;
-                        tracing::info!(sandbox_id = %sandbox_id, vm_id = %vm_id, "Sandbox ready");
-                        break;
-                    }
-                    VmStatus::Shutdown | VmStatus::Unknown => {
-                        let _ = sandboxes::update_status(
-                            &db_pool,
-                            sandbox_id,
-                            SandboxStatus::Error,
-                            Some("VM failed to start".to_string()),
-                        )
-                        .await;
-                        tracing::warn!(
-                            sandbox_id = %sandbox_id,
-                            vm_id = %vm_id,
-                            status = ?vm.status,
-                            "Sandbox VM entered error state"
-                        );
-                        break;
-                    }
-                    _ => {
-                        // VmStatus::Created or Pending: start job may still be in-flight.
-                        // Check the job status before declaring failure to avoid a race
-                        // where the job fails and reverts to Created before the first poll.
-                        if let Ok(job) = jobs::get(&db_pool, job_id).await
-                            && job.status == jobs::JobStatus::Failed
-                        {
-                            let msg = job
-                                .error
-                                .unwrap_or_else(|| "VM failed to start".to_string());
-                            tracing::warn!(
-                                sandbox_id = %sandbox_id,
-                                vm_id = %vm_id,
-                                error = %msg,
-                                "Sandbox start job failed"
-                            );
-                            let _ = sandboxes::update_status(
-                                &db_pool,
-                                sandbox_id,
-                                SandboxStatus::Error,
-                                Some(msg),
-                            )
-                            .await;
-                            break;
-                        }
-                    }
-                },
-                Err(sqlx::Error::RowNotFound) => break,
-                Err(e) => {
-                    tracing::warn!(
-                        sandbox_id = %sandbox_id,
-                        vm_id = %vm_id,
-                        error = %e,
-                        "Sandbox watcher: failed to poll VM status"
-                    );
-                }
+            ReadyOutcome::Gone => {
+                // VM row vanished; nothing to mark.
             }
         }
     });
@@ -345,24 +317,12 @@ fn spawn_sandbox_ready_watcher(
 )]
 #[instrument(skip(env))]
 pub async fn list(Extension(env): Extension<App>) -> Result<ApiResponse<Vec<Sandbox>>> {
-    let rows = sandboxes::list(env.pool())
+    let rows = sandboxes::list_with_details(env.pool())
         .await
         .map_err(crate::errors::Error::Sqlx)?;
 
-    let mut sandboxes_out = Vec::with_capacity(rows.len());
-    for row in rows {
-        let mut sandbox: Sandbox = row.into();
-        if let Ok(vm) = vms::get(env.pool(), sandbox.vm_id).await {
-            sandbox.vm_status = Some(vm.status);
-        }
-        if let Ok(interfaces) = network_interfaces::list_by_vm(env.pool(), sandbox.vm_id).await {
-            sandbox.ip_address = interfaces.into_iter().find_map(|i| i.ip_address);
-        }
-        sandboxes_out.push(sandbox);
-    }
-
     Ok(ApiResponse {
-        data: sandboxes_out,
+        data: rows.into_iter().map(Into::into).collect(),
         code: StatusCode::OK,
     })
 }
@@ -385,22 +345,43 @@ pub async fn get(
     Extension(env): Extension<App>,
     Path(sandbox_id): Path<Uuid>,
 ) -> Result<ApiResponse<Sandbox>> {
-    let row = sandboxes::get(env.pool(), sandbox_id).await?;
-    let mut sandbox: Sandbox = row.into();
-
-    if let Ok(vm) = vms::get(env.pool(), sandbox.vm_id).await {
-        sandbox.vm_status = Some(vm.status);
-    }
-    if let Ok(interfaces) = network_interfaces::list_by_vm(env.pool(), sandbox.vm_id).await {
-        sandbox.ip_address = interfaces.into_iter().find_map(|i| i.ip_address);
-    }
-
-    // Bump last_activity_at so this GET counts as activity
-    let _ = sandboxes::touch_activity(env.pool(), sandbox_id).await;
+    let row = sandboxes::get_with_details(env.pool(), sandbox_id).await?;
+    let sandbox: Sandbox = row.into();
 
     Ok(ApiResponse {
         data: sandbox,
         code: StatusCode::OK,
+    })
+}
+
+#[utoipa::path(
+    post,
+    path = "/sandboxes/{sandbox_id}/keepalive",
+    params(
+        ("sandbox_id" = uuid::Uuid, Path, description = "Sandbox unique identifier")
+    ),
+    responses(
+        (status = 204, description = "Sandbox idle clock reset"),
+        (status = 404, description = "Sandbox not found"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "sandboxes"
+)]
+#[instrument(skip(env))]
+pub async fn keepalive(
+    Extension(env): Extension<App>,
+    Path(sandbox_id): Path<Uuid>,
+) -> Result<ApiResponse<()>> {
+    // Ensure the sandbox exists so the caller gets 404 instead of a silent no-op.
+    let _ = sandboxes::get(env.pool(), sandbox_id).await?;
+
+    sandboxes::touch_activity(env.pool(), sandbox_id)
+        .await
+        .map_err(crate::errors::Error::Sqlx)?;
+
+    Ok(ApiResponse {
+        data: (),
+        code: StatusCode::NO_CONTENT,
     })
 }
 

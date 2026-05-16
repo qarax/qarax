@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use sqlx::PgPool;
 use tokio::time::{Duration, interval};
 use tracing::{info, warn};
@@ -9,17 +7,17 @@ use crate::{
     App,
     handlers::vm::handler::{create_vm_internal, start_vm_internal},
     model::{
-        jobs::{self, JobStatus},
         sandbox_pool_members::{self, SandboxPoolMember, SandboxPoolMemberStatus},
         sandbox_pools::{self, SandboxPool},
         sandboxes::NewSandbox,
-        vms::{self, VmStatus},
     },
-    sandbox_runtime::{destroy_vm, resolve_sandbox_vm},
+    sandbox_runtime::{self, ReadyOutcome, destroy_vm, resolve_sandbox_vm},
 };
 
 pub async fn start_sandbox_pool_manager(env: App) {
-    let mut ticker = interval(Duration::from_secs(10));
+    let mut ticker = interval(Duration::from_secs(
+        env.sandbox().pool_manager_interval_secs,
+    ));
 
     loop {
         ticker.tick().await;
@@ -146,115 +144,93 @@ async fn provision_pool_member(env: &App, pool: &SandboxPool) -> Result<(), crat
     let req = NewSandbox {
         name: internal_name.clone(),
         vm_template_id: pool.vm_template_id,
-        idle_timeout_secs: Some(300),
+        idle_timeout_secs: Some(env.sandbox().pool_member_idle_timeout_secs),
         instance_type_id: None,
         network_id: None,
     };
     let resolved_vm = resolve_sandbox_vm(env, &req).await?;
-    let vm_id = create_vm_internal(env, resolved_vm).await?;
+    let is_oci = resolved_vm.image_ref.is_some();
+
+    let (vm_id, initial_job_id) = if is_oci {
+        crate::handlers::vm::handler::create_vm_with_image_internal(env, resolved_vm).await?
+    } else {
+        let id = create_vm_internal(env, resolved_vm).await?;
+        (id, Uuid::nil())
+    };
     let member = sandbox_pool_members::create(env.pool(), pool.id, vm_id)
         .await
         .map_err(crate::errors::Error::Sqlx)?;
 
-    match start_vm_internal(env, vm_id).await {
-        Ok(job_id) => {
-            info!(
-                pool_id = %pool.id,
-                member_id = %member.id,
-                vm_id = %vm_id,
-                job_id = %job_id,
-                "Sandbox pool manager: prewarming sandbox VM"
-            );
-            spawn_member_ready_watcher(env.pool_arc(), member.id, vm_id, job_id);
+    let job_id = if is_oci {
+        initial_job_id
+    } else {
+        match start_vm_internal(env, vm_id).await {
+            Ok(job_id) => job_id,
+            Err(e) => {
+                let _ = sandbox_pool_members::update_status(
+                    env.pool(),
+                    member.id,
+                    SandboxPoolMemberStatus::Error,
+                    Some(e.to_string()),
+                )
+                .await;
+                return Ok(());
+            }
         }
-        Err(e) => {
-            let _ = sandbox_pool_members::update_status(
-                env.pool(),
-                member.id,
-                SandboxPoolMemberStatus::Error,
-                Some(e.to_string()),
-            )
-            .await;
-        }
-    }
+    };
+
+    info!(
+        pool_id = %pool.id,
+        member_id = %member.id,
+        vm_id = %vm_id,
+        job_id = %job_id,
+        oci = is_oci,
+        "Sandbox pool manager: prewarming sandbox VM"
+    );
+    spawn_member_ready_watcher(env.clone(), member.id, vm_id, job_id, is_oci);
 
     Ok(())
 }
 
-fn spawn_member_ready_watcher(pool: Arc<PgPool>, member_id: Uuid, vm_id: Uuid, job_id: Uuid) {
+fn spawn_member_ready_watcher(env: App, member_id: Uuid, vm_id: Uuid, job_id: Uuid, is_oci: bool) {
     tokio::spawn(async move {
-        let mut ticker = interval(Duration::from_secs(2));
-        let mut attempts = 0u32;
-        loop {
-            ticker.tick().await;
-            attempts += 1;
-            if attempts > 150 {
+        let outcome = sandbox_runtime::watch_for_ready(&env, vm_id, job_id, is_oci).await;
+        match outcome {
+            ReadyOutcome::Ready => {
                 let _ = sandbox_pool_members::update_status(
-                    &pool,
+                    env.pool(),
+                    member_id,
+                    SandboxPoolMemberStatus::Ready,
+                    None,
+                )
+                .await;
+                info!(member_id = %member_id, vm_id = %vm_id, "Sandbox pool member ready");
+            }
+            ReadyOutcome::Failed(msg) => {
+                warn!(
+                    member_id = %member_id,
+                    vm_id = %vm_id,
+                    error = %msg,
+                    "Sandbox pool member failed"
+                );
+                let _ = sandbox_pool_members::update_status(
+                    env.pool(),
+                    member_id,
+                    SandboxPoolMemberStatus::Error,
+                    Some(msg),
+                )
+                .await;
+            }
+            ReadyOutcome::TimedOut => {
+                let _ = sandbox_pool_members::update_status(
+                    env.pool(),
                     member_id,
                     SandboxPoolMemberStatus::Error,
                     Some("timed out waiting for VM to start".to_string()),
                 )
                 .await;
-                break;
             }
-
-            match vms::get(&pool, vm_id).await {
-                Ok(vm) => match vm.status {
-                    VmStatus::Running => {
-                        let _ = sandbox_pool_members::update_status(
-                            &pool,
-                            member_id,
-                            SandboxPoolMemberStatus::Ready,
-                            None,
-                        )
-                        .await;
-                        break;
-                    }
-                    VmStatus::Shutdown | VmStatus::Unknown => {
-                        let _ = sandbox_pool_members::update_status(
-                            &pool,
-                            member_id,
-                            SandboxPoolMemberStatus::Error,
-                            Some("VM failed to start".to_string()),
-                        )
-                        .await;
-                        break;
-                    }
-                    _ => {
-                        if let Ok(job) = jobs::get(&pool, job_id).await
-                            && job.status == JobStatus::Failed
-                        {
-                            let msg = job
-                                .error
-                                .unwrap_or_else(|| "VM failed to start".to_string());
-                            warn!(
-                                member_id = %member_id,
-                                vm_id = %vm_id,
-                                error = %msg,
-                                "Sandbox pool member start job failed"
-                            );
-                            let _ = sandbox_pool_members::update_status(
-                                &pool,
-                                member_id,
-                                SandboxPoolMemberStatus::Error,
-                                Some(msg),
-                            )
-                            .await;
-                            break;
-                        }
-                    }
-                },
-                Err(sqlx::Error::RowNotFound) => break,
-                Err(e) => {
-                    warn!(
-                        member_id = %member_id,
-                        vm_id = %vm_id,
-                        error = %e,
-                        "Sandbox pool manager: failed to poll VM status"
-                    );
-                }
-            }
+            ReadyOutcome::Gone => {}
         }
     });
 }

@@ -188,6 +188,7 @@ pub struct BackupListQuery {
         sandbox::handler::list,
         sandbox::handler::get,
         sandbox::handler::exec,
+        sandbox::handler::keepalive,
         sandbox::handler::delete,
         sandbox::pool_handler::list,
         sandbox::pool_handler::get,
@@ -700,6 +701,10 @@ fn sandboxes() -> Router {
             get(sandbox::handler::get).delete(sandbox::handler::delete),
         )
         .route("/sandboxes/{sandbox_id}/exec", post(sandbox::handler::exec))
+        .route(
+            "/sandboxes/{sandbox_id}/keepalive",
+            post(sandbox::handler::keepalive),
+        )
         .route(
             "/vm-templates/{vm_template_id}/sandbox-pool",
             get(sandbox::pool_handler::get)

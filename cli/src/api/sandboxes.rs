@@ -29,3 +29,9 @@ pub async fn exec(
 ) -> anyhow::Result<ExecSandboxResponse> {
     client.post(&format!("/sandboxes/{id}/exec"), req).await
 }
+
+pub async fn keepalive(client: &Client, id: Uuid) -> anyhow::Result<()> {
+    client
+        .post_empty(&format!("/sandboxes/{id}/keepalive"))
+        .await
+}

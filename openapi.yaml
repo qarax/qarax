@@ -1128,6 +1128,26 @@ paths:
           description: Sandbox is not ready or guest exec is unavailable
         '500':
           description: Internal server error
+  /sandboxes/{sandbox_id}/keepalive:
+    post:
+      tags:
+      - sandboxes
+      operationId: keepalive
+      parameters:
+      - name: sandbox_id
+        in: path
+        description: Sandbox unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '204':
+          description: Sandbox idle clock reset
+        '404':
+          description: Sandbox not found
+        '500':
+          description: Internal server error
   /scheduling/config:
     get:
       tags:

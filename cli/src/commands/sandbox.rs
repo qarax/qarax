@@ -56,6 +56,11 @@ enum SandboxCommand {
         /// Sandbox name or ID
         sandbox: String,
     },
+    /// Reset a sandbox's idle clock without fetching its details
+    Keepalive {
+        /// Sandbox name or ID
+        sandbox: String,
+    },
     /// Execute a command inside a running sandbox
     Exec {
         /// Sandbox name or ID
@@ -272,6 +277,11 @@ pub async fn run(args: SandboxArgs, client: &Client, output: OutputFormat) -> an
             let id = resolve_sandbox_id(client, &sandbox).await?;
             api::sandboxes::delete(client, id).await?;
             println!("Deleted sandbox: {id}");
+        }
+        SandboxCommand::Keepalive { sandbox } => {
+            let id = resolve_sandbox_id(client, &sandbox).await?;
+            api::sandboxes::keepalive(client, id).await?;
+            println!("Kept sandbox alive: {id}");
         }
         SandboxCommand::Exec {
             sandbox,

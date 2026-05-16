@@ -193,6 +193,81 @@ WHERE vm_id = $1
     .await
 }
 
+#[derive(sqlx::FromRow, Debug, Clone)]
+pub struct SandboxWithDetailsRow {
+    pub id: Uuid,
+    pub vm_id: Uuid,
+    pub vm_template_id: Option<Uuid>,
+    pub name: String,
+    pub status: SandboxStatus,
+    pub idle_timeout_secs: i32,
+    pub last_activity_at: DateTime<Utc>,
+    pub error_message: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub vm_status: Option<VmStatus>,
+    pub ip_address: Option<String>,
+}
+
+impl From<SandboxWithDetailsRow> for Sandbox {
+    fn from(row: SandboxWithDetailsRow) -> Self {
+        Sandbox {
+            id: row.id,
+            vm_id: row.vm_id,
+            vm_template_id: row.vm_template_id,
+            name: row.name,
+            status: row.status,
+            idle_timeout_secs: row.idle_timeout_secs,
+            last_activity_at: row.last_activity_at,
+            error_message: row.error_message,
+            created_at: row.created_at,
+            ip_address: row.ip_address,
+            vm_status: row.vm_status,
+        }
+    }
+}
+
+const SANDBOX_DETAILS_SELECT: &str = r#"
+SELECT s.id,
+       s.vm_id,
+       s.vm_template_id,
+       s.name,
+       s.status,
+       s.idle_timeout_secs,
+       s.last_activity_at,
+       s.error_message,
+       s.created_at,
+       v.status AS vm_status,
+       ni.ip_address::text AS ip_address
+FROM sandboxes s
+LEFT JOIN vms v ON v.id = s.vm_id
+LEFT JOIN LATERAL (
+    SELECT ip_address
+    FROM network_interfaces
+    WHERE vm_id = s.vm_id AND ip_address IS NOT NULL
+    LIMIT 1
+) ni ON TRUE
+"#;
+
+pub async fn list_with_details(pool: &PgPool) -> Result<Vec<SandboxWithDetailsRow>, sqlx::Error> {
+    let sql = format!("{}\nORDER BY s.created_at DESC", SANDBOX_DETAILS_SELECT);
+    sqlx::query_as::<_, SandboxWithDetailsRow>(&sql)
+        .fetch_all(pool)
+        .await
+}
+
+pub async fn get_with_details(
+    pool: &PgPool,
+    sandbox_id: Uuid,
+) -> Result<SandboxWithDetailsRow, Error> {
+    let sql = format!("{}\nWHERE s.id = $1", SANDBOX_DETAILS_SELECT);
+    sqlx::query_as::<_, SandboxWithDetailsRow>(&sql)
+        .bind(sandbox_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(Error::Sqlx)?
+        .ok_or(Error::NotFound)
+}
+
 pub async fn list(pool: &PgPool) -> Result<Vec<SandboxRow>, sqlx::Error> {
     sqlx::query_as::<_, SandboxRow>(
         r#"
@@ -228,12 +303,12 @@ pub async fn update_status(
     Ok(())
 }
 
-pub async fn touch_activity(pool: &PgPool, sandbox_id: Uuid) -> Result<(), sqlx::Error> {
-    sqlx::query(r#"UPDATE sandboxes SET last_activity_at = NOW() WHERE id = $1"#)
+pub async fn touch_activity(pool: &PgPool, sandbox_id: Uuid) -> Result<u64, sqlx::Error> {
+    let result = sqlx::query(r#"UPDATE sandboxes SET last_activity_at = NOW() WHERE id = $1"#)
         .bind(sandbox_id)
         .execute(pool)
         .await?;
-    Ok(())
+    Ok(result.rows_affected())
 }
 
 pub async fn list_expired(pool: &PgPool) -> Result<Vec<SandboxRow>, sqlx::Error> {
