@@ -9,7 +9,7 @@ use crate::{
 };
 
 pub async fn start_sandbox_reaper(env: App) {
-    let mut ticker = interval(Duration::from_secs(15));
+    let mut ticker = interval(Duration::from_secs(env.sandbox().reaper_interval_secs));
 
     loop {
         ticker.tick().await;

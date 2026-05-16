@@ -50,6 +50,59 @@ fn default_memory_health_floor_bytes() -> i64 {
     1024 * 1024 * 1024
 }
 
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, utoipa::ToSchema)]
+pub struct SandboxSettings {
+    #[serde(default = "default_sandbox_idle_timeout_secs")]
+    pub default_idle_timeout_secs: i32,
+    #[serde(default = "default_sandbox_reaper_interval_secs")]
+    pub reaper_interval_secs: u64,
+    #[serde(default = "default_sandbox_pool_manager_interval_secs")]
+    pub pool_manager_interval_secs: u64,
+    #[serde(default = "default_sandbox_ready_watcher_interval_secs")]
+    pub ready_watcher_interval_secs: u64,
+    #[serde(default = "default_sandbox_ready_watcher_max_attempts")]
+    pub ready_watcher_max_attempts: u32,
+    #[serde(default = "default_sandbox_pool_member_idle_timeout_secs")]
+    pub pool_member_idle_timeout_secs: i32,
+}
+
+impl Default for SandboxSettings {
+    fn default() -> Self {
+        Self {
+            default_idle_timeout_secs: default_sandbox_idle_timeout_secs(),
+            reaper_interval_secs: default_sandbox_reaper_interval_secs(),
+            pool_manager_interval_secs: default_sandbox_pool_manager_interval_secs(),
+            ready_watcher_interval_secs: default_sandbox_ready_watcher_interval_secs(),
+            ready_watcher_max_attempts: default_sandbox_ready_watcher_max_attempts(),
+            pool_member_idle_timeout_secs: default_sandbox_pool_member_idle_timeout_secs(),
+        }
+    }
+}
+
+fn default_sandbox_idle_timeout_secs() -> i32 {
+    300
+}
+
+fn default_sandbox_reaper_interval_secs() -> u64 {
+    10
+}
+
+fn default_sandbox_pool_manager_interval_secs() -> u64 {
+    10
+}
+
+fn default_sandbox_ready_watcher_interval_secs() -> u64 {
+    2
+}
+
+fn default_sandbox_ready_watcher_max_attempts() -> u32 {
+    150
+}
+
+fn default_sandbox_pool_member_idle_timeout_secs() -> i32 {
+    300
+}
+
 #[derive(serde::Deserialize, Debug)]
 struct VmDefaultsSettingsRaw {
     pub kernel: String,
@@ -100,6 +153,8 @@ pub struct Settings {
     pub vm_defaults: VmDefaultsSettings,
     #[serde(default)]
     pub scheduling: SchedulingSettings,
+    #[serde(default)]
+    pub sandbox: SandboxSettings,
     #[serde(default)]
     pub telemetry: TelemetrySettings,
 }

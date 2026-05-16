@@ -241,6 +241,7 @@ mod tests {
                 configuration.database,
                 configuration.vm_defaults,
                 configuration.scheduling,
+                configuration.sandbox,
                 default_control_plane_architecture(),
             )
         }

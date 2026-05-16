@@ -73,6 +73,7 @@ async fn spawn_app() -> TestApp {
         configuration.database.clone(),
         configuration.vm_defaults.clone(),
         configuration.scheduling.clone(),
+        configuration.sandbox.clone(),
         default_control_plane_architecture(),
     )
     .await

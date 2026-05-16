@@ -21,7 +21,9 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use crate::configuration::{DatabaseSettings, SchedulingSettings, VmDefaultsSettings};
+use crate::configuration::{
+    DatabaseSettings, SandboxSettings, SchedulingSettings, VmDefaultsSettings,
+};
 
 #[cfg(feature = "otel")]
 use common::metrics::Metrics;
@@ -32,6 +34,7 @@ pub struct App {
     database: DatabaseSettings,
     vm_defaults: VmDefaultsSettings,
     scheduling: SchedulingSettings,
+    sandbox: SandboxSettings,
     control_plane_architecture: Arc<str>,
     maintenance_mode: Arc<AtomicBool>,
     #[cfg(feature = "otel")]
@@ -43,6 +46,7 @@ impl std::fmt::Debug for App {
         f.debug_struct("App")
             .field("vm_defaults", &self.vm_defaults)
             .field("scheduling", &self.scheduling)
+            .field("sandbox", &self.sandbox)
             .field(
                 "control_plane_architecture",
                 &self.control_plane_architecture,
@@ -58,6 +62,7 @@ impl App {
         database: DatabaseSettings,
         vm_defaults: VmDefaultsSettings,
         scheduling: SchedulingSettings,
+        sandbox: SandboxSettings,
         control_plane_architecture: String,
     ) -> Self {
         Self {
@@ -65,6 +70,7 @@ impl App {
             database,
             vm_defaults,
             scheduling,
+            sandbox,
             control_plane_architecture: Arc::from(control_plane_architecture),
             maintenance_mode: Arc::new(AtomicBool::new(false)),
         }
@@ -76,6 +82,7 @@ impl App {
         database: DatabaseSettings,
         vm_defaults: VmDefaultsSettings,
         scheduling: SchedulingSettings,
+        sandbox: SandboxSettings,
         control_plane_architecture: String,
     ) -> Self {
         let meter = opentelemetry::global::meter("qarax");
@@ -84,6 +91,7 @@ impl App {
             database,
             vm_defaults,
             scheduling,
+            sandbox,
             control_plane_architecture: Arc::from(control_plane_architecture),
             maintenance_mode: Arc::new(AtomicBool::new(false)),
             metrics: Arc::new(Metrics::new(&meter)),
@@ -108,6 +116,10 @@ impl App {
 
     pub fn scheduling(&self) -> &SchedulingSettings {
         &self.scheduling
+    }
+
+    pub fn sandbox(&self) -> &SandboxSettings {
+        &self.sandbox
     }
 
     pub fn control_plane_architecture(&self) -> &str {

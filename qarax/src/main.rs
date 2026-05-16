@@ -61,6 +61,7 @@ async fn main() -> std::io::Result<()> {
     let listener = TcpListener::bind(address).await?;
     let vm_defaults = configuration.vm_defaults.clone();
     let scheduling = configuration.scheduling.clone();
+    let sandbox = configuration.sandbox.clone();
     tracing::info!(
         "VM defaults: kernel={}, initramfs={:?}, cmdline={}",
         vm_defaults.kernel,
@@ -73,6 +74,7 @@ async fn main() -> std::io::Result<()> {
         configuration.database.clone(),
         vm_defaults,
         scheduling,
+        sandbox,
         default_control_plane_architecture(),
     )
     .await
