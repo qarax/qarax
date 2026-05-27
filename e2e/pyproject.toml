@@ -12,7 +12,7 @@ dependencies = [
     "python-dateutil>=2.9.0",
     "attrs>=25.4.0",
     "qarax-api-client",
-    "asyncssh>=2.22.0",
+    "asyncssh>=2.23.0",
 ]
 
 [project.optional-dependencies]
