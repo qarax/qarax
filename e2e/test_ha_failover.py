@@ -242,14 +242,14 @@ async def test_ha_failover_on_host_failure(client, two_hosts):
             stopped_service = node_service_by_host[host1_id]
             _compose("stop", stopped_service)
 
+            # The dead host must be marked DOWN before failover can start.
+            await _wait_for_host_status(c, dead_host_id, HostStatus.DOWN, timeout=30)
+
             # The HA VM must come back RUNNING on the surviving host.
             vm = await _wait_for_failover(c, ha_vm_id, dead_host_id)
             assert vm.host_id == host2_id, (
                 f"Expected HA VM on host2 after failover, got {vm.host_id}"
             )
-
-            # The dead host must be marked DOWN.
-            await _wait_for_host_status(c, dead_host_id, HostStatus.DOWN, timeout=30)
 
             # The non-HA VM must not have been rescheduled.
             plain_vm = await get_vm.asyncio(client=c, vm_id=plain_vm_id)

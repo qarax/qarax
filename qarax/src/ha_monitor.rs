@@ -85,7 +85,11 @@ async fn run_cycle(env: &App, settings: &HaSettings, state: &mut MonitorState) {
 
     for host in down_hosts {
         let client = NodeClient::new(&host.address, host.port as u16);
-        if client.get_node_info().await.is_ok() {
+        let is_reachable = tokio::time::timeout(Duration::from_secs(5), client.get_node_info())
+            .await
+            .map(|res| res.is_ok())
+            .unwrap_or(false);
+        if is_reachable {
             // The host is reachable despite being marked Down (e.g. it
             // recovered before an operator re-enabled it). Never fail over
             // from a live host; instead remove stale copies of VMs that were
@@ -264,10 +268,12 @@ async fn execute_failover(
     let target = pick_failover_host(env, vm, dead_host.id, &required_pool_ids).await?;
 
     // Best-effort: if the dead host is partially alive, remove the old copy
-    // before starting elsewhere.
+    // before starting elsewhere. Use a short timeout since the host is
+    // already known to be unreachable.
     let old_client = NodeClient::new(&dead_host.address, dead_host.port as u16);
-    let _ = old_client.force_stop_vm(vm.id).await;
-    let _ = old_client.delete_vm(vm.id).await;
+    let cleanup_timeout = Duration::from_secs(2);
+    let _ = tokio::time::timeout(cleanup_timeout, old_client.force_stop_vm(vm.id)).await;
+    let _ = tokio::time::timeout(cleanup_timeout, old_client.delete_vm(vm.id)).await;
 
     // Tag the VM so the stale copy is cleaned up if the source host recovers.
     let mut config = vm.config.clone();
@@ -278,7 +284,18 @@ async fn execute_failover(
     // Created makes the start path re-create the VM on the new host.
     vms::update_status(env.pool(), vm.id, VmStatus::Created).await?;
 
-    let start_job_id = start_vm_internal(env, vm.id).await?;
+    let start_job_id = match start_vm_internal(env, vm.id).await {
+        Ok(job_id) => job_id,
+        Err(e) => {
+            // Revert so the HA monitor picks this VM back up as a candidate
+            // and retries on a subsequent tick, instead of leaving it
+            // stranded in `Created` on the target host.
+            let _ = vms::update_host_id(env.pool(), vm.id, dead_host.id).await;
+            let _ = vms::update_status(env.pool(), vm.id, vm.status).await;
+            let _ = vms::update_config(env.pool(), vm.id, &vm.config).await;
+            return Err(e);
+        }
+    };
 
     info!(
         "HA monitor: VM {} ({}) failed over from host {} to host {} (start job {})",
