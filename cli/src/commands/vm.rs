@@ -119,6 +119,10 @@ enum VmCommand {
         /// Enable the guest agent used by `qarax vm exec`
         #[arg(long)]
         guest_agent: bool,
+        /// Enable high availability: restart the VM on another host if its
+        /// host fails. Requires all VM disks to be on shared storage pools.
+        #[arg(long)]
+        ha: bool,
         /// Number of GPUs to request (enables GPU-aware scheduling)
         #[arg(long)]
         gpu_count: Option<i32>,
@@ -513,6 +517,10 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
                         "disabled"
                     }
                 );
+                println!(
+                    "HA:          {}",
+                    if vm.ha_enabled { "enabled" } else { "disabled" }
+                );
                 println!("Boot mode:   {}", vm.boot_mode);
                 println!("vCPUs:       {}/{}", vm.boot_vcpus, vm.max_vcpus);
                 println!("Memory:      {}", format_bytes(vm.memory_size));
@@ -561,6 +569,7 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
             cloud_init_meta_data,
             cloud_init_network_config,
             guest_agent,
+            ha,
             gpu_count,
             gpu_vendor,
             gpu_model,
@@ -699,6 +708,7 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
                 persistent_upper_pool_id,
                 placement_policy,
                 guest_agent: guest_agent.then_some(true),
+                ha_enabled: ha.then_some(true),
             };
 
             let result = api::vms::create(client, &new_vm).await?;

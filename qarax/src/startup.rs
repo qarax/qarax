@@ -5,10 +5,13 @@ use sqlx::PgPool;
 
 use crate::{
     App,
-    configuration::{DatabaseSettings, SandboxSettings, SchedulingSettings, VmDefaultsSettings},
+    configuration::{
+        DatabaseSettings, HaSettings, SandboxSettings, SchedulingSettings, VmDefaultsSettings,
+    },
     handlers::app,
 };
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     listener: TcpListener,
     db_pool: PgPool,
@@ -16,6 +19,7 @@ pub async fn run(
     vm_defaults: VmDefaultsSettings,
     scheduling: SchedulingSettings,
     sandbox: SandboxSettings,
+    ha: HaSettings,
     control_plane_architecture: String,
 ) -> Result<impl IntoFuture<Output = std::io::Result<()>> + Send, Box<dyn std::error::Error + Send>>
 {
@@ -35,6 +39,9 @@ pub async fn run(
 
     // Spawn background task to poll host resource metrics
     tokio::spawn(crate::resource_monitor::start_resource_monitor(a.clone()));
+
+    // Spawn background task to fail over HA-enabled VMs from dead hosts
+    tokio::spawn(crate::ha_monitor::start_ha_monitor(a.clone(), ha));
 
     // Spawn background task to deliver lifecycle hook webhooks
     tokio::spawn(crate::hook_executor::start_hook_executor(a.clone()));

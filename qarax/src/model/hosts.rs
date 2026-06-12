@@ -571,6 +571,17 @@ pub async fn list_up(pool: &PgPool) -> Result<Vec<Host>, sqlx::Error> {
     Ok(rows.into_iter().map(|r| host_from_row(&r)).collect())
 }
 
+/// Return all DOWN hosts (candidates for HA failover).
+pub async fn list_down(pool: &PgPool) -> Result<Vec<Host>, sqlx::Error> {
+    let rows = sqlx::query(&format!(
+        "SELECT {HOST_COLUMNS} FROM hosts WHERE status = 'DOWN'"
+    ))
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows.into_iter().map(|r| host_from_row(&r)).collect())
+}
+
 /// Return hosts that should continue receiving health/resource probes.
 pub async fn list_probeable(pool: &PgPool) -> Result<Vec<Host>, sqlx::Error> {
     let rows = sqlx::query(&format!(

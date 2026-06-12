@@ -17,6 +17,11 @@ scheduling:
   cpu_oversubscription_ratio: 4.0
   disk_headroom_bytes: 10737418240
   memory_health_floor_bytes: 1073741824
+ha:
+  enabled: true
+  failover_grace_seconds: 60
+  check_interval_seconds: 15
+  retry_cooldown_seconds: 120
 telemetry:
   otel_enabled: false
   otlp_endpoint: "http://localhost:4318"

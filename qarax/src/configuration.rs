@@ -51,6 +51,52 @@ fn default_memory_health_floor_bytes() -> i64 {
 }
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize, utoipa::ToSchema)]
+pub struct HaSettings {
+    /// Master switch for the HA failover monitor.
+    #[serde(default = "default_ha_enabled")]
+    pub enabled: bool,
+    /// How long a host must stay down and unreachable before its HA VMs are
+    /// failed over. Acts as the split-brain guard: keep it comfortably above
+    /// transient network-blip duration.
+    #[serde(default = "default_ha_failover_grace_seconds")]
+    pub failover_grace_seconds: u64,
+    /// How often the HA monitor re-probes down hosts.
+    #[serde(default = "default_ha_check_interval_seconds")]
+    pub check_interval_seconds: u64,
+    /// Minimum delay between failover attempts for the same VM (e.g. while
+    /// waiting for capacity to free up).
+    #[serde(default = "default_ha_retry_cooldown_seconds")]
+    pub retry_cooldown_seconds: u64,
+}
+
+impl Default for HaSettings {
+    fn default() -> Self {
+        Self {
+            enabled: default_ha_enabled(),
+            failover_grace_seconds: default_ha_failover_grace_seconds(),
+            check_interval_seconds: default_ha_check_interval_seconds(),
+            retry_cooldown_seconds: default_ha_retry_cooldown_seconds(),
+        }
+    }
+}
+
+fn default_ha_enabled() -> bool {
+    true
+}
+
+fn default_ha_failover_grace_seconds() -> u64 {
+    60
+}
+
+fn default_ha_check_interval_seconds() -> u64 {
+    15
+}
+
+fn default_ha_retry_cooldown_seconds() -> u64 {
+    120
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, utoipa::ToSchema)]
 pub struct SandboxSettings {
     #[serde(default = "default_sandbox_idle_timeout_secs")]
     pub default_idle_timeout_secs: i32,
@@ -155,6 +201,8 @@ pub struct Settings {
     pub scheduling: SchedulingSettings,
     #[serde(default)]
     pub sandbox: SandboxSettings,
+    #[serde(default)]
+    pub ha: HaSettings,
     #[serde(default)]
     pub telemetry: TelemetrySettings,
 }
@@ -261,6 +309,23 @@ pub fn get_configuration() -> Result<Settings, config::ConfigError> {
         .set_override_option(
             "scheduling.memory_health_floor_bytes",
             std::env::var("SCHEDULING_MEMORY_HEALTH_FLOOR_BYTES")
+                .ok()
+                .filter(|s| !s.is_empty()),
+        )?
+        // Override HA settings from environment variables if set and non-empty
+        .set_override_option(
+            "ha.enabled",
+            std::env::var("HA_ENABLED").ok().filter(|s| !s.is_empty()),
+        )?
+        .set_override_option(
+            "ha.failover_grace_seconds",
+            std::env::var("HA_FAILOVER_GRACE_SECONDS")
+                .ok()
+                .filter(|s| !s.is_empty()),
+        )?
+        .set_override_option(
+            "ha.check_interval_seconds",
+            std::env::var("HA_CHECK_INTERVAL_SECONDS")
                 .ok()
                 .filter(|s| !s.is_empty()),
         )?

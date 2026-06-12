@@ -44,6 +44,8 @@ pub struct PlacementPolicy {
 
 pub const GUEST_AGENT_CONFIG_KEY: &str = "guest_agent";
 const LEGACY_SANDBOX_EXEC_CONFIG_KEY: &str = "sandbox_exec";
+pub const HA_ENABLED_CONFIG_KEY: &str = "ha_enabled";
+pub const FAILED_OVER_FROM_CONFIG_KEY: &str = "failed_over_from";
 
 pub fn guest_agent_enabled(config: &serde_json::Value) -> bool {
     config
@@ -68,6 +70,55 @@ pub fn set_guest_agent_config(config: &mut serde_json::Value, enabled: bool) {
             serde_json::Value::Bool(enabled),
         );
         map.remove(LEGACY_SANDBOX_EXEC_CONFIG_KEY);
+    }
+}
+
+pub fn ha_enabled(config: &serde_json::Value) -> bool {
+    config
+        .get(HA_ENABLED_CONFIG_KEY)
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+}
+
+pub fn set_ha_enabled_config(config: &mut serde_json::Value, enabled: bool) {
+    if !config.is_object() {
+        *config = default_vm_config();
+    }
+
+    if let Some(map) = config.as_object_mut() {
+        map.insert(
+            HA_ENABLED_CONFIG_KEY.to_string(),
+            serde_json::Value::Bool(enabled),
+        );
+    }
+}
+
+/// Host the VM was failed over from, if an HA failover is pending cleanup
+/// (the stale copy on the source host has not been confirmed gone yet).
+pub fn failed_over_from(config: &serde_json::Value) -> Option<Uuid> {
+    config
+        .get(FAILED_OVER_FROM_CONFIG_KEY)
+        .and_then(|value| value.as_str())
+        .and_then(|value| Uuid::parse_str(value).ok())
+}
+
+pub fn set_failed_over_from(config: &mut serde_json::Value, source_host_id: Option<Uuid>) {
+    if !config.is_object() {
+        *config = default_vm_config();
+    }
+
+    if let Some(map) = config.as_object_mut() {
+        match source_host_id {
+            Some(host_id) => {
+                map.insert(
+                    FAILED_OVER_FROM_CONFIG_KEY.to_string(),
+                    serde_json::Value::String(host_id.to_string()),
+                );
+            }
+            None => {
+                map.remove(FAILED_OVER_FROM_CONFIG_KEY);
+            }
+        }
     }
 }
 
@@ -159,6 +210,7 @@ pub struct Vm {
     pub description: Option<String>,
     pub placement_policy: Option<PlacementPolicy>,
     pub guest_agent: bool,
+    pub ha_enabled: bool,
 
     // CPU configuration
     pub boot_vcpus: i32,
@@ -239,6 +291,7 @@ impl From<VmRow> for Vm {
             description: row.description,
             placement_policy: placement_policy_from_config(&row.config.0),
             guest_agent: guest_agent_enabled(&row.config.0),
+            ha_enabled: ha_enabled(&row.config.0),
 
             boot_vcpus: row.boot_vcpus,
             max_vcpus: row.max_vcpus,
@@ -435,6 +488,11 @@ pub struct NewVm {
     /// Enable the guest agent used by `vm exec`.
     pub guest_agent: Option<bool>,
 
+    /// Enable high availability for this VM. When its host fails, the VM is
+    /// automatically restarted on another eligible host. Requires all disks
+    /// to live on shared storage pools.
+    pub ha_enabled: Option<bool>,
+
     #[serde(default = "default_vm_config")]
     pub config: serde_json::Value,
 }
@@ -545,6 +603,7 @@ pub async fn resolve_create_request(pool: &PgPool, request: NewVm) -> Result<Res
         persistent_upper_pool_id,
         placement_policy,
         guest_agent,
+        ha_enabled,
         config,
     } = request;
 
@@ -617,6 +676,9 @@ pub async fn resolve_create_request(pool: &PgPool, request: NewVm) -> Result<Res
     let mut config = config;
     if let Some(enabled) = guest_agent {
         set_guest_agent_config(&mut config, enabled);
+    }
+    if let Some(enabled) = ha_enabled {
+        set_ha_enabled_config(&mut config, enabled);
     }
 
     Ok(ResolvedNewVm {
@@ -1093,6 +1155,66 @@ pub async fn clear_image_ref(pool: &PgPool, vm_id: Uuid) -> Result<(), sqlx::Err
         .execute(pool)
         .await?;
     Ok(())
+}
+
+pub async fn update_config(
+    pool: &PgPool,
+    vm_id: Uuid,
+    config: &serde_json::Value,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE vms SET config = $1 WHERE id = $2")
+        .bind(Json(config))
+        .bind(vm_id)
+        .execute(pool)
+        .await?;
+
+    Ok(())
+}
+
+/// VMs that were failed over from the given host and still await stale-copy
+/// cleanup on it (their config carries `failed_over_from = source_host_id`).
+pub async fn list_failed_over_from(
+    pool: &PgPool,
+    source_host_id: Uuid,
+) -> Result<Vec<Vm>, sqlx::Error> {
+    let vms: Vec<VmRow> = sqlx::query_as!(
+        VmRow,
+        r#"
+SELECT id,
+        name,
+        tags as "tags!",
+        status as "status: _",
+        host_id as "host_id?",
+        hypervisor as "hypervisor: _",
+        boot_source_id as "boot_source_id?",
+        boot_mode as "boot_mode: _",
+        description as "description?",
+        boot_vcpus,
+        max_vcpus,
+        cpu_topology as "cpu_topology: _",
+        kvm_hyperv as "kvm_hyperv!",
+        memory_size,
+        memory_hotplug_size as "memory_hotplug_size?",
+        memory_mergeable as "memory_mergeable!",
+        memory_shared as "memory_shared!",
+        memory_hugepages as "memory_hugepages!",
+        memory_hugepage_size as "memory_hugepage_size?",
+        memory_prefault as "memory_prefault!",
+        memory_thp as "memory_thp!",
+        image_ref as "image_ref?",
+        cloud_init_user_data as "cloud_init_user_data?",
+        cloud_init_meta_data as "cloud_init_meta_data?",
+        cloud_init_network_config as "cloud_init_network_config?",
+        config as "config: _"
+FROM vms
+WHERE config->>'failed_over_from' = $1
+        "#,
+        source_host_id.to_string()
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(vms.into_iter().map(Into::into).collect())
 }
 
 pub async fn update_host_id(pool: &PgPool, vm_id: Uuid, host_id: Uuid) -> Result<(), sqlx::Error> {

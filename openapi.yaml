@@ -3795,6 +3795,7 @@ components:
       - sandbox_claim
       - vm_start
       - vm_migrate
+      - vm_failover
       - host_evacuate
       - disk_create
       - vm_commit
@@ -4304,6 +4305,14 @@ components:
           - boolean
           - 'null'
           description: Enable the guest agent used by `vm exec`.
+        ha_enabled:
+          type:
+          - boolean
+          - 'null'
+          description: |-
+            Enable high availability for this VM. When its host fails, the VM is
+            automatically restarted on another eligible host. Requires all disks
+            to live on shared storage pools.
         hypervisor:
           oneOf:
           - type: 'null'
@@ -5183,6 +5192,7 @@ components:
       - hypervisor
       - boot_mode
       - guest_agent
+      - ha_enabled
       - boot_vcpus
       - max_vcpus
       - kvm_hyperv
@@ -5223,6 +5233,8 @@ components:
           - string
           - 'null'
         guest_agent:
+          type: boolean
+        ha_enabled:
           type: boolean
         host_id:
           type:

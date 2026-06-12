@@ -101,6 +101,9 @@ services:
       VM_FIRMWARE: ${VM_FIRMWARE:-/usr/share/cloud-hypervisor/CLOUDHV.fd}
       # Reduce disk headroom for CI — runners have limited free disk
       SCHEDULING_DISK_HEADROOM_BYTES: ${SCHEDULING_DISK_HEADROOM_BYTES:-1073741824}
+      # Short HA windows so the failover e2e test completes quickly
+      HA_FAILOVER_GRACE_SECONDS: ${HA_FAILOVER_GRACE_SECONDS:-5}
+      HA_CHECK_INTERVAL_SECONDS: ${HA_CHECK_INTERVAL_SECONDS:-5}
     ports:
       - "8000:8000"
     depends_on:

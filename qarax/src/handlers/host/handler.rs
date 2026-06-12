@@ -90,7 +90,10 @@ fn persisted_vm_placement_policy(vm: &Vm) -> Option<crate::model::vms::Placement
     crate::model::vms::placement_policy_from_config(&vm.config)
 }
 
-async fn evacuation_scheduling_request(
+/// Build a scheduling request to move an existing VM off `source_host_id`,
+/// preserving its resource needs, networks, and placement policy. Used by
+/// host evacuation and HA failover.
+pub(crate) async fn evacuation_scheduling_request(
     env: &App,
     vm: &Vm,
     source_host_id: Uuid,
