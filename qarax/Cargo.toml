@@ -49,7 +49,7 @@ sha2 = "0.10"
 hex = "0.4"
 tonic = "0.10.2"
 prost = "0.12.3"
-russh = "0.60.1"
+russh = "0.60.3"
 # russh 0.60.x pulls pkcs8-0.11.0-rc.11 which requires pkcs5 0.8.0-rc.13; pin to
 # prevent Cargo from upgrading to pkcs5 0.8.0 stable where ::recommended was renamed.
 pkcs5 = "=0.8.0-rc.13"
