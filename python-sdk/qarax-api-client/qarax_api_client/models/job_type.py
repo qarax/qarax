@@ -7,6 +7,7 @@ class JobType(str, Enum):
     IMAGE_PULL = "image_pull"
     SANDBOX_CLAIM = "sandbox_claim"
     VM_COMMIT = "vm_commit"
+    VM_FAILOVER = "vm_failover"
     VM_MIGRATE = "vm_migrate"
     VM_START = "vm_start"
 

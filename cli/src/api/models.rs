@@ -19,6 +19,8 @@ pub struct Vm {
     pub description: Option<String>,
     pub placement_policy: Option<serde_json::Value>,
     pub guest_agent: bool,
+    #[serde(default)]
+    pub ha_enabled: bool,
     pub boot_vcpus: i32,
     pub max_vcpus: i32,
     pub memory_size: i64,
@@ -93,6 +95,8 @@ pub struct NewVm {
     pub placement_policy: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub guest_agent: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ha_enabled: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

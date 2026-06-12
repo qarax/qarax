@@ -85,6 +85,7 @@ Do not jump to code investigation when services may not be running or the wrong 
 - `qarax/src/grpc_client.rs` — Tonic client for communicating with qarax-node instances
 - `qarax/src/vm_monitor.rs` — Background task that periodically reconciles VM status with nodes
 - `qarax/src/resource_monitor.rs` — Background task polling host resource metrics
+- `qarax/src/ha_monitor.rs` — Background task failing over HA-enabled VMs from dead hosts
 - `qarax/src/hook_executor.rs` — Background task managing lifecycle hook executions
 - `qarax/src/transfer_executor.rs` — Async file transfer handling
 - `qarax/src/host_deployer.rs` — Host deployment via SSH + bootc

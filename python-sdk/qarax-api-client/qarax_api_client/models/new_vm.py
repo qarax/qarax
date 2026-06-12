@@ -42,6 +42,9 @@ class NewVm:
         cpu_topology (Any | Unset):
         description (None | str | Unset):
         guest_agent (bool | None | Unset): Enable the guest agent used by `vm exec`.
+        ha_enabled (bool | None | Unset): Enable high availability for this VM. When its host fails, the VM is
+            automatically restarted on another eligible host. Requires all disks
+            to live on shared storage pools.
         hypervisor (Hypervisor | None | Unset):
         image_ref (None | str | Unset): OCI image reference to use as root filesystem (e.g.
             "docker.io/library/ubuntu:22.04").
@@ -91,6 +94,7 @@ class NewVm:
     cpu_topology: Any | Unset = UNSET
     description: None | str | Unset = UNSET
     guest_agent: bool | None | Unset = UNSET
+    ha_enabled: bool | None | Unset = UNSET
     hypervisor: Hypervisor | None | Unset = UNSET
     image_ref: None | str | Unset = UNSET
     instance_type_id: None | Unset | UUID = UNSET
@@ -183,6 +187,12 @@ class NewVm:
             guest_agent = UNSET
         else:
             guest_agent = self.guest_agent
+
+        ha_enabled: bool | None | Unset
+        if isinstance(self.ha_enabled, Unset):
+            ha_enabled = UNSET
+        else:
+            ha_enabled = self.ha_enabled
 
         hypervisor: None | str | Unset
         if isinstance(self.hypervisor, Unset):
@@ -369,6 +379,8 @@ class NewVm:
             field_dict["description"] = description
         if guest_agent is not UNSET:
             field_dict["guest_agent"] = guest_agent
+        if ha_enabled is not UNSET:
+            field_dict["ha_enabled"] = ha_enabled
         if hypervisor is not UNSET:
             field_dict["hypervisor"] = hypervisor
         if image_ref is not UNSET:
@@ -526,6 +538,15 @@ class NewVm:
             return cast(bool | None | Unset, data)
 
         guest_agent = _parse_guest_agent(d.pop("guest_agent", UNSET))
+
+        def _parse_ha_enabled(data: object) -> bool | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(bool | None | Unset, data)
+
+        ha_enabled = _parse_ha_enabled(d.pop("ha_enabled", UNSET))
 
         def _parse_hypervisor(data: object) -> Hypervisor | None | Unset:
             if data is None:
@@ -817,6 +838,7 @@ class NewVm:
             cpu_topology=cpu_topology,
             description=description,
             guest_agent=guest_agent,
+            ha_enabled=ha_enabled,
             hypervisor=hypervisor,
             image_ref=image_ref,
             instance_type_id=instance_type_id,

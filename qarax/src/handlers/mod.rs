@@ -29,7 +29,7 @@ mod audit_log;
 mod backup;
 mod boot_source;
 mod events;
-mod host;
+pub(crate) mod host;
 mod instance_type;
 mod job;
 mod lifecycle_hook;

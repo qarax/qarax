@@ -60,6 +60,7 @@ pub(crate) async fn resolve_sandbox_vm(
         persistent_upper_pool_id: None,
         placement_policy: None,
         guest_agent: Some(true),
+        ha_enabled: None,
         config: serde_json::json!({}),
     };
 

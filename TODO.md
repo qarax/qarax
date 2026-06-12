@@ -51,7 +51,10 @@ Platform
 
   - Web UI — full management interface with console, graphs, VM lifecycle
   - RBAC / Auth — users, groups, roles, LDAP, API tokens, 2FA
-  - High Availability — automatic failover, fencing, cluster config replication
+  - High Availability — automatic failover DONE (ha_enabled VMs restart on
+    another host when theirs dies). Remaining: real fencing (IPMI/watchdog/
+    storage lease — currently timeout + re-probe based), cluster config
+    replication, failover for GPU and local-disk VMs
   - Audit log — record all API mutations with actor and before/after state
   - Resource pools — group VMs/hosts for delegation, billing, quotas
   - Scheduled backups — cron-based snapshot scheduling with retention policies

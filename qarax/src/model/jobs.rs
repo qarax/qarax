@@ -34,6 +34,7 @@ pub enum JobType {
     SandboxClaim,
     VmStart,
     VmMigrate,
+    VmFailover,
     HostEvacuate,
     DiskCreate,
     VmCommit,

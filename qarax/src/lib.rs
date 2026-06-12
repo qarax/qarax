@@ -2,6 +2,7 @@ pub mod configuration;
 pub mod database;
 pub mod errors;
 pub mod grpc_client;
+pub mod ha_monitor;
 pub mod handlers;
 pub mod hook_executor;
 pub mod host_deployer;
