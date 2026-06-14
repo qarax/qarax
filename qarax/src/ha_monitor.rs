@@ -263,10 +263,6 @@ async fn execute_failover(
     let target =
         pick_failover_host(env, vm, dead_host.id, &required_pool_ids, &gpu_request).await?;
 
-    if let Some(gpu_request) = &gpu_request {
-        reallocate_vm_gpus(env, vm.id, target.id, gpu_request).await?;
-    }
-
     // Best-effort: if the dead host is partially alive, remove the old copy
     // before starting elsewhere. Use a short timeout since the host is
     // already known to be unreachable.
@@ -284,15 +280,23 @@ async fn execute_failover(
     // Created makes the start path re-create the VM on the new host.
     vms::update_status(env.pool(), vm.id, VmStatus::Created).await?;
 
+    if let Some(gpu_request) = &gpu_request
+        && let Err(e) = reallocate_vm_gpus(env, vm.id, target.id, gpu_request).await
+    {
+        revert_failover_state(env, vm, dead_host.id).await;
+        return Err(e);
+    }
+
     let start_job_id = match start_vm_internal(env, vm.id).await {
         Ok(job_id) => job_id,
         Err(e) => {
             // Revert so the HA monitor picks this VM back up as a candidate
             // and retries on a subsequent tick, instead of leaving it
             // stranded in `Created` on the target host.
-            let _ = vms::update_host_id(env.pool(), vm.id, dead_host.id).await;
-            let _ = vms::update_status(env.pool(), vm.id, vm.status).await;
-            let _ = vms::update_config(env.pool(), vm.id, &vm.config).await;
+            revert_failover_state(env, vm, dead_host.id).await;
+            if let Some(gpu_request) = &gpu_request {
+                let _ = reallocate_vm_gpus(env, vm.id, dead_host.id, gpu_request).await;
+            }
             return Err(e);
         }
     };
@@ -309,6 +313,14 @@ async fn execute_failover(
     }))
 }
 
+/// Best-effort revert of the VM's host/status/config changes made during a
+/// failed failover attempt, so the HA monitor retries it on a later tick.
+async fn revert_failover_state(env: &App, vm: &Vm, dead_host_id: Uuid) {
+    let _ = vms::update_host_id(env.pool(), vm.id, dead_host_id).await;
+    let _ = vms::update_status(env.pool(), vm.id, vm.status).await;
+    let _ = vms::update_config(env.pool(), vm.id, &vm.config).await;
+}
+
 /// GPU requirements derived from the GPUs currently allocated to the VM on
 /// the dead host. `None` means the VM has no GPUs attached.
 async fn gpu_request_for_vm(env: &App, vm: &Vm) -> Result<Option<hosts::GpuRequest>, Error> {
@@ -319,8 +331,8 @@ async fn gpu_request_for_vm(env: &App, vm: &Vm) -> Result<Option<hosts::GpuReque
 
     Ok(Some(hosts::GpuRequest {
         count: allocated.len() as i32,
-        vendor: allocated[0].vendor.clone(),
-        model: allocated[0].model.clone(),
+        vendor: allocated.iter().find_map(|g| g.vendor.clone()),
+        model: allocated.iter().find_map(|g| g.model.clone()),
         min_vram_bytes: allocated.iter().filter_map(|g| g.vram_bytes).min(),
     }))
 }
