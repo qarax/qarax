@@ -29,6 +29,7 @@ from uuid import UUID
 import httpx
 import pytest
 from qarax_api_client import Client
+from helpers import AUTH_HEADERS
 from qarax_api_client.api.hosts import add as add_host
 from qarax_api_client.api.hosts import init as init_host
 from qarax_api_client.api.hosts import list_ as list_hosts
@@ -56,7 +57,7 @@ FAILOVER_TIMEOUT = 180
 
 @pytest.fixture
 def client():
-    return Client(base_url=QARAX_URL)
+    return Client(base_url=QARAX_URL, headers=AUTH_HEADERS)
 
 
 def _register_and_init_host(client, address, port, name):
@@ -93,7 +94,7 @@ def _register_and_init_host(client, address, port, name):
 @pytest.fixture(scope="module")
 def two_hosts():
     """Ensure both qarax-node instances are registered and initialized. Returns (host1_id, host2_id)."""
-    c = Client(base_url=QARAX_URL)
+    c = Client(base_url=QARAX_URL, headers=AUTH_HEADERS)
     host1_id = _register_and_init_host(
         c, QARAX_NODE_HOST, QARAX_NODE_PORT, "e2e-node-1"
     )
@@ -172,7 +173,7 @@ async def _create_vm_raw(http_client, *, name, ha_enabled):
 @pytest.mark.asyncio
 async def test_ha_enabled_is_persisted(client, two_hosts):
     """ha_enabled survives the round trip through create and get."""
-    async with httpx.AsyncClient(base_url=QARAX_URL) as http_client:
+    async with httpx.AsyncClient(base_url=QARAX_URL, headers=AUTH_HEADERS) as http_client:
         vm_id = await _create_vm_raw(
             http_client, name=f"e2e-ha-flag-{uuid.uuid4().hex[:6]}", ha_enabled=True
         )
@@ -201,7 +202,7 @@ async def test_ha_failover_on_host_failure(client, two_hosts):
     dead_host_id = None
     stopped_service = None
 
-    async with client as c, httpx.AsyncClient(base_url=QARAX_URL) as http_client:
+    async with client as c, httpx.AsyncClient(base_url=QARAX_URL, headers=AUTH_HEADERS) as http_client:
         try:
             # Pin both VMs to host1 by putting host2 in maintenance.
             await update_host.asyncio_detailed(

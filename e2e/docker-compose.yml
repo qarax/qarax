@@ -104,6 +104,9 @@ services:
       # Short HA windows so the failover e2e test completes quickly
       HA_FAILOVER_GRACE_SECONDS: ${HA_FAILOVER_GRACE_SECONDS:-5}
       HA_CHECK_INTERVAL_SECONDS: ${HA_CHECK_INTERVAL_SECONDS:-5}
+      # API token auth - tests authenticate with QARAX_TEST_TOKEN
+      AUTH_ENABLED: "true"
+      AUTH_TOKENS: ${QARAX_TEST_TOKEN:-e2e-test-token}
     ports:
       - "8000:8000"
     depends_on:

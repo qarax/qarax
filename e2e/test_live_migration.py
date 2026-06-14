@@ -26,6 +26,7 @@ from uuid import UUID
 import httpx
 import pytest
 from qarax_api_client import Client
+from helpers import AUTH_HEADERS
 from qarax_api_client.api.hosts import add as add_host
 from qarax_api_client.api.hosts import evacuate as evacuate_host
 from qarax_api_client.api.hosts import init as init_host
@@ -77,7 +78,7 @@ MIGRATION_TIMEOUT = 120
 
 @pytest.fixture
 def client():
-    return Client(base_url=QARAX_URL)
+    return Client(base_url=QARAX_URL, headers=AUTH_HEADERS)
 
 
 def _register_and_init_host(client, address, port, name):
@@ -114,7 +115,7 @@ def _register_and_init_host(client, address, port, name):
 @pytest.fixture(scope="module")
 def two_hosts():
     """Ensure both qarax-node instances are registered and initialized. Returns (host1_id, host2_id)."""
-    c = Client(base_url=QARAX_URL)
+    c = Client(base_url=QARAX_URL, headers=AUTH_HEADERS)
     host1_id = _register_and_init_host(
         c, QARAX_NODE_HOST, QARAX_NODE_PORT, "e2e-node-1"
     )
@@ -522,7 +523,7 @@ async def test_scheduler_placement_policy_reservation_anti_affinity_and_spread(
     anti_vm_id = None
     spread_vm_ids: list[UUID] = []
 
-    async with client as c, httpx.AsyncClient(base_url=QARAX_URL) as http_client:
+    async with client as c, httpx.AsyncClient(base_url=QARAX_URL, headers=AUTH_HEADERS) as http_client:
         try:
             await _update_host_placement(
                 http_client, host1_id, reservation_class=reservation_class

@@ -50,19 +50,19 @@ from qarax_api_client.models import (
     VmStatus,
 )
 
-from helpers import QARAX_URL, call_api, call_api_detailed, wait_for_status
+from helpers import AUTH_HEADERS, QARAX_URL, call_api, call_api_detailed, wait_for_status
 
 
 @pytest.fixture
 def client():
     """Create a qarax API client."""
-    return Client(base_url=QARAX_URL)
+    return Client(base_url=QARAX_URL, headers=AUTH_HEADERS)
 
 
 @pytest.fixture(scope="module")
 def fc_snapshot_storage_pool():
     """Create a local storage pool for FC snapshot tests and attach it to a UP host."""
-    with Client(base_url=QARAX_URL) as c:
+    with Client(base_url=QARAX_URL, headers=AUTH_HEADERS) as c:
         hosts = [h for h in (list_hosts.sync(client=c) or []) if h.status == HostStatus.UP]
         assert hosts, "No UP hosts registered"
         host_id = hosts[0].id

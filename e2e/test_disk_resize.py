@@ -68,7 +68,7 @@ from qarax_api_client.models.disk_resize_request import DiskResizeRequest
 from qarax_api_client.models.new_storage_object import NewStorageObject
 from qarax_api_client.models.storage_object_type import StorageObjectType
 
-from helpers import QARAX_URL, wait_for_status
+from helpers import AUTH_HEADERS, QARAX_URL, wait_for_status
 from helpers import up_hosts as _up_hosts
 
 VM_OPERATION_TIMEOUT = 30
@@ -85,7 +85,7 @@ TEST_FILE_PATH = "/var/lib/qarax/images/test-initramfs.gz"
 
 @pytest.fixture
 def client():
-    return Client(base_url=QARAX_URL)
+    return Client(base_url=QARAX_URL, headers=AUTH_HEADERS)
 
 
 def _node_container_names():

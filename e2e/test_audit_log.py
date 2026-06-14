@@ -11,6 +11,8 @@ import uuid
 import httpx
 import pytest
 
+from helpers import AUTH_HEADERS
+
 QARAX_URL = os.getenv("QARAX_URL", "http://localhost:8000")
 
 
@@ -29,7 +31,7 @@ def list_audit_logs(
         params["action"] = action
     if limit is not None:
         params["limit"] = limit
-    resp = httpx.get(f"{QARAX_URL}/audit-logs", params=params)
+    resp = httpx.get(f"{QARAX_URL}/audit-logs", params=params, headers=AUTH_HEADERS)
     resp.raise_for_status()
     return resp.json()
 
@@ -43,13 +45,13 @@ def create_host() -> dict[str, str]:
         "host_user": "root",
         "password": "",
     }
-    resp = httpx.post(f"{QARAX_URL}/hosts", json=host)
+    resp = httpx.post(f"{QARAX_URL}/hosts", json=host, headers=AUTH_HEADERS)
     resp.raise_for_status()
     return {"id": resp.text.strip(), "name": host["name"]}
 
 
 def get_audit_log(audit_log_id: str) -> dict:
-    resp = httpx.get(f"{QARAX_URL}/audit-logs/{audit_log_id}")
+    resp = httpx.get(f"{QARAX_URL}/audit-logs/{audit_log_id}", headers=AUTH_HEADERS)
     resp.raise_for_status()
     return resp.json()
 
@@ -133,11 +135,13 @@ def test_audit_log_limit_param():
 def test_audit_log_get_not_found():
     """GET /audit-logs/{id} returns 404 for a non-existent ID."""
     non_existent = "00000000-0000-0000-0000-000000000000"
-    resp = httpx.get(f"{QARAX_URL}/audit-logs/{non_existent}")
+    resp = httpx.get(f"{QARAX_URL}/audit-logs/{non_existent}", headers=AUTH_HEADERS)
     assert resp.status_code == 404
 
 
 def test_audit_log_invalid_action_filter_returns_400():
     """Invalid action filters should be rejected instead of ignored."""
-    resp = httpx.get(f"{QARAX_URL}/audit-logs", params={"action": "not-a-real-action"})
+    resp = httpx.get(
+        f"{QARAX_URL}/audit-logs", params={"action": "not-a-real-action"}, headers=AUTH_HEADERS
+    )
     assert resp.status_code == 400

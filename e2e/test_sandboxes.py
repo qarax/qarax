@@ -7,6 +7,7 @@ import uuid
 
 import pytest
 from qarax_api_client import Client
+from helpers import AUTH_HEADERS
 from qarax_api_client.api.boot_sources import (
     create as create_boot_source,
     delete as delete_boot_source,
@@ -56,7 +57,7 @@ TRANSFER_TIMEOUT = 30
 
 @pytest.fixture
 def client():
-    return Client(base_url=QARAX_URL)
+    return Client(base_url=QARAX_URL, headers=AUTH_HEADERS)
 
 
 async def create_bootable_sandbox_template(
@@ -232,7 +233,7 @@ async def cleanup_bootable_sandbox_template(client, resources):
 @pytest.fixture
 async def sandbox_template():
     """Create an explicitly bootable Cloud Hypervisor template for sandbox tests."""
-    async with Client(base_url=QARAX_URL) as c:
+    async with Client(base_url=QARAX_URL, headers=AUTH_HEADERS) as c:
         template_id, resources = await create_bootable_sandbox_template(c, "cloud_hv")
         yield template_id
         await cleanup_bootable_sandbox_template(c, resources)

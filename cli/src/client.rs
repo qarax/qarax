@@ -7,9 +7,18 @@ pub struct Client {
 }
 
 impl Client {
-    pub fn new(base_url: &str) -> Self {
+    pub fn new(base_url: &str, token: Option<&str>) -> Self {
+        let mut builder = reqwest::Client::builder();
+        if let Some(token) = token {
+            let mut headers = reqwest::header::HeaderMap::new();
+            let mut auth_value = reqwest::header::HeaderValue::from_str(&format!("Bearer {token}"))
+                .expect("API token must be a valid header value");
+            auth_value.set_sensitive(true);
+            headers.insert(reqwest::header::AUTHORIZATION, auth_value);
+            builder = builder.default_headers(headers);
+        }
         Self {
-            inner: reqwest::Client::new(),
+            inner: builder.build().expect("failed to build HTTP client"),
             base_url: base_url.trim_end_matches('/').to_string(),
         }
     }
@@ -185,5 +194,51 @@ impl Client {
             .with_context(|| format!("DELETE {path}"))?;
         Self::check_error(resp).await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    /// Accepts a single connection, captures the raw request, and replies
+    /// with an empty 200 response.
+    async fn capture_request(listener: TcpListener) -> String {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut buf = vec![0u8; 4096];
+        let n = socket.read(&mut buf).await.unwrap();
+        socket
+            .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n")
+            .await
+            .unwrap();
+        String::from_utf8_lossy(&buf[..n]).to_lowercase()
+    }
+
+    #[tokio::test]
+    async fn sets_authorization_header_when_token_provided() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(capture_request(listener));
+
+        let client = Client::new(&format!("http://{addr}"), Some("my-token"));
+        let _ = client.get_text("/").await;
+
+        let request = server.await.unwrap();
+        assert!(request.contains("authorization: bearer my-token"));
+    }
+
+    #[tokio::test]
+    async fn no_authorization_header_when_token_absent() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(capture_request(listener));
+
+        let client = Client::new(&format!("http://{addr}"), None);
+        let _ = client.get_text("/").await;
+
+        let request = server.await.unwrap();
+        assert!(!request.contains("authorization:"));
     }
 }

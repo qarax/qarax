@@ -8,6 +8,8 @@ from qarax_api_client.api.vms import get as get_vm
 from qarax_api_client.models import HostStatus, VmStatus
 
 QARAX_URL = os.getenv("QARAX_URL", "http://localhost:8000")
+QARAX_TEST_TOKEN = os.getenv("QARAX_TEST_TOKEN", "e2e-test-token")
+AUTH_HEADERS = {"Authorization": f"Bearer {QARAX_TEST_TOKEN}"}
 VM_OPERATION_TIMEOUT = 30
 
 

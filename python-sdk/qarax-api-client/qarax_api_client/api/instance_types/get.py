@@ -14,6 +14,7 @@ from ...types import Response
 def _get_kwargs(
     instance_type_id: UUID,
 ) -> dict[str, Any]:
+
     _kwargs: dict[str, Any] = {
         "method": "get",
         "url": "/instance-types/{instance_type_id}".format(

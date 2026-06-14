@@ -6,7 +6,8 @@ use sqlx::PgPool;
 use crate::{
     App,
     configuration::{
-        DatabaseSettings, HaSettings, SandboxSettings, SchedulingSettings, VmDefaultsSettings,
+        AuthSettings, DatabaseSettings, HaSettings, SandboxSettings, SchedulingSettings,
+        VmDefaultsSettings,
     },
     handlers::app,
 };
@@ -19,6 +20,7 @@ pub async fn run(
     vm_defaults: VmDefaultsSettings,
     scheduling: SchedulingSettings,
     sandbox: SandboxSettings,
+    auth: AuthSettings,
     ha: HaSettings,
     control_plane_architecture: String,
 ) -> Result<impl IntoFuture<Output = std::io::Result<()>> + Send, Box<dyn std::error::Error + Send>>
@@ -31,6 +33,7 @@ pub async fn run(
         vm_defaults,
         scheduling,
         sandbox,
+        auth,
         control_plane_architecture,
     );
 

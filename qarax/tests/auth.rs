@@ -3,8 +3,7 @@ use tokio::net::TcpListener;
 use common::telemtry::{get_subscriber, init_subscriber};
 use once_cell::sync::Lazy;
 use qarax::{
-    configuration::{DatabaseSettings, default_control_plane_architecture, get_configuration},
-    model::hosts::NewHost,
+    configuration::{AuthSettings, DatabaseSettings, default_control_plane_architecture},
     startup::run,
 };
 use reqwest::StatusCode;
@@ -15,7 +14,6 @@ use uuid::Uuid;
 struct TestApp {
     pub db_name: String,
     pub address: String,
-    pub _pool: PgPool,
 }
 
 static TRACING: Lazy<()> = Lazy::new(|| {
@@ -48,18 +46,16 @@ pub async fn configure_database(config: &DatabaseSettings) -> PgPool {
     connection_pool
 }
 
-async fn spawn_app() -> TestApp {
+async fn spawn_app(auth: AuthSettings) -> TestApp {
     Lazy::force(&TRACING);
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("Failed to bind random port");
     let port = listener.local_addr().unwrap().port();
     let address = format!("http://127.0.0.1:{}", port);
-    println!("Address: {}", address);
     let mut configuration =
         qarax::configuration::get_configuration().expect("Failed to read configuration.");
     configuration.database.name = Uuid::new_v4().to_string();
-    tracing::info!("Using database {}", configuration.database.name);
     let connection_pool = configure_database(&configuration.database).await;
 
     let server = run(
@@ -69,12 +65,12 @@ async fn spawn_app() -> TestApp {
         configuration.vm_defaults.clone(),
         configuration.scheduling.clone(),
         configuration.sandbox.clone(),
-        configuration.auth.clone(),
+        auth,
         configuration.ha.clone(),
         default_control_plane_architecture(),
     )
-    .await;
-    let server = server.unwrap();
+    .await
+    .unwrap();
     std::thread::spawn(move || {
         let rt = Runtime::new().unwrap();
         let _ = rt.block_on(async move { server.await });
@@ -82,62 +78,113 @@ async fn spawn_app() -> TestApp {
     TestApp {
         db_name: configuration.database.name,
         address,
-        _pool: connection_pool,
     }
-}
-
-#[tokio::test]
-async fn test_list_hosts_empty() {
-    let app = spawn_app().await;
-    let res: Result<reqwest::Response, reqwest::Error> =
-        reqwest::get(&format!("{}/hosts", &app.address)).await;
-    assert_eq!(res.unwrap().status(), StatusCode::OK);
-}
-
-#[tokio::test]
-async fn test_add_host() {
-    let app = spawn_app().await;
-    let host = NewHost {
-        name: String::from("test_host"),
-        address: String::from("127.0.0.1"),
-        port: 8080,
-        host_user: String::from("root"),
-        password: String::from("pass"),
-        reservation_class: None,
-        placement_labels: std::collections::BTreeMap::new(),
-    };
-    let client = reqwest::Client::new();
-    let res = client
-        .post(format!("{}/hosts", &app.address))
-        .header("Content-Type", "application/json")
-        .json(&host)
-        .send()
-        .await;
-    assert_eq!(res.unwrap().status(), StatusCode::CREATED);
 }
 
 impl Drop for TestApp {
     fn drop(&mut self) {
         let (tx, rx) = std::sync::mpsc::channel();
         let db_name = self.db_name.clone();
-
         std::thread::spawn(move || {
             let rt = Runtime::new().unwrap();
             rt.block_on(async {
-                let config = get_configuration().expect("Failed to read configuration");
+                let config = qarax::configuration::get_configuration()
+                    .expect("Failed to read configuration");
                 let mut conn = PgConnection::connect_with(&config.database.without_db())
                     .await
                     .expect("Failed to connect to Postgres");
-
                 conn.execute(&*format!("DROP DATABASE \"{}\" WITH (FORCE)", db_name))
                     .await
                     .expect("Failed to drop database.");
-
-                tracing::info!("Dropped database: {db_name}");
                 let _ = tx.send(());
             })
         });
-
         let _ = rx.recv();
     }
+}
+
+#[tokio::test]
+async fn test_auth_disabled_allows_unauthenticated_requests() {
+    let app = spawn_app(AuthSettings {
+        enabled: false,
+        tokens: vec![],
+    })
+    .await;
+
+    let res = reqwest::get(format!("{}/hosts", app.address))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn test_auth_enabled_rejects_missing_token() {
+    let app = spawn_app(AuthSettings {
+        enabled: true,
+        tokens: vec!["test-token".to_string()],
+    })
+    .await;
+
+    let res = reqwest::get(format!("{}/hosts", app.address))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn test_auth_enabled_rejects_wrong_token() {
+    let app = spawn_app(AuthSettings {
+        enabled: true,
+        tokens: vec!["test-token".to_string()],
+    })
+    .await;
+
+    let client = reqwest::Client::new();
+    let res = client
+        .get(format!("{}/hosts", app.address))
+        .bearer_auth("wrong-token")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn test_auth_enabled_accepts_valid_token() {
+    let app = spawn_app(AuthSettings {
+        enabled: true,
+        tokens: vec!["test-token".to_string()],
+    })
+    .await;
+
+    let client = reqwest::Client::new();
+    let res = client
+        .get(format!("{}/hosts", app.address))
+        .bearer_auth("test-token")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn test_auth_enabled_allows_public_paths_without_token() {
+    let app = spawn_app(AuthSettings {
+        enabled: true,
+        tokens: vec!["test-token".to_string()],
+    })
+    .await;
+
+    let res = reqwest::get(&app.address).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let res = reqwest::get(format!("{}/swagger-ui", app.address))
+        .await
+        .unwrap();
+    assert!(res.status().is_success() || res.status().is_redirection());
+
+    let res = reqwest::get(format!("{}/api-docs/openapi.json", app.address))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
 }

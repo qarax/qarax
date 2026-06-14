@@ -75,6 +75,7 @@ async fn main() -> std::io::Result<()> {
         vm_defaults,
         scheduling,
         sandbox,
+        configuration.auth.clone(),
         configuration.ha.clone(),
         default_control_plane_architecture(),
     )

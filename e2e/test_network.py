@@ -30,13 +30,13 @@ from qarax_api_client.models import (
 )
 
 
-from helpers import QARAX_URL, call_api, up_hosts as _up_hosts, wait_for_status
+from helpers import AUTH_HEADERS, QARAX_URL, call_api, up_hosts as _up_hosts, wait_for_status
 
 
 @pytest.fixture
 def client():
     """Create a qarax API client."""
-    return Client(base_url=QARAX_URL)
+    return Client(base_url=QARAX_URL, headers=AUTH_HEADERS)
 
 
 @pytest.mark.asyncio
@@ -268,7 +268,7 @@ async def test_vpc_routing_and_security_group_updates(client):
         net_a_id = None
         net_b_id = None
 
-        async with httpx.AsyncClient(base_url=QARAX_URL, timeout=30.0) as raw:
+        async with httpx.AsyncClient(base_url=QARAX_URL, timeout=30.0, headers=AUTH_HEADERS) as raw:
             try:
                 net_a_resp = await raw.post(
                     "/networks",

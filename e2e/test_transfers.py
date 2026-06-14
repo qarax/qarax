@@ -40,13 +40,13 @@ from qarax_api_client.models.attach_host_request import AttachHostRequest
 
 TRANSFER_TIMEOUT = 30
 
-from helpers import QARAX_URL, up_hosts as _up_hosts
+from helpers import AUTH_HEADERS, QARAX_URL, up_hosts as _up_hosts
 
 
 @pytest.fixture
 def client():
     """Create a qarax API client."""
-    return Client(base_url=QARAX_URL)
+    return Client(base_url=QARAX_URL, headers=AUTH_HEADERS)
 
 
 @pytest.mark.asyncio

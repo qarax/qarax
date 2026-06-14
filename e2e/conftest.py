@@ -24,6 +24,8 @@ from qarax_api_client.api.hosts import init as init_host
 from qarax_api_client.api.hosts import list_ as list_hosts
 from qarax_api_client.models.new_host import NewHost
 
+from helpers import AUTH_HEADERS
+
 QARAX_URL = os.getenv("QARAX_URL", "http://localhost:8000")
 # Address of qarax-node as seen from the qarax control plane (inside docker network)
 QARAX_NODE_HOST = os.getenv("QARAX_NODE_HOST", "qarax-node")
@@ -221,7 +223,7 @@ def telemetry_collector(_telemetry_store: _TelemetryStore) -> _TelemetryStore:
 @pytest.fixture(scope="session", autouse=True)
 def ensure_host_registered():
     """Register the qarax-node host and initialize it before tests run."""
-    client = Client(base_url=QARAX_URL)
+    client = Client(base_url=QARAX_URL, headers=AUTH_HEADERS)
 
     hosts = list_hosts.sync(client=client)
     if hosts is None:

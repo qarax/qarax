@@ -177,6 +177,16 @@ impl From<VmDefaultsSettingsRaw> for VmDefaultsSettings {
     }
 }
 
+#[derive(Debug, Clone, Default, serde::Deserialize, serde::Serialize, utoipa::ToSchema)]
+pub struct AuthSettings {
+    /// Master switch for API token authentication.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Static bearer tokens accepted by the API.
+    #[serde(default)]
+    pub tokens: Vec<String>,
+}
+
 #[derive(serde::Deserialize, Debug, Default)]
 pub struct TelemetrySettings {
     /// Enable OpenTelemetry export (requires the `otel` feature at compile time)
@@ -205,6 +215,8 @@ pub struct Settings {
     pub ha: HaSettings,
     #[serde(default)]
     pub telemetry: TelemetrySettings,
+    #[serde(default)]
+    pub auth: AuthSettings,
 }
 
 #[derive(serde::Deserialize, Debug, Clone)]
@@ -339,6 +351,23 @@ pub fn get_configuration() -> Result<Settings, config::ConfigError> {
             std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
                 .ok()
                 .filter(|s| !s.is_empty()),
+        )?
+        // Override auth settings from environment variables if set and non-empty
+        .set_override_option(
+            "auth.enabled",
+            std::env::var("AUTH_ENABLED").ok().filter(|s| !s.is_empty()),
+        )?
+        .set_override_option(
+            "auth.tokens",
+            std::env::var("AUTH_TOKENS")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .map(|s| {
+                    s.split(',')
+                        .map(|t| t.trim().to_string())
+                        .filter(|t| !t.is_empty())
+                        .collect::<Vec<_>>()
+                }),
         )?
         .build()?;
     settings.try_deserialize::<Settings>()
