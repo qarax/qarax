@@ -258,14 +258,14 @@ async fn execute_failover(
     vm: &Vm,
     dead_host: &Host,
 ) -> Result<serde_json::Value, Error> {
-    if !host_gpus::list_by_vm(env.pool(), vm.id).await?.is_empty() {
-        return Err(Error::UnprocessableEntity(
-            "HA failover is not supported for VMs with attached GPUs".into(),
-        ));
-    }
-
     let required_pool_ids = shared_disk_pool_ids(env, vm).await?;
-    let target = pick_failover_host(env, vm, dead_host.id, &required_pool_ids).await?;
+    let gpu_request = gpu_request_for_vm(env, vm).await?;
+    let target =
+        pick_failover_host(env, vm, dead_host.id, &required_pool_ids, &gpu_request).await?;
+
+    if let Some(gpu_request) = &gpu_request {
+        reallocate_vm_gpus(env, vm.id, target.id, gpu_request).await?;
+    }
 
     // Best-effort: if the dead host is partially alive, remove the old copy
     // before starting elsewhere. Use a short timeout since the host is
@@ -307,6 +307,56 @@ async fn execute_failover(
         "target_host_id": target.id,
         "start_job_id": start_job_id,
     }))
+}
+
+/// GPU requirements derived from the GPUs currently allocated to the VM on
+/// the dead host. `None` means the VM has no GPUs attached.
+async fn gpu_request_for_vm(env: &App, vm: &Vm) -> Result<Option<hosts::GpuRequest>, Error> {
+    let allocated = host_gpus::list_by_vm(env.pool(), vm.id).await?;
+    if allocated.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(hosts::GpuRequest {
+        count: allocated.len() as i32,
+        vendor: allocated[0].vendor.clone(),
+        model: allocated[0].model.clone(),
+        min_vram_bytes: allocated.iter().filter_map(|g| g.vram_bytes).min(),
+    }))
+}
+
+/// Move the VM's GPU allocation from the dead host to `target_host_id`,
+/// atomically within a transaction so a partial allocation never leaves the
+/// VM without its required GPUs.
+async fn reallocate_vm_gpus(
+    env: &App,
+    vm_id: Uuid,
+    target_host_id: Uuid,
+    gpu_request: &hosts::GpuRequest,
+) -> Result<(), Error> {
+    let mut tx = env.pool().begin().await?;
+    host_gpus::deallocate_by_vm_tx(&mut tx, vm_id).await?;
+    let allocated = host_gpus::allocate_gpus(
+        &mut tx,
+        target_host_id,
+        vm_id,
+        gpu_request.count,
+        gpu_request.vendor.as_deref(),
+        gpu_request.model.as_deref(),
+        gpu_request.min_vram_bytes,
+    )
+    .await?;
+
+    if (allocated.len() as i32) < gpu_request.count {
+        return Err(Error::UnprocessableEntity(format!(
+            "requested {} GPUs for failover but only {} available on target host",
+            gpu_request.count,
+            allocated.len()
+        )));
+    }
+
+    tx.commit().await?;
+    Ok(())
 }
 
 /// Pool IDs backing the VM's disks (including persistent OverlayBD upper
@@ -352,8 +402,10 @@ async fn pick_failover_host(
     vm: &Vm,
     dead_host_id: Uuid,
     required_pool_ids: &[Uuid],
+    gpu_request: &Option<hosts::GpuRequest>,
 ) -> Result<Host, Error> {
-    let base_request = evacuation_scheduling_request(env, vm, dead_host_id).await?;
+    let base_request =
+        evacuation_scheduling_request(env, vm, dead_host_id, gpu_request.clone()).await?;
     let mut excluded_host_ids = base_request.excluded_host_ids.clone();
 
     loop {
@@ -395,12 +447,13 @@ mod tests {
     use sqlx::{Connection, Executor, PgConnection, PgPool};
     use uuid::Uuid;
 
-    use super::collect_failover_candidates;
+    use super::{collect_failover_candidates, gpu_request_for_vm, reallocate_vm_gpus};
     use crate::{
         App,
         configuration::{default_control_plane_architecture, get_configuration},
         model::{
-            hosts::{self, HostStatus, NewHost},
+            host_gpus::{self, GpuDiscovery},
+            hosts::{self, GpuRequest, HostStatus, NewHost},
             vms::{self, BootMode, Hypervisor, ResolvedNewVm, VmStatus},
         },
     };
@@ -483,11 +536,16 @@ mod tests {
         }
 
         async fn insert_down_host(&self) -> Uuid {
+            self.insert_down_host_with_address("ha-test-host", "127.0.0.1")
+                .await
+        }
+
+        async fn insert_down_host_with_address(&self, name: &str, address: &str) -> Uuid {
             let host_id = hosts::add(
                 &self.pool,
                 &NewHost {
-                    name: "ha-test-host".to_string(),
-                    address: "127.0.0.1".to_string(),
+                    name: name.to_string(),
+                    address: address.to_string(),
                     port: 50051,
                     host_user: "root".to_string(),
                     password: String::new(),
@@ -636,5 +694,185 @@ mod tests {
             .await
             .expect("Failed to list failed-over VMs");
         assert!(listed.is_empty());
+    }
+
+    #[tokio::test]
+    async fn gpu_request_reflects_current_allocation() {
+        let db = TestDatabase::new().await;
+        let host_id = db.insert_down_host().await;
+        let vm_id = db
+            .insert_vm("gpu-vm", host_id, VmStatus::Running, true)
+            .await;
+
+        host_gpus::sync_gpus(
+            &db.pool,
+            host_id,
+            &[GpuDiscovery {
+                pci_address: "0000:00:01.0".to_string(),
+                model: "A100".to_string(),
+                vendor: "nvidia".to_string(),
+                vram_bytes: 80 * 1024 * 1024 * 1024,
+                iommu_group: 1,
+                numa_node: 0,
+            }],
+        )
+        .await
+        .expect("Failed to sync GPUs");
+
+        let mut tx = db.pool.begin().await.expect("Failed to begin tx");
+        let allocated = host_gpus::allocate_gpus(&mut tx, host_id, vm_id, 1, None, None, None)
+            .await
+            .expect("Failed to allocate GPU");
+        assert_eq!(allocated.len(), 1);
+        tx.commit().await.expect("Failed to commit");
+
+        let vm = vms::get(&db.pool, vm_id).await.expect("Failed to get VM");
+        let gpu_request = gpu_request_for_vm(&db.app(), &vm)
+            .await
+            .expect("Failed to compute GPU request")
+            .expect("Expected a GPU request");
+
+        assert_eq!(gpu_request.count, 1);
+        assert_eq!(gpu_request.vendor, Some("nvidia".to_string()));
+        assert_eq!(gpu_request.model, Some("A100".to_string()));
+        assert_eq!(gpu_request.min_vram_bytes, Some(80 * 1024 * 1024 * 1024));
+    }
+
+    #[tokio::test]
+    async fn gpu_request_is_none_without_allocated_gpus() {
+        let db = TestDatabase::new().await;
+        let host_id = db.insert_down_host().await;
+        let vm_id = db
+            .insert_vm("no-gpu-vm", host_id, VmStatus::Running, true)
+            .await;
+
+        let vm = vms::get(&db.pool, vm_id).await.expect("Failed to get VM");
+        let gpu_request = gpu_request_for_vm(&db.app(), &vm)
+            .await
+            .expect("Failed to compute GPU request");
+        assert!(gpu_request.is_none());
+    }
+
+    #[tokio::test]
+    async fn reallocate_vm_gpus_moves_allocation_to_target_host() {
+        let db = TestDatabase::new().await;
+        let dead_host_id = db
+            .insert_down_host_with_address("ha-test-host-dead", "127.0.0.1")
+            .await;
+        let target_host_id = db
+            .insert_down_host_with_address("ha-test-host-target", "127.0.0.2")
+            .await;
+        let vm_id = db
+            .insert_vm("gpu-vm", dead_host_id, VmStatus::Running, true)
+            .await;
+
+        host_gpus::sync_gpus(
+            &db.pool,
+            dead_host_id,
+            &[GpuDiscovery {
+                pci_address: "0000:00:01.0".to_string(),
+                model: "A100".to_string(),
+                vendor: "nvidia".to_string(),
+                vram_bytes: 80 * 1024 * 1024 * 1024,
+                iommu_group: 1,
+                numa_node: 0,
+            }],
+        )
+        .await
+        .expect("Failed to sync GPUs on dead host");
+
+        host_gpus::sync_gpus(
+            &db.pool,
+            target_host_id,
+            &[GpuDiscovery {
+                pci_address: "0000:00:02.0".to_string(),
+                model: "A100".to_string(),
+                vendor: "nvidia".to_string(),
+                vram_bytes: 80 * 1024 * 1024 * 1024,
+                iommu_group: 1,
+                numa_node: 0,
+            }],
+        )
+        .await
+        .expect("Failed to sync GPUs on target host");
+
+        let mut tx = db.pool.begin().await.expect("Failed to begin tx");
+        host_gpus::allocate_gpus(&mut tx, dead_host_id, vm_id, 1, None, None, None)
+            .await
+            .expect("Failed to allocate GPU on dead host");
+        tx.commit().await.expect("Failed to commit");
+
+        let gpu_request = GpuRequest {
+            count: 1,
+            vendor: Some("nvidia".to_string()),
+            model: Some("A100".to_string()),
+            min_vram_bytes: None,
+        };
+        reallocate_vm_gpus(&db.app(), vm_id, target_host_id, &gpu_request)
+            .await
+            .expect("Failed to reallocate GPUs");
+
+        let allocated = host_gpus::list_by_vm(&db.pool, vm_id)
+            .await
+            .expect("Failed to list GPUs by VM");
+        assert_eq!(allocated.len(), 1);
+        assert_eq!(allocated[0].host_id, target_host_id);
+        assert_eq!(allocated[0].pci_address, "0000:00:02.0");
+
+        let dead_host_gpus = host_gpus::list_by_host(&db.pool, dead_host_id)
+            .await
+            .expect("Failed to list GPUs on dead host");
+        assert!(dead_host_gpus[0].vm_id.is_none());
+    }
+
+    #[tokio::test]
+    async fn reallocate_vm_gpus_fails_when_target_lacks_gpus() {
+        let db = TestDatabase::new().await;
+        let dead_host_id = db
+            .insert_down_host_with_address("ha-test-host-dead", "127.0.0.1")
+            .await;
+        let target_host_id = db
+            .insert_down_host_with_address("ha-test-host-target", "127.0.0.2")
+            .await;
+        let vm_id = db
+            .insert_vm("gpu-vm", dead_host_id, VmStatus::Running, true)
+            .await;
+
+        host_gpus::sync_gpus(
+            &db.pool,
+            dead_host_id,
+            &[GpuDiscovery {
+                pci_address: "0000:00:01.0".to_string(),
+                model: "A100".to_string(),
+                vendor: "nvidia".to_string(),
+                vram_bytes: 80 * 1024 * 1024 * 1024,
+                iommu_group: 1,
+                numa_node: 0,
+            }],
+        )
+        .await
+        .expect("Failed to sync GPUs on dead host");
+
+        let mut tx = db.pool.begin().await.expect("Failed to begin tx");
+        host_gpus::allocate_gpus(&mut tx, dead_host_id, vm_id, 1, None, None, None)
+            .await
+            .expect("Failed to allocate GPU on dead host");
+        tx.commit().await.expect("Failed to commit");
+
+        let gpu_request = GpuRequest {
+            count: 1,
+            vendor: Some("nvidia".to_string()),
+            model: Some("A100".to_string()),
+            min_vram_bytes: None,
+        };
+        let result = reallocate_vm_gpus(&db.app(), vm_id, target_host_id, &gpu_request).await;
+        assert!(result.is_err());
+
+        // The original allocation on the dead host must be untouched since
+        // the transaction rolled back without committing the reallocation.
+        let dead_host_gpus = host_gpus::list_by_host(&db.pool, dead_host_id)
+            .await
+            .expect("Failed to list GPUs on dead host");
+        assert_eq!(dead_host_gpus[0].vm_id, Some(vm_id));
     }
 }

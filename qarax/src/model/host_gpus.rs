@@ -196,3 +196,16 @@ pub async fn deallocate_by_vm(pool: &PgPool, vm_id: Uuid) -> Result<u64, sqlx::E
             .await?;
     Ok(result.rows_affected())
 }
+
+/// Release all GPUs allocated to a VM, within an existing transaction.
+pub async fn deallocate_by_vm_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    vm_id: Uuid,
+) -> Result<u64, sqlx::Error> {
+    let result =
+        sqlx::query("UPDATE host_gpus SET vm_id = NULL, updated_at = NOW() WHERE vm_id = $1")
+            .bind(vm_id)
+            .execute(tx.as_mut())
+            .await?;
+    Ok(result.rows_affected())
+}
