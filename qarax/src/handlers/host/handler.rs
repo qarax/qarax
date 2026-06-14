@@ -97,6 +97,7 @@ pub(crate) async fn evacuation_scheduling_request(
     env: &App,
     vm: &Vm,
     source_host_id: Uuid,
+    gpu: Option<hosts::GpuRequest>,
 ) -> Result<hosts::SchedulingRequest> {
     let required_network_ids = network_interfaces::list_by_vm(env.pool(), vm.id)
         .await?
@@ -113,7 +114,7 @@ pub(crate) async fn evacuation_scheduling_request(
         architecture: persisted_vm_architecture(vm),
         storage_pool_id: None,
         required_network_ids,
-        gpu: None,
+        gpu,
         placement_policy: persisted_vm_placement_policy(vm),
         excluded_host_ids: vec![source_host_id],
     })
@@ -124,7 +125,7 @@ async fn pick_evacuation_plan(
     vm: &Vm,
     source_host_id: Uuid,
 ) -> Result<PlannedVmMigration> {
-    let base_request = evacuation_scheduling_request(env, vm, source_host_id).await?;
+    let base_request = evacuation_scheduling_request(env, vm, source_host_id, None).await?;
     let mut excluded_host_ids = base_request.excluded_host_ids.clone();
     let mut last_reason = None;
 
