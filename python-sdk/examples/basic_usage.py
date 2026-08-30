@@ -6,6 +6,7 @@ to manage hosts and virtual machines.
 """
 
 import asyncio
+
 from qarax_api_client import Client
 from qarax_api_client.api.hosts import list_ as list_hosts
 from qarax_api_client.api.vms import list_ as list_vms
