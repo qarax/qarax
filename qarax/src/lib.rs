@@ -12,6 +12,7 @@ pub mod resource_monitor;
 pub mod sandbox_pool_manager;
 pub mod sandbox_reaper;
 pub mod sandbox_runtime;
+pub mod secret_provider;
 pub mod startup;
 pub mod transfer_executor;
 pub mod vm_monitor;
@@ -25,6 +26,7 @@ use std::sync::{
 use crate::configuration::{
     DatabaseSettings, SandboxSettings, SchedulingSettings, VmDefaultsSettings,
 };
+use crate::secret_provider::{ExternalSecretProvider, SecretProvider};
 
 #[cfg(feature = "otel")]
 use common::metrics::Metrics;
@@ -38,6 +40,7 @@ pub struct App {
     sandbox: SandboxSettings,
     control_plane_architecture: Arc<str>,
     maintenance_mode: Arc<AtomicBool>,
+    secret_provider: Arc<dyn SecretProvider>,
     #[cfg(feature = "otel")]
     metrics: Arc<Metrics>,
 }
@@ -74,6 +77,7 @@ impl App {
             sandbox,
             control_plane_architecture: Arc::from(control_plane_architecture),
             maintenance_mode: Arc::new(AtomicBool::new(false)),
+            secret_provider: Arc::new(ExternalSecretProvider),
         }
     }
 
@@ -95,6 +99,7 @@ impl App {
             sandbox,
             control_plane_architecture: Arc::from(control_plane_architecture),
             maintenance_mode: Arc::new(AtomicBool::new(false)),
+            secret_provider: Arc::new(ExternalSecretProvider),
             metrics: Arc::new(Metrics::new(&meter)),
         }
     }
@@ -133,6 +138,10 @@ impl App {
 
     pub fn set_maintenance_mode(&self, enabled: bool) {
         self.maintenance_mode.store(enabled, Ordering::SeqCst);
+    }
+
+    pub fn secret_provider(&self) -> &dyn SecretProvider {
+        self.secret_provider.as_ref()
     }
 
     #[cfg(feature = "otel")]

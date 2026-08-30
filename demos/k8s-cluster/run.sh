@@ -493,8 +493,7 @@ if ! run host get "$HOST_NAME" &>/dev/null; then
 		--name "$HOST_NAME" \
 		--address "$HOST_ADDRESS" \
 		--port 50051 \
-		--user root \
-		--password ""
+		--user root
 	ok "Host created: ${HOST_NAME}"
 else
 	ok "Host already exists: ${HOST_NAME}"

@@ -69,9 +69,7 @@ def _register_and_init_host(client, address, port, name):
     if existing is not None:
         host_id = existing.id
     else:
-        new_host = NewHost(
-            name=name, address=address, port=port, host_user="root", password=""
-        )
+        new_host = NewHost(name=name, address=address, port=port, host_user="root")
         result = add_host.sync_detailed(client=client, body=new_host)
         if result.status_code.value == 201:
             host_id = UUID(result.parsed.strip())

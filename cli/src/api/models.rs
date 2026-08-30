@@ -305,7 +305,8 @@ pub struct NewHost {
     pub address: String,
     pub port: i32,
     pub host_user: String,
-    pub password: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub credential_ref: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reservation_class: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]

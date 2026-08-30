@@ -179,7 +179,7 @@ if [[ "$pool_exists" -gt 0 ]]; then
 else
 	# Register host if not already present
 	if ! $QARAX host list 2>/dev/null | grep -q "$HOST_NAME"; then
-		$QARAX host add --name "$HOST_NAME" --address qarax-node --port 50051 --user root --password ""
+		$QARAX host add --name "$HOST_NAME" --address qarax-node --port 50051 --user root
 	fi
 
 	# Init host with retries (qarax-node may still be starting)

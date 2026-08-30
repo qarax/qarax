@@ -454,9 +454,8 @@ register_host() {
 		--arg name "${host_name}" \
 		--arg address "${vm_ip}" \
 		--arg host_user "${SSH_USER}" \
-		--arg password "" \
 		--argjson port "${NODE_PORT}" \
-		'{name:$name,address:$address,port:$port,host_user:$host_user,password:$password}')"
+		'{name:$name,address:$address,port:$port,host_user:$host_user}')"
 
 	local body_file code host_id
 	body_file="$(mktemp)"

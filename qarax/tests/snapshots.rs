@@ -112,8 +112,7 @@ async fn ensure_host_up(client: &reqwest::Client, address: &str) -> String {
             "name": "test-host",
             "address": "127.0.0.1",
             "port": 50051,
-            "host_user": "root",
-            "password": ""
+            "host_user": "root"
         }))
         .send()
         .await

@@ -81,6 +81,36 @@ qarax host init node-01
 
 See the [qarax-node README](qarax-node/) for runtime dependencies and configuration.
 
+### Host credentials
+
+For new hosts, keep SSH passwords outside Qarax and register an external credential reference:
+
+```bash
+# Resolve from the qarax process environment.
+export NODE_01_SSH_PASSWORD='...'
+qarax host add --name node-01 --address 192.0.2.10 --user root \
+  --credential-ref env://NODE_01_SSH_PASSWORD
+
+# Resolve from a secret mounted into the qarax container.
+qarax host add --name node-02 --address 192.0.2.11 --user root \
+  --credential-ref file:///run/secrets/node-02-ssh-password
+```
+
+Environment variables and mounted files are read only when a host deploy or upgrade starts. The
+reference is stored in PostgreSQL, but neither references nor resolved secrets are returned by the
+API or written to logs. File references must use absolute paths visible inside every control-plane
+replica. Environment variables must likewise be configured consistently on every replica.
+
+Native secret-manager API providers are not yet included. Vault Agent, Secrets Store CSI Driver,
+and similar sidecars can expose secrets as mounted files for `file://` references. Direct
+`vault://`, AWS Secrets Manager, GCP Secret Manager, and Azure Key Vault references require a
+future provider implementation.
+
+Qarax does not store host passwords. A migration drops the former `hosts.password` column, so
+operators upgrading from an older release must register credential references before the next
+deploy or upgrade. A deploy request may still supply an operation-scoped password or private-key
+path; those values are used for that operation and are never persisted.
+
 ## VM boot configuration
 
 Default boot artifacts are configured per environment in `configuration/` (`base.yaml`, `local.yaml`, `production.yaml`), selected by the `APP_ENVIRONMENT` env var (default: `local`):

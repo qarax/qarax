@@ -20,6 +20,7 @@ use crate::{
 };
 use axum::{Extension, Json, extract::Path};
 use http::StatusCode;
+use secrecy::ExposeSecret;
 use serde::Serialize;
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -263,13 +264,14 @@ pub async fn list(
     ),
     tag = "hosts"
 )]
-#[instrument(skip(env))]
+#[instrument(skip(env, host))]
 pub async fn add(
     Extension(env): Extension<App>,
     Json(host): Json<NewHost>,
 ) -> Result<axum::response::Response> {
     host.validate_unique_name(env.pool()).await?;
     host.validate_placement()?;
+    host.validate_credentials()?;
     let host_name = host.name.clone();
     let id = hosts::add(env.pool(), &host).await?;
 
@@ -523,15 +525,19 @@ pub async fn evacuate(
     ),
     tag = "hosts"
 )]
-#[instrument(skip(env))]
+#[instrument(skip(env, body))]
 pub async fn deploy(
     Extension(env): Extension<App>,
     Path(host_id): Path<Uuid>,
-    Json(body): Json<DeployHostRequest>,
+    Json(mut body): Json<DeployHostRequest>,
 ) -> Result<axum::response::Response> {
     body.validate()?;
 
-    let host = hosts::require_by_id(env.pool(), host_id).await?;
+    let mut host = hosts::require_by_id(env.pool(), host_id).await?;
+    if body.ssh_password.is_none() && body.ssh_private_key_path.is_none() {
+        body.ssh_password = resolved_host_password(&env, &host)?;
+    }
+    host.credential_ref = None;
     let host_name = host.name.clone();
     hosts::update_status(env.pool(), host_id, HostStatus::Installing).await?;
 
@@ -770,7 +776,7 @@ mod tests {
                     address: "127.0.0.1".to_string(),
                     port: 50051,
                     host_user: "root".to_string(),
-                    password: String::new(),
+                    credential_ref: None,
                     reservation_class: None,
                     placement_labels: std::collections::BTreeMap::new(),
                 },
@@ -921,7 +927,7 @@ pub async fn node_upgrade(
     Extension(env): Extension<App>,
     Path(host_id): Path<Uuid>,
 ) -> Result<(StatusCode, String)> {
-    let host = hosts::require_by_id(env.pool(), host_id).await?;
+    let mut host = hosts::require_by_id(env.pool(), host_id).await?;
 
     let image = host.last_deployed_image.clone().ok_or_else(|| {
         crate::errors::Error::UnprocessableEntity(
@@ -929,16 +935,17 @@ pub async fn node_upgrade(
         )
     })?;
 
-    let password = String::from_utf8(host.password.clone()).unwrap_or_default();
+    let password = resolved_host_password(&env, &host)?.ok_or_else(|| {
+        crate::errors::Error::UnprocessableEntity(
+            "host has no credential reference; register one before upgrading".to_string(),
+        )
+    })?;
+    host.credential_ref = None;
     let deploy_request = DeployHostRequest {
         image,
         ssh_port: None,
         ssh_user: Some(host.host_user.clone()),
-        ssh_password: if password.is_empty() {
-            None
-        } else {
-            Some(password)
-        },
+        ssh_password: Some(password),
         ssh_private_key_path: None,
         install_bootc: Some(false),
         reboot: Some(true),
@@ -949,6 +956,17 @@ pub async fn node_upgrade(
     spawn_deploy(env.pool_arc(), host, deploy_request, host_id);
 
     Ok((StatusCode::ACCEPTED, "Node upgrade started".to_string()))
+}
+
+fn resolved_host_password(env: &App, host: &Host) -> Result<Option<String>> {
+    if let Some(credential_ref) = host.credential_ref.as_deref() {
+        let secret = env.secret_provider().resolve(credential_ref).map_err(|error| {
+            tracing::error!(host_id = %host.id, error = %error, "Failed to resolve host credential");
+            crate::errors::Error::InternalServerError
+        })?;
+        return Ok(Some(secret.expose_secret().to_owned()));
+    }
+    Ok(None)
 }
 
 #[utoipa::path(

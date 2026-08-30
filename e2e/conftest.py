@@ -238,7 +238,6 @@ def ensure_host_registered():
                 address=address,
                 port=QARAX_NODE_PORT,
                 host_user="root",
-                password="",
             )
             result = add_host.sync_detailed(client=client, body=new_host)
             if result.status_code.value == 201:

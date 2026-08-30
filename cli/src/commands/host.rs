@@ -47,9 +47,9 @@ enum HostCommand {
         /// SSH user
         #[arg(long)]
         user: String,
-        /// SSH password (omit for key-based auth)
-        #[arg(long, default_value = "")]
-        password: String,
+        /// External SSH password reference (env://NAME or file:///absolute/path)
+        #[arg(long)]
+        credential_ref: Option<String>,
         /// Optional reservation class for policy-based placement
         #[arg(long)]
         reservation_class: Option<String>,
@@ -315,7 +315,7 @@ pub async fn run(args: HostArgs, client: &Client, output: OutputFormat) -> anyho
             address,
             port,
             user,
-            password,
+            credential_ref,
             reservation_class,
             labels,
         } => {
@@ -325,7 +325,7 @@ pub async fn run(args: HostArgs, client: &Client, output: OutputFormat) -> anyho
                 address,
                 port,
                 host_user: user,
-                password,
+                credential_ref,
                 reservation_class,
                 placement_labels,
             };

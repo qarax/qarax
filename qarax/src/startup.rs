@@ -21,8 +21,10 @@ pub async fn run(
     sandbox: SandboxSettings,
     ha: HaSettings,
     control_plane_architecture: String,
-) -> Result<impl IntoFuture<Output = std::io::Result<()>> + Send, Box<dyn std::error::Error + Send>>
-{
+) -> Result<
+    impl IntoFuture<Output = std::io::Result<()>> + Send,
+    Box<dyn std::error::Error + Send + Sync>,
+> {
     crate::model::events::init_event_bus();
 
     let a = App::new(

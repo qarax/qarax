@@ -112,8 +112,7 @@ async fn add_host(client: &reqwest::Client, address: &str, name: &str, port: u16
             "name": name,
             "address": "127.0.0.1",
             "port": port,
-            "host_user": "root",
-            "password": ""
+            "host_user": "root"
         }))
         .send()
         .await
@@ -214,8 +213,7 @@ async fn test_failed_host_create_does_not_record_audit_log() {
             "name": host_name,
             "address": "127.0.0.1",
             "port": 50052,
-            "host_user": "root",
-            "password": ""
+            "host_user": "root"
         }))
         .send()
         .await

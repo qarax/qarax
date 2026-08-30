@@ -131,7 +131,7 @@ def upgrade_host_id():
             address=UPGRADE_TEST_NODE_HOST,
             port=UPGRADE_TEST_NODE_PORT,
             host_user="root",
-            password="testpassword",
+            credential_ref="env://E2E_UPGRADE_SSH_PASSWORD",
         ),
     )
     assert result.status_code.value == 201, (

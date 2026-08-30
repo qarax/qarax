@@ -15,7 +15,7 @@ use uuid::Uuid;
 struct TestApp {
     pub db_name: String,
     pub address: String,
-    pub _pool: PgPool,
+    pub pool: PgPool,
 }
 
 static TRACING: Lazy<()> = Lazy::new(|| {
@@ -81,7 +81,7 @@ async fn spawn_app() -> TestApp {
     TestApp {
         db_name: configuration.database.name,
         address,
-        _pool: connection_pool,
+        pool: connection_pool,
     }
 }
 
@@ -101,7 +101,7 @@ async fn test_add_host() {
         address: String::from("127.0.0.1"),
         port: 8080,
         host_user: String::from("root"),
-        password: String::from("pass"),
+        credential_ref: None,
         reservation_class: None,
         placement_labels: std::collections::BTreeMap::new(),
     };
@@ -112,7 +112,83 @@ async fn test_add_host() {
         .json(&host)
         .send()
         .await;
-    assert_eq!(res.unwrap().status(), StatusCode::CREATED);
+    let response = res.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    response.text().await.unwrap().parse::<Uuid>().unwrap();
+
+    let response = client
+        .get(format!("{}/hosts", &app.address))
+        .send()
+        .await
+        .unwrap();
+    let body = response.text().await.unwrap();
+    assert!(!body.contains("password"));
+    assert!(!body.contains("112,97,115,115"));
+}
+
+#[tokio::test]
+async fn test_add_host_stores_only_credential_reference_and_hides_it() {
+    let app = spawn_app().await;
+    let reference = "env://QARAX_TEST_HOST_PASSWORD";
+    let client = reqwest::Client::new();
+    let response = client
+        .post(format!("{}/hosts", &app.address))
+        .json(&serde_json::json!({
+            "name": "referenced-host",
+            "address": "127.0.0.1",
+            "port": 22,
+            "host_user": "root",
+            "credential_ref": reference,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let host_id: Uuid = response.text().await.unwrap().parse().unwrap();
+
+    let stored_reference: Option<String> =
+        sqlx::query_scalar("SELECT credential_ref FROM hosts WHERE id = $1")
+            .bind(host_id)
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+    assert_eq!(stored_reference.as_deref(), Some(reference));
+
+    let response = client
+        .get(format!("{}/hosts", &app.address))
+        .send()
+        .await
+        .unwrap();
+    let body = response.text().await.unwrap();
+    assert!(!body.contains("credential_ref"));
+    assert!(!body.contains("QARAX_TEST_HOST_PASSWORD"));
+
+    let response = client
+        .post(format!("{}/hosts/{host_id}/deploy", &app.address))
+        .json(&serde_json::json!({ "image": "example.invalid/qarax:test" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(!response.text().await.unwrap().contains(reference));
+}
+
+#[tokio::test]
+async fn test_add_host_rejects_legacy_password_field() {
+    let app = spawn_app().await;
+    let response = reqwest::Client::new()
+        .post(format!("{}/hosts", &app.address))
+        .json(&serde_json::json!({
+            "name": "ambiguous-credentials",
+            "address": "127.0.0.1",
+            "port": 22,
+            "host_user": "root",
+            "password": "legacy-secret",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }
 
 impl Drop for TestApp {
