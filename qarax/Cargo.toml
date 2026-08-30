@@ -43,12 +43,12 @@ secrecy = { version = "0.8.0", features = ["serde"] }
 hyper = { version = "1.0.1", features = ["full"] }
 config = "0.13.4"
 macaddr = { version = "1.0.1", features = ["serde"] }
-reqwest = { version = "0.11", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 hmac = "0.12"
 sha2 = "0.10"
 hex = "0.4"
-tonic = "0.10.2"
-prost = "0.12.3"
+tonic = "0.12.3"
+prost = "0.13.5"
 russh = "0.60.3"
 # russh 0.60.x pulls pkcs8-0.11.0-rc.11 which requires pkcs5 0.8.0-rc.13; pin to
 # prevent Cargo from upgrading to pkcs5 0.8.0 stable where ::recommended was renamed.
@@ -69,4 +69,4 @@ once_cell = "1.18.0"
 tempfile = "3"
 
 [build-dependencies]
-tonic-build = "0.10.2"
+tonic-build = "0.12.3"
