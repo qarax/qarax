@@ -43,7 +43,6 @@ def create_host() -> dict[str, str]:
         "address": f"192.0.2.{int(suffix[:2], 16) % 250 + 1}",
         "port": 50051,
         "host_user": "root",
-        "password": "",
     }
     resp = httpx.post(f"{QARAX_URL}/hosts", json=host, headers=AUTH_HEADERS)
     resp.raise_for_status()

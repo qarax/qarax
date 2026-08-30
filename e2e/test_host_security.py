@@ -1,11 +1,11 @@
 import httpx
 import uuid
 
-from helpers import QARAX_URL
+from helpers import AUTH_HEADERS, QARAX_URL
 
 
 def test_host_credentials_are_not_exposed():
-    response = httpx.get(f"{QARAX_URL}/hosts", timeout=10)
+    response = httpx.get(f"{QARAX_URL}/hosts", headers=AUTH_HEADERS, timeout=10)
     response.raise_for_status()
 
     hosts = response.json()
@@ -25,12 +25,15 @@ def test_environment_credential_reference_is_resolved_but_never_exposed():
             # DATABASE_HOST is always present in the qarax E2E container.
             "credential_ref": "env://DATABASE_HOST",
         },
+        headers=AUTH_HEADERS,
         timeout=10,
     )
     response.raise_for_status()
     host_id = response.text
 
-    hosts_response = httpx.get(f"{QARAX_URL}/hosts", timeout=10)
+    hosts_response = httpx.get(
+        f"{QARAX_URL}/hosts", headers=AUTH_HEADERS, timeout=10
+    )
     hosts_response.raise_for_status()
     serialized = hosts_response.text
     assert "credential_ref" not in serialized
@@ -40,6 +43,7 @@ def test_environment_credential_reference_is_resolved_but_never_exposed():
     deploy_response = httpx.post(
         f"{QARAX_URL}/hosts/{host_id}/deploy",
         json={"image": "example.invalid/qarax:test", "reboot": False},
+        headers=AUTH_HEADERS,
         timeout=10,
     )
     assert deploy_response.status_code == 202
