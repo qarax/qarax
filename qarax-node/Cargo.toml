@@ -64,7 +64,7 @@ num_cpus = "1"
 opentelemetry = { version = "0.31", optional = true }
 tracing-opentelemetry = { version = "0.32", optional = true }
 tower = { version = "0.4", optional = true }
-http = { version = "0.2", optional = true }
+http = { version = "1", optional = true }
 
 # Heap profiling (behind "dhat-heap" feature — never enable in production builds)
 dhat = { version = "0.3", optional = true }

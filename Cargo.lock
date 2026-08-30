@@ -3847,7 +3847,7 @@ dependencies = [
  "flate2",
  "futures",
  "gethostname 0.4.3",
- "http 0.2.12",
+ "http 1.4.0",
  "http-body-util",
  "hyper 1.9.0",
  "netlink-packet-route",
