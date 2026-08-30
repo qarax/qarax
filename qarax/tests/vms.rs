@@ -122,8 +122,7 @@ async fn ensure_host_up_with_name(
             "name": name,
             "address": "127.0.0.1",
             "port": port,
-            "host_user": "root",
-            "password": ""
+            "host_user": "root"
         }))
         .send()
         .await

@@ -560,7 +560,7 @@ mod tests {
                     address: address.to_string(),
                     port: 50051,
                     host_user: "root".to_string(),
-                    password: String::new(),
+                    credential_ref: None,
                     reservation_class: None,
                     placement_labels: std::collections::BTreeMap::new(),
                 },

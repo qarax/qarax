@@ -176,7 +176,7 @@ async fn run_ssh_command(
         return Err(DeployError::MissingSshUser);
     }
 
-    let password = resolve_password(host, request);
+    let password = resolve_password(request);
     let mut session = connect_and_authenticate(host, request, &ssh_user, password).await?;
     let command_result =
         execute_remote_command(&mut session, remote_command, allow_disconnect).await;
@@ -293,7 +293,7 @@ async fn execute_remote_command(
     }
 }
 
-fn resolve_password(host: &Host, request: &DeployHostRequest) -> Option<String> {
+fn resolve_password(request: &DeployHostRequest) -> Option<String> {
     let request_password = request
         .ssh_password
         .as_ref()
@@ -307,12 +307,7 @@ fn resolve_password(host: &Host, request: &DeployHostRequest) -> Option<String> 
         return None;
     }
 
-    let host_password = String::from_utf8_lossy(&host.password).trim().to_string();
-    if host_password.is_empty() {
-        None
-    } else {
-        Some(host_password)
-    }
+    None
 }
 
 fn expand_private_key_path(path: &str) -> Result<PathBuf, DeployError> {

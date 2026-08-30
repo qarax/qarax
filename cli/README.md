@@ -80,8 +80,9 @@ anti-affinity, spread, and maintenance-aware placement interact, see
 ### Hosts
 
 ```bash
-# Add a host (password auth)
-qarax host add --name node-01 --address 192.168.1.10 --user root --password secret
+# Add a host using an external password reference
+export NODE_01_SSH_PASSWORD='...'
+qarax host add --name node-01 --address 192.168.1.10 --user root --credential-ref env://NODE_01_SSH_PASSWORD
 
 # Add a host with placement metadata
 qarax host add --name node-02 --address 192.168.1.11 --user root \
@@ -361,7 +362,7 @@ qarax job get <job-uuid>
 qarax configure --server http://localhost:8000
 
 # 1. Add and initialize a host
-qarax host add --name node-01 --address 192.168.1.10 --user root --password secret
+qarax host add --name node-01 --address 192.168.1.10 --user root --credential-ref file:///run/secrets/node-01-password
 qarax host init node-01
 
 # 2. Create a local storage pool on the host

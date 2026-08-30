@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from attrs import define as _attrs_define
-from attrs import field as _attrs_field
 
 from ..types import UNSET, Unset
 
@@ -21,8 +20,9 @@ class NewHost:
         address (str):
         host_user (str):
         name (str):
-        password (str):
         port (int):
+        credential_ref (None | str | Unset): External SSH password reference (`env://NAME` or `file:///absolute/path`).
+            Accepted on input but never returned by host APIs.
         placement_labels (NewHostPlacementLabels | Unset): Arbitrary placement labels for scheduler filters and
             preferences.
         reservation_class (None | str | Unset): Optional reservation class this host belongs to.
@@ -31,11 +31,10 @@ class NewHost:
     address: str
     host_user: str
     name: str
-    password: str
     port: int
+    credential_ref: None | str | Unset = UNSET
     placement_labels: NewHostPlacementLabels | Unset = UNSET
     reservation_class: None | str | Unset = UNSET
-    additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         address = self.address
@@ -44,9 +43,13 @@ class NewHost:
 
         name = self.name
 
-        password = self.password
-
         port = self.port
+
+        credential_ref: None | str | Unset
+        if isinstance(self.credential_ref, Unset):
+            credential_ref = UNSET
+        else:
+            credential_ref = self.credential_ref
 
         placement_labels: dict[str, Any] | Unset = UNSET
         if not isinstance(self.placement_labels, Unset):
@@ -59,16 +62,17 @@ class NewHost:
             reservation_class = self.reservation_class
 
         field_dict: dict[str, Any] = {}
-        field_dict.update(self.additional_properties)
+
         field_dict.update(
             {
                 "address": address,
                 "host_user": host_user,
                 "name": name,
-                "password": password,
                 "port": port,
             }
         )
+        if credential_ref is not UNSET:
+            field_dict["credential_ref"] = credential_ref
         if placement_labels is not UNSET:
             field_dict["placement_labels"] = placement_labels
         if reservation_class is not UNSET:
@@ -87,9 +91,16 @@ class NewHost:
 
         name = d.pop("name")
 
-        password = d.pop("password")
-
         port = d.pop("port")
+
+        def _parse_credential_ref(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        credential_ref = _parse_credential_ref(d.pop("credential_ref", UNSET))
 
         _placement_labels = d.pop("placement_labels", UNSET)
         placement_labels: NewHostPlacementLabels | Unset
@@ -111,27 +122,10 @@ class NewHost:
             address=address,
             host_user=host_user,
             name=name,
-            password=password,
             port=port,
+            credential_ref=credential_ref,
             placement_labels=placement_labels,
             reservation_class=reservation_class,
         )
 
-        new_host.additional_properties = d
         return new_host
-
-    @property
-    def additional_keys(self) -> list[str]:
-        return list(self.additional_properties.keys())
-
-    def __getitem__(self, key: str) -> Any:
-        return self.additional_properties[key]
-
-    def __setitem__(self, key: str, value: Any) -> None:
-        self.additional_properties[key] = value
-
-    def __delitem__(self, key: str) -> None:
-        del self.additional_properties[key]
-
-    def __contains__(self, key: str) -> bool:
-        return key in self.additional_properties

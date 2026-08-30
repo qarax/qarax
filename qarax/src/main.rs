@@ -88,6 +88,7 @@ async fn main() -> std::io::Result<()> {
         }
         Err(e) => {
             tracing::error!("Server failed to start: {}", e);
+            return Err(std::io::Error::other(e));
         }
     }
 

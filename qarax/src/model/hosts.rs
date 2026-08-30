@@ -14,7 +14,7 @@ use crate::errors;
 /// The version of the control-plane binary, used to detect out-of-date nodes.
 pub const CONTROL_PLANE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-const HOST_COLUMNS: &str = "id, name, address, port, host_user, password, status, cloud_hypervisor_version, firecracker_version, kernel_version, node_version, last_deployed_image, reservation_class, placement_labels, architecture, total_cpus, total_memory_bytes, available_memory_bytes, load_average, disk_total_bytes, disk_available_bytes, resources_updated_at";
+const HOST_COLUMNS: &str = "id, name, address, port, host_user, credential_ref, status, cloud_hypervisor_version, firecracker_version, kernel_version, node_version, last_deployed_image, reservation_class, placement_labels, architecture, total_cpus, total_memory_bytes, available_memory_bytes, load_average, disk_total_bytes, disk_available_bytes, resources_updated_at";
 
 /// Build a Host from a sqlx Row containing all host columns.
 fn host_from_row(r: &sqlx::postgres::PgRow) -> Host {
@@ -28,7 +28,7 @@ fn host_from_row(r: &sqlx::postgres::PgRow) -> Host {
         address: r.get("address"),
         port: r.get("port"),
         host_user: r.get("host_user"),
-        password: r.get("password"),
+        credential_ref: r.get("credential_ref"),
         status: r.get("status"),
         cloud_hypervisor_version: r.get("cloud_hypervisor_version"),
         firecracker_version: r.get("firecracker_version"),
@@ -51,7 +51,7 @@ fn host_from_row(r: &sqlx::postgres::PgRow) -> Host {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
+#[derive(Serialize, Deserialize, Clone, ToSchema)]
 pub struct Host {
     pub id: Uuid,
     pub name: String,
@@ -60,8 +60,9 @@ pub struct Host {
     pub status: HostStatus,
     pub host_user: String,
 
-    #[serde(skip_deserializing)]
-    pub password: Vec<u8>,
+    #[serde(skip)]
+    #[schema(ignore)]
+    pub credential_ref: Option<String>,
 
     pub cloud_hypervisor_version: Option<String>,
     pub firecracker_version: Option<String>,
@@ -87,6 +88,18 @@ pub struct Host {
     pub disk_total_bytes: Option<i64>,
     pub disk_available_bytes: Option<i64>,
     pub resources_updated_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+impl std::fmt::Debug for Host {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Host")
+            .field("id", &self.id)
+            .field("name", &self.name)
+            .field("address", &self.address)
+            .field("status", &self.status)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(
@@ -120,7 +133,7 @@ pub struct UpdateHostPlacementRequest {
     pub placement_labels: BTreeMap<String, String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
+#[derive(Serialize, Deserialize, Clone, ToSchema)]
 pub struct DeployHostRequest {
     /// Fully-qualified bootc image reference to deploy on the host.
     pub image: String,
@@ -136,6 +149,18 @@ pub struct DeployHostRequest {
     pub install_bootc: Option<bool>,
     /// Reboot after `bootc switch`. Defaults to true.
     pub reboot: Option<bool>,
+}
+
+impl std::fmt::Debug for DeployHostRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DeployHostRequest")
+            .field("image", &self.image)
+            .field("ssh_port", &self.ssh_port)
+            .field("install_bootc", &self.install_bootc)
+            .field("reboot", &self.reboot)
+            .finish_non_exhaustive()
+    }
 }
 
 impl DeployHostRequest {
@@ -192,7 +217,8 @@ impl DeployHostRequest {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Validate, ToSchema)]
+#[derive(Serialize, Deserialize, Clone, Validate, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct NewHost {
     #[validate(length(min = 1, max = 255))]
     pub name: String,
@@ -202,12 +228,26 @@ pub struct NewHost {
     pub port: i32,
 
     pub host_user: String,
-    pub password: String,
+    /// External SSH password reference (`env://NAME` or `file:///absolute/path`).
+    /// Accepted on input but never returned by host APIs.
+    pub credential_ref: Option<String>,
     /// Optional reservation class this host belongs to.
     pub reservation_class: Option<String>,
     /// Arbitrary placement labels for scheduler filters and preferences.
     #[serde(default)]
     pub placement_labels: BTreeMap<String, String>,
+}
+
+impl std::fmt::Debug for NewHost {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("NewHost")
+            .field("name", &self.name)
+            .field("address", &self.address)
+            .field("port", &self.port)
+            .field("host_user", &self.host_user)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -262,6 +302,14 @@ impl NewHost {
 
     pub fn validate_placement(&self) -> Result<(), errors::Error> {
         validate_placement_fields(self.reservation_class.as_deref(), &self.placement_labels)
+    }
+
+    pub fn validate_credentials(&self) -> Result<(), errors::Error> {
+        if let Some(credential_ref) = self.credential_ref.as_deref() {
+            crate::secret_provider::validate_credential_ref(credential_ref)
+                .map_err(|error| errors::Error::UnprocessableEntity(error.to_string()))?;
+        }
+        Ok(())
     }
 }
 
@@ -325,7 +373,7 @@ pub async fn add(pool: &PgPool, host: &NewHost) -> Result<Uuid, sqlx::Error> {
             address,
             port,
             host_user,
-            password,
+            credential_ref,
             status,
             reservation_class,
             placement_labels
@@ -338,7 +386,7 @@ pub async fn add(pool: &PgPool, host: &NewHost) -> Result<Uuid, sqlx::Error> {
     .bind(&host.address)
     .bind(host.port)
     .bind(&host.host_user)
-    .bind(host.password.as_bytes())
+    .bind(host.credential_ref.as_deref())
     .bind(HostStatus::Down)
     .bind(host.reservation_class.as_deref())
     .bind(Json(&host.placement_labels))
@@ -399,7 +447,7 @@ pub async fn pick_host_tx(
 ) -> Result<Option<Host>, sqlx::Error> {
     let mut qb = QueryBuilder::<Postgres>::new(
         r#"
-SELECT h.id, h.name, h.address, h.port, h.host_user, h.password,
+SELECT h.id, h.name, h.address, h.port, h.host_user, h.credential_ref,
         h.status, h.cloud_hypervisor_version, h.firecracker_version, h.kernel_version,
        h.node_version, h.last_deployed_image, h.reservation_class, h.placement_labels,
        h.architecture,
@@ -792,7 +840,7 @@ mod tests {
                     address: format!("127.0.0.{address_suffix}"),
                     port: 50051,
                     host_user: "root".to_string(),
-                    password: String::new(),
+                    credential_ref: None,
                     reservation_class: None,
                     placement_labels: BTreeMap::new(),
                 },

@@ -66,8 +66,7 @@ else
 				--name "$HOST_NAME" \
 				--address "$QARAX_NODE_HOST" \
 				--port "$QARAX_NODE_PORT" \
-				--user root \
-				--password "" 2>&1
+				--user root 2>&1
 		); then
 			[[ -n "$add_output" ]] && echo "$add_output"
 			break

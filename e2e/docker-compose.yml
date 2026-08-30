@@ -87,6 +87,7 @@ services:
     environment:
       DATABASE_URL: postgres://qarax:qarax@postgres:5432/qarax
       DATABASE_HOST: postgres
+      E2E_UPGRADE_SSH_PASSWORD: ${E2E_UPGRADE_SSH_PASSWORD:-testpassword}
       APP_ENVIRONMENT: local
       QARAX_CONFIG_DIR: /app/configuration
       OTEL_ENABLED: ${OTEL_ENABLED:-false}

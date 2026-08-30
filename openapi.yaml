@@ -3988,15 +3988,19 @@ components:
       - address
       - port
       - host_user
-      - password
       properties:
         address:
           type: string
+        credential_ref:
+          type:
+          - string
+          - 'null'
+          description: |-
+            External SSH password reference (`env://NAME` or `file:///absolute/path`).
+            Accepted on input but never returned by host APIs.
         host_user:
           type: string
         name:
-          type: string
-        password:
           type: string
         placement_labels:
           type: object
@@ -4013,6 +4017,7 @@ components:
           - string
           - 'null'
           description: Optional reservation class this host belongs to.
+      additionalProperties: false
     NewInstanceType:
       type: object
       required:
