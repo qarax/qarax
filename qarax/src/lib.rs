@@ -1,3 +1,4 @@
+pub mod auth;
 pub mod configuration;
 pub mod database;
 pub mod errors;
@@ -24,7 +25,7 @@ use std::sync::{
 };
 
 use crate::configuration::{
-    DatabaseSettings, SandboxSettings, SchedulingSettings, VmDefaultsSettings,
+    AuthSettings, DatabaseSettings, SandboxSettings, SchedulingSettings, VmDefaultsSettings,
 };
 use crate::secret_provider::{ExternalSecretProvider, SecretProvider};
 
@@ -38,6 +39,7 @@ pub struct App {
     vm_defaults: VmDefaultsSettings,
     scheduling: SchedulingSettings,
     sandbox: SandboxSettings,
+    auth: AuthSettings,
     control_plane_architecture: Arc<str>,
     maintenance_mode: Arc<AtomicBool>,
     secret_provider: Arc<dyn SecretProvider>,
@@ -61,12 +63,14 @@ impl std::fmt::Debug for App {
 
 impl App {
     #[cfg(not(feature = "otel"))]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         pool: PgPool,
         database: DatabaseSettings,
         vm_defaults: VmDefaultsSettings,
         scheduling: SchedulingSettings,
         sandbox: SandboxSettings,
+        auth: AuthSettings,
         control_plane_architecture: String,
     ) -> Self {
         Self {
@@ -75,6 +79,7 @@ impl App {
             vm_defaults,
             scheduling,
             sandbox,
+            auth,
             control_plane_architecture: Arc::from(control_plane_architecture),
             maintenance_mode: Arc::new(AtomicBool::new(false)),
             secret_provider: Arc::new(ExternalSecretProvider),
@@ -82,12 +87,14 @@ impl App {
     }
 
     #[cfg(feature = "otel")]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         pool: PgPool,
         database: DatabaseSettings,
         vm_defaults: VmDefaultsSettings,
         scheduling: SchedulingSettings,
         sandbox: SandboxSettings,
+        auth: AuthSettings,
         control_plane_architecture: String,
     ) -> Self {
         let meter = opentelemetry::global::meter("qarax");
@@ -97,6 +104,7 @@ impl App {
             vm_defaults,
             scheduling,
             sandbox,
+            auth,
             control_plane_architecture: Arc::from(control_plane_architecture),
             maintenance_mode: Arc::new(AtomicBool::new(false)),
             secret_provider: Arc::new(ExternalSecretProvider),
@@ -126,6 +134,10 @@ impl App {
 
     pub fn sandbox(&self) -> &SandboxSettings {
         &self.sandbox
+    }
+
+    pub fn auth(&self) -> &AuthSettings {
+        &self.auth
     }
 
     pub fn control_plane_architecture(&self) -> &str {

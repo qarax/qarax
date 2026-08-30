@@ -117,15 +117,15 @@ def webhook_server():
 
 @pytest.fixture
 def client():
-    return Client(base_url=QARAX_URL)
+    return Client(base_url=QARAX_URL, headers=AUTH_HEADERS)
 
 
 @pytest.fixture
 def http_client():
-    return httpx.Client(base_url=QARAX_URL)
+    return httpx.Client(base_url=QARAX_URL, headers=AUTH_HEADERS)
 
 
-from helpers import call_api, wait_for_status
+from helpers import AUTH_HEADERS, call_api, wait_for_status
 
 
 # ---------------------------------------------------------------------------

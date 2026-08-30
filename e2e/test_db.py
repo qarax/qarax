@@ -5,13 +5,14 @@ from qarax_api_client.api.hosts import list_ as list_hosts
 from qarax_api_client.models import NewNetwork
 from qarax_api_client.models.attach_host_request import AttachHostRequest
 from qarax_api_client import Client
+from helpers import AUTH_HEADERS
 import uuid
 
 async def run():
     import contextlib
     @contextlib.asynccontextmanager
     async def make_client():
-        c = Client(base_url=QARAX_URL)
+        c = Client(base_url=QARAX_URL, headers=AUTH_HEADERS)
         yield c
         
     async with make_client() as c:

@@ -24,6 +24,11 @@ export CLOUD_HYPERVISOR_VERSION
 : "${FIRECRACKER_VERSION:=$(cat ../versions/firecracker-version)}"
 export FIRECRACKER_VERSION
 
+# qarax CLI auth token, must match AUTH_TOKENS configured for the qarax
+# service in docker-compose.yml (see e2e/helpers.py).
+: "${QARAX_TOKEN:=${QARAX_TEST_TOKEN:-e2e-test-token}}"
+export QARAX_TOKEN
+
 default_webhook_host() {
 	if [ "$(uname -s)" != "Linux" ]; then
 		echo "host.docker.internal"

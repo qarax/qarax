@@ -5626,6 +5626,12 @@ components:
           - string
           - 'null'
           format: uuid
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+security:
+- bearerAuth: []
 tags:
 - name: hosts
   description: Host management endpoints

@@ -25,3 +25,6 @@ ha:
 telemetry:
   otel_enabled: false
   otlp_endpoint: "http://localhost:4318"
+auth:
+  enabled: false
+  tokens: []

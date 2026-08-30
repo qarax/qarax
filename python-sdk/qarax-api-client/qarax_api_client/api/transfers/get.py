@@ -15,6 +15,7 @@ def _get_kwargs(
     pool_id: UUID,
     transfer_id: UUID,
 ) -> dict[str, Any]:
+
     _kwargs: dict[str, Any] = {
         "method": "get",
         "url": "/storage-pools/{pool_id}/transfers/{transfer_id}".format(

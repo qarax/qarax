@@ -41,7 +41,7 @@ from qarax_api_client.models import (
 
 VM_OPERATION_TIMEOUT = 30
 
-from helpers import QARAX_URL, call_api, call_api_detailed, wait_for_status
+from helpers import AUTH_HEADERS, QARAX_URL, call_api, call_api_detailed, wait_for_status
 from test_sandboxes import (
     cleanup_bootable_sandbox_template,
     create_bootable_sandbox_template,
@@ -51,7 +51,7 @@ from test_sandboxes import (
 @pytest.fixture
 def client():
     """Create a qarax API client."""
-    return Client(base_url=QARAX_URL)
+    return Client(base_url=QARAX_URL, headers=AUTH_HEADERS)
 
 
 @pytest.mark.asyncio

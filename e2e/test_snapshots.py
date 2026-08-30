@@ -44,18 +44,18 @@ from qarax_api_client.models.snapshot_status import SnapshotStatus
 
 VM_OPERATION_TIMEOUT = 60
 
-from helpers import QARAX_URL, wait_for_status
+from helpers import AUTH_HEADERS, QARAX_URL, wait_for_status
 
 
 @pytest.fixture
 def client():
-    return Client(base_url=QARAX_URL)
+    return Client(base_url=QARAX_URL, headers=AUTH_HEADERS)
 
 
 @pytest.fixture(scope="module")
 def snapshot_storage_pool():
     """Create a local storage pool for snapshot tests and attach it to the host."""
-    with Client(base_url=QARAX_URL) as c:
+    with Client(base_url=QARAX_URL, headers=AUTH_HEADERS) as c:
         hosts = [h for h in (list_hosts.sync(client=c) or []) if h.status == HostStatus.UP]
         assert hosts and len(hosts) > 0, "No UP hosts registered"
         host_id = hosts[0].id

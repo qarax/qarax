@@ -30,6 +30,7 @@ import uuid
 
 import pytest
 from qarax_api_client import Client
+from helpers import AUTH_HEADERS
 from qarax_api_client.api.hosts import add as add_host
 from qarax_api_client.api.hosts import deploy as deploy_host
 from qarax_api_client.api.hosts import init as init_host
@@ -121,7 +122,7 @@ def upgrade_host_id():
             f"upgrade node {UPGRADE_TEST_NODE_HOST}:{UPGRADE_TEST_NODE_PORT} is not reachable"
         )
 
-    client = Client(base_url=QARAX_URL)
+    client = Client(base_url=QARAX_URL, headers=AUTH_HEADERS)
     host_name = f"bootc-vm-{uuid.uuid4().hex[:8]}"
 
     result = add_host.sync_detailed(
@@ -163,7 +164,7 @@ def upgrade_host_id():
 
 def test_init_populates_node_version(upgrade_host_id):
     """After init, the host should have a non-null node_version."""
-    client = Client(base_url=QARAX_URL)
+    client = Client(base_url=QARAX_URL, headers=AUTH_HEADERS)
     host = get_host(client, upgrade_host_id)
     assert host.status == HostStatus.UP
     assert host.node_version is not None, "node_version should be set after init"
@@ -181,7 +182,7 @@ def test_deploy_sets_last_deployed_image_and_node_version(upgrade_host_id):
       - last_deployed_image is recorded
       - After re-init, node_version == "0.1.0"
     """
-    client = Client(base_url=QARAX_URL)
+    client = Client(base_url=QARAX_URL, headers=AUTH_HEADERS)
 
     result = deploy_host.sync_detailed(
         host_id=upgrade_host_id,
@@ -227,7 +228,7 @@ def test_upgrade_uses_stored_credentials_and_updates_version(upgrade_host_id):
       - Host: installing → up (real VM reboot occurs)
       - Re-init: node_version still "0.2.0-test" (same image re-deployed)
     """
-    client = Client(base_url=QARAX_URL)
+    client = Client(base_url=QARAX_URL, headers=AUTH_HEADERS)
 
     # Deploy v2 to set last_deployed_image
     result = deploy_host.sync_detailed(

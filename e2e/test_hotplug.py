@@ -71,12 +71,12 @@ from qarax_api_client.models.storage_object_type import StorageObjectType
 NFS_SERVER_HOST = os.getenv("NFS_SERVER_HOST", "nfs-server")
 NFS_EXPORT_PATH = os.getenv("NFS_EXPORT_PATH", "/nfs-export")
 
-from helpers import QARAX_URL, call_api, up_hosts as _up_hosts, wait_for_status
+from helpers import AUTH_HEADERS, QARAX_URL, call_api, up_hosts as _up_hosts, wait_for_status
 
 
 @pytest.fixture
 def client():
-    return Client(base_url=QARAX_URL)
+    return Client(base_url=QARAX_URL, headers=AUTH_HEADERS)
 
 
 async def _make_nfs_pool(c, test_id, hosts):

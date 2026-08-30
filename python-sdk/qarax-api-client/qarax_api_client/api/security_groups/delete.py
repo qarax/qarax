@@ -13,6 +13,7 @@ from ...types import Response
 def _get_kwargs(
     security_group_id: UUID,
 ) -> dict[str, Any]:
+
     _kwargs: dict[str, Any] = {
         "method": "delete",
         "url": "/security-groups/{security_group_id}".format(

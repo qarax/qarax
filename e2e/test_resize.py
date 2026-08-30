@@ -32,7 +32,7 @@ from qarax_api_client.api.vms import (
 from qarax_api_client.models import Hypervisor, NewVm, VmStatus
 from qarax_api_client.models.vm_resize_request import VmResizeRequest
 
-from helpers import QARAX_URL, wait_for_status
+from helpers import AUTH_HEADERS, QARAX_URL, wait_for_status
 
 VM_OPERATION_TIMEOUT = 30
 
@@ -45,7 +45,7 @@ MEMORY_HOTPLUG_SIZE = 256 * 1024 * 1024
 
 @pytest.fixture
 def client():
-    return Client(base_url=QARAX_URL)
+    return Client(base_url=QARAX_URL, headers=AUTH_HEADERS)
 
 
 async def _make_resize_vm(c, test_id):

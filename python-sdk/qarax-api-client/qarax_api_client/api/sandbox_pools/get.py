@@ -14,6 +14,7 @@ from ...types import Response
 def _get_kwargs(
     vm_template_id: UUID,
 ) -> dict[str, Any]:
+
     _kwargs: dict[str, Any] = {
         "method": "get",
         "url": "/vm-templates/{vm_template_id}/sandbox-pool".format(

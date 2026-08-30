@@ -543,6 +543,7 @@ mod tests {
                 configuration.vm_defaults,
                 configuration.scheduling,
                 configuration.sandbox,
+                configuration.auth,
                 default_control_plane_architecture(),
             )
         }

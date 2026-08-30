@@ -19,6 +19,9 @@ pub enum Error {
 
     #[error("not found")]
     NotFound,
+
+    #[error("missing or invalid API token")]
+    Unauthorized,
 }
 
 fn unique_violation_message(db_err: &dyn sqlx::error::DatabaseError) -> String {

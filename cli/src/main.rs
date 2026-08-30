@@ -16,6 +16,10 @@ pub fn resolve_server(flag: Option<String>, cfg: &config::Config) -> String {
         .unwrap_or_else(|| DEFAULT_SERVER.to_string())
 }
 
+pub fn resolve_token(flag: Option<String>, cfg: &config::Config) -> Option<String> {
+    flag.or_else(|| cfg.token.clone())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -24,6 +28,7 @@ mod tests {
     fn cfg(server: Option<&str>) -> Config {
         Config {
             server: server.map(str::to_string),
+            token: None,
         }
     }
 
@@ -47,6 +52,36 @@ mod tests {
         let server = resolve_server(None, &cfg(None));
         assert_eq!(server, DEFAULT_SERVER);
     }
+
+    #[test]
+    fn token_flag_beats_config() {
+        let cfg = Config {
+            server: None,
+            token: Some("config-token".to_string()),
+        };
+        let token = resolve_token(Some("flag-token".to_string()), &cfg);
+        assert_eq!(token, Some("flag-token".to_string()));
+    }
+
+    #[test]
+    fn token_falls_back_to_config() {
+        let cfg = Config {
+            server: None,
+            token: Some("config-token".to_string()),
+        };
+        let token = resolve_token(None, &cfg);
+        assert_eq!(token, Some("config-token".to_string()));
+    }
+
+    #[test]
+    fn token_none_when_unset() {
+        let cfg = Config {
+            server: None,
+            token: None,
+        };
+        let token = resolve_token(None, &cfg);
+        assert_eq!(token, None);
+    }
 }
 
 #[derive(Parser)]
@@ -55,6 +90,10 @@ pub struct Cli {
     /// Server base URL (overrides config file and QARAX_SERVER env var)
     #[arg(long, env = "QARAX_SERVER", global = true)]
     pub server: Option<String>,
+
+    /// API token for authentication (overrides config file and QARAX_TOKEN env var)
+    #[arg(long, env = "QARAX_TOKEN", global = true)]
+    pub token: Option<String>,
 
     /// Output format (table, json, yaml)
     #[arg(
@@ -117,8 +156,9 @@ async fn main() -> Result<()> {
 
     let cfg = config::load();
     let server = resolve_server(cli.server, &cfg);
+    let token = resolve_token(cli.token, &cfg);
 
-    let client = client::Client::new(&server);
+    let client = client::Client::new(&server, token.as_deref());
 
     match cli.command {
         Commands::Backup(args) => commands::backup::run(args, &client, cli.output).await,

@@ -14,6 +14,7 @@ from ...types import Response
 def _get_kwargs(
     hook_id: UUID,
 ) -> dict[str, Any]:
+
     _kwargs: dict[str, Any] = {
         "method": "get",
         "url": "/hooks/{hook_id}/executions".format(

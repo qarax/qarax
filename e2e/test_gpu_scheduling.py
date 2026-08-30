@@ -11,6 +11,7 @@ import os
 
 import pytest
 from qarax_api_client import Client
+from helpers import AUTH_HEADERS
 from qarax_api_client.api.hosts import list_ as list_hosts
 from qarax_api_client.api.instance_types import (
     create as create_instance_type,
@@ -30,13 +31,13 @@ QARAX_URL = os.getenv("QARAX_URL", "http://localhost:8000")
 @pytest.fixture
 def client():
     """Create a qarax API client."""
-    return Client(base_url=QARAX_URL)
+    return Client(base_url=QARAX_URL, headers=AUTH_HEADERS)
 
 
 @pytest.fixture
 def http_client():
     """Create a raw HTTP client for endpoints not yet in the generated SDK."""
-    return httpx.Client(base_url=QARAX_URL)
+    return httpx.Client(base_url=QARAX_URL, headers=AUTH_HEADERS)
 
 
 def get_first_host_id(client):

@@ -2,6 +2,7 @@ import os
 
 import pytest
 from qarax_api_client import Client
+from helpers import AUTH_HEADERS
 from qarax_api_client.api.hosts import init as init_host
 from qarax_api_client.api.hosts import list_ as list_hosts
 
@@ -11,7 +12,7 @@ QARAX_NODE_HOST = os.getenv("QARAX_NODE_HOST", "qarax-node")
 
 @pytest.mark.telemetry
 def test_otel_exports_trace_propagation_and_metrics(telemetry_collector):
-    client = Client(base_url=QARAX_URL)
+    client = Client(base_url=QARAX_URL, headers=AUTH_HEADERS)
     hosts = list_hosts.sync(client=client)
     assert hosts is not None
 

@@ -56,7 +56,7 @@ JOB_TIMEOUT = 120  # OCI image pull can take a while
 
 @pytest.fixture
 def client():
-    return Client(base_url=QARAX_URL)
+    return Client(base_url=QARAX_URL, headers=AUTH_HEADERS)
 
 
 async def wait_for_job(c, job_id, timeout=JOB_TIMEOUT):
@@ -75,7 +75,7 @@ async def wait_for_job(c, job_id, timeout=JOB_TIMEOUT):
     raise TimeoutError(f"Job {job_id} did not complete within {timeout}s")
 
 
-from helpers import up_hosts as _up_hosts
+from helpers import AUTH_HEADERS, up_hosts as _up_hosts
 
 
 async def _create_pool(c, name, pool_type, config):

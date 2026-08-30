@@ -17,6 +17,7 @@ def _get_kwargs(
     pool_id: None | Unset | UUID = UNSET,
     object_type: None | StorageObjectType | Unset = UNSET,
 ) -> dict[str, Any]:
+
     params: dict[str, Any] = {}
 
     json_name: None | str | Unset

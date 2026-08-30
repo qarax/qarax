@@ -20,7 +20,10 @@ use tower_http::{
     request_id::{MakeRequestUuid, PropagateRequestIdLayer, RequestId, SetRequestIdLayer},
     trace::TraceLayer,
 };
-use utoipa::OpenApi;
+use utoipa::{
+    Modify, OpenApi,
+    openapi::security::{Http, HttpAuthScheme, SecurityScheme},
+};
 use utoipa_swagger_ui::SwaggerUi;
 use validator::ValidationErrors;
 
@@ -326,9 +329,23 @@ pub struct BackupListQuery {
         title = "Qarax API",
         version = "0.1.0",
         description = "REST API for managing virtual machines and hypervisor hosts"
-    )
+    ),
+    modifiers(&SecurityAddon),
+    security(("bearerAuth" = []))
 )]
 pub struct ApiDoc;
+
+struct SecurityAddon;
+
+impl Modify for SecurityAddon {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        let components = openapi.components.get_or_insert_default();
+        components.add_security_scheme(
+            "bearerAuth",
+            SecurityScheme::Http(Http::new(HttpAuthScheme::Bearer)),
+        );
+    }
+}
 
 #[cfg(feature = "otel")]
 async fn record_http_metrics(
@@ -423,6 +440,10 @@ pub fn app(env: App) -> Router {
         .layer(middleware::from_fn_with_state(
             env.clone(),
             reject_maintenance_requests,
+        ))
+        .layer(middleware::from_fn_with_state(
+            env.clone(),
+            crate::auth::require_api_token,
         ))
         .layer(Extension(env.clone()))
         .layer(middleware::from_fn_with_state(
@@ -783,6 +804,7 @@ impl Error {
             InvalidEntity(_) | UnprocessableEntity(_) => StatusCode::UNPROCESSABLE_ENTITY,
             Conflict(_) => StatusCode::CONFLICT,
             NotFound => StatusCode::NOT_FOUND,
+            Unauthorized => StatusCode::UNAUTHORIZED,
         }
     }
 }

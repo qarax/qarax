@@ -32,20 +32,20 @@ from qarax_api_client.models import (
 )
 from qarax_api_client.models.attach_pool_host_request import AttachPoolHostRequest
 
-from helpers import QARAX_URL, wait_for_status
+from helpers import AUTH_HEADERS, QARAX_URL, wait_for_status
 
 VM_OPERATION_TIMEOUT = 60
 
 
 @pytest.fixture
 def client():
-    return Client(base_url=QARAX_URL)
+    return Client(base_url=QARAX_URL, headers=AUTH_HEADERS)
 
 
 @pytest.fixture(scope="module")
 def backup_storage_pool():
     """Create a local storage pool backed by the control-plane filesystem."""
-    with Client(base_url=QARAX_URL) as c:
+    with Client(base_url=QARAX_URL, headers=AUTH_HEADERS) as c:
         hosts = [h for h in (list_hosts.sync(client=c) or []) if h.status == HostStatus.UP]
         assert hosts, "No UP hosts registered"
         host_id = hosts[0].id

@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct Config {
     pub server: Option<String>,
+    #[serde(default)]
+    pub token: Option<String>,
 }
 
 fn config_path() -> Option<PathBuf> {
@@ -54,6 +56,7 @@ mod tests {
 
         let cfg = Config {
             server: Some("http://example.com:8000".to_string()),
+            token: None,
         };
         save_to(&path, &cfg).unwrap();
 
@@ -87,6 +90,7 @@ mod tests {
 
         let cfg = Config {
             server: Some("http://example.com".to_string()),
+            token: None,
         };
         save_to(&path, &cfg).unwrap();
         assert!(path.exists());

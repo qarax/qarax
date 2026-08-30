@@ -24,12 +24,12 @@ from qarax_api_client.models import NewVm, Hypervisor, VmStatus
 
 VM_OPERATION_TIMEOUT = 60
 
-from helpers import QARAX_URL, call_api, up_hosts as _up_hosts
+from helpers import AUTH_HEADERS, QARAX_URL, call_api, up_hosts as _up_hosts
 
 
 @pytest.fixture
 def client():
-    return Client(base_url=QARAX_URL)
+    return Client(base_url=QARAX_URL, headers=AUTH_HEADERS)
 
 
 async def wait_for_vm_status(
