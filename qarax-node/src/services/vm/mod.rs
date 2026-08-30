@@ -82,6 +82,7 @@ impl VmServiceImpl {
     }
 
     /// Run a unit-returning VM operation, logging start/success/failure uniformly.
+    #[allow(clippy::result_large_err)]
     async fn run_vm_op<F, Fut>(
         &self,
         op_name: &str,

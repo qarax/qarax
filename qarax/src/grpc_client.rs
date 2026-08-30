@@ -9,6 +9,7 @@ use uuid::Uuid;
 use crate::model::network_interfaces::NetworkInterface;
 
 // Include the generated proto code
+#[allow(clippy::result_large_err)]
 pub mod node {
     tonic::include_proto!("node");
 }
