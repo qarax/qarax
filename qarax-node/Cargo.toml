@@ -29,7 +29,7 @@ tonic = "0.12.3"
 anyhow = "1.0.75"
 async-trait = "0.1"
 uuid = { version = "1.6.1", features = ["v4"] }
-openssl = { version = "0.10.79", features = ["vendored"] }
+openssl = { version = "0.10.80", features = ["vendored"] }
 
 # Cloud Hypervisor SDK
 cloud-hypervisor-sdk = { git = "https://github.com/qarax/cloud-hypervisor-sdk.git", tag = "v51.1.0" }
