@@ -1,0 +1,63 @@
+apiVersion: v1
+data:
+  setup.sql: |-
+    CREATE USER qarax PASSWORD 'qarax';
+    CREATE DATABASE qarax owner qarax template template0 encoding 'UTF8' lc_collate 'en_US.UTF-8' lc_ctype 'en_US.UTF-8';
+    CREATE EXTENSION "pgcrypto";
+kind: ConfigMap
+metadata:
+  name: qarax-postgres-init-script-configmap
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: postgres
+    tier: backend
+  name: postgres
+spec:
+  ports:
+  - nodePort: 31000
+    port: 8080
+  selector:
+    app: postgres
+    tier: backend
+  type: LoadBalancer
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: postgres
+    tier: backend
+  name: postgres
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+        tier: backend
+    spec:
+      containers:
+      - env:
+        - name: POSTGRES_PASSWORD
+          value: pqarax
+        image: postgres:13
+        imagePullPolicy: IfNotPresent
+        name: postgres
+        resources:
+          requests:
+            cpu: 100m
+            memory: 100Mi
+        volumeMounts:
+        - mountPath: /docker-entrypoint-initdb.d
+          name: qarax-init-script
+          readOnly: true
+      volumes:
+      - configMap:
+          name: qarax-postgres-init-script-configmap
+        name: qarax-init-script
