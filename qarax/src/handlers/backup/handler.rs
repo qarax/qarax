@@ -20,9 +20,9 @@ use crate::{
     model::{
         audit_log::{AuditAction, AuditResourceType},
         backups::{self, Backup, BackupStatus, BackupType, NewBackup},
-        hosts,
+        hosts::{self, HostStatus},
         storage_objects::{self, NewStorageObject, StorageObjectType},
-        storage_pools,
+        storage_pools, vms,
     },
 };
 
@@ -449,7 +449,7 @@ pub async fn restore(
         (status = 204, description = "Backup and its stored data deleted"),
         (status = 404, description = "Backup not found"),
         (status = 409, description = "Backup is still being created"),
-        (status = 422, description = "No host available to remove the VM snapshot"),
+        (status = 422, description = "No UP host can reach the VM snapshot"),
         (status = 500, description = "Internal server error")
     ),
     tag = "backups"
@@ -471,24 +471,43 @@ pub async fn delete(
     let storage_object = storage_objects::get(env.pool(), backup.storage_object_id).await?;
     if let Some(path) = storage_objects::get_path_from_config(&storage_object.config) {
         match backup.backup_type {
-            // VM snapshots live on a node that has the backup's pool attached.
+            // A VM snapshot is written by the node running the VM, which is
+            // not necessarily one the (local) pool is attached to, and the VM
+            // may have moved since. DeleteSnapshot treats a missing directory
+            // as success, so ask every candidate: the VM's current host and
+            // all hosts attached to the pool.
             BackupType::Vm => {
-                let host_id =
-                    storage_pools::find_host_for_pool(env.pool(), storage_object.storage_pool_id)
-                        .await?
-                        .ok_or_else(|| {
-                            crate::errors::Error::UnprocessableEntity(
-                                "no host is attached to the backup's storage pool".into(),
-                            )
+                let mut host_ids =
+                    storage_pools::list_host_ids(env.pool(), storage_object.storage_pool_id)
+                        .await?;
+                if let Some(vm_id) = backup.vm_id
+                    && let Some(vm_host) = vms::get(env.pool(), vm_id).await?.host_id
+                {
+                    host_ids.push(vm_host);
+                }
+                host_ids.sort();
+                host_ids.dedup();
+
+                let mut reached = 0;
+                for host_id in host_ids {
+                    let host = hosts::require_by_id(env.pool(), host_id).await?;
+                    if host.status != HostStatus::Up {
+                        continue;
+                    }
+                    NodeClient::new(&host.address, host.port as u16)
+                        .delete_snapshot(&format!("file://{path}"))
+                        .await
+                        .map_err(|e| {
+                            error!(error = %e, backup_id = %backup.id, host_id = %host.id, "failed to delete VM backup snapshot");
+                            crate::errors::Error::InternalServerError
                         })?;
-                let host = hosts::require_by_id(env.pool(), host_id).await?;
-                NodeClient::new(&host.address, host.port as u16)
-                    .delete_snapshot(&format!("file://{path}"))
-                    .await
-                    .map_err(|e| {
-                        error!(error = %e, backup_id = %backup.id, "failed to delete VM backup snapshot");
-                        crate::errors::Error::InternalServerError
-                    })?;
+                    reached += 1;
+                }
+                if reached == 0 {
+                    return Err(crate::errors::Error::UnprocessableEntity(
+                        "no UP host can reach the backup's snapshot".into(),
+                    ));
+                }
             }
             // Database dumps are written by the control plane itself.
             BackupType::Database => match fs::remove_file(&path).await {
