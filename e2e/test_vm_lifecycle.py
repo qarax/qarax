@@ -197,6 +197,35 @@ async def test_vm_full_lifecycle(client):
             assert not any(str(v.id) == vm_id_str for v in vms)
 
 
+# vm_monitor ticks every 30s (qarax/src/vm_monitor.rs).
+VM_MONITOR_TICK_SECS = 30
+
+
+@pytest.mark.asyncio
+async def test_created_vm_survives_monitor_tick_and_starts(client):
+    """A never-started VM is not defined on its node yet; the monitor must not
+    mark it unknown (which made start fail with NotFound)."""
+    async with client as c:
+        new_vm = NewVm(
+            name=f"test-vm-e2e-idle-created-{int(time.time())}",
+            hypervisor=Hypervisor.CLOUD_HV,
+            boot_vcpus=1,
+            max_vcpus=1,
+            memory_size=256 * 1024 * 1024,
+        )
+        vm_id_str = str(await call_api(create_vm, client=c, body=new_vm))
+        try:
+            await asyncio.sleep(VM_MONITOR_TICK_SECS + 5)
+            vm = await call_api(get_vm, client=c, vm_id=vm_id_str)
+            assert vm.status == VmStatus.CREATED, f"expected created, got {vm.status}"
+
+            await call_api(start_vm, client=c, vm_id=vm_id_str)
+            await wait_for_status(c, vm_id_str, VmStatus.RUNNING)
+        finally:
+            await call_api(force_stop_vm, client=c, vm_id=vm_id_str)
+            await call_api(delete_vm, client=c, vm_id=vm_id_str)
+
+
 @pytest.mark.asyncio
 async def test_vm_delete(client):
     """Test VM deletion."""
