@@ -329,6 +329,18 @@ pub async fn find_host_for_pool(pool: &PgPool, pool_id: Uuid) -> Result<Option<U
     Ok(row.map(|(id,)| id))
 }
 
+/// All hosts attached to a storage pool.
+pub async fn list_host_ids(pool: &PgPool, pool_id: Uuid) -> Result<Vec<Uuid>, sqlx::Error> {
+    let rows = sqlx::query_as::<_, (Uuid,)>(
+        "SELECT host_id FROM host_storage_pools WHERE storage_pool_id = $1",
+    )
+    .bind(pool_id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows.into_iter().map(|(id,)| id).collect())
+}
+
 /// Check whether a host is attached to a given storage pool.
 pub async fn host_has_pool(
     pool: &PgPool,
