@@ -330,6 +330,8 @@ class TestHookExecution:
             assert len(executions) >= 2
             delivered = [e for e in executions if e["status"] == "delivered"]
             assert len(delivered) >= 2
+            # The successful delivery itself counts as an attempt.
+            assert all(e["attempt_count"] >= 1 for e in delivered), delivered
 
         finally:
             delete_hook(http_client, hook_id)

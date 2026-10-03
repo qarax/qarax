@@ -367,6 +367,7 @@ pub async fn mark_delivered(
         r#"
 UPDATE hook_executions
 SET status          = 'DELIVERED',
+    attempt_count   = attempt_count + 1,
     response_status = $2,
     response_body   = $3,
     delivered_at    = NOW()
