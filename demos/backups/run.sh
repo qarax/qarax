@@ -6,6 +6,13 @@
 #   1. VM backup create/list/get/restore
 #   2. Control-plane database backup create/list/get/restore
 #
+# Prerequisites:
+#   - qarax stack running (./hack/run-local.sh; started automatically if not up)
+#   - docker (to manage dump files inside the qarax container), jq
+#
+# Usage:
+#   ./demos/backups/run.sh [--server URL] [--host NAME] [--pool-name NAME] [--pool-path PATH]
+#
 
 set -euo pipefail
 
@@ -78,6 +85,7 @@ capture() {
 	"$@"
 }
 
+# Wait for the API to answer again after the database restore.
 wait_for_api() {
 	local timeout="${1:-60}"
 	local elapsed=0
@@ -99,7 +107,7 @@ wait_for_vm_status() {
 	local status=""
 
 	while [[ "$elapsed" -lt "$timeout" ]]; do
-		status=$("${QARAX[@]}" vm get "$vm" -o json | jq -r '.status')
+		status=$("${QARAX[@]}" vm get "$vm" -o json | jq -r '.status') || true
 		if [[ "$status" == "$expected" ]]; then
 			return 0
 		fi
@@ -121,26 +129,29 @@ cleanup_backup_artifacts() {
 }
 
 ensure_backup_pool() {
-	local pool_id pool_json pool_type pool_path
+	local pool_json pool_type pool_path
 
-	if "${QARAX[@]}" storage-pool get "$POOL_NAME" -o json >/dev/null 2>&1; then
-		pool_id=$(curl -sf "${SERVER}/storage-pools" | jq -r ".[] | select(.name == \"${POOL_NAME}\") | .id")
-		[[ -n "$pool_id" ]] || die "Storage pool '$POOL_NAME' exists but could not be resolved via the API"
-		pool_json=$(curl -sf "${SERVER}/storage-pools/${pool_id}")
+	# The CLI's pool model omits `config`, so read the pool through the API.
+	pool_json=$(api_curl -sf "${SERVER}/storage-pools?name=${POOL_NAME}" |
+		jq -c --arg name "$POOL_NAME" '[.[] | select(.name == $name)] | .[0] // empty') ||
+		die "Failed to list storage pools at ${SERVER}"
+
+	if [[ -n "$pool_json" ]]; then
 		pool_type=$(jq -r '.pool_type' <<<"$pool_json")
 		pool_path=$(jq -r '.config.path // empty' <<<"$pool_json")
 		[[ "$pool_type" == "local" ]] || die "Storage pool '$POOL_NAME' exists but is not a local pool"
 		[[ "$pool_path" == "$POOL_PATH" ]] || die "Storage pool '$POOL_NAME' uses path '$pool_path', expected '$POOL_PATH'"
 		info "Reusing storage pool '$POOL_NAME'."
+		# Re-attach in case the host was re-registered since the last run.
+		run "${QARAX[@]}" storage-pool attach-host "$POOL_NAME" "$HOST_NAME"
 	else
+		# --host attaches the new pool to the host as part of creation.
 		run "${QARAX[@]}" storage-pool create \
 			--name "$POOL_NAME" \
 			--pool-type local \
 			--path "$POOL_PATH" \
 			--host "$HOST_NAME"
 	fi
-
-	run "${QARAX[@]}" storage-pool attach-host "$POOL_NAME" "$HOST_NAME"
 }
 
 cleanup() {
@@ -156,7 +167,8 @@ cleanup() {
 	if [[ "$PRE_TYPE_CREATED" -eq 1 ]]; then
 		"${QARAX[@]}" instance-type delete "$PRE_TYPE_NAME" >/dev/null 2>&1 || true
 	fi
-	cleanup_backup_artifacts >/dev/null 2>&1 || true
+	# Subshell: cleanup_backup_artifacts calls die (exit) on failure.
+	(cleanup_backup_artifacts) >/dev/null 2>&1 || true
 	info "Left reusable storage pool '$POOL_NAME' in place."
 }
 trap cleanup EXIT
@@ -174,7 +186,6 @@ QARAX_BIN="$(find_qarax_bin)"
 QARAX=("$QARAX_BIN" --server "$SERVER")
 
 ensure_stack "$SERVER"
-wait_for_api 30
 
 if [[ -z "$HOST_NAME" ]]; then
 	HOST_NAME=$("${QARAX[@]}" host list -o json | jq -r '[.[] | select(.status == "up")] | .[0].name // empty')

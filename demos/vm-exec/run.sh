@@ -7,7 +7,7 @@
 # command inside the guest through the new regular-VM exec path.
 #
 # Prerequisites:
-#   - qarax stack running (./hack/run-local.sh)
+#   - qarax stack running (./hack/run-local.sh; started automatically if not up)
 #   - qarax CLI on PATH or built under target/
 #   - jq installed
 #
@@ -75,7 +75,7 @@ while [[ $# -gt 0 ]]; do
 		echo "Options:"
 		echo "  --server URL   qarax API URL (default: \$QARAX_SERVER or http://localhost:8000)"
 		echo "  --host NAME    Host name or ID to attach the demo pool to"
-		echo "  --keep         Leave the demo VM/template/pool in place after success"
+		echo "  --keep         Leave the demo VM/template/pool in place for inspection"
 		exit 0
 		;;
 	*)
@@ -128,8 +128,9 @@ cleanup() {
 
 	echo
 	step "Cleaning up demo resources..."
-	"${QARAX[@]}" vm force-stop "$VM_NAME" --wait >/dev/null 2>&1 || true
-	"${QARAX[@]}" vm stop "$VM_NAME" --wait >/dev/null 2>&1 || true
+	# Delete tears the VM down on the node even if it is still running; the
+	# force-stop is best effort. Avoid `--wait`: it has no timeout.
+	"${QARAX[@]}" vm force-stop "$VM_NAME" >/dev/null 2>&1 || true
 	"${QARAX[@]}" vm delete "$VM_NAME" >/dev/null 2>&1 || true
 	"${QARAX[@]}" vm-template delete "$TEMPLATE_NAME" >/dev/null 2>&1 || true
 	"${QARAX[@]}" boot-source delete "$BOOT_SOURCE_NAME" >/dev/null 2>&1 || true
@@ -149,7 +150,7 @@ wait_for_vm_status() {
 	local status=""
 
 	while ((SECONDS < deadline)); do
-		status=$("${QARAX[@]}" -o json vm get "$vm_name" | jq -r '.status')
+		status=$("${QARAX[@]}" -o json vm get "$vm_name" | jq -r '.status') || true
 		if [[ "$status" == "$expected" ]]; then
 			return 0
 		fi

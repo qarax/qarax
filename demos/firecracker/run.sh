@@ -9,6 +9,13 @@
 #   4) Resume VM
 #   5) Stop VM
 #   6) Delete VM (cleanup)
+#
+# Prerequisites:
+#   - qarax stack running (make run-local), or let the script start it
+#   - Firecracker on qarax-node (the local qarax-node image ships it)
+#
+# The script builds the qarax CLI first; set SKIP_BUILD=1 to use an existing
+# binary (target/ or PATH).
 
 set -euo pipefail
 
@@ -105,14 +112,18 @@ wait_for_status() {
 		elapsed=$((elapsed + 2))
 	done
 	echo ""
-	die "Timed out waiting for VM '${vm}' to reach status '${target}'"
+	$QARAX vm get "$vm" >&2 || true
+	die "Timed out waiting for VM '${vm}' to reach status '${target}' (last status: ${current}).\nCheck the node logs: docker compose -f e2e/docker-compose.yml logs qarax-node"
 }
 
 echo -e "${BOLD}${CYAN}=== Firecracker Integration Demo ===${NC}"
 ensure_stack "$SERVER"
 
-echo -e "${GREEN}▸${NC} Validating API connectivity..."
-$QARAX host list -o json >/dev/null
+echo -e "${GREEN}▸${NC} Checking for a Firecracker-capable host..."
+FC_HOSTS=$($QARAX host list -o json | python3 -c 'import json,sys; print(sum(1 for h in json.load(sys.stdin) if h.get("status","").lower() == "up" and h.get("firecracker_version")))')
+if [[ "$FC_HOSTS" -eq 0 ]]; then
+	echo -e "  ${YELLOW}No 'up' host reports a Firecracker version; VM creation may fail.${NC}"
+fi
 
 echo -e "${GREEN}▸${NC} Creating Firecracker VM: ${BOLD}${VM_NAME}${NC}"
 if ! $QARAX vm create \

@@ -10,6 +10,10 @@
 #   5. An empty security group attached to VM B, causing default-deny ingress
 #   6. A live ICMP rule update restoring connectivity without recreating the VM
 #
+# Prerequisites:
+#   - a two-node qarax stack with both hosts UP (see README.md)
+#   - jq, docker with docker compose
+#
 
 set -euo pipefail
 
@@ -20,8 +24,8 @@ cd "$REPO_ROOT"
 
 SERVER="${QARAX_SERVER:-http://localhost:8000}"
 KEEP_RESOURCES=false
-export CLOUD_HYPERVISOR_VERSION="${CLOUD_HYPERVISOR_VERSION:-$(tr -d '\n' < "${REPO_ROOT}/versions/cloud-hypervisor-version")}"
-export FIRECRACKER_VERSION="${FIRECRACKER_VERSION:-$(tr -d '\n' < "${REPO_ROOT}/versions/firecracker-version")}"
+export CLOUD_HYPERVISOR_VERSION="${CLOUD_HYPERVISOR_VERSION:-$(tr -d '\n' <"${REPO_ROOT}/versions/cloud-hypervisor-version")}"
+export FIRECRACKER_VERSION="${FIRECRACKER_VERSION:-$(tr -d '\n' <"${REPO_ROOT}/versions/firecracker-version")}"
 
 SUFFIX="$$"
 VPC_NAME="demo-xhost-vpc-${SUFFIX}"
@@ -78,7 +82,7 @@ EOF
 while [[ $# -gt 0 ]]; do
 	case "$1" in
 	--server)
-		SERVER="$2"
+		SERVER="${2:?--server requires a URL}"
 		shift 2
 		;;
 	--keep-resources)
@@ -107,8 +111,10 @@ qarax() {
 	"$QARAX_BIN" --server "$SERVER" "$@"
 }
 
+COMPOSE_FILE="${REPO_ROOT}/e2e/docker-compose.yml"
+
 docker_compose() {
-	docker compose -f "${REPO_ROOT}/e2e/docker-compose.yml" "$@"
+	docker compose -f "$COMPOSE_FILE" "$@"
 }
 
 node_service_for_address() {
@@ -150,42 +156,35 @@ clear_known_host() {
 		"sed -i '/${VM_A_IP}/d' /root/.ssh/known_hosts 2>/dev/null || true"
 }
 
+# SSH into VM A via the node container and ping VM B. Bounded by `timeout` so a
+# hung SSH session cannot stall the demo.
 ping_vm_b_from_vm_a() {
-	local output status
-	set +e
-	output="$(
-		docker_compose exec -T "$PRIMARY_NODE_SERVICE" \
-			dbclient -y -i /root/.ssh/id_rsa "root@${VM_A_IP}" \
-			ping -c 3 -W 1 "$VM_B_IP" 2>&1
-	)"
-	status=$?
-	set -e
-
-	printf '%s\n' "$output"
-	return "$status"
+	timeout 30 docker compose -f "$COMPOSE_FILE" exec -T "$PRIMARY_NODE_SERVICE" \
+		dbclient -y -i /root/.ssh/id_rsa "root@${VM_A_IP}" \
+		ping -c 3 -W 1 "$VM_B_IP" 2>&1
 }
 
 wait_for_ping_state() {
 	local desired="$1"
 	local attempts="${2:-15}"
 	local delay="${3:-2}"
-	local last_output=""
+	local last_output="" status
 
 	for _ in $(seq 1 "$attempts"); do
-		set +e
-		last_output="$(ping_vm_b_from_vm_a)"
-		local status=$?
-		set -e
+		status=0
+		last_output="$(ping_vm_b_from_vm_a)" || status=$?
 
 		if [[ "$desired" == "allowed" ]]; then
-			if [[ $status -eq 0 && "$last_output" == *"0% packet loss"* ]]; then
+			if [[ $status -eq 0 && "$last_output" == *" 0% packet loss"* ]]; then
 				info "Ping succeeded:"
 				echo "$last_output"
 				return 0
 			fi
 		else
-			if [[ $status -ne 0 ]]; then
-				info "Ping is blocked (non-zero exit is expected here):"
+			# Only count it as blocked when ping itself ran and got nothing
+			# back; SSH/connectivity failures to VM A must not pass as "blocked".
+			if [[ "$last_output" == *"100% packet loss"* ]]; then
+				info "Ping is blocked (100% packet loss is expected here):"
 				echo "$last_output"
 				return 0
 			fi
@@ -194,10 +193,18 @@ wait_for_ping_state() {
 		sleep "$delay"
 	done
 
+	echo "$last_output" >&2
 	if [[ "$desired" == "allowed" ]]; then
 		die "Expected ping from ${VM_A} (${VM_A_IP}) to ${VM_B} (${VM_B_IP}) to succeed"
 	fi
 	die "Expected ping from ${VM_A} (${VM_A_IP}) to ${VM_B} (${VM_B_IP}) to be blocked"
+}
+
+# Best-effort teardown of a demo VM. `vm stop --wait` has no timeout of its own,
+# so force-stop under `timeout` and delete regardless.
+remove_vm() {
+	timeout 60 "$QARAX_BIN" --server "$SERVER" vm force-stop "$1" --wait >/dev/null 2>&1 || true
+	qarax vm delete "$1" >/dev/null 2>&1 || true
 }
 
 cleanup() {
@@ -207,6 +214,7 @@ cleanup() {
 		info "VMs: ${VM_A}, ${VM_B}"
 		info "Networks: ${NETWORK_A}, ${NETWORK_B}"
 		info "Security group: ${SG_NAME}"
+		info "Delete them before re-running: the demo reuses subnets ${SUBNET_A} and ${SUBNET_B}."
 		return
 	fi
 
@@ -217,10 +225,8 @@ cleanup() {
 		qarax vm detach-security-group "$VM_B" --security-group "$SG_NAME" 2>/dev/null || true
 	fi
 
-	qarax vm stop "$VM_A" --wait 2>/dev/null || true
-	qarax vm stop "$VM_B" --wait 2>/dev/null || true
-	qarax vm delete "$VM_A" 2>/dev/null || true
-	qarax vm delete "$VM_B" 2>/dev/null || true
+	remove_vm "$VM_A"
+	remove_vm "$VM_B"
 
 	qarax security-group delete "$SG_NAME" 2>/dev/null || true
 
@@ -262,7 +268,7 @@ PRIMARY_HOST_ADDRESS="$(jq -r '([.[] | select(.status == "up" and (.name == "e2e
 SECONDARY_HOST_ID="$(jq -r --arg primary "$PRIMARY_HOST_ID" '([.[] | select(.status == "up" and .id != $primary and (.name == "e2e-node-2" or .address == "qarax-node-2"))][0] // [.[] | select(.status == "up" and .id != $primary)][0]).id // empty' <<<"$host_json")"
 SECONDARY_HOST_NAME="$(jq -r --arg primary "$PRIMARY_HOST_ID" '([.[] | select(.status == "up" and .id != $primary and (.name == "e2e-node-2" or .address == "qarax-node-2"))][0] // [.[] | select(.status == "up" and .id != $primary)][0]).name // empty' <<<"$host_json")"
 SECONDARY_HOST_ADDRESS="$(jq -r --arg primary "$PRIMARY_HOST_ID" '([.[] | select(.status == "up" and .id != $primary and (.name == "e2e-node-2" or .address == "qarax-node-2"))][0] // [.[] | select(.status == "up" and .id != $primary)][0]).address // empty' <<<"$host_json")"
-[[ -n "$SECONDARY_HOST_ID" ]] || die "This demo requires two UP hosts. Start the two-node e2e stack first."
+[[ -n "$SECONDARY_HOST_ID" ]] || die "This demo requires two UP hosts. With 'make run-local' running, register the second node:\n  QARAX_TOKEN=\${QARAX_TOKEN:-e2e-test-token} bash e2e/setup_host.sh ${SERVER} qarax-node-2 50051 local-node-2\nSee demos/cross-host-vpc/README.md for details."
 
 PRIMARY_NODE_SERVICE="$(node_service_for_address "$PRIMARY_HOST_ADDRESS")" || die "Unsupported primary host address '${PRIMARY_HOST_ADDRESS}'"
 SECONDARY_NODE_SERVICE="$(node_service_for_address "$SECONDARY_HOST_ADDRESS")" || die "Unsupported secondary host address '${SECONDARY_HOST_ADDRESS}'"
@@ -271,6 +277,11 @@ info "Primary host:   ${PRIMARY_HOST_NAME} (${PRIMARY_HOST_ADDRESS})"
 info "Secondary host: ${SECONDARY_HOST_NAME} (${SECONDARY_HOST_ADDRESS})"
 info "SSH hop service: ${PRIMARY_NODE_SERVICE}"
 info "Resources are named with suffix: ${SUFFIX}"
+
+existing_networks="$(qarax network list -o json | jq -r --arg a "$SUBNET_A" --arg b "$SUBNET_B" \
+	'[.[] | select(.subnet == $a or .subnet == $b) | .name] | join(", ")')"
+[[ -z "$existing_networks" ]] ||
+	die "Networks already use the demo subnets (${SUBNET_A}, ${SUBNET_B}): ${existing_networks}\nDelete them first (e.g. leftovers from --keep-resources)."
 
 step "Creating two isolated networks in the same VPC"
 run qarax network create --name "$NETWORK_A" --subnet "$SUBNET_A" --gateway "$GATEWAY_A" --vpc "$VPC_NAME" --network-type isolated

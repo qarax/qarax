@@ -14,13 +14,26 @@ Demonstrates Qarax cross-host VPC routing end to end on a live two-node stack:
 - a live two-node Qarax stack with both hosts `up`
 - `jq`
 - Docker with `docker compose`
-- `qarax` CLI on PATH, or a Rust toolchain so the demo can build it
+- `qarax` CLI built in `target/` or on PATH, or a Rust toolchain so the demo can build it
 
-The intended environment is the two-node e2e stack, for example:
+If your server uses a token other than the local default, export `QARAX_TOKEN`.
+
+The simplest two-node setup is `make run-local`, which already starts a second
+node container (`qarax-node-2`) but only registers the first one. Register the
+second node:
+
+```bash
+make run-local
+QARAX_TOKEN=${QARAX_TOKEN:-e2e-test-token} \
+  bash e2e/setup_host.sh http://localhost:8000 qarax-node-2 50051 local-node-2
+```
+
+Alternatively, keep the two-node e2e stack running after its VPC test (add
+`REBUILD=1` to force a rebuild of binaries and images):
 
 ```bash
 cd e2e
-REBUILD=1 KEEP=1 ./run_e2e_tests.sh test_network.py -k vpc_routing_and_security_group_updates
+KEEP=1 ./run_e2e_tests.sh test_network.py -k vpc_routing_and_security_group_updates
 ```
 
 ## Usage
@@ -52,4 +65,6 @@ security-group update path and the same-VPC cross-host source-IP handling fix.
 By default the script cleans up both VMs, both networks, and the security group
 on exit.
 
-Use `--keep-resources` if you want to inspect them afterward.
+Use `--keep-resources` if you want to inspect them afterward. Delete the kept
+networks before re-running: the demo always uses subnets `10.121.1.0/24` and
+`10.121.2.0/24` and refuses to start if a network already uses them.

@@ -12,6 +12,7 @@
 #
 # Prerequisites:
 #   - qarax stack running (make run-local)
+#   - qarax CLI on PATH or built under target/ (make build)
 #   - Host registered and initialized with at least one GPU bound to vfio-pci
 #   - IOMMU enabled (intel_iommu=on iommu=pt in kernel cmdline)
 #
@@ -38,6 +39,9 @@
 #   ./demos/gpu-passthrough/run.sh --host my-node               # specify host
 
 set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+source "${REPO_ROOT}/demos/lib.sh"
 
 # Defaults
 VM_NAME="demo-gpu-vm"
@@ -106,19 +110,28 @@ while [[ $# -gt 0 ]]; do
 		echo "  --min-vram BYTES       Minimum GPU VRAM in bytes"
 		echo "  --vcpus N              Number of vCPUs (default: 4)"
 		echo "  --memory MiB           Memory in MiB (default: 4096)"
-		echo "  --host NAME            Host name to inspect GPUs on (default: first host)"
+		echo "  --host NAME            Host name to inspect GPUs on (default: first host that is up)"
 		echo "  --server URL           qarax API URL (default: \$QARAX_SERVER or http://localhost:8000)"
 		exit 0
 		;;
 	*)
-		echo "Unknown option: $1"
+		echo "Unknown option: $1" >&2
 		exit 1
 		;;
 	esac
 done
 
 MEMORY_BYTES=$((MEMORY_MIB * 1024 * 1024))
-QARAX="qarax --server $SERVER"
+
+QARAX_BIN="$(find_qarax_bin)"
+[[ -n "$QARAX_BIN" ]] || die "qarax CLI not found. Run 'make build' or add it to PATH."
+QARAX="$QARAX_BIN --server $SERVER"
+
+require_server "$SERVER"
+
+if $QARAX vm get "$VM_NAME" >/dev/null 2>&1; then
+	die "VM '$VM_NAME' already exists. Delete it first ('qarax vm delete $VM_NAME') or pass --name."
+fi
 
 echo "=== qarax GPU Passthrough Demo ==="
 echo ""
@@ -136,44 +149,43 @@ echo "Memory:     ${MEMORY_MIB} MiB"
 echo ""
 
 # Find a host with GPUs
-echo "List available GPUs"
+echo "--- Available GPUs ---"
 if [[ -z "$HOST_NAME" ]]; then
-	FIRST_HOST=$($QARAX host list -o json | python3 -c "import json,sys; hosts=json.load(sys.stdin); print(hosts[0]['name'] if hosts else '')" 2>/dev/null || true)
-	if [[ -n "$FIRST_HOST" ]]; then
-		HOST_NAME="$FIRST_HOST"
-	else
-		echo "(no hosts found — register a host first)"
-		exit 1
-	fi
+	HOST_NAME=$($QARAX host list -o json | python3 -c "import json,sys; hosts=[h for h in json.load(sys.stdin) if h.get('status','').lower() == 'up']; print(hosts[0]['name'] if hosts else '')")
+	[[ -n "$HOST_NAME" ]] || die "No host in 'up' state — register and initialize a host first."
 fi
 echo "\$ qarax host gpus $HOST_NAME"
 $QARAX host gpus "$HOST_NAME"
+FREE_GPUS=$($QARAX host gpus "$HOST_NAME" -o json | python3 -c "import json,sys; print(sum(1 for g in json.load(sys.stdin) if not g.get('vm_id')))")
+if ((FREE_GPUS < GPU_COUNT)); then
+	echo -e "${YELLOW}Warning: host '$HOST_NAME' reports ${FREE_GPUS} free GPU(s), ${GPU_COUNT} requested.${NC}"
+	echo -e "${YELLOW}Scheduling will fail unless another host has enough vfio-pci bound GPUs.${NC}"
+fi
 echo ""
 
 # Build GPU flags
-GPU_FLAGS="--gpu-count $GPU_COUNT"
+GPU_FLAGS=(--gpu-count "$GPU_COUNT")
 if [[ -n "$GPU_VENDOR" ]]; then
-	GPU_FLAGS="$GPU_FLAGS --gpu-vendor $GPU_VENDOR"
+	GPU_FLAGS+=(--gpu-vendor "$GPU_VENDOR")
 fi
 if [[ -n "$GPU_MODEL" ]]; then
-	GPU_FLAGS="$GPU_FLAGS --gpu-model $GPU_MODEL"
+	GPU_FLAGS+=(--gpu-model "$GPU_MODEL")
 fi
 if [[ -n "$MIN_VRAM" ]]; then
-	GPU_FLAGS="$GPU_FLAGS --min-vram $MIN_VRAM"
+	GPU_FLAGS+=(--min-vram "$MIN_VRAM")
 fi
 
-# Create VM with OCI image + GPU passthrough
-echo "Create GPU VM"
-echo "\$ qarax vm create --name $VM_NAME --vcpus $VCPUS --memory $MEMORY_BYTES --image-ref $IMAGE_REF $GPU_FLAGS"
-# shellcheck disable=SC2086
+# Create VM with OCI image + GPU passthrough (the CLI waits for the async create job)
+echo "--- Create GPU VM ---"
+echo "\$ qarax vm create --name $VM_NAME --vcpus $VCPUS --memory $MEMORY_BYTES --image-ref $IMAGE_REF ${GPU_FLAGS[*]}"
 $QARAX vm create --name "$VM_NAME" \
 	--vcpus "$VCPUS" --memory "$MEMORY_BYTES" \
 	--image-ref "$IMAGE_REF" \
-	$GPU_FLAGS
+	"${GPU_FLAGS[@]}"
 echo ""
 
 # Start the VM
-echo "Start the VM"
+echo "--- Start the VM ---"
 echo "\$ qarax vm start $VM_NAME"
 $QARAX vm start "$VM_NAME"
 echo ""
@@ -183,8 +195,10 @@ echo "--- VM Status ---"
 $QARAX vm get "$VM_NAME"
 echo ""
 
+# Show GPUs on the host the scheduler actually picked
+VM_HOST_ID=$($QARAX vm get "$VM_NAME" -o json | python3 -c "import json,sys; print(json.load(sys.stdin).get('host_id') or '')")
 echo "--- GPU Allocation ---"
-$QARAX host gpus "$HOST_NAME"
+$QARAX host gpus "${VM_HOST_ID:-$HOST_NAME}"
 echo ""
 
 echo "=== Done ==="
@@ -194,6 +208,6 @@ echo "Inside the guest, 'lspci' will show the GPU as a PCI device."
 echo ""
 echo "Useful commands:"
 echo "  qarax vm get $VM_NAME            # check VM status"
-echo "  qarax host gpus $HOST_NAME       # check GPU allocation"
+echo "  qarax host gpus ${VM_HOST_ID:-$HOST_NAME}       # check GPU allocation"
 echo "  qarax vm stop $VM_NAME           # stop the VM (releases GPUs)"
 echo "  qarax vm delete $VM_NAME         # delete the VM"

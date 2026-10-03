@@ -58,7 +58,7 @@ usage() {
 while [[ $# -gt 0 ]]; do
 	case "$1" in
 	--server)
-		SERVER="$2"
+		SERVER="${2:?--server requires a URL}"
 		shift 2
 		;;
 	--help | -h)
@@ -81,14 +81,6 @@ QARAX_BIN="$(find_qarax_bin)"
 
 qarax() {
 	"$QARAX_BIN" --server "$SERVER" "$@"
-}
-
-ensure_two_host_stack() {
-	if curl -sf --max-time 3 "${SERVER}/" >/dev/null 2>&1; then
-		return 0
-	fi
-
-	die "qarax server not reachable at ${SERVER}\nStart a live two-node stack first, for example:\n  cd e2e\n  KEEP=1 ./run_e2e_tests.sh test_live_migration.py::test_host_evacuation_marks_maintenance_and_avoids_rescheduling"
 }
 
 host_name_for_id() {
@@ -184,7 +176,7 @@ banner "Host Maintenance / Evacuation Demo"
 
 step "Preflight checks"
 command -v jq >/dev/null || die "jq is required"
-ensure_two_host_stack
+require_server "$SERVER"
 
 host_json="$(qarax host list -o json 2>&1)" || {
 	if grep -qi "missing field" <<<"$host_json"; then
@@ -195,7 +187,11 @@ host_json="$(qarax host list -o json 2>&1)" || {
 
 up_hosts="$(jq -r '.[] | select(.status == "up") | [.name, .address] | @tsv' <<<"$host_json")"
 up_host_count="$(jq -r '[.[] | select(.status == "up")] | length' <<<"$host_json")"
-[[ "$up_host_count" -ge 2 ]] || die "This demo requires two UP hosts. Start the two-node e2e stack first."
+[[ "$up_host_count" -ge 2 ]] || die "This demo requires two UP hosts (found ${up_host_count}).
+With 'make run-local' running, register the second node:
+  QARAX_TOKEN=\${QARAX_TOKEN:-e2e-test-token} bash e2e/setup_host.sh ${SERVER} qarax-node-2 50051 local-node-2
+If a host is still in maintenance from an earlier run: qarax host maintenance exit <host>
+See demos/host-evacuation/README.md for details."
 
 info "UP hosts:"
 while IFS=$'\t' read -r host_name host_address; do

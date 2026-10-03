@@ -12,16 +12,18 @@
 # no OverlayBD, no external dependency after the download.
 #
 # Prerequisites:
-#   - qarax stack running (make run-local or hack/run-local.sh)
-#   - qarax CLI on PATH
+#   - qarax stack running (make run-local), or let the script start it
+#   - qarax CLI on PATH or built under target/ (make build)
+#   - jq
 #   - A host registered and in "up" state
 #   - Internet access from the qarax-node for the image download
-#   - An SSH public key at ~/.ssh/id_rsa.pub (or set SSH_PUB_KEY)
+#   - An SSH public key at ~/.ssh/id_ed25519.pub or ~/.ssh/id_rsa.pub (or set SSH_PUB_KEY)
 #
 # Usage:
 #   ./demos/cloud-image/run.sh
 #   ./demos/cloud-image/run.sh --image-url https://example.com/custom.img --name my-vm
 #   ./demos/cloud-image/run.sh --preallocate   # reserve blocks upfront
+#   ./demos/cloud-image/run.sh --cleanup       # delete VM, disk, network, and pool
 #
 
 set -euo pipefail
@@ -44,8 +46,10 @@ IMAGE_URL="https://cloud-images.ubuntu.com/minimal/releases/jammy/release/ubuntu
 VCPUS=2
 MEMORY_GIB=1
 SERVER="${QARAX_SERVER:-http://localhost:8000}"
-SSH_PUB_KEY="${SSH_PUB_KEY:-$(cat ~/.ssh/id_rsa.pub 2>/dev/null || echo '')}"
+SSH_PUB_KEY="${SSH_PUB_KEY:-$(cat ~/.ssh/id_ed25519.pub 2>/dev/null || cat ~/.ssh/id_rsa.pub 2>/dev/null || true)}"
 PREALLOCATE=false
+DOWNLOAD_TIMEOUT=1800
+CLEANUP=0
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -114,6 +118,33 @@ while [[ $# -gt 0 ]]; do
 		SERVER="$2"
 		shift 2
 		;;
+	--cleanup)
+		CLEANUP=1
+		shift
+		;;
+	--help | -h)
+		echo "Usage: $0 [OPTIONS]"
+		echo ""
+		echo "Options:"
+		echo "  --name NAME              VM name (default: demo-cloud-image-vm)"
+		echo "  --image-url URL          Cloud image URL (default: Ubuntu 22.04 minimal)"
+		echo "  --disk-name NAME         Disk storage object name (default: ubuntu-22.04-cloud)"
+		echo "  --preallocate            Reserve disk blocks upfront (default: sparse)"
+		echo "  --pool-name NAME         Local storage pool name (default: demo-cloud-image-pool)"
+		echo "  --pool-path PATH         Pool directory on qarax-node (default: /var/lib/qarax/cloud-image-pool)"
+		echo "  --network-name NAME      Network name (default: demo-cloud-image-net)"
+		echo "  --subnet CIDR            Network subnet (default: 10.97.0.0/24)"
+		echo "  --gateway IP             Network gateway (default: 10.97.0.1)"
+		echo "  --bridge-name NAME       Bridge device on the host (default: qci0)"
+		echo "  --parent-interface NIC   Bridge this host NIC instead of an isolated NAT bridge"
+		echo "  --host NAME              Host for the pool and network (default: \$QARAX_HOST or local-node)"
+		echo "  --vcpus N                Number of vCPUs (default: 2)"
+		echo "  --memory GiB             Memory in GiB (default: 1)"
+		echo "  --ssh-key KEY            SSH public key to inject (default: \$SSH_PUB_KEY or ~/.ssh/id_{ed25519,rsa}.pub)"
+		echo "  --server URL             qarax API URL (default: \$QARAX_SERVER or http://localhost:8000)"
+		echo "  --cleanup                Delete the VM, disk, network, and pool, then exit"
+		exit 0
+		;;
 	*)
 		echo "Unknown argument: $1" >&2
 		exit 1
@@ -123,42 +154,68 @@ done
 
 export QARAX_SERVER="$SERVER"
 
+command -v jq >/dev/null || die "jq is required"
+
 QARAX_BIN="$(find_qarax_bin)"
-[[ -z "$QARAX_BIN" ]] && die "qarax CLI not found. Run 'make build' or add it to PATH."
+[[ -n "$QARAX_BIN" ]] || die "qarax CLI not found. Run 'make build' or add it to PATH."
 QARAX="$QARAX_BIN --server $SERVER"
+
+if [[ "$CLEANUP" -eq 1 ]]; then
+	if ! curl -sf --max-time 3 "${SERVER}/" >/dev/null 2>&1; then
+		echo "Stack not running — nothing to clean up."
+		exit 0
+	fi
+	require_auth "$SERVER"
+	echo "=== Cleaning up cloud-image demo resources ==="
+	timeout 60 $QARAX vm force-stop --wait "$VM_NAME" >/dev/null 2>&1 || true
+	$QARAX vm delete "$VM_NAME" 2>/dev/null || true
+	$QARAX storage-object delete "$DISK_NAME" 2>/dev/null || true
+	$QARAX network detach-host --network "$NETWORK_NAME" --host "$HOST_NAME" 2>/dev/null || true
+	$QARAX network delete "$NETWORK_NAME" 2>/dev/null || true
+	$QARAX storage-pool delete "$POOL_NAME" 2>/dev/null || true
+	echo "Done."
+	exit 0
+fi
 
 ensure_stack "$SERVER"
 
 wait_for_job() {
 	local job_id="$1"
 	local label="$2"
+	local timeout="$3"
+	local elapsed=0
 
-	while true; do
+	while ((elapsed < timeout)); do
 		local job_json status progress
 		job_json=$($QARAX job get "$job_id" --output json)
 		status=$(jq -r '.status' <<<"$job_json")
 		case "$status" in
 		completed)
-			echo "  ${label}: completed"
+			echo -e "\r  ${label}: completed          "
 			return 0
 			;;
 		failed)
-			echo "  ${label}: failed" >&2
-			jq -r '.error // "unknown error"' <<<"$job_json" >&2
-			return 1
+			echo ""
+			die "${label} failed: $(jq -r '.error // "unknown error"' <<<"$job_json")"
 			;;
 		*)
 			progress=$(jq -r '.progress // 0' <<<"$job_json")
-			echo -ne "\r  ${label}: [${status}] ${progress}%   "
-			sleep 2
+			echo -ne "\r  ${label}: [${status}] ${progress}% (${elapsed}s)   "
+			sleep 5
+			elapsed=$((elapsed + 5))
 			;;
 		esac
 	done
+	echo ""
+	die "${label} did not finish within ${timeout}s (job ${job_id}). Check: qarax job get ${job_id}"
 }
 
 if [[ -z "$SSH_PUB_KEY" ]]; then
-	echo "Error: no SSH public key found. Set SSH_PUB_KEY or ensure ~/.ssh/id_rsa.pub exists." >&2
-	exit 1
+	die "no SSH public key found. Set SSH_PUB_KEY, pass --ssh-key, or create ~/.ssh/id_ed25519.pub."
+fi
+
+if $QARAX vm get "$VM_NAME" >/dev/null 2>&1; then
+	die "VM '$VM_NAME' already exists. Run '$0 --cleanup' first or pass --name."
 fi
 
 echo "=== Cloud Image VM Demo ==="
@@ -172,64 +229,72 @@ echo ""
 
 # ── Step 1: Storage pool ──────────────────────────────────────────────────────
 
-echo "→ Creating storage pool '$POOL_NAME'..."
-POOL_ID=$($QARAX storage-pool create \
-	--name "$POOL_NAME" \
-	--pool-type local \
-	--path "$POOL_PATH" \
-	--host "$HOST_NAME" \
-	--output json | jq -r '.pool_id' 2>/dev/null ||
-	$QARAX storage-pool list --output json | jq -r ".[] | select(.name==\"$POOL_NAME\") | .id")
+if POOL_ID=$($QARAX storage-pool get "$POOL_NAME" --output json 2>/dev/null | jq -r '.id'); then
+	echo "→ Reusing storage pool '$POOL_NAME'"
+else
+	echo "→ Creating storage pool '$POOL_NAME'..."
+	POOL_ID=$($QARAX storage-pool create \
+		--name "$POOL_NAME" \
+		--pool-type local \
+		--path "$POOL_PATH" \
+		--host "$HOST_NAME" \
+		--output json | jq -r '.pool_id')
+fi
 
 echo "  Pool: $POOL_ID"
 
 # ── Step 2: Network ────────────────────────────────────────────────────────────
 
-echo "→ Creating network '$NETWORK_NAME'..."
-NETWORK_ID=$($QARAX network create \
-	--name "$NETWORK_NAME" \
-	--subnet "$NETWORK_SUBNET" \
-	--gateway "$NETWORK_GATEWAY" \
-	--output json | jq -r '.network_id' 2>/dev/null ||
-	$QARAX network list --output json | jq -r ".[] | select(.name==\"$NETWORK_NAME\") | .id")
+NETWORK_REUSED=0
+if NETWORK_ID=$($QARAX network get "$NETWORK_NAME" --output json 2>/dev/null | jq -r '.id'); then
+	echo "→ Reusing network '$NETWORK_NAME'"
+	NETWORK_REUSED=1
+else
+	echo "→ Creating network '$NETWORK_NAME'..."
+	NETWORK_ID=$($QARAX network create \
+		--name "$NETWORK_NAME" \
+		--subnet "$NETWORK_SUBNET" \
+		--gateway "$NETWORK_GATEWAY" \
+		--output json | jq -r '.network_id')
+fi
 
 echo "  Network: $NETWORK_ID"
 
 echo "→ Attaching network to host '$HOST_NAME'..."
+ATTACH_ARGS=(--network "$NETWORK_NAME" --host "$HOST_NAME" --bridge-name "$BRIDGE_NAME")
 if [[ -n "$PARENT_INTERFACE" ]]; then
-	$QARAX network attach-host \
-		--network "$NETWORK_NAME" \
-		--host "$HOST_NAME" \
-		--bridge-name "$BRIDGE_NAME" \
-		--parent-interface "$PARENT_INTERFACE"
+	ATTACH_ARGS+=(--parent-interface "$PARENT_INTERFACE")
+fi
+if [[ "$NETWORK_REUSED" -eq 1 ]]; then
+	# The bridge already exists on the node after a previous run, so a second
+	# attach fails; that is expected.
+	$QARAX network attach-host "${ATTACH_ARGS[@]}" 2>/dev/null ||
+		echo "  (already attached from a previous run)"
 else
-	$QARAX network attach-host \
-		--network "$NETWORK_NAME" \
-		--host "$HOST_NAME" \
-		--bridge-name "$BRIDGE_NAME"
+	$QARAX network attach-host "${ATTACH_ARGS[@]}"
 fi
 
 # ── Step 3: Download cloud image into the pool ────────────────────────────────
 
-echo "→ Downloading cloud image into pool (this may take a few minutes)..."
+if DISK_ID=$($QARAX storage-object get "$DISK_NAME" --output json 2>/dev/null | jq -r '.id'); then
+	echo "→ Reusing disk '$DISK_NAME' from a previous run (use --cleanup for a fresh download)"
+	echo "  Disk: $DISK_ID"
+else
+	echo "→ Downloading cloud image into pool (this may take a few minutes)..."
 
-PREALLOCATE_FLAG=""
-if [[ "$PREALLOCATE" == "true" ]]; then
-	PREALLOCATE_FLAG="--preallocate"
-fi
+	CREATE_DISK_ARGS=(--pool "$POOL_NAME" --name "$DISK_NAME" --source "$IMAGE_URL")
+	if [[ "$PREALLOCATE" == "true" ]]; then
+		CREATE_DISK_ARGS+=(--preallocate)
+	fi
 
-DISK_RESULT=$($QARAX storage-pool create-disk \
-	--pool "$POOL_NAME" \
-	--name "$DISK_NAME" \
-	--source "$IMAGE_URL" \
-	$PREALLOCATE_FLAG \
-	--output json)
+	DISK_RESULT=$($QARAX storage-pool create-disk "${CREATE_DISK_ARGS[@]}" --output json)
 
-DISK_ID=$(echo "$DISK_RESULT" | jq -r '.storage_object_id')
-DISK_JOB_ID=$(echo "$DISK_RESULT" | jq -r '.job_id // empty')
-echo "  Disk: $DISK_ID"
-if [[ -n "$DISK_JOB_ID" ]]; then
-	wait_for_job "$DISK_JOB_ID" "Disk download"
+	DISK_ID=$(jq -r '.storage_object_id' <<<"$DISK_RESULT")
+	DISK_JOB_ID=$(jq -r '.job_id // empty' <<<"$DISK_RESULT")
+	echo "  Disk: $DISK_ID"
+	if [[ -n "$DISK_JOB_ID" ]]; then
+		wait_for_job "$DISK_JOB_ID" "Disk download" "$DOWNLOAD_TIMEOUT"
+	fi
 fi
 
 # ── Step 4: Create VM with the disk as root + cloud-init ──────────────────────
@@ -241,8 +306,8 @@ users:
   - name: qarax
     sudo: ALL=(ALL) NOPASSWD:ALL
     shell: /bin/bash
-     ssh_authorized_keys:
-       - $SSH_PUB_KEY
+    ssh_authorized_keys:
+      - $SSH_PUB_KEY
 growpart:
   mode: auto
   devices: ['/']
@@ -294,9 +359,13 @@ if [[ -n "$PARENT_INTERFACE" ]]; then
 else
 	echo "Compose mode note: Qarax bridge networks live inside the qarax-node namespace."
 	echo "Verify reachability from the node container:"
-	echo "  docker exec e2e-qarax-node-1 bash -lc 'timeout 3 bash -lc \"</dev/tcp/$VM_IP/22\" && echo ssh-open'"
-	echo "  docker exec e2e-qarax-node-1 curl http://$VM_IP:8080"
+	echo "  docker compose -f e2e/docker-compose.yml exec qarax-node bash -c 'timeout 3 bash -c \"</dev/tcp/$VM_IP/22\" && echo ssh-open'"
+	echo "  docker compose -f e2e/docker-compose.yml exec qarax-node curl http://$VM_IP:8080"
 fi
 echo ""
 echo "To inspect the VM:"
-echo "  $QARAX vm get $VM_NAME"
+echo "  qarax vm get $VM_NAME"
+echo "  qarax vm console $VM_NAME"
+echo ""
+echo "To delete everything this demo created:"
+echo "  $0 --cleanup"

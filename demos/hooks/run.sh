@@ -8,13 +8,13 @@
 #
 # Prerequisites:
 #   - qarax stack running (make run-local)
-#   - qarax CLI on PATH
-#   - jq installed
+#   - qarax CLI on PATH (or Rust toolchain to auto-build it)
+#   - jq and python3 installed
 #
 # Usage:
 #   ./demos/hooks/run.sh
 #   ./demos/hooks/run.sh --server http://localhost:8000
-#   WEBHOOK_HOST=192.168.1.10 ./demos/hooks/run.sh  # if host.docker.internal doesn't work
+#   WEBHOOK_HOST=192.168.1.10 ./demos/hooks/run.sh  # if the auto-detected address doesn't work
 #
 
 set -euo pipefail
@@ -67,13 +67,13 @@ while [[ $# -gt 0 ]]; do
 	--help | -h)
 		echo "Usage: $0 [OPTIONS]"
 		echo "  --server URL          qarax API URL (default: \$QARAX_SERVER or http://localhost:8000)"
-		echo "  --webhook-host HOST   How qarax reaches this machine (default: host.docker.internal)"
-		echo "  --webhook-port PORT   Local port for webhook receiver (default: 9999)"
+		echo "  --webhook-host HOST   How qarax reaches this machine (default: \$WEBHOOK_HOST, else the"
+		echo "                        e2e Docker network gateway on Linux, host.docker.internal elsewhere)"
+		echo "  --webhook-port PORT   Local port for webhook receiver (default: \$WEBHOOK_PORT or 9999)"
 		exit 0
 		;;
 	*)
-		echo "Unknown option: $1"
-		exit 1
+		die "Unknown option: $1"
 		;;
 	esac
 done
@@ -89,6 +89,21 @@ run() {
 	echo -e "  ${DIM}\$ $*${NC}"
 	"$@"
 }
+
+# Poll until the VM reaches the expected status; fail with the last status seen.
+wait_for_status() {
+	local expected="$1" timeout="$2" status=""
+	local deadline=$((SECONDS + timeout))
+	while ((SECONDS < deadline)); do
+		status=$($QARAX vm get "$VM_ID" -o json | jq -r '.status') || true
+		[[ "$status" == "$expected" ]] && return 0
+		sleep 1
+	done
+	die "VM '$VM_NAME' did not reach '$expected' within ${timeout}s (last status: ${status:-unknown})"
+}
+
+command -v jq >/dev/null 2>&1 || die "jq is required"
+command -v python3 >/dev/null 2>&1 || die "python3 is required for the webhook receiver"
 
 if [[ -z "$(find_qarax_bin)" ]]; then
 	echo "qarax CLI not found — building..."
@@ -139,7 +154,8 @@ class Handler(BaseHTTPRequestHandler):
         new = body.get('new_status', '?')
         tags = body.get('tags', [])
         tag_str = f'  tags={tags}' if tags else ''
-        print(f'  \033[1;33m⚡ WEBHOOK\033[0m [{ts}] \033[1m{vm}\033[0m: {prev} → \033[1m{new}\033[0m{tag_str}', flush=True)
+        sig_str = '  \033[2m(HMAC-signed)\033[0m' if sig != 'none' else ''
+        print(f'  \033[1;33m⚡ WEBHOOK\033[0m [{ts}] \033[1m{vm}\033[0m: {prev} → \033[1m{new}\033[0m{tag_str}{sig_str}', flush=True)
 
         self.send_response(200)
         self.end_headers()
@@ -152,6 +168,7 @@ HTTPServer(('0.0.0.0', ${WEBHOOK_PORT}), Handler).serve_forever()
 " &
 RECEIVER_PID=$!
 sleep 0.5
+kill -0 "$RECEIVER_PID" 2>/dev/null || die "Webhook receiver failed to start (is port $WEBHOOK_PORT already in use?)"
 
 step "Creating lifecycle hook..."
 echo
@@ -163,6 +180,7 @@ run $QARAX hook create \
 echo
 
 HOOK_ID=$($QARAX hook list -o json | jq -r ".[] | select(.name == \"$HOOK_NAME\") | .id")
+[[ -n "$HOOK_ID" ]] || die "Hook '$HOOK_NAME' not found after create"
 info "Hook ID: $HOOK_ID"
 
 step "Hook registered:"
@@ -176,42 +194,31 @@ run $QARAX vm create --name "$VM_NAME" --vcpus "$VCPUS" --memory "$MEMORY_BYTES"
 echo
 
 VM_ID=$($QARAX vm list -o json | jq -r ".[] | select(.name == \"$VM_NAME\") | .id")
+[[ -n "$VM_ID" ]] || die "VM '$VM_NAME' not found after create"
 info "VM ID: $VM_ID"
 sleep 3 # let hook executor deliver
 
 step "Starting VM..."
 run $QARAX vm start "$VM_NAME"
 info "Waiting for VM to start..."
-
-# Poll until running or timeout
-for i in $(seq 1 30); do
-	STATUS=$($QARAX vm get "$VM_ID" -o json | jq -r '.status')
-	if [[ "$STATUS" == "running" ]]; then
-		break
-	fi
-	sleep 1
-done
+wait_for_status running 60
 echo
 sleep 3 # let hook executor deliver
 
 step "Pausing VM..."
 run $QARAX vm pause "$VM_NAME"
+wait_for_status paused 30
 sleep 3
 
 step "Resuming VM..."
 run $QARAX vm resume "$VM_NAME"
+wait_for_status running 30
 sleep 3
 
 step "Stopping VM..."
 run $QARAX vm stop "$VM_NAME"
 info "Waiting for VM to stop..."
-for i in $(seq 1 20); do
-	STATUS=$($QARAX vm get "$VM_ID" -o json | jq -r '.status')
-	if [[ "$STATUS" == "shutdown" ]]; then
-		break
-	fi
-	sleep 1
-done
+wait_for_status shutdown 60
 echo
 sleep 3 # let hook executor deliver
 
