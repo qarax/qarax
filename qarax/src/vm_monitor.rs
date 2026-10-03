@@ -93,17 +93,19 @@ pub async fn start_vm_monitor(env: App) {
                                 .map(|e| matches!(e, crate::errors::Error::NotFound))
                                 .unwrap_or(false)
                             {
-                                info!(
-                                    "VM monitor: VM {} not found on node, marking as Unknown",
-                                    vm.id
-                                );
-                                if let Err(db_err) =
-                                    vms::update_status(env.pool(), vm.id, VmStatus::Unknown).await
-                                {
-                                    warn!(
-                                        "VM monitor: failed to update VM {} status: {}",
-                                        vm.id, db_err
+                                if let Some(status) = status_when_missing_on_node(vm.status) {
+                                    info!(
+                                        "VM monitor: VM {} not found on node, marking as {:?}",
+                                        vm.id, status
                                     );
+                                    if let Err(db_err) =
+                                        vms::update_status(env.pool(), vm.id, status).await
+                                    {
+                                        warn!(
+                                            "VM monitor: failed to update VM {} status: {}",
+                                            vm.id, db_err
+                                        );
+                                    }
                                 }
                             } else {
                                 warn!(
@@ -145,6 +147,19 @@ pub fn record_monitor_cycle(monitor: &str, start: std::time::Instant) {
         .add(1, &[KeyValue::new("monitor", monitor.to_string())]);
 }
 
+/// New status for a VM its host reports as unknown, or `None` to leave it.
+///
+/// A `Created` VM has a host (OCI image VMs are placed when their image is
+/// imported) but is only defined on the node when it is first started, so
+/// "not found" is its normal state. Marking it `Unknown` would also make
+/// start skip the create request and fail with NotFound.
+fn status_when_missing_on_node(current: VmStatus) -> Option<VmStatus> {
+    match current {
+        VmStatus::Created => None,
+        _ => Some(VmStatus::Unknown),
+    }
+}
+
 fn proto_status_to_db(status: i32, previous_status: VmStatus) -> VmStatus {
     // Proto VmStatus values:
     // VM_STATUS_UNKNOWN = 0, VM_STATUS_CREATED = 1, VM_STATUS_RUNNING = 2,
@@ -170,8 +185,20 @@ fn proto_status_to_db(status: i32, previous_status: VmStatus) -> VmStatus {
 
 #[cfg(test)]
 mod tests {
-    use super::proto_status_to_db;
+    use super::{proto_status_to_db, status_when_missing_on_node};
     use crate::model::vms::VmStatus;
+
+    #[test]
+    fn never_started_vm_missing_on_node_stays_created() {
+        assert_eq!(status_when_missing_on_node(VmStatus::Created), None);
+    }
+
+    #[test]
+    fn deployed_vm_missing_on_node_becomes_unknown() {
+        for status in [VmStatus::Running, VmStatus::Paused, VmStatus::Migrating] {
+            assert_eq!(status_when_missing_on_node(status), Some(VmStatus::Unknown));
+        }
+    }
 
     #[test]
     fn created_state_stays_created_for_never_started_vms() {
