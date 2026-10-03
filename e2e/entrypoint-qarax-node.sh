@@ -9,6 +9,16 @@ modprobe target_core_user 2>/dev/null || true
 modprobe tcm_loop 2>/dev/null || true
 modprobe uio 2>/dev/null || true
 modprobe vhost_vsock 2>/dev/null || true
+modprobe iscsi_tcp 2>/dev/null || true
+
+# iSCSI initiator for BLOCK storage pools. There is no systemd here, so do what
+# iscsi-init.service and iscsid.socket do on a real host: generate a per-node
+# initiator name (the image ships none) and start iscsid for iscsiadm login.
+if command -v iscsid >/dev/null 2>&1; then
+	[ -s /etc/iscsi/initiatorname.iscsi ] ||
+		echo "InitiatorName=$(iscsi-iname)" >/etc/iscsi/initiatorname.iscsi
+	iscsid || echo "WARNING: failed to start iscsid; BLOCK storage pools will not attach"
+fi
 
 sync_uio_nodes() {
 	for sys_uio in /sys/class/uio/uio*; do

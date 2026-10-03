@@ -25,6 +25,15 @@ qarax as a `BLOCK` storage pool.
 
 If your server uses a token other than the local default, export `QARAX_TOKEN`.
 
+## Limitation: no iSCSI login in the container stack
+
+The kernel's iSCSI initiator netlink interface only works in the host network
+namespace. The compose `qarax-node` runs in a Docker bridge network, so its
+login fails (`iscsid` logs `sendmsg: bug? ctrl_fd`) even though discovery
+succeeds. The demo therefore shows the pool and LUN APIs and reports that no
+session was established. On a real hypervisor host (bootc appliance or bare
+metal) the same pool attaches and its LUNs appear under `/dev/disk/by-path/`.
+
 ## Run
 
 ```bash
@@ -37,12 +46,12 @@ If your server uses a token other than the local default, export `QARAX_TOKEN`.
 The script:
 
 1. builds a `targetcli`-based image and starts it as the `iscsi-target` service
-   in the e2e compose project, exporting `iqn.2024-01.qarax:demo` on
+   in the e2e compose project, exporting `iqn.2024-01.io.qarax:demo` on
    `iscsi-target:3260`
-2. starts `iscsid` inside the `qarax-node` container (the e2e node image has no
-   init system to start it)
-3. creates a BLOCK pool pointing at the target and waits until `qarax-node` has
-   an iSCSI session to it
+2. checks that `iscsid` is running in the `qarax-node` container (the node
+   entrypoint starts it)
+3. creates a BLOCK pool pointing at the target and reports whether `qarax-node`
+   got an iSCSI session (it can't in the container stack; see above)
 4. registers LUN 0 (1 GiB) as a disk object
 
 ## Cleanup
