@@ -97,6 +97,7 @@ pub struct BackupListQuery {
         backup::handler::get,
         backup::handler::create,
         backup::handler::restore,
+        backup::handler::delete,
         host::handler::list,
         host::handler::add,
         host::handler::update,
@@ -483,7 +484,10 @@ fn backups() -> Router {
             "/backups",
             get(backup::handler::list).post(backup::handler::create),
         )
-        .route("/backups/{backup_id}", get(backup::handler::get))
+        .route(
+            "/backups/{backup_id}",
+            get(backup::handler::get).delete(backup::handler::delete),
+        )
         .route(
             "/backups/{backup_id}/restore",
             post(backup::handler::restore),

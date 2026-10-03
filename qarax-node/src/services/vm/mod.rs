@@ -11,14 +11,14 @@ use crate::firecracker::FirecrackerManager;
 use crate::rpc::node::{
     AddDeviceRequest, AddDiskDeviceRequest, AddNetworkDeviceRequest, AttachNetworkRequest,
     AttachNetworkResponse, AttachStoragePoolRequest, AttachStoragePoolResponse, ConsoleInput,
-    ConsoleLogResponse, ConsoleOutput, ConsolePtyPathResponse, DetachNetworkRequest,
-    DetachNetworkResponse, DetachStoragePoolRequest, DeviceCounters, ExecVmRequest, ExecVmResponse,
-    GpuInfo, HypervisorType, ImportOverlayBdRequest, ImportOverlayBdResponse, NodeInfo, NumaNode,
-    PreflightCheck, PreflightImageRequest, PreflightImageResponse, ReceiveMigrationRequest,
-    ReceiveMigrationResponse, RemoveDeviceRequest, ResizeDiskRequest, ResizeVmRequest,
-    RestoreVmRequest, SendMigrationRequest, SnapshotVmRequest, StoragePoolKind,
-    SyncNetworkIsolationRequest, SyncVmFirewallRequest, SyncVpcOverlaysRequest, VmConfig,
-    VmCounters, VmId, VmList, VmState, vm_service_server::VmService,
+    ConsoleLogResponse, ConsoleOutput, ConsolePtyPathResponse, DeleteSnapshotRequest,
+    DetachNetworkRequest, DetachNetworkResponse, DetachStoragePoolRequest, DeviceCounters,
+    ExecVmRequest, ExecVmResponse, GpuInfo, HypervisorType, ImportOverlayBdRequest,
+    ImportOverlayBdResponse, NodeInfo, NumaNode, PreflightCheck, PreflightImageRequest,
+    PreflightImageResponse, ReceiveMigrationRequest, ReceiveMigrationResponse, RemoveDeviceRequest,
+    ResizeDiskRequest, ResizeVmRequest, RestoreVmRequest, SendMigrationRequest, SnapshotVmRequest,
+    StoragePoolKind, SyncNetworkIsolationRequest, SyncVmFirewallRequest, SyncVpcOverlaysRequest,
+    VmConfig, VmCounters, VmId, VmList, VmState, vm_service_server::VmService,
 };
 use crate::vmm::{VmmError, VmmManager};
 use common::cpu_list::expand_cpu_list;
@@ -241,6 +241,21 @@ impl VmService for VmServiceImpl {
                 error!("Failed to restore VM {}: {}", req.vm_id, e);
                 Err(map_vmm_error(e))
             }
+        }
+    }
+
+    async fn delete_snapshot(
+        &self,
+        request: Request<DeleteSnapshotRequest>,
+    ) -> Result<Response<()>, Status> {
+        let url = request.into_inner().snapshot_url;
+        match crate::snapshot::delete_snapshot_dir(&url).await {
+            Ok(_) => Ok(Response::new(())),
+            Err(e @ crate::snapshot::SnapshotDeleteError::Io(..)) => {
+                error!("{}", e);
+                Err(Status::internal(e.to_string()))
+            }
+            Err(e) => Err(Status::invalid_argument(e.to_string())),
         }
     }
 

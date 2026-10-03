@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 use crate::{
     App,
+    grpc_client::NodeClient,
     handlers::{
         audit::{AuditEvent, AuditEventExt},
         vm::handler::{CreateSnapshotRequest, create_vm_snapshot, restore_vm_from_snapshot},
@@ -19,6 +20,7 @@ use crate::{
     model::{
         audit_log::{AuditAction, AuditResourceType},
         backups::{self, Backup, BackupStatus, BackupType, NewBackup},
+        hosts,
         storage_objects::{self, NewStorageObject, StorageObjectType},
         storage_pools,
     },
@@ -430,6 +432,85 @@ pub async fn restore(
     }
     .with_audit_event(AuditEvent {
         action: AuditAction::Restore,
+        resource_type: AuditResourceType::Backup,
+        resource_id: backup.id,
+        resource_name: Some(backup.name),
+        metadata: None,
+    }))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/backups/{backup_id}",
+    params(
+        ("backup_id" = uuid::Uuid, Path, description = "Backup unique identifier")
+    ),
+    responses(
+        (status = 204, description = "Backup and its stored data deleted"),
+        (status = 404, description = "Backup not found"),
+        (status = 409, description = "Backup is still being created"),
+        (status = 422, description = "No host available to remove the VM snapshot"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "backups"
+)]
+#[instrument(skip(env))]
+pub async fn delete(
+    Extension(env): Extension<App>,
+    Path(backup_id): Path<Uuid>,
+) -> Result<axum::response::Response> {
+    let backup = backups::get(env.pool(), backup_id).await?;
+    if backup.status == BackupStatus::Creating {
+        return Err(crate::errors::Error::Conflict(
+            "backup is still being created".into(),
+        ));
+    }
+
+    // Remove the stored data first, so a failure leaves the record in place
+    // and the delete can be retried.
+    let storage_object = storage_objects::get(env.pool(), backup.storage_object_id).await?;
+    if let Some(path) = storage_objects::get_path_from_config(&storage_object.config) {
+        match backup.backup_type {
+            // VM snapshots live on a node that has the backup's pool attached.
+            BackupType::Vm => {
+                let host_id =
+                    storage_pools::find_host_for_pool(env.pool(), storage_object.storage_pool_id)
+                        .await?
+                        .ok_or_else(|| {
+                            crate::errors::Error::UnprocessableEntity(
+                                "no host is attached to the backup's storage pool".into(),
+                            )
+                        })?;
+                let host = hosts::require_by_id(env.pool(), host_id).await?;
+                NodeClient::new(&host.address, host.port as u16)
+                    .delete_snapshot(&format!("file://{path}"))
+                    .await
+                    .map_err(|e| {
+                        error!(error = %e, backup_id = %backup.id, "failed to delete VM backup snapshot");
+                        crate::errors::Error::InternalServerError
+                    })?;
+            }
+            // Database dumps are written by the control plane itself.
+            BackupType::Database => match fs::remove_file(&path).await {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => {
+                    error!(error = %e, path = %path, "failed to delete database backup dump");
+                    return Err(crate::errors::Error::InternalServerError);
+                }
+            },
+        }
+    }
+
+    // Cascades to the backup row (and the VM snapshot row for VM backups).
+    storage_objects::delete(env.pool(), storage_object.id).await?;
+
+    Ok(ApiResponse {
+        data: (),
+        code: StatusCode::NO_CONTENT,
+    }
+    .with_audit_event(AuditEvent {
+        action: AuditAction::Delete,
         resource_type: AuditResourceType::Backup,
         resource_id: backup.id,
         resource_name: Some(backup.name),

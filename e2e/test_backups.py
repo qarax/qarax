@@ -4,8 +4,10 @@ E2E tests for the top-level backup API.
 These tests cover:
 - VM backup create/list/get/restore through /backups
 - Control-plane database backup/restore through /backups
+- Backup deletion, including removal of the stored snapshot / dump
 """
 
+import subprocess
 import uuid
 
 import pytest
@@ -35,6 +37,48 @@ from qarax_api_client.models.attach_pool_host_request import AttachPoolHostReque
 from helpers import AUTH_HEADERS, QARAX_URL, wait_for_status
 
 VM_OPERATION_TIMEOUT = 60
+
+
+def _containers(prefix):
+    result = subprocess.run(
+        ["docker", "ps", "--format", "{{.Names}}"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return [name for name in result.stdout.splitlines() if name.startswith(prefix)]
+
+
+def _path_exists_in_any(prefix, path):
+    """True if `path` exists in any running container whose name starts with prefix."""
+    containers = _containers(prefix)
+    assert containers, f"no running containers matching {prefix}"
+    return any(
+        subprocess.run(
+            ["docker", "exec", c, "test", "-e", path], check=False
+        ).returncode
+        == 0
+        for c in containers
+    )
+
+
+async def _backup_data_path(httpx_client, backup):
+    resp = await httpx_client.get(
+        f"{QARAX_URL}/storage-objects/{backup['storage_object_id']}"
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()["config"]["path"]
+
+
+async def _assert_backup_deleted(httpx_client, backup):
+    resp = await httpx_client.delete(f"{QARAX_URL}/backups/{backup['id']}")
+    assert resp.status_code == 204, resp.text
+    resp = await httpx_client.get(f"{QARAX_URL}/backups/{backup['id']}")
+    assert resp.status_code == 404, resp.text
+    resp = await httpx_client.get(
+        f"{QARAX_URL}/storage-objects/{backup['storage_object_id']}"
+    )
+    assert resp.status_code == 404, resp.text
 
 
 @pytest.fixture
@@ -84,6 +128,7 @@ async def test_vm_backup_lifecycle(client, backup_storage_pool):
             memory_size=256 * 1024 * 1024,
         )
         vm_id = uuid.UUID(str(await create_vm.asyncio(client=c, body=new_vm)).strip('"'))
+        backup = None
 
         try:
             await start_vm.asyncio_detailed(client=c, vm_id=vm_id)
@@ -131,6 +176,10 @@ async def test_vm_backup_lifecycle(client, backup_storage_pool):
             await wait_for_status(c, vm_id, VmStatus.RUNNING, timeout=VM_OPERATION_TIMEOUT)
             await stop_vm.asyncio_detailed(client=c, vm_id=vm_id)
         finally:
+            # Before the VM: deleting it cascades the backup row away and would
+            # leave the snapshot behind (and block the pool fixture's cleanup).
+            if backup is not None:
+                await httpx_client.delete(f"{QARAX_URL}/backups/{backup['id']}")
             await delete_vm.asyncio_detailed(client=c, vm_id=vm_id)
 
 
@@ -200,3 +249,68 @@ async def test_database_backup_restore(client, backup_storage_pool):
             await delete_instance_type.asyncio_detailed(
                 client=c, instance_type_id=str(before_id)
             )
+
+
+@pytest.mark.asyncio
+async def test_vm_backup_delete_removes_snapshot(client, backup_storage_pool):
+    async with client as c:
+        httpx_client = c.get_async_httpx_client()
+        new_vm = NewVm(
+            name=f"e2e-backup-del-vm-{uuid.uuid4().hex[:8]}",
+            hypervisor=Hypervisor.CLOUD_HV,
+            boot_vcpus=1,
+            max_vcpus=1,
+            memory_size=256 * 1024 * 1024,
+        )
+        vm_id = uuid.UUID(
+            str(await create_vm.asyncio(client=c, body=new_vm)).strip('"')
+        )
+
+        try:
+            await start_vm.asyncio_detailed(client=c, vm_id=vm_id)
+            await wait_for_status(
+                c, vm_id, VmStatus.RUNNING, timeout=VM_OPERATION_TIMEOUT
+            )
+
+            create_resp = await httpx_client.post(
+                f"{QARAX_URL}/backups",
+                json={
+                    "backup_type": "vm",
+                    "vm_id": str(vm_id),
+                    "storage_pool_id": str(backup_storage_pool),
+                    "name": f"e2e-vm-backup-del-{uuid.uuid4().hex[:8]}",
+                },
+            )
+            assert create_resp.status_code == 201, create_resp.text
+            backup = create_resp.json()
+
+            snapshot_dir = await _backup_data_path(httpx_client, backup)
+            assert _path_exists_in_any("e2e-qarax-node", snapshot_dir)
+
+            await _assert_backup_deleted(httpx_client, backup)
+            assert not _path_exists_in_any("e2e-qarax-node", snapshot_dir)
+        finally:
+            await stop_vm.asyncio_detailed(client=c, vm_id=vm_id)
+            await delete_vm.asyncio_detailed(client=c, vm_id=vm_id)
+
+
+@pytest.mark.asyncio
+async def test_database_backup_delete_removes_dump(client, backup_storage_pool):
+    async with client as c:
+        httpx_client = c.get_async_httpx_client()
+        create_resp = await httpx_client.post(
+            f"{QARAX_URL}/backups",
+            json={
+                "backup_type": "database",
+                "storage_pool_id": str(backup_storage_pool),
+                "name": f"e2e-db-backup-del-{uuid.uuid4().hex[:8]}",
+            },
+        )
+        assert create_resp.status_code == 201, create_resp.text
+        backup = create_resp.json()
+
+        dump_path = await _backup_data_path(httpx_client, backup)
+        assert _path_exists_in_any("e2e-qarax-1", dump_path)
+
+        await _assert_backup_deleted(httpx_client, backup)
+        assert not _path_exists_in_any("e2e-qarax-1", dump_path)

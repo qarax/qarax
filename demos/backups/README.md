@@ -4,7 +4,8 @@ This demo exercises the new top-level `qarax backup` surface end-to-end.
 
 It covers:
 
-1. `qarax backup create vm`, `list`, `get`, and `restore`
+1. `qarax backup create vm`, `list`, `get`, `restore`, and `delete` (which also
+   removes the snapshot from the node)
 2. `qarax backup create database`, `list`, `get`, and `restore`
 
 The database half proves that restoring a control-plane backup really rewinds

@@ -7,5 +7,6 @@ pub mod oci_config;
 pub mod overlaybd;
 pub mod rpc;
 pub mod services;
+pub mod snapshot;
 pub mod storage;
 pub mod vmm;

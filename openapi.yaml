@@ -164,6 +164,29 @@ paths:
           description: Backup not found
         '500':
           description: Internal server error
+    delete:
+      tags:
+      - backups
+      operationId: delete
+      parameters:
+      - name: backup_id
+        in: path
+        description: Backup unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '204':
+          description: Backup and its stored data deleted
+        '404':
+          description: Backup not found
+        '409':
+          description: Backup is still being created
+        '422':
+          description: No host available to remove the VM snapshot
+        '500':
+          description: Internal server error
   /backups/{backup_id}/restore:
     post:
       tags:
