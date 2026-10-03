@@ -109,8 +109,7 @@ impl VmServiceImpl {
     async fn binary_version(path: &Path, arg: &str) -> Option<String> {
         match tokio::process::Command::new(path).arg(arg).output().await {
             Ok(output) if output.status.success() => {
-                let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                (!version.is_empty()).then_some(version)
+                parse_version_output(&String::from_utf8_lossy(&output.stdout))
             }
             Ok(output) => {
                 warn!(
@@ -131,6 +130,17 @@ impl VmServiceImpl {
             }
         }
     }
+}
+
+/// Extract the version from `<binary> --version` stdout: the first non-empty
+/// line. Firecracker prints a trailing "exiting successfully" log line after
+/// the version, which must not end up in the reported version string.
+fn parse_version_output(stdout: &str) -> Option<String> {
+    stdout
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(str::to_string)
 }
 
 #[tonic::async_trait]
@@ -1544,6 +1554,20 @@ fn preflight_response(
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn parse_version_output_takes_first_non_empty_line() {
+        let firecracker = "Firecracker v1.11.0\n\n2026-10-03T09:37:21.432830422 [anonymous-instance:main] Firecracker exiting successfully. exit_code=0\n";
+        assert_eq!(
+            parse_version_output(firecracker).as_deref(),
+            Some("Firecracker v1.11.0")
+        );
+        assert_eq!(
+            parse_version_output("cloud-hypervisor v51.1\n").as_deref(),
+            Some("cloud-hypervisor v51.1")
+        );
+        assert_eq!(parse_version_output("\n  \n"), None);
+    }
 
     fn make_numa_dir(dir: &TempDir, node_id: u32, cpulist: &str, mem_kb: u64, distances: &str) {
         let node_dir = dir.path().join(format!("node{}", node_id));
