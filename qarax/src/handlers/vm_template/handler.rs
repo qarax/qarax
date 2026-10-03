@@ -1,7 +1,10 @@
 use super::*;
 use crate::{
     App,
-    model::vm_templates::{self, NewVmTemplate, VmTemplate},
+    model::{
+        sandbox_pools,
+        vm_templates::{self, NewVmTemplate, VmTemplate},
+    },
 };
 use axum::{Extension, Json, extract::Path};
 use http::StatusCode;
@@ -85,6 +88,7 @@ pub async fn create(
     responses(
         (status = 204, description = "VM template deleted successfully"),
         (status = 404, description = "VM template not found"),
+        (status = 409, description = "VM template still has a sandbox pool"),
         (status = 500, description = "Internal server error")
     ),
     tag = "vm-templates"
@@ -94,6 +98,19 @@ pub async fn delete(
     Extension(env): Extension<App>,
     Path(vm_template_id): Path<Uuid>,
 ) -> Result<StatusCode> {
+    // sandbox_pools.vm_template_id has no ON DELETE action: deleting the pool
+    // tears down its prewarmed VMs, so require that to be done explicitly.
+    match sandbox_pools::get_by_template(env.pool(), vm_template_id).await {
+        Ok(pool) => {
+            return Err(crate::errors::Error::Conflict(format!(
+                "VM template {vm_template_id} has a sandbox pool ({}); delete the pool first \
+                 (DELETE /vm-templates/{vm_template_id}/sandbox-pool)",
+                pool.id
+            )));
+        }
+        Err(sqlx::Error::RowNotFound) => {}
+        Err(e) => return Err(e.into()),
+    }
     vm_templates::delete(env.pool(), vm_template_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }

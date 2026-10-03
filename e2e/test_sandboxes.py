@@ -539,6 +539,33 @@ async def test_sandbox_pool_claim_returns_completed_claim_job(client, sandbox_te
 
 
 @pytest.mark.asyncio
+async def test_vm_template_delete_conflicts_while_sandbox_pool_exists(client, sandbox_template):
+    """Deleting a template that still has a sandbox pool returns 409, not a 500."""
+    async with client as c:
+        httpx_client = c.get_async_httpx_client()
+        pool_url = f"{QARAX_URL}/vm-templates/{sandbox_template}/sandbox-pool"
+        # min_ready=0 creates the pool row without booting any prewarmed VMs.
+        response = await httpx_client.put(pool_url, json={"min_ready": 0})
+        assert response.status_code == 200, response.text
+        try:
+            response = await httpx_client.delete(
+                f"{QARAX_URL}/vm-templates/{sandbox_template}"
+            )
+            assert response.status_code == 409, (
+                f"Expected 409 while a sandbox pool exists, got {response.status_code}: "
+                f"{response.text}"
+            )
+            assert "sandbox pool" in response.text
+        finally:
+            await httpx_client.delete(pool_url)
+
+        # Once the pool is gone the template is deletable again (the fixture's
+        # cleanup performs the actual delete).
+        response = await httpx_client.get(pool_url)
+        assert response.status_code == 404, response.text
+
+
+@pytest.mark.asyncio
 async def test_sandbox_idle_timeout_reaping(client, sandbox_template):
     """Sandbox with a 1-second idle timeout is reaped by the background reaper."""
     async with client as c:

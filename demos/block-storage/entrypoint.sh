@@ -4,7 +4,7 @@
 # Exports one fileio-backed LUN (default: 1 GiB) over iSCSI with a wide-open
 # ACL (demo_mode enabled). IQN and LUN size are configurable via env vars:
 #
-#   TARGET_IQN   iSCSI target IQN (default: iqn.2024-01.qarax:demo)
+#   TARGET_IQN   iSCSI target IQN (default: iqn.2024-01.io.qarax:demo)
 #   LUN_SIZE     backing file size in bytes (default: 1073741824 = 1 GiB)
 #   LUN_PATH     backing file path (default: /var/lib/qarax-block/lun0.img)
 #
@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-TARGET_IQN="${TARGET_IQN:-iqn.2024-01.qarax:demo}"
+TARGET_IQN="${TARGET_IQN:-iqn.2024-01.io.qarax:demo}"
 LUN_PATH="${LUN_PATH:-/var/lib/qarax-block/lun0.img}"
 LUN_SIZE="${LUN_SIZE:-1073741824}"
 BACKSTORE="demo_lun0"
@@ -47,6 +47,12 @@ fi
 
 remove_target
 trap shutdown TERM INT
+
+# targetcli queries tcmu-runner over the D-Bus system bus whenever the host
+# kernel has TCMU user backstores (qarax-node's OverlayBD creates them), and
+# crashes if there is no bus at all. A bare bus lets that lookup fail cleanly.
+mkdir -p /run/dbus
+dbus-daemon --system --fork
 
 echo "==> Configuring LIO via targetcli"
 targetcli <<EOF

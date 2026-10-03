@@ -17,7 +17,7 @@ services:
       - /lib/modules:/lib/modules:ro
       - /sys/kernel/config:/sys/kernel/config
     environment:
-      TARGET_IQN: iqn.2024-01.qarax:demo
+      TARGET_IQN: iqn.2024-01.io.qarax:demo
       LUN_SIZE: "1073741824"
     healthcheck:
       test: ["CMD", "sh", "-c", "ss -ltn | grep -q :3260"]

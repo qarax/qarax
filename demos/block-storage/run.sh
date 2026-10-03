@@ -28,7 +28,7 @@ export CLOUD_HYPERVISOR_VERSION="${CLOUD_HYPERVISOR_VERSION:-$(tr -d '\n' <"${RE
 export FIRECRACKER_VERSION="${FIRECRACKER_VERSION:-$(tr -d '\n' <"${REPO_ROOT}/versions/firecracker-version")}"
 
 # Must match demos/block-storage/compose.yml.
-TARGET_IQN="iqn.2024-01.qarax:demo"
+TARGET_IQN="iqn.2024-01.io.qarax:demo"
 LUN_SIZE_BYTES=1073741824
 PORTAL="iscsi-target:3260"
 NODE_SERVICE="qarax-node"
@@ -176,16 +176,10 @@ until target_listening; do
 done
 info "iSCSI target ${TARGET_IQN} listening on ${PORTAL}"
 
-step "Ensuring the iSCSI initiator daemon runs in ${NODE_SERVICE}"
-# The e2e node image ships iscsi-initiator-utils but no init system, so iscsid
-# (required for iscsiadm login) is not started by default. A second iscsid
-# exits on the pid-file lock, so this is safe to repeat.
-docker_compose exec -T "$NODE_SERVICE" sh -c '
-	modprobe iscsi_tcp 2>/dev/null || true
-	[ -s /etc/iscsi/initiatorname.iscsi ] ||
-		echo "InitiatorName=$(iscsi-iname)" >/etc/iscsi/initiatorname.iscsi
-	iscsid >/dev/null 2>&1 || true
-' || die "Failed to prepare the iSCSI initiator in ${NODE_SERVICE}"
+# The node entrypoint (e2e/entrypoint-qarax-node.sh) starts iscsid; containers
+# created before it did so need recreating.
+docker_compose exec -T "$NODE_SERVICE" sh -c 'cat /proc/[0-9]*/comm 2>/dev/null | grep -qx iscsid' ||
+	die "iscsid is not running in ${NODE_SERVICE}.\nRecreate the node container: docker compose -f e2e/docker-compose.yml up -d --build --force-recreate ${NODE_SERVICE}"
 
 step "Creating the BLOCK storage pool"
 info "\$ qarax storage-pool create --name ${POOL_NAME} --pool-type block --portal ${PORTAL} --iqn ${TARGET_IQN} --capacity ${LUN_SIZE_BYTES}"
@@ -200,19 +194,31 @@ info "Pool ID: ${POOL_ID}"
 run qarax storage-pool get "$POOL_ID"
 echo
 
-step "Waiting for ${NODE_SERVICE} to log in to the target"
+step "Checking whether ${NODE_SERVICE} logged in to the target"
 info "Shared pools auto-attach to every UP host in the background (iscsiadm discovery + login)."
-elapsed=0
-until node_has_session; do
-	if [[ $elapsed -ge 60 ]]; then
-		die "${NODE_SERVICE} did not log in to ${TARGET_IQN} within 60s\nCheck: docker compose -f e2e/docker-compose.yml logs ${NODE_SERVICE}"
+# In the compose stack qarax-node runs in a Docker bridge network, and the
+# kernel's iSCSI initiator netlink interface only works in the host network
+# namespace, so login fails there (iscsid logs "sendmsg: bug? ctrl_fd").
+# Give it a few seconds in case the node does run in the host namespace.
+SESSION=false
+for _ in 1 2 3 4 5; do
+	if node_has_session; then
+		SESSION=true
+		break
 	fi
 	sleep 2
-	elapsed=$((elapsed + 2))
 done
-run docker_compose exec -T "$NODE_SERVICE" iscsiadm -m session
-docker_compose exec -T "$NODE_SERVICE" iscsiadm -m session -P 3 2>/dev/null |
-	grep -E 'Target:|Attached scsi disk' || true
+if [[ "$SESSION" == "true" ]]; then
+	run docker_compose exec -T "$NODE_SERVICE" iscsiadm -m session
+	docker_compose exec -T "$NODE_SERVICE" iscsiadm -m session -P 3 2>/dev/null |
+		grep -E 'Target:|Attached scsi disk' || true
+else
+	echo -e "  ${YELLOW}No iSCSI session: expected in the container-mode stack.${NC}"
+	info "The kernel only accepts iSCSI logins from the host network namespace, and"
+	info "${NODE_SERVICE} runs in a Docker bridge network. On a real hypervisor host"
+	info "(bootc appliance or bare metal) the pool attaches and each LUN appears under"
+	info "/dev/disk/by-path/. The pool and LUN APIs below work either way."
+fi
 echo
 
 step "Registering LUN 0 as a disk object"
@@ -227,7 +233,11 @@ run qarax storage-object get "$DISK_ID"
 
 banner "Demo Complete"
 info "BLOCK pool ${POOL_NAME} points at ${TARGET_IQN} on ${PORTAL}."
-info "${NODE_SERVICE} logged in to the target when the pool auto-attached."
+if [[ "$SESSION" == "true" ]]; then
+	info "${NODE_SERVICE} logged in to the target when the pool auto-attached."
+else
+	info "${NODE_SERVICE} could not log in (container network namespace; see above)."
+fi
 info "LUN 0 (1 GiB) is registered as disk object ${DISK_NAME}."
 if [[ "$KEEP_RESOURCES" == "true" ]]; then
 	info "Attach it to a VM with: qarax vm attach-disk <vm> --object ${DISK_NAME}"
