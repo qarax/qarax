@@ -77,10 +77,10 @@ type FileTransferClient =
 use node::{
     AddDiskDeviceRequest, AddNetworkDeviceRequest, AttachNetworkRequest, AttachStoragePoolRequest,
     BlankDiskSource, CloudInitConfig, ConsoleConfig, ConsoleInput, ConsoleLogResponse,
-    CopyFileRequest, CpusConfig, CreateDiskRequest, DetachNetworkRequest, DetachStoragePoolRequest,
-    DiskConfig, DownloadFileRequest, ExecVmRequest, ExecVmResponse, HypervisorType,
-    ImportOverlayBdRequest, ImportOverlayBdResponse, MemoryConfig, NetConfig, NodeInfo,
-    NumaPlacement, OverlayBdDiskSource, PayloadConfig, PreflightImageRequest,
+    CopyFileRequest, CpusConfig, CreateDiskRequest, DeleteSnapshotRequest, DetachNetworkRequest,
+    DetachStoragePoolRequest, DiskConfig, DownloadFileRequest, ExecVmRequest, ExecVmResponse,
+    HypervisorType, ImportOverlayBdRequest, ImportOverlayBdResponse, MemoryConfig, NetConfig,
+    NodeInfo, NumaPlacement, OverlayBdDiskSource, PayloadConfig, PreflightImageRequest,
     PreflightImageResponse, ReceiveMigrationRequest, RemoveDeviceRequest, ResizeDiskRequest,
     ResizeVmRequest, RestoreVmRequest, SendMigrationRequest, SnapshotVmRequest, StoragePoolKind,
     SyncNetworkIsolationRequest, SyncVmFirewallRequest, SyncVpcOverlaysRequest, TransferResponse,
@@ -541,6 +541,19 @@ impl NodeClient {
             })
             .await
             .context("Failed to snapshot VM on qarax-node")?;
+        Ok(())
+    }
+
+    /// Remove a snapshot directory previously written by `snapshot_vm`.
+    #[instrument(skip(self))]
+    pub async fn delete_snapshot(&self, snapshot_url: &str) -> Result<()> {
+        let mut client = self.connect_vm_service().await?;
+        client
+            .delete_snapshot(DeleteSnapshotRequest {
+                snapshot_url: snapshot_url.to_string(),
+            })
+            .await
+            .context("Failed to delete snapshot on qarax-node")?;
         Ok(())
     }
 

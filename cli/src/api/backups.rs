@@ -37,3 +37,7 @@ pub async fn restore(client: &Client, backup_id: Uuid) -> anyhow::Result<Restore
         .post_empty_json(&format!("/backups/{backup_id}/restore"))
         .await
 }
+
+pub async fn delete(client: &Client, backup_id: Uuid) -> anyhow::Result<()> {
+    client.delete(&format!("/backups/{backup_id}")).await
+}

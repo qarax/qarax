@@ -3,7 +3,7 @@
 # Demo: top-level backups
 #
 # Shows the first-class `qarax backup` surface end-to-end:
-#   1. VM backup create/list/get/restore
+#   1. VM backup create/list/get/restore/delete
 #   2. Control-plane database backup create/list/get/restore
 #
 # Prerequisites:
@@ -157,6 +157,13 @@ ensure_backup_pool() {
 cleanup() {
 	echo
 	step "Cleaning up..."
+	# Delete backups before the VM: deleting a VM cascades away its backup
+	# records but would leave the snapshot data behind. (A restored database
+	# backup has no record left; cleanup_backup_artifacts clears its dump.)
+	local backup
+	for backup in "$VM_BACKUP_NAME" "$DB_BACKUP_NAME"; do
+		"${QARAX[@]}" backup delete "$backup" >/dev/null 2>&1 || true
+	done
 	if [[ "$VM_CREATED" -eq 1 ]]; then
 		"${QARAX[@]}" vm stop "$VM_NAME" >/dev/null 2>&1 || true
 		"${QARAX[@]}" vm delete "$VM_NAME" >/dev/null 2>&1 || true
@@ -202,7 +209,7 @@ cleanup_backup_artifacts
 ensure_backup_pool
 echo
 
-banner "Part 1 — VM backup create/list/get/restore"
+banner "Part 1 — VM backup create/list/get/restore/delete"
 
 step "Creating and starting demo VM..."
 run "${QARAX[@]}" vm create --name "$VM_NAME" --vcpus 1 --memory "$MEMORY_BYTES"
@@ -241,6 +248,10 @@ step "Restoring the VM from the backup..."
 run "${QARAX[@]}" backup restore "$VM_BACKUP_NAME"
 wait_for_vm_status "$VM_NAME" running 60
 info "VM returned to running state after restore."
+echo
+
+step "Deleting the VM backup (removes its snapshot from the node)..."
+run "${QARAX[@]}" backup delete "$VM_BACKUP_NAME"
 echo
 
 step "Cleaning up the demo VM before the database flow..."

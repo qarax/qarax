@@ -40,6 +40,11 @@ enum BackupCommand {
         /// Backup name or ID
         backup: String,
     },
+    /// Delete a backup and the data it stores (snapshot or database dump)
+    Delete {
+        /// Backup name or ID
+        backup: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -136,6 +141,11 @@ pub async fn run(args: BackupArgs, client: &Client, output: OutputFormat) -> any
                     .collect();
                 println!("{}", Table::new(rows).with(Style::psql()));
             }
+        }
+        BackupCommand::Delete { backup } => {
+            let backup_id = resolve_backup_id(client, &backup).await?;
+            api::backups::delete(client, backup_id).await?;
+            println!("Deleted backup: {backup_id}");
         }
         BackupCommand::Get { backup } => {
             let backup_id = resolve_backup_id(client, &backup).await?;
