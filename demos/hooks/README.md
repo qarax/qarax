@@ -6,9 +6,11 @@ Starts a tiny HTTP server locally, registers a global webhook hook, then drives 
 
 ## Prerequisites
 
-- qarax stack running: `make run-local`
-- `jq` installed
+- qarax stack running: `make run-local` (the script starts it via `./hack/run-local.sh` if it is not up)
+- `jq` and `python3` installed
 - `qarax` CLI on PATH (or Rust toolchain to auto-build it)
+
+If your server uses a token other than the local default, export `QARAX_TOKEN`.
 
 ## Usage
 
@@ -18,7 +20,7 @@ Starts a tiny HTTP server locally, registers a global webhook hook, then drives 
 # Custom API endpoint
 ./demos/hooks/run.sh --server http://localhost:8000
 
-# If host.docker.internal doesn't resolve (Linux)
+# If the qarax container can't reach the auto-detected address
 WEBHOOK_HOST=192.168.1.10 ./demos/hooks/run.sh
 ```
 
@@ -26,9 +28,9 @@ WEBHOOK_HOST=192.168.1.10 ./demos/hooks/run.sh
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--server URL` | `$QARAX_SERVER` | qarax API URL |
-| `--webhook-host HOST` | Docker gateway IP | How qarax reaches this machine |
-| `--webhook-port PORT` | `9999` | Local port for the webhook receiver |
+| `--server URL` | `$QARAX_SERVER` or `http://localhost:8000` | qarax API URL |
+| `--webhook-host HOST` | `$WEBHOOK_HOST`, else the `e2e_default` Docker network gateway on Linux, `host.docker.internal` elsewhere | How qarax reaches this machine |
+| `--webhook-port PORT` | `$WEBHOOK_PORT` or `9999` | Local port for the webhook receiver |
 
 ## What you'll see
 

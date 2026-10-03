@@ -49,8 +49,7 @@ while [[ $# -gt 0 ]]; do
 		exit 0
 		;;
 	*)
-		echo "Unknown option: $1"
-		exit 1
+		die "Unknown option: $1"
 		;;
 	esac
 done
@@ -67,6 +66,20 @@ run() {
 	"$@"
 }
 
+# Poll until the VM reaches the expected status; fail with the last status seen.
+wait_for_status() {
+	local expected="$1" timeout="$2" status=""
+	local deadline=$((SECONDS + timeout))
+	while ((SECONDS < deadline)); do
+		status=$($QARAX vm get "$VM_ID" -o json | jq -r '.status') || true
+		[[ "$status" == "$expected" ]] && return 0
+		sleep 1
+	done
+	die "VM '$VM_NAME' did not reach '$expected' within ${timeout}s (last status: ${status:-unknown})"
+}
+
+command -v jq >/dev/null 2>&1 || die "jq is required"
+
 # Find the qarax binary, building if necessary
 if [[ -z "$(find_qarax_bin)" ]]; then
 	echo "qarax CLI not found — building..."
@@ -78,7 +91,7 @@ QARAX="$QARAX_BIN --server $SERVER"
 
 ensure_stack "$SERVER"
 
-# Pretty-print an SSE event line───────
+# Pretty-print captured SSE events.
 # Reads from a log file and renders each data: line as a formatted transition.
 print_events() {
 	local label="$1"
@@ -120,33 +133,30 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Verify stack is reachable─────────
 banner "SSE Event Stream Demo"
-
-step "Verifying qarax stack at $SERVER..."
-if ! curl -sf "$SERVER/hosts" >/dev/null; then
-	die "Cannot reach qarax at $SERVER — run 'make run-local' first"
-fi
-info "Stack is up."
 
 # Open SSE subscriptions
 banner "Opening SSE Subscriptions"
 
-SSE_ALL_LOG=$(mktemp /tmp/sse-all-XXXXXX.log)
-SSE_FILTERED_LOG=$(mktemp /tmp/sse-filtered-XXXXXX.log)
+SSE_ALL_LOG=$(mktemp "${TMPDIR:-/tmp}/sse-all-XXXXXX")
+SSE_FILTERED_LOG=$(mktemp "${TMPDIR:-/tmp}/sse-filtered-XXXXXX")
 
+# /events requires the bearer token like every other API route. curl is invoked
+# directly (not via api_curl) so that $! is the curl PID and cleanup can kill it.
 step "Opening unfiltered SSE stream  →  GET ${SERVER}/events"
-curl -sN --no-buffer "${SERVER}/events" >>"$SSE_ALL_LOG" 2>&1 &
+curl -sN --no-buffer -H "Authorization: Bearer ${QARAX_TOKEN}" "${SERVER}/events" >>"$SSE_ALL_LOG" 2>&1 &
 SSE_ALL_PID=$!
 info "Background PID: $SSE_ALL_PID  |  log: $SSE_ALL_LOG"
 
 step "Opening filtered SSE stream    →  GET ${SERVER}/events?status=running"
-curl -sN --no-buffer "${SERVER}/events?status=running" >>"$SSE_FILTERED_LOG" 2>&1 &
+curl -sN --no-buffer -H "Authorization: Bearer ${QARAX_TOKEN}" "${SERVER}/events?status=running" >>"$SSE_FILTERED_LOG" 2>&1 &
 SSE_FILTERED_PID=$!
 info "Background PID: $SSE_FILTERED_PID  |  log: $SSE_FILTERED_LOG"
 
 # Give curl connections time to establish
 sleep 1
+kill -0 "$SSE_ALL_PID" 2>/dev/null || die "Unfiltered SSE stream exited early: $(cat "$SSE_ALL_LOG")"
+kill -0 "$SSE_FILTERED_PID" 2>/dev/null || die "Filtered SSE stream exited early: $(cat "$SSE_FILTERED_LOG")"
 
 # VM lifecycle
 banner "Running VM Lifecycle"
@@ -157,26 +167,19 @@ echo
 
 VM_ID=$($QARAX vm list -o json |
 	jq -r ".[] | select(.name == \"$VM_NAME\") | .id")
+[[ -n "$VM_ID" ]] || die "VM '$VM_NAME' not found after create"
 info "VM ID: $VM_ID"
 
 step "Starting VM..."
 run $QARAX vm start "$VM_NAME"
 info "Waiting for VM to reach 'running'..."
-for i in $(seq 1 30); do
-	STATUS=$($QARAX vm get "$VM_ID" -o json | jq -r '.status')
-	if [[ "$STATUS" == "running" ]]; then break; fi
-	sleep 1
-done
+wait_for_status running 60
 echo
 
 step "Stopping VM..."
 run $QARAX vm stop "$VM_NAME"
 info "Waiting for VM to reach 'shutdown'..."
-for i in $(seq 1 30); do
-	STATUS=$($QARAX vm get "$VM_ID" -o json | jq -r '.status')
-	if [[ "$STATUS" == "shutdown" ]]; then break; fi
-	sleep 1
-done
+wait_for_status shutdown 60
 echo
 
 step "Deleting VM..."
@@ -212,9 +215,10 @@ head -20 "$SSE_ALL_LOG" 2>/dev/null || true
 
 banner "Demo Complete"
 
+AUTH_HEADER='-H "Authorization: Bearer $QARAX_TOKEN"'
 echo -e "  Try it yourself:"
-echo -e "  ${DIM}\$ curl -N '${SERVER}/events'${NC}"
-echo -e "  ${DIM}\$ curl -N '${SERVER}/events?status=running'${NC}"
-echo -e "  ${DIM}\$ curl -N '${SERVER}/events?vm_id=<uuid>'${NC}"
-echo -e "  ${DIM}\$ curl -N '${SERVER}/events?tag=<tag>'${NC}"
+echo -e "  ${DIM}\$ curl -N ${AUTH_HEADER} '${SERVER}/events'${NC}"
+echo -e "  ${DIM}\$ curl -N ${AUTH_HEADER} '${SERVER}/events?status=running'${NC}"
+echo -e "  ${DIM}\$ curl -N ${AUTH_HEADER} '${SERVER}/events?vm_id=<uuid>'${NC}"
+echo -e "  ${DIM}\$ curl -N ${AUTH_HEADER} '${SERVER}/events?tag=<tag>'${NC}"
 echo

@@ -36,7 +36,8 @@ Get from "the demo is broken" to a verified end-to-end fix with the fewest blind
    - host-local bare metal workflow
 2. Verify infrastructure first:
    - expected containers or services are up
-   - API responds
+   - API responds **and accepts the token** (probe an authenticated route like `/hosts`)
+   - host kernel matches `/lib/modules` (modules load on demand at VM start)
    - registry and database are reachable if required
 3. Inspect service logs before source code.
 4. Check the network path if anything is unreachable:
@@ -65,6 +66,9 @@ Get from "the demo is broken" to a verified end-to-end fix with the fewest blind
 ## Common repo-specific failure classes
 
 - stack binary/API mismatch after code changes
+- auth: 401 from a missing/wrong `QARAX_TOKEN` (the local stack enables token auth; `/` is public so it can't detect this). Use `require_server` from `demos/lib.sh`
+- API contract drift: demo sends a field or flag the API/CLI removed (422 / clap usage error, which `set -e` + `$(...)` can turn into a silent exit)
+- host kernel modules unavailable (`uname -r` has no `/lib/modules` dir after an unrebooted kernel upgrade): TCMU/OverlayBD and iptables failures at VM start
 - stale host records or wrong host selection in E2E-style environments
 - relay or bridge source-address mismatches
 - guest networking configured but not actually applied

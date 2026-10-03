@@ -10,7 +10,8 @@
 #
 # Usage:
 #   ./hack/run-local.sh            # Build and start the stack
-#   ./hack/run-local.sh --vm         # Run qarax-node in a libvirt VM instead of a container (alias: --with-vm)
+#   ./hack/run-local.sh --vm       # Run qarax-node in a libvirt VM instead of a container
+#   ./hack/run-local.sh --with-vm  # Also create and start an example boot-source VM
 #   ./hack/run-local.sh --cleanup  # Stop and remove stack + volumes
 #   REBUILD=1 ./hack/run-local.sh  # Rebuild Docker images from scratch
 #   SKIP_BUILD=1 ./hack/run-local.sh # Use existing qarax-node binary
@@ -34,6 +35,12 @@ set -e
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
+
+# e2e/docker-compose.yml enables API token auth with
+# AUTH_TOKENS=${QARAX_TEST_TOKEN:-e2e-test-token}. Export the matching token so
+# our own API calls (and setup_vm.py / the qarax CLI) authenticate.
+: "${QARAX_TOKEN:=${QARAX_TEST_TOKEN:-e2e-test-token}}"
+export QARAX_TOKEN
 
 CH_VERSION_FILE="${REPO_ROOT}/versions/cloud-hypervisor-version"
 export CLOUD_HYPERVISOR_VERSION="${CLOUD_HYPERVISOR_VERSION:-$(tr -d '\n' <"$CH_VERSION_FILE")}"
@@ -234,7 +241,7 @@ lookup_host_id_by_address() {
 	local api_url="$1"
 	local address="$2"
 
-	curl -fsS "${api_url}/hosts" | python3 -c "
+	curl -fsS -H "Authorization: Bearer ${QARAX_TOKEN}" "${api_url}/hosts" | python3 -c "
 import json, sys
 address = sys.argv[1]
 for host in json.load(sys.stdin):
@@ -253,6 +260,7 @@ mark_host_down_by_address() {
 	[[ -z "$host_id" ]] && return 0
 
 	curl -fsS -X PATCH "${api_url}/hosts/${host_id}" \
+		-H "Authorization: Bearer ${QARAX_TOKEN}" \
 		-H "Content-Type: application/json" \
 		-d '{"status":"down"}' >/dev/null
 	echo -e "${YELLOW}Marked stale host ${address} DOWN (id: ${host_id}).${NC}"
@@ -311,6 +319,9 @@ Endpoints:
   API (root):   http://localhost:8000/
   Swagger UI:   http://localhost:8000/swagger-ui
   OpenAPI JSON: http://localhost:8000/api-docs/openapi.json
+
+API auth is enabled. Export the token before using the CLI or curl:
+  export QARAX_TOKEN=${QARAX_TOKEN}
 
 EOF
 }
@@ -561,13 +572,6 @@ if [[ -n "${REBUILD}" ]]; then
 fi
 force_remove_nfs_container
 
-# Preflight: ensure port 5432 is free before starting postgres
-if ss -tlnp 2>/dev/null | grep -q ':5432 ' || lsof -i :5432 -sTCP:LISTEN -t 2>/dev/null | grep -q .; then
-	echo -e "${RED}ERROR: Port 5432 is already in use.${NC}" >&2
-	echo "Stop the conflicting process first (e.g. 'docker stop qarax-test-postgres') then retry." >&2
-	exit 1
-fi
-
 compose_cmd up -d --build "${UP_SERVICES[@]}"
 compose_cmd up -d --force-recreate "${FORCE_RECREATE_SERVICES[@]}"
 
@@ -637,7 +641,7 @@ if [[ $VM_MODE -eq 1 ]]; then
 		"cargo run -p cli vm stop <VM_ID>" \
 		"cargo run -p cli storage-pool list" \
 		"cargo run -p cli job get <JOB_ID>" \
-		"cargo run -p cli --json vm list              # raw JSON output"
+		"cargo run -p cli -- -o json vm list           # raw JSON output"
 	print_command_section "Docker stack commands:" \
 		"docker compose -f e2e/docker-compose.yml logs -f qarax" \
 		"docker compose -f e2e/docker-compose.yml logs -f qarax-node"
@@ -823,7 +827,7 @@ if [[ $WITH_VM -eq 0 ]]; then
 		"cargo run -p cli vm stop <VM_ID>" \
 		"cargo run -p cli vm delete <VM_ID>" \
 		"cargo run -p cli host init <HOST_ID>         # connect via gRPC, mark host UP" \
-		"cargo run -p cli --json vm list              # raw JSON output" \
+		"cargo run -p cli -- -o json vm list           # raw JSON output" \
 		"cargo run -p cli boot-source list" \
 		"cargo run -p cli storage-pool list" \
 		"cargo run -p cli transfer list --pool <POOL_ID>" \

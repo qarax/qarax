@@ -45,7 +45,6 @@ VETH_HOST="veth-k8s-host"
 HOST_ACCESS_IP="10.101.0.254/24"
 CONTROL_IP="10.101.0.10"
 WORKER_IPS=("10.101.0.11" "10.101.0.12")
-POD_CIDR="10.244.0.0/16"
 SMOKE_NODEPORT=30080
 
 HOST_NAME="e2e-node-2"
@@ -54,7 +53,6 @@ SERVER="http://localhost:8000"
 NODE_CONTAINER="e2e-qarax-node-2-1"
 STORAGE_POOL_NAME="k8s-pool"
 STORAGE_POOL_PATH="/var/lib/qarax/storage/k8s-pool"
-FIRMWARE_PATH="/usr/share/cloud-hypervisor/CLOUDHV.fd"
 
 CONTROL_PLANE_VCPUS="${CONTROL_PLANE_VCPUS:-2}"
 CONTROL_PLANE_MEMORY_MIB="${CONTROL_PLANE_MEMORY_MIB:-4096}"
@@ -67,14 +65,14 @@ DEBUG_USER="qarax-debug"
 
 NODES=(k8s-control-0 k8s-worker-1 k8s-worker-2)
 declare -A NODE_IPS=(
-	[k8s-control-0]="${CONTROL_IP}"
-	[k8s-worker-1]="${WORKER_IPS[0]}"
-	[k8s-worker-2]="${WORKER_IPS[1]}"
+	["k8s-control-0"]="${CONTROL_IP}"
+	["k8s-worker-1"]="${WORKER_IPS[0]}"
+	["k8s-worker-2"]="${WORKER_IPS[1]}"
 )
 declare -A NODE_SSH_PORTS=(
-	[k8s-control-0]="32210"
-	[k8s-worker-1]="32211"
-	[k8s-worker-2]="32212"
+	["k8s-control-0"]="32210"
+	["k8s-worker-1"]="32211"
+	["k8s-worker-2"]="32212"
 )
 
 # Runtime state
@@ -89,7 +87,6 @@ SUDO_AVAILABLE=0
 DEBUG_SSH_PRIVATE_KEY=""
 DEBUG_SSH_PUBLIC_KEY=""
 DEBUG_SSH_PUBLIC_KEY_YAML=""
-NODE_RESTARTED=0
 
 step() { echo -e "\n${CYAN}=== $* ===${NC}"; }
 ok() { echo -e "${GREEN}✓ $*${NC}"; }
@@ -211,10 +208,17 @@ start_relay() {
 	info "Relay ${name}: localhost:${host_port} → ${target_ip}:${target_port}"
 }
 
+# Kill the socat relay listening on PORT. Scans /proc instead of using fuser,
+# which is not installed in the node image.
 stop_relay() {
 	local port="$1"
-	docker exec "$NODE_CONTAINER" sh -c \
-		"kill \$(fuser ${port}/tcp 2>/dev/null) 2>/dev/null || true"
+	docker exec "$NODE_CONTAINER" sh -c '
+		for p in /proc/[0-9]*; do
+			tr "\0" " " <"$p/cmdline" 2>/dev/null | grep -q "^socat TCP-LISTEN:$1," &&
+				kill "${p#/proc/}" 2>/dev/null
+		done
+		true
+	' sh "$port"
 }
 
 container_file_exists() {
@@ -239,22 +243,6 @@ rebuild_vm_disk_in_place() {
 		"qemu-img convert -f qcow2 -O qcow2 '${BASE_DISK_PATH}' '${tmp_disk}' && \
          qemu-img resize '${tmp_disk}' '${disk_size}' >/dev/null && \
          mv -f '${tmp_disk}' '${final_disk}'"
-}
-
-reconcile_demo_vms_after_node_restart() {
-	[[ "$NODE_RESTARTED" -eq 1 ]] || return 0
-	step "Removing stale demo VM records after node restart"
-	for node in "${NODES[@]}"; do
-		if run vm get "$node" &>/dev/null; then
-			info "Removing stale VM record for ${node}"
-			run vm stop "$node" &>/dev/null || true
-			run vm delete "$node" &>/dev/null || true
-		fi
-	done
-	for node in "${NODES[@]}"; do
-		! run vm get "$node" &>/dev/null || die "Stale VM record still exists for ${node}; run ./demos/k8s-cluster/run.sh --cleanup and retry"
-	done
-	ok "Stale demo VMs removed"
 }
 
 reset_demo_vms() {
@@ -300,7 +288,6 @@ prepare_access_mode() {
 
 # Generate a random kubeadm bootstrap token (format: [a-z0-9]{6}.[a-z0-9]{16})
 generate_token() {
-	local chars="abcdefghijklmnopqrstuvwxyz0123456789"
 	python3 -c "
 import random, string
 chars = string.ascii_lowercase + string.digits
@@ -322,7 +309,8 @@ ensure_debug_ssh_key() {
 		DEBUG_SSH_PUBLIC_KEY="$(<"${DEBUG_SSH_PRIVATE_KEY}.pub")"
 	else
 		DEBUG_SSH_PRIVATE_KEY="${ARTIFACT_DIR}/id_ed25519"
-		ssh-keygen -q -t ed25519 -N "" -C "qarax-k8s-demo" -f "${DEBUG_SSH_PRIVATE_KEY}" >/dev/null
+		[[ -f "${DEBUG_SSH_PRIVATE_KEY}" ]] ||
+			ssh-keygen -q -t ed25519 -N "" -C "qarax-k8s-demo" -f "${DEBUG_SSH_PRIVATE_KEY}" >/dev/null
 		DEBUG_SSH_PUBLIC_KEY="$(<"${DEBUG_SSH_PRIVATE_KEY}.pub")"
 	fi
 
@@ -426,8 +414,7 @@ cleanup() {
 	rm -rf "$ARTIFACT_DIR"
 	ok "Artifacts removed"
 
-	cd "$REPO_ROOT/e2e"
-	docker compose down -v 2>/dev/null || true
+	bash "${REPO_ROOT}/hack/run-local.sh" --cleanup || true
 	ok "Stack torn down"
 }
 
@@ -438,9 +425,8 @@ fi
 
 step "Preflight checks"
 command -v docker &>/dev/null || die "docker is required"
-command -v jq &>/dev/null || die "jq is required"
 command -v python3 &>/dev/null || die "python3 is required"
-command -v nc &>/dev/null || die "nc (nmap-ncat) is required"
+command -v kubectl &>/dev/null || die "kubectl is required"
 command -v ssh-keygen &>/dev/null || die "ssh-keygen is required"
 [[ -e /dev/kvm ]] || die "/dev/kvm not found — KVM is required"
 if sudo -n true &>/dev/null; then
@@ -451,41 +437,35 @@ else
 fi
 ok "Preflight passed"
 
-if [[ -z "$(find_qarax_bin)" ]]; then
-	step "Building qarax CLI"
-	cargo build -p cli
-fi
-
-step "Building qarax binaries (musl)"
-rustup target add x86_64-unknown-linux-musl 2>/dev/null || true
-cargo build --release -p qarax -p qarax-node -p qarax-init
+# Server/node binaries are built by hack/run-local.sh when ensure_stack has to
+# start the stack; only the CLI is needed here.
+step "Building qarax CLI"
+rustup target add "$MUSL_TARGET" 2>/dev/null || true
 cargo build -p cli
-ok "Binaries ready"
+ok "CLI ready"
 
 QARAX_BIN="$(find_qarax_bin)"
 [[ -n "$QARAX_BIN" ]] || die "qarax CLI not found"
 QARAX=("$QARAX_BIN" --server "$SERVER")
 
+step "Starting qarax stack"
 ensure_stack "$SERVER"
+# This demo runs on the second node. The compose stack normally starts it as a
+# dependency of qarax, but not in --vm mode or if it has since stopped.
+if [[ "$(docker inspect -f '{{.State.Running}}' "$NODE_CONTAINER" 2>/dev/null)" != "true" ]]; then
+	info "Starting qarax-node-2..."
+	CLOUD_HYPERVISOR_VERSION="$(tr -d '\n' <"${REPO_ROOT}/versions/cloud-hypervisor-version")"
+	FIRECRACKER_VERSION="$(tr -d '\n' <"${REPO_ROOT}/versions/firecracker-version")"
+	export CLOUD_HYPERVISOR_VERSION FIRECRACKER_VERSION
+	docker compose -f "${REPO_ROOT}/e2e/docker-compose.yml" up -d --wait qarax-node-2
+fi
+for container in "$NODE_CONTAINER" e2e-registry-1; do
+	[[ "$(docker inspect -f '{{.State.Running}}' "$container" 2>/dev/null)" == "true" ]] ||
+		die "Container ${container} is not running — start the full stack with 'make run-local'"
+done
+ok "Stack up"
 
 mkdir -p "$ARTIFACT_DIR"
-
-step "Starting qarax stack"
-cd "$REPO_ROOT/e2e"
-if curl -sf "$SERVER/hosts" -o /dev/null 2>/dev/null; then
-	ok "Stack already running"
-else
-	docker compose up -d --build
-	info "Waiting for qarax API..."
-	elapsed=0
-	until curl -sf "$SERVER/hosts" -o /dev/null 2>/dev/null; do
-		sleep 3
-		elapsed=$((elapsed + 3))
-		[[ $elapsed -gt 120 ]] && die "Timed out waiting for qarax API"
-	done
-	ok "Stack up"
-fi
-cd "$REPO_ROOT"
 
 step "Registering qarax-node host"
 if ! run host get "$HOST_NAME" &>/dev/null; then
@@ -524,7 +504,6 @@ if ! run network get "$NETWORK_NAME" &>/dev/null; then
 	ok "Network ${NETWORK_NAME} created"
 elif ! docker exec "$NODE_CONTAINER" ip link show "$BRIDGE_NAME" &>/dev/null; then
 	info "Bridge ${BRIDGE_NAME} missing (container restarted?), re-attaching..."
-	NODE_RESTARTED=1
 	run network attach-host \
 		--network "$NETWORK_NAME" \
 		--host "$HOST_NAME" \
@@ -533,8 +512,6 @@ elif ! docker exec "$NODE_CONTAINER" ip link show "$BRIDGE_NAME" &>/dev/null; th
 else
 	ok "Network ${NETWORK_NAME} already exists"
 fi
-
-reconcile_demo_vms_after_node_restart
 
 prepare_access_mode
 
@@ -640,6 +617,9 @@ else
 		-e "s/PAUSE_VERSION_PLACEHOLDER/${PAUSE_VERSION}/g" \
 		"${DEMO_DIR}/prebake.sh" >"$local_prebake"
 	info "Saving Kubernetes images for offline guest import..."
+	for img in "${K8S_IMAGE_LIST[@]}"; do
+		docker image inspect "$img" &>/dev/null || docker pull "$img" >/dev/null
+	done
 	docker image save -o "$image_archive" "${K8S_IMAGE_LIST[@]}"
 	docker cp "$local_prebake" "${NODE_CONTAINER}:/tmp/k8s-prebake.sh"
 	docker exec "$NODE_CONTAINER" rm -rf /tmp/k8s-image-archives
@@ -662,14 +642,14 @@ step "Creating per-VM disks (qcow2 overlays, resized to ${DISK_SIZE})"
 docker exec "$NODE_CONTAINER" mkdir -p "$STORAGE_POOL_PATH"
 
 declare -A DISK_NAMES=(
-	[k8s-control-0]="k8s-control-disk"
-	[k8s-worker-1]="k8s-worker-1-disk"
-	[k8s-worker-2]="k8s-worker-2-disk"
+	["k8s-control-0"]="k8s-control-disk"
+	["k8s-worker-1"]="k8s-worker-1-disk"
+	["k8s-worker-2"]="k8s-worker-2-disk"
 )
 declare -A DISK_SIZES=(
-	[k8s-control-0]="$DISK_SIZE"
-	[k8s-worker-1]="$DISK_SIZE"
-	[k8s-worker-2]="$DISK_SIZE"
+	["k8s-control-0"]="$DISK_SIZE"
+	["k8s-worker-1"]="$DISK_SIZE"
+	["k8s-worker-2"]="$DISK_SIZE"
 )
 
 for node in "${NODES[@]}"; do
@@ -713,16 +693,16 @@ GUEST_REGISTRY_IP="$GATEWAY"
 
 CONTROL_USERDATA="${ARTIFACT_DIR}/user-data-control.yaml"
 declare -A USERDATA_PATHS=(
-	[k8s-control-0]="${CONTROL_USERDATA}"
-	[k8s-worker-1]="${ARTIFACT_DIR}/user-data-k8s-worker-1.yaml"
-	[k8s-worker-2]="${ARTIFACT_DIR}/user-data-k8s-worker-2.yaml"
+	["k8s-control-0"]="${CONTROL_USERDATA}"
+	["k8s-worker-1"]="${ARTIFACT_DIR}/user-data-k8s-worker-1.yaml"
+	["k8s-worker-2"]="${ARTIFACT_DIR}/user-data-k8s-worker-2.yaml"
 )
 
 render_user_data "${DEMO_DIR}/cloud-init-control.sh" "$KUBEADM_TOKEN" "$GUEST_REGISTRY_IP" "$CONTROL_USERDATA"
 render_user_data "${DEMO_DIR}/cloud-init-worker.sh" "$KUBEADM_TOKEN" "$GUEST_REGISTRY_IP" \
-	"${USERDATA_PATHS[k8s-worker-1]}" "${NODE_IPS[k8s-worker-1]}"
+	"${USERDATA_PATHS["k8s-worker-1"]}" "${NODE_IPS["k8s-worker-1"]}"
 render_user_data "${DEMO_DIR}/cloud-init-worker.sh" "$KUBEADM_TOKEN" "$GUEST_REGISTRY_IP" \
-	"${USERDATA_PATHS[k8s-worker-2]}" "${NODE_IPS[k8s-worker-2]}"
+	"${USERDATA_PATHS["k8s-worker-2"]}" "${NODE_IPS["k8s-worker-2"]}"
 ok "cloud-init files written to ${ARTIFACT_DIR}"
 
 step "Creating k8s VMs (firmware boot)"
@@ -776,7 +756,7 @@ done
 
 step "Waiting for Kubernetes API server"
 info "This takes 5-15 minutes (images pre-pulled from local registry)..."
-info "Watch progress: docker exec ${NODE_CONTAINER} tail -f /dev/null  (use 'vm attach' in another shell)"
+info "Watch progress in another shell: ${QARAX_BIN} vm attach k8s-control-0 (guest log: /var/log/k8s-setup.log)"
 elapsed=0
 max_wait=3600
 until curl -sk --connect-timeout 3 --max-time 5 "https://${API_HOST}:${API_PORT}/healthz" 2>/dev/null | grep -q ok; do

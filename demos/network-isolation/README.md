@@ -11,10 +11,13 @@ Demonstrates Qarax network isolation end to end on the local stack:
 
 ## Prerequisites
 
-- local stack available via `./hack/run-local.sh`
+- local stack from `make run-local` (the script starts it via
+  `hack/run-local.sh` if the API is not reachable)
 - `jq`
 - Docker with `docker compose`
-- `qarax` CLI on PATH, or a Rust toolchain so the demo can build it
+- `qarax` CLI built in `target/` or on PATH, or a Rust toolchain so the demo can build it
+
+If your server uses a token other than the local default, export `QARAX_TOKEN`.
 
 ## Usage
 
@@ -45,4 +48,6 @@ on `qarax-node`.
 By default the script cleans up both VMs, both networks, and the security group
 on exit.
 
-Use `--keep-resources` if you want to inspect them afterward.
+Use `--keep-resources` if you want to inspect them afterward. Delete the kept
+networks before re-running: the demo always uses subnets `10.121.1.0/24` and
+`10.121.2.0/24` and refuses to start if a network already uses them.

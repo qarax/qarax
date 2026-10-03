@@ -59,6 +59,8 @@ Examples of proof:
 - Prefer existing demo patterns under `demos/`.
 - Use `demos/lib.sh` helpers and conventions when changing demo scripts.
 - If a running stack looks out of sync with the CLI, rebuild the environment before chasing false failures.
+- A 401 means the token is wrong/missing (`QARAX_TOKEN`, default `e2e-test-token` for the local stack), not that the stack is down. A 422 on a raw API call usually means the demo sends a field the API removed (API contract drift).
+- VM start failing with TCMU configfs `ENOENT` or iptables "do you need to insmod?" is a host kernel-module problem: compare `uname -r` with `ls /lib/modules` (kernel upgraded without reboot). Don't patch code for it.
 - When reachability is unclear, prefer packet capture and listener inspection over guessing.
 - When a demo needs an unsupported product knob, extend the CLI or product surface cleanly rather than hardcoding around it.
 

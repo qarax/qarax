@@ -13,7 +13,12 @@
 #
 # Build:
 #   cargo build --release -p qarax -p qarax-node -p qarax-init
-#   podman build -f demos/Containerfile.control-plane -t qarax-control-plane .
+#   podman build --build-arg CLOUD_HYPERVISOR_VERSION=$(cat versions/cloud-hypervisor-version) \
+#     -f demos/hyperconverged/Containerfile.control-plane -t qarax-control-plane .
+#
+# API auth: production.yaml enables token auth. run.sh writes
+# /etc/qarax/qarax.env (AUTH_TOKENS=...) into the disk image after export, so
+# the token is never baked into an image layer.
 
 FROM fedora:43
 
@@ -24,6 +29,7 @@ ARG OVERLAYBD_RPM_DIST=azurelinux.3.0
 ARG ACI_VERSION=1.4.1
 ARG ACI_RPM_SUFFIX=20260114025326.c6ba42c
 ARG REGISTRY_PORT=5000
+ARG CLOUDHV_FW_TAG=ch-a54f262b09
 
 # Install PostgreSQL, qarax-node runtime dependencies, and minimal tools
 RUN dnf install -y \
@@ -102,6 +108,14 @@ RUN mkdir -p /var/lib/qarax/vms \
     /opt/overlaybd/registry_cache \
     /opt/overlaybd/gzip_cache
 
+# Install Cloud Hypervisor UEFI firmware (CLOUDHV.fd) for firmware-boot
+# workload VMs (e.g. --with-local-vm). Same tag as e2e/Dockerfile.qarax-node.
+RUN mkdir -p /usr/share/cloud-hypervisor && \
+    curl -fsSL \
+    "https://github.com/cloud-hypervisor/edk2/releases/download/${CLOUDHV_FW_TAG}/CLOUDHV.fd" \
+    -o /usr/share/cloud-hypervisor/CLOUDHV.fd && \
+    chmod 644 /usr/share/cloud-hypervisor/CLOUDHV.fd
+
 # Download Cloud Hypervisor kernel (vmlinux)
 RUN curl -fsSL \
     "https://github.com/cloud-hypervisor/linux/releases/download/ch-release-v6.16.9-20251112/vmlinux-x86_64" \
@@ -141,6 +155,9 @@ Environment="RUST_BACKTRACE=1"
 Environment="DATABASE_URL=postgres://qarax:qarax@127.0.0.1:5432/qarax"
 Environment="OTEL_ENABLED=true"
 Environment="OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318"
+Environment="VM_FIRMWARE=/usr/share/cloud-hypervisor/CLOUDHV.fd"
+# AUTH_TOKENS for the API (written by demos/hyperconverged/run.sh)
+EnvironmentFile=-/etc/qarax/qarax.env
 
 StandardOutput=journal
 StandardError=journal

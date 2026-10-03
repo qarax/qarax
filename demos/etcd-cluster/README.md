@@ -15,18 +15,24 @@ Each VM boots from the `etcd-cluster/Containerfile` image. The node determines i
 
 - Docker (with Compose)
 - `podman` (to build the etcd node image)
+- `jq`
 - `/dev/kvm`
 - Rust toolchain
+- `sudo` (the last step plumbs a veth from the host into the VM bridge so the cluster is reachable from your machine)
+
+The script starts the local stack with `hack/run-local.sh` (same as `make run-local`) if it is not already running, and uses the host registered at address `qarax-node` (override with `QARAX_HOST`). The local stack has API auth enabled; the script defaults `QARAX_TOKEN` to its `e2e-test-token`.
 
 ## Usage
 
 ```bash
-# Full run (starts stack, builds image, boots cluster)
+# Full run (starts stack if needed, builds + converts image, boots cluster)
 ./demos/etcd-cluster/run.sh
 
-# Tear down
+# Tear down: removes the host veth and the whole local stack (make stop-local)
 ./demos/etcd-cluster/run.sh --cleanup
 ```
+
+Re-running is safe: existing network, image object, and VMs are reused.
 
 ## Try it out
 
@@ -41,6 +47,7 @@ etcdctl --endpoints=http://10.100.0.10:2379 put hello world
 etcdctl --endpoints=http://10.100.0.11:2379 get hello
 
 # Kill a node — cluster survives with 2/3
+export QARAX_TOKEN=e2e-test-token
 qarax vm stop etcd-2
 etcdctl --endpoints=http://10.100.0.10:2379,http://10.100.0.11:2379 put still running yes
 ```

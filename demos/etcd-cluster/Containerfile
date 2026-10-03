@@ -8,12 +8,12 @@
 #   etcd-1  10.100.0.11
 #   etcd-2  10.100.0.12
 #
-# Build:
-#   podman build -f demos/etcd/Containerfile -t localhost:5000/etcd-node:latest demos/etcd/
-#   podman push localhost:5000/etcd-node:latest
+# Built, pushed, and converted to OverlayBD automatically by the demo:
+#   ./demos/etcd-cluster/run.sh
 #
-# Then run the demo:
-#   ./demos/demo-etcd-cluster.sh
+# Manual build (the local registry is published on localhost:5001):
+#   podman build -f demos/etcd-cluster/Containerfile -t localhost:5001/etcd-node:src demos/etcd-cluster/
+#   podman push --tls-verify=false localhost:5001/etcd-node:src
 
 FROM fedora:43
 

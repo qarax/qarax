@@ -6,7 +6,7 @@ on:
     types: [labeled]
 
 env:
-  DAGGER_VERSION: v0.20.6
+  DAGGER_VERSION: v0.21.10
 
 jobs:
   build:

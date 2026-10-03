@@ -14,9 +14,11 @@ via Server-Sent Events (SSE).
 
 ## Prerequisites
 
-- qarax stack running: `make run-local`
+- qarax stack running: `make run-local` (the script starts it via `./hack/run-local.sh` if it is not up)
 - `curl` and `jq` installed
 - `qarax` CLI on PATH (or it will be built automatically)
+
+If your server uses a token other than the local default, export `QARAX_TOKEN`.
 
 ## Usage
 
@@ -27,8 +29,9 @@ via Server-Sent Events (SSE).
 
 ## Query parameter filters
 
-The `/events` endpoint accepts optional query parameters to narrow the event
-stream before it reaches your client:
+`/events` is authenticated like the rest of the API, so pass the bearer token
+(the local stack's default is `e2e-test-token`). The endpoint accepts optional
+query parameters to narrow the event stream before it reaches your client:
 
 | Parameter | Description |
 |-----------|-------------|
@@ -40,16 +43,16 @@ Examples:
 
 ```bash
 # All events
-curl -N http://localhost:8000/events
+curl -N -H "Authorization: Bearer $QARAX_TOKEN" http://localhost:8000/events
 
 # Only start events
-curl -N 'http://localhost:8000/events?status=running'
+curl -N -H "Authorization: Bearer $QARAX_TOKEN" 'http://localhost:8000/events?status=running'
 
 # Events for a single VM
-curl -N 'http://localhost:8000/events?vm_id=<uuid>'
+curl -N -H "Authorization: Bearer $QARAX_TOKEN" 'http://localhost:8000/events?vm_id=<uuid>'
 
 # Combined filter: only a specific VM transitioning to shutdown
-curl -N 'http://localhost:8000/events?vm_id=<uuid>&status=shutdown'
+curl -N -H "Authorization: Bearer $QARAX_TOKEN" 'http://localhost:8000/events?vm_id=<uuid>&status=shutdown'
 ```
 
 ## Wire format

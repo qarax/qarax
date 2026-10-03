@@ -14,9 +14,21 @@ Demonstrates Qarax's manual host evacuation workflow on a live two-host stack:
 
 - a live two-node Qarax stack with both hosts `up`
 - `jq`
-- `qarax` CLI on PATH, or a Rust toolchain so the demo can build it
+- `qarax` CLI built in `target/` or on PATH, or a Rust toolchain so the demo can build it
 
-The intended environment is the two-node e2e stack, for example:
+If your server uses a token other than the local default, export `QARAX_TOKEN`.
+
+The simplest two-node setup is `make run-local`, which already starts a second
+node container (`qarax-node-2`) but only registers the first one. Register the
+second node:
+
+```bash
+make run-local
+QARAX_TOKEN=${QARAX_TOKEN:-e2e-test-token} \
+  bash e2e/setup_host.sh http://localhost:8000 qarax-node-2 50051 local-node-2
+```
+
+Alternatively, keep the two-node e2e stack running after its evacuation test:
 
 ```bash
 cd e2e

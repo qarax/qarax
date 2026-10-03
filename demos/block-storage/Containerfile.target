@@ -1,14 +1,15 @@
 # LIO iSCSI target container for the BLOCK storage demo.
 #
-# Provisions a fileio-backed LUN via targetcli and listens on port 3260.
-# The target config is baked into /etc/target/saveconfig.json so the target
-# comes up ready on container start without runtime provisioning.
+# Provisions a fileio-backed LUN via targetcli at container start (see
+# entrypoint.sh) and listens on port 3260. The LIO objects live in the host
+# kernel via the bind-mounted /sys/kernel/config.
 FROM quay.io/centos/centos:stream9
 
 RUN dnf install -y --setopt=install_weak_deps=False \
     targetcli \
     python3-rtslib \
     iproute \
+    kmod \
     util-linux \
     && dnf clean all
 
@@ -18,6 +19,5 @@ COPY demos/block-storage/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 EXPOSE 3260
-EXPOSE 3260/udp
 
 ENTRYPOINT ["/entrypoint.sh"]

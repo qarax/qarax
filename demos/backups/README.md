@@ -13,9 +13,12 @@ second one created after it.
 
 ## Prerequisites
 
-- `./hack/run-local.sh`
+- qarax stack running: `./hack/run-local.sh` (the script starts it if it is not up)
 - `jq`
-- Docker with `docker compose`
+- `docker` (the script clears dump files inside the `qarax` container of the
+  `e2e` Compose project)
+
+If your server uses a token other than the local default, export `QARAX_TOKEN`.
 
 ## Usage
 

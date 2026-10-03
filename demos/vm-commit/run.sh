@@ -4,10 +4,10 @@
 #
 # This script demonstrates the "vm commit" workflow:
 #   1. Start the qarax stack (if not already running)
-#   2. Register and initialise a qarax-node host
+#   2. Use an UP host, or register and initialise qarax-node if there is none
 #   3. Create an OverlayBD storage pool (backed by the local registry)
 #   4. Create a Local storage pool for the committed raw disk
-#   5. Attach both pools to the host
+#   5. Attach both pools to the host (also when reusing pools from a previous run)
 #   6. Push a small OCI image (busybox) to the local registry
 #   7. Create a VM backed by that OCI image (async job, polls to completion)
 #   8. Run `vm commit` to copy the OverlayBD block device to a raw disk
@@ -18,7 +18,7 @@
 #
 # Prerequisites:
 #   - Docker with KVM support (/dev/kvm available)
-#   - Rust toolchain (cargo) for `cargo run -p cli`
+#   - qarax CLI (built automatically with cargo if missing)
 #   - jq, curl, docker
 #
 # Usage:
@@ -64,7 +64,21 @@ run() {
 }
 
 # Look up a pool by name; print its ID. Prints nothing if not found.
-find_pool() { curl -sf "${SERVER}/storage-pools" | jq -r ".[] | select(.name == \"$1\") | .id"; }
+find_pool() {
+	api_curl -sf "${SERVER}/storage-pools?name=$1" | jq -r ".[] | select(.name == \"$1\") | .id"
+}
+
+case "${1:-}" in
+"" | --cleanup) ;;
+--help | -h)
+	echo "Usage: $0 [--cleanup]"
+	echo "  --cleanup   Delete the VM, storage objects and pools created by a previous run"
+	echo "Environment: QARAX_SERVER, QARAX_TOKEN, REGISTRY_PUSH_URL, REGISTRY_INTERNAL_URL,"
+	echo "             QARAX_NODE_ADDRESS, QARAX_NODE_PORT"
+	exit 0
+	;;
+*) die "Unknown option: $1 (see --help)" ;;
+esac
 
 QARAX_BIN="$(find_qarax_bin)"
 if [[ -z "$QARAX_BIN" ]]; then
@@ -81,17 +95,17 @@ if [[ "${1:-}" == "--cleanup" ]]; then
 		echo "  Stack not running — nothing to clean up."
 		exit 0
 	fi
+	require_auth "$SERVER"
 
 	step "Deleting VM '${VM_NAME}'"
 	$QARAX vm delete "$VM_NAME" 2>/dev/null && echo "  Deleted." || echo "  Not found, skipping."
 
 	step "Deleting storage objects in demo pools"
 	for pool_name in "$OBD_POOL_NAME" "$LOCAL_POOL_NAME"; do
-		pool_id=$(curl -sf "${SERVER}/storage-pools" | jq -r ".[] | select(.name == \"${pool_name}\") | .id" 2>/dev/null || true)
+		pool_id=$(find_pool "$pool_name" 2>/dev/null || true)
 		[[ -z "$pool_id" ]] && continue
 		for obj_id in $(
-			curl -sf "${SERVER}/storage-objects" |
-				jq -r ".[] | select(.storage_pool_id == \"${pool_id}\") | .id" 2>/dev/null || true
+			api_curl -sf "${SERVER}/storage-objects?pool_id=${pool_id}" | jq -r '.[].id' 2>/dev/null || true
 		); do
 			info "Deleting storage object $obj_id"
 			$QARAX storage-object delete "$obj_id" 2>/dev/null || true
@@ -119,22 +133,30 @@ echo ""
 
 step "Ensure qarax-node host is registered and up"
 
-HOST_ID=$(curl -sf "${SERVER}/hosts" | jq -r '[.[] | select(.status == "up")] | .[0].id // empty' 2>/dev/null || true)
+HOSTS_JSON=$($QARAX host list -o json)
+HOST_ID=$(jq -r '[.[] | select(.status == "up")] | .[0].id // empty' <<<"$HOSTS_JSON")
 
 if [[ -z "$HOST_ID" ]]; then
-	info "No UP host found — registering qarax-node at ${NODE_ADDRESS}:${NODE_PORT}..."
-	HOST_ID=$(
-		curl -sf -X POST "${SERVER}/hosts" \
-			-H "Content-Type: application/json" \
-			-d "{\"name\":\"demo-node\",\"address\":\"${NODE_ADDRESS}\",\"port\":${NODE_PORT},\"host_user\":\"root\",\"password\":\"\"}" |
-			tr -d '"'
-	)
-	info "Registered host: ${HOST_ID}"
-	info "Initialising host (gRPC handshake)..."
-	curl -sf -X POST "${SERVER}/hosts/${HOST_ID}/init" >/dev/null
+	# Reuse a registered-but-down host at the node address (e.g. after a node
+	# restart) rather than tripping over the unique address constraint.
+	HOST_ID=$(jq -r --arg a "$NODE_ADDRESS" '[.[] | select(.address == $a)] | .[0].id // empty' <<<"$HOSTS_JSON")
+	if [[ -z "$HOST_ID" ]]; then
+		info "No UP host found — registering qarax-node at ${NODE_ADDRESS}:${NODE_PORT}..."
+		HOST_ID=$(
+			run $QARAX host add \
+				--name demo-node \
+				--address "$NODE_ADDRESS" \
+				--port "$NODE_PORT" \
+				--user root \
+				-o json | jq -r '.host_id'
+		)
+		info "Registered host: ${HOST_ID}"
+	fi
+	info "Initialising host ${HOST_ID} (gRPC handshake)..."
+	run $QARAX host init "$HOST_ID" >/dev/null
 	info "Host initialised."
 else
-	HOST_NAME=$(curl -sf "${SERVER}/hosts" | jq -r ".[] | select(.id == \"${HOST_ID}\") | .name")
+	HOST_NAME=$(jq -r --arg id "$HOST_ID" '.[] | select(.id == $id) | .name' <<<"$HOSTS_JSON")
 	info "Found existing UP host: ${HOST_NAME}"
 fi
 
@@ -154,6 +176,7 @@ step "Create OverlayBD storage pool '${OBD_POOL_NAME}'"
 OBD_POOL_ID=$(find_pool "$OBD_POOL_NAME")
 if [[ -n "$OBD_POOL_ID" ]]; then
 	info "Already exists: ${OBD_POOL_ID}"
+	run $QARAX storage-pool attach-host "$OBD_POOL_NAME" "$HOST_ID"
 else
 	OBD_POOL_ID=$(
 		run $QARAX storage-pool create \
@@ -171,6 +194,7 @@ step "Create Local storage pool '${LOCAL_POOL_NAME}'"
 LOCAL_POOL_ID=$(find_pool "$LOCAL_POOL_NAME")
 if [[ -n "$LOCAL_POOL_ID" ]]; then
 	info "Already exists: ${LOCAL_POOL_ID}"
+	run $QARAX storage-pool attach-host "$LOCAL_POOL_NAME" "$HOST_ID"
 else
 	LOCAL_POOL_ID=$(
 		run $QARAX storage-pool create \
@@ -187,7 +211,7 @@ echo ""
 banner "Creating OCI-backed VM"
 
 step "Create VM '${VM_NAME}' with --image-ref"
-VM_ID=$(curl -sf "${SERVER}/vms" | jq -r ".[] | select(.name == \"${VM_NAME}\") | .id")
+VM_ID=$(api_curl -sf "${SERVER}/vms?name=${VM_NAME}" | jq -r ".[] | select(.name == \"${VM_NAME}\") | .id")
 if [[ -n "$VM_ID" ]]; then
 	info "Already exists: ${VM_ID}"
 else
@@ -211,19 +235,25 @@ else
 	step "Polling VM creation job..."
 	elapsed=0
 	timeout=180
+	job_json=""
+	status="unknown"
 	while [[ $elapsed -lt $timeout ]]; do
-		status=$(curl -sf "${SERVER}/jobs/${JOB_ID}" | jq -r '.status' 2>/dev/null || echo "unknown")
+		job_json=$(api_curl -sf "${SERVER}/jobs/${JOB_ID}" 2>/dev/null || true)
+		status=$(jq -r '.status // "unknown"' <<<"${job_json:-null}" 2>/dev/null || echo "unknown")
 		case "$status" in
-		completed) info "Job completed."; break ;;
+		completed)
+			info "Job completed."
+			break
+			;;
 		failed)
-			err=$(curl -sf "${SERVER}/jobs/${JOB_ID}" | jq -r '.error // .message // "unknown"' 2>/dev/null)
-			die "VM creation job failed: ${err}"
+			die "VM creation job failed: $(jq -r '.error // "unknown"' <<<"$job_json")"
 			;;
 		esac
 		sleep 3
 		elapsed=$((elapsed + 3))
 	done
-	[[ $elapsed -lt $timeout ]] || die "Timed out waiting for VM creation job"
+	[[ "$status" == "completed" ]] ||
+		die "Timed out after ${timeout}s waiting for VM creation job ${JOB_ID} (last status: ${status}, progress: $(jq -r '.progress // "?"' <<<"${job_json:-null}" 2>/dev/null))"
 fi
 echo ""
 
@@ -231,7 +261,7 @@ step "VM state:"
 run $QARAX vm get "$VM_NAME"
 echo ""
 
-IMAGE_REF_BEFORE=$(curl -sf "${SERVER}/vms/${VM_ID}" | jq -r '.image_ref // empty')
+IMAGE_REF_BEFORE=$(api_curl -sf "${SERVER}/vms/${VM_ID}" | jq -r '.image_ref // empty')
 
 if [[ -n "$IMAGE_REF_BEFORE" ]]; then
 	info "image_ref = '${IMAGE_REF_BEFORE}'"
@@ -260,7 +290,7 @@ step "VM state after commit (image_ref should be null)"
 run $QARAX vm get "$VM_NAME"
 echo ""
 
-IMAGE_REF_AFTER=$(curl -sf "${SERVER}/vms/${VM_ID}" | jq -r '.image_ref // empty')
+IMAGE_REF_AFTER=$(api_curl -sf "${SERVER}/vms/${VM_ID}" | jq -r '.image_ref // empty')
 if [[ -n "$IMAGE_REF_AFTER" ]]; then
 	die "image_ref was not cleared after commit (got: ${IMAGE_REF_AFTER})"
 fi
@@ -271,7 +301,7 @@ step "Committed disk storage object"
 run $QARAX storage-object list
 echo ""
 
-COMMITTED_OBJ=$(curl -sf "${SERVER}/storage-objects?name=committed-${VM_ID}")
+COMMITTED_OBJ=$(api_curl -sf "${SERVER}/storage-objects?name=committed-${VM_ID}")
 COUNT=$(echo "$COMMITTED_OBJ" | jq 'length')
 if [[ "$COUNT" -ne 1 ]]; then
 	die "Expected 1 committed disk object, got ${COUNT}"
@@ -290,10 +320,10 @@ echo ""
 echo -e "  VM '${VM_NAME}' was converted from an OCI OverlayBD image to a"
 echo -e "  standalone raw disk stored in pool '${LOCAL_POOL_NAME}'."
 echo ""
-echo -e "  The demo environment is still running. Explore it:"
-echo -e "    ${DIM}${QARAX_BIN} vm get ${VM_NAME}${NC}"
-echo -e "    ${DIM}${QARAX_BIN} storage-object list${NC}"
-echo -e "    ${DIM}${QARAX_BIN} storage-pool list${NC}"
+echo -e "  The demo environment is still running. Explore it (export QARAX_TOKEN first):"
+echo -e "    ${DIM}${QARAX} vm get ${VM_NAME}${NC}"
+echo -e "    ${DIM}${QARAX} storage-object list --pool ${LOCAL_POOL_NAME}${NC}"
+echo -e "    ${DIM}${QARAX} storage-pool list${NC}"
 echo ""
 echo -e "  To tear down:"
 echo -e "    ${DIM}$(realpath "$0") --cleanup${NC}"

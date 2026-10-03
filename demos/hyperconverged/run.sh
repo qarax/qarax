@@ -26,9 +26,13 @@
 #   - Rust toolchain (cargo)
 #   - podman
 #   - passt (https://passt.top) — user-space networking via vhost-user
+#   - guestfish (libguestfs-tools), python3
 #   - cloud-hypervisor binary on PATH (auto-downloaded if missing)
 #   - Read/write access to /dev/kvm (for nested virtualization)
-#   - qarax CLI on PATH
+#
+# The control plane runs with APP_ENVIRONMENT=production, which enables API
+# token auth. The token is taken from QARAX_TOKEN (see demos/lib.sh) and
+# injected into the VM as AUTH_TOKENS.
 #
 # Usage:
 #   ./demos/hyperconverged/run.sh             # Full build + run
@@ -39,6 +43,7 @@
 #   ./demos/hyperconverged/run.sh --with-local-vm  # Also boot a firmware VM with cloud image
 #   ./demos/hyperconverged/run.sh --with-db-vm    # Also boot an OCI PostgreSQL VM
 #   ./demos/hyperconverged/run.sh --network-backend bridge # Use bridged VM networking instead of default passt
+#   Further options: --db-image IMAGE, --local-pool-path PATH, --cloud-image-url URL
 
 set -euo pipefail
 
@@ -68,6 +73,7 @@ PASST_SOCKET="${TMP_PREFIX}-passt.sock"
 PASST_PID_FILE="${TMP_PREFIX}-passt.pid"
 PASST_LOG="${TMP_PREFIX}-passt.log"
 CH_PID_FILE="${TMP_PREFIX}-ch.pid"
+QARAX_ENV_FILE="${TMP_PREFIX}-qarax.env"
 CP_SSH_PORT="${CP_SSH_PORT:-2222}"
 GRAFANA_HOST_PORT="${GRAFANA_HOST_PORT:-3000}"
 API_HOST_PORT="${API_HOST_PORT:-8000}"
@@ -116,7 +122,8 @@ cleanup() {
 	rm -f "${PASST_SOCKET}" "${PASST_SOCKET}.repair"
 
 	rm -f "$CP_API_SOCKET" "$CP_CONSOLE_LOG" "$CP_ROOTFS" "$CP_KERNEL" "$CH_FIRMWARE" "$PASST_LOG" \
-		"${TMP_PREFIX}-loader.conf" "${TMP_PREFIX}-qarax.conf"
+		"${TMP_PREFIX}-loader.conf" "${TMP_PREFIX}-qarax.conf" "$QARAX_ENV_FILE" \
+		"${TMP_PREFIX}-rootfs.tar" "${TMP_PREFIX}-Containerfile.postgres"
 
 	echo -e "${GREEN}Cleanup complete.${NC}"
 }
@@ -128,8 +135,24 @@ WITH_LOCAL_VM=0
 WITH_DB_VM=0
 NETWORK_BACKEND=""
 LOCAL_POOL_PATH="/var/lib/qarax/images"
-CLOUD_IMAGE_URL="${CLOUD_IMAGE_URL:-https://download.fedoraproject.org/pub/fedora/linux/releases/41/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-41-1.4.x86_64.raw.xz}"
-DB_IMAGE="${DB_IMAGE:-docker.io/library/postgres:17-alpine}"
+# Transfers are stored verbatim (no decompression), so this must be a raw or
+# qcow2 image, not .xz.
+CLOUD_IMAGE_URL="${CLOUD_IMAGE_URL:-https://download.fedoraproject.org/pub/fedora/linux/releases/43/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-43-1.6.x86_64.qcow2}"
+DEFAULT_DB_IMAGE="docker.io/library/postgres:17-alpine"
+DB_IMAGE="${DB_IMAGE:-${DEFAULT_DB_IMAGE}}"
+
+usage() {
+	echo "Usage: $0 [--cleanup] [--with-local] [--with-nfs --nfs-url HOST:/PATH] [--with-local-vm] [--with-db-vm]"
+	echo "          [--network-backend passt|bridge] [--db-image IMAGE] [--local-pool-path PATH] [--cloud-image-url URL]"
+}
+
+# Options that take a value: fail clearly instead of tripping `set -u`.
+need_value() {
+	[[ $# -ge 2 && -n "$2" ]] || {
+		usage
+		die "$1 requires a value"
+	}
+}
 
 while [[ $# -gt 0 ]]; do
 	case $1 in
@@ -146,6 +169,7 @@ while [[ $# -gt 0 ]]; do
 		shift
 		;;
 	--nfs-url)
+		need_value "$@"
 		NFS_URL="$2"
 		shift 2
 		;;
@@ -159,25 +183,32 @@ while [[ $# -gt 0 ]]; do
 		shift
 		;;
 	--network-backend)
+		need_value "$@"
 		NETWORK_BACKEND="$2"
 		shift 2
 		;;
 	--db-image)
+		need_value "$@"
 		DB_IMAGE="$2"
 		shift 2
 		;;
 	--local-pool-path)
+		need_value "$@"
 		LOCAL_POOL_PATH="$2"
 		shift 2
 		;;
 	--cloud-image-url)
+		need_value "$@"
 		CLOUD_IMAGE_URL="$2"
 		shift 2
 		;;
+	-h | --help)
+		usage
+		exit 0
+		;;
 	*)
-		echo -e "${RED}Unknown option: $1${NC}"
-		echo "Usage: $0 [--cleanup] [--with-local] [--with-nfs --nfs-url HOST:/PATH] [--with-local-vm] [--with-db-vm] [--network-backend bridge|passt]"
-		exit 1
+		usage
+		die "Unknown option: $1"
 		;;
 	esac
 done
@@ -208,10 +239,14 @@ echo ""
 command -v podman &>/dev/null || die "podman is required. Install it and try again."
 command -v passt &>/dev/null || die "passt is required. Install it (e.g. dnf install passt / apt install passt) and try again."
 command -v guestfish &>/dev/null || die "guestfish is required. Install libguestfs-tools and try again."
+command -v python3 &>/dev/null || die "python3 is required."
+# The token becomes AUTH_TOKENS (comma-separated) in a systemd EnvironmentFile.
+[[ "$QARAX_TOKEN" =~ ^[A-Za-z0-9._~+/=-]+$ ]] ||
+	die "QARAX_TOKEN must be non-empty and contain no whitespace or commas."
 
 for _port in "$REGISTRY_PORT" "$GRAFANA_HOST_PORT" "$API_HOST_PORT" "$CP_SSH_PORT"; do
 	if ss -tlnH "sport = :${_port}" 2>/dev/null | grep -q .; then
-		die "Port ${_port} is already in use on the host. Stop the conflicting service or override the *_PORT env vars before running the demo."
+		die "Port ${_port} is already in use on the host. If a previous demo run is still active, run '$0 --cleanup'; otherwise stop the conflicting service or override the *_PORT env vars."
 	fi
 done
 
@@ -287,7 +322,7 @@ else
 	echo "Skipping build (SKIP_BUILD=1)"
 fi
 
-for bin in qarax qarax-node qarax-init; do
+for bin in qarax-server qarax-node qarax-init; do
 	[[ -f "${REPO_ROOT}/target/${MUSL_TARGET}/release/${bin}" ]] ||
 		die "Binary not found: target/${MUSL_TARGET}/release/${bin} — run without SKIP_BUILD to build first."
 done
@@ -356,6 +391,12 @@ title qarax
 linux /$(basename "$CP_KERNEL")
 options root=/dev/vda2 rw console=ttyS0 systemd.unified_cgroup_hierarchy=1 net.ifnames=0 biosdevname=0
 EOF
+# Injected at disk-build time (not baked into the OCI image) and loaded by
+# qarax.service via EnvironmentFile.
+(
+	umask 077
+	printf 'AUTH_TOKENS=%s\n' "$QARAX_TOKEN" >"$QARAX_ENV_FILE"
+)
 
 LIBGUESTFS_BACKEND=direct guestfish --rw -a "$CP_ROOTFS" <<EOF
 run
@@ -373,9 +414,11 @@ mkdir-p /boot/loader/entries
 upload "$CP_KERNEL" /boot/$(basename "$CP_KERNEL")
 upload "$LOADER_CONF" /boot/loader/loader.conf
 upload "$BLS_ENTRY" /boot/loader/entries/qarax.conf
+upload "$QARAX_ENV_FILE" /etc/qarax/qarax.env
+chmod 0600 /etc/qarax/qarax.env
 EOF
 
-rm -f "$ROOTFS_TAR" "$LOADER_CONF" "$BLS_ENTRY"
+rm -f "$ROOTFS_TAR" "$LOADER_CONF" "$BLS_ENTRY" "$QARAX_ENV_FILE"
 
 echo "Building qarax CLI..."
 cargo build --release -p cli
@@ -422,8 +465,8 @@ fi
 
 echo "Seeding grafana/otel-lgtm into local registry..."
 podman pull docker.io/grafana/otel-lgtm:latest
-podman tag docker.io/grafana/otel-lgtm:latest localhost:${REGISTRY_PORT}/grafana/otel-lgtm:latest
-podman push localhost:${REGISTRY_PORT}/grafana/otel-lgtm:latest --tls-verify=false
+podman tag docker.io/grafana/otel-lgtm:latest "localhost:${REGISTRY_PORT}/grafana/otel-lgtm:latest"
+podman push "localhost:${REGISTRY_PORT}/grafana/otel-lgtm:latest" --tls-verify=false
 echo -e "${GREEN}grafana/otel-lgtm seeded into local registry${NC}"
 
 echo ""
@@ -431,10 +474,12 @@ echo ""
 echo -e "${YELLOW}Phase 3: Launch control plane VM${NC}"
 
 # Kill any stale passt/CH from a previous failed run
-if [[ -f "$PASST_PID_FILE" ]]; then
-	kill "$(cat "$PASST_PID_FILE")" 2>/dev/null || true
-	rm -f "$PASST_PID_FILE"
-fi
+for _pid_file in "$CH_PID_FILE" "$PASST_PID_FILE"; do
+	if [[ -f "$_pid_file" ]]; then
+		kill "$(cat "$_pid_file")" 2>/dev/null || true
+		rm -f "$_pid_file"
+	fi
+done
 pkill -f "passt.*qarax-cp" 2>/dev/null || true
 rm -f "${PASST_SOCKET}" "${PASST_SOCKET}.repair" "$CP_API_SOCKET"
 sleep 0.2
@@ -541,24 +586,22 @@ echo ""
 echo -e "${YELLOW}Phase 4: Register host${NC}"
 
 QARAX_API="http://127.0.0.1:${API_HOST_PORT}"
+export QARAX_SERVER="${QARAX_API}"
+require_auth "$QARAX_API"
 
+# The CP VM's qarax-node is reached over gRPC; no SSH credentials are needed.
 echo "Adding CP VM as compute host (self-registration)..."
-HOST_ID=$(curl -sf -X POST "${QARAX_API}/hosts" \
-	-H "Content-Type: application/json" \
-	-d '{
-		"name": "local-node",
-		"address": "'"${CP_VM_IP}"'",
-		"port": '"${QARAX_NODE_PORT}"',
-		"host_user": "root",
-		"password": ""
-	}' | tr -d '"')
-
-[[ -n "$HOST_ID" ]] || die "Failed to add host"
-echo -e "Host added: ${HOST_ID}"
+"$QARAX_CLI" host add --name local-node --address "${CP_VM_IP}" \
+	--port "${QARAX_NODE_PORT}" --user root
 
 echo "Initializing host (gRPC handshake)..."
-curl -sf -X POST "${QARAX_API}/hosts/${HOST_ID}/init" | head -c 200
-echo ""
+# qarax-node may still be starting inside the VM; retry for up to ~60s.
+for attempt in $(seq 1 20); do
+	"$QARAX_CLI" host init local-node && break
+	[[ $attempt -lt 20 ]] || die "Host init failed. Check qarax-node inside the CP VM: ssh -p ${CP_SSH_PORT} root@localhost (password: qarax), journalctl -u qarax-node"
+	echo -e "${YELLOW}Host init failed (attempt ${attempt}/20), retrying in 3s...${NC}"
+	sleep 3
+done
 echo ""
 
 # Wait for in-VM telemetry backend (Grafana) to be ready
@@ -658,8 +701,6 @@ DEMO_IMAGE="${DEMO_IMAGE:-public.ecr.aws/docker/library/alpine:latest}"
 DEMO_VM_NAME="alpine-vm"
 DEMO_VM_MEMORY=268435456 # 256 MiB
 
-export QARAX_SERVER="${QARAX_API}"
-
 echo "Creating default ${NETWORK_BACKEND} network (192.168.100.0/24)..."
 net_retries=5
 net_attempt=0
@@ -721,13 +762,15 @@ fi
 if [[ "$WITH_LOCAL_VM" -eq 1 ]]; then
 	CLOUD_VM_NAME="cloud-vm"
 
-	echo "Transferring cloud image into local pool..."
+	CLOUD_VM_MEMORY=1073741824 # 1 GiB
+
+	echo "Transferring cloud image into local pool (waits for the download)..."
 	"$QARAX_CLI" transfer create --pool local-pool --name cloud-disk \
-		--source "$CLOUD_IMAGE_URL" --object-type disk
+		--source "$CLOUD_IMAGE_URL" --object-type disk --wait
 
 	echo "Creating firmware-boot VM: ${CLOUD_VM_NAME}..."
 	"$QARAX_CLI" vm create --name "${CLOUD_VM_NAME}" --vcpus 1 \
-		--memory "${DEMO_VM_MEMORY}" --boot-mode firmware
+		--memory "${CLOUD_VM_MEMORY}" --boot-mode firmware
 
 	echo "Attaching cloud disk..."
 	"$QARAX_CLI" vm attach-disk "${CLOUD_VM_NAME}" --object cloud-disk
@@ -743,15 +786,17 @@ if [[ "$WITH_DB_VM" -eq 1 ]]; then
 	DB_VM_NAME="db-vm"
 	DB_VM_MEMORY=536870912 # 512 MiB
 
-	if [[ "$DB_IMAGE" == "docker.io/library/postgres:17-alpine" ]]; then
+	if [[ "$DB_IMAGE" == "$DEFAULT_DB_IMAGE" ]]; then
 		echo "Building custom Postgres image with POSTGRES_HOST_AUTH_METHOD=trust..."
-		cat <<EOF >/tmp/Containerfile.postgres
+		DB_CONTAINERFILE="${TMP_PREFIX}-Containerfile.postgres"
+		cat <<EOF >"$DB_CONTAINERFILE"
 FROM ${DB_IMAGE}
 ENV POSTGRES_PASSWORD=postgres
 ENV POSTGRES_HOST_AUTH_METHOD=trust
 EOF
-		podman build -t localhost:${REGISTRY_PORT}/postgres:17-alpine-trust -f /tmp/Containerfile.postgres
-		podman push localhost:${REGISTRY_PORT}/postgres:17-alpine-trust --tls-verify=false
+		podman build -t "localhost:${REGISTRY_PORT}/postgres:17-alpine-trust" -f "$DB_CONTAINERFILE"
+		podman push "localhost:${REGISTRY_PORT}/postgres:17-alpine-trust" --tls-verify=false
+		rm -f "$DB_CONTAINERFILE"
 		DB_IMAGE="${VM_SEES_HOST}:${REGISTRY_PORT}/postgres:17-alpine-trust"
 	fi
 
@@ -762,7 +807,7 @@ EOF
 	echo "Starting database VM..."
 	"$QARAX_CLI" vm start "${DB_VM_NAME}"
 
-	DB_VM_JSON=$("$QARAX_CLI" vm get "${DB_VM_NAME}" --json 2>/dev/null || true)
+	DB_VM_JSON=$("$QARAX_CLI" --output json vm get "${DB_VM_NAME}" 2>/dev/null || true)
 	DB_VM_ID=$(python3 -c 'import json,sys
 try:
     print(json.loads(sys.stdin.read()).get("id",""))
@@ -770,7 +815,7 @@ except Exception:
     print("")' <<<"${DB_VM_JSON}")
 	DB_VM_IP=""
 	if [[ "$NETWORK_BACKEND" == "bridge" && -n "${DB_VM_ID}" ]]; then
-		DB_VM_IPS_JSON=$("$QARAX_CLI" network list-ips default --json 2>/dev/null || true)
+		DB_VM_IPS_JSON=$("$QARAX_CLI" --output json network list-ips default 2>/dev/null || true)
 		DB_VM_IP=$(python3 -c 'import json,sys
 vmid=sys.argv[1]
 try:
@@ -834,8 +879,9 @@ echo "  ${DEMO_VM_NAME}         (OCI: ${DEMO_IMAGE})"
 [[ "$WITH_DB_VM" -eq 1 ]] && echo "  db-vm             (OCI: ${DB_IMAGE}, PostgreSQL)"
 [[ "$WITH_LOCAL_VM" -eq 1 ]] && echo "  cloud-vm          (firmware boot, cloud image)"
 echo ""
-echo "Set server for CLI commands:"
+echo "Set server and API token for CLI commands:"
 echo "  export QARAX_SERVER=http://localhost:${API_HOST_PORT}"
+echo "  export QARAX_TOKEN=${QARAX_TOKEN}"
 echo ""
 echo "Interact with VMs:"
 echo "  qarax vm list"
@@ -844,5 +890,5 @@ echo "  qarax vm attach ${DEMO_VM_NAME}"
 [[ "$WITH_LOCAL_VM" -eq 1 ]] && echo "  qarax vm attach cloud-vm"
 echo ""
 echo "Cleanup:"
-echo "  sudo ./demos/hyperconverged/run.sh --cleanup"
+echo "  $0 --cleanup   (run as the same user that started the demo)"
 echo ""

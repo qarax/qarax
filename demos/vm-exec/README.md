@@ -18,8 +18,11 @@ The initramfs includes `qarax-init`, so the guest agent is available for `qarax 
 
 ## Prerequisites
 
-- `./hack/run-local.sh`
+- qarax stack running: `./hack/run-local.sh` (the script starts it if it is not up)
 - `jq`
+- `qarax` CLI built with guest exec support (built automatically if missing)
+
+If your server uses a token other than the local default, export `QARAX_TOKEN`.
 
 ## Usage
 
@@ -35,10 +38,10 @@ Optional flags:
 
 ## What success looks like
 
-The demo prints the `qarax vm exec` output from inside the guest. The expected stdout includes:
+The demo prints the `qarax vm exec` output from inside the guest. The command
+is `printf vm-exec && uname -s`, so the expected stdout is the marker followed
+directly by the kernel name:
 
 ```text
 vm-execLinux
 ```
-
-plus the kernel name from `uname -s`.

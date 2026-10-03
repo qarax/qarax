@@ -14,6 +14,7 @@ All status messages go to stderr so they don't interfere with output parsing.
 """
 
 import argparse
+import os
 import sys
 import time
 
@@ -25,9 +26,19 @@ def log(msg: str) -> None:
     print(msg, file=sys.stderr)
 
 
+# The local stack (e2e/docker-compose.yml) enables API token auth with
+# AUTH_TOKENS=${QARAX_TEST_TOKEN:-e2e-test-token}; default to the same token.
+API_TOKEN = (
+    os.environ.get("QARAX_TOKEN")
+    or os.environ.get("QARAX_TEST_TOKEN")
+    or "e2e-test-token"
+)
+
+
 def api(method: str, path: str, base_url: str, **kwargs) -> requests.Response:
     url = f"{base_url}{path}"
-    resp = requests.request(method, url, **kwargs)
+    headers = {"Authorization": f"Bearer {API_TOKEN}", **kwargs.pop("headers", {})}
+    resp = requests.request(method, url, headers=headers, **kwargs)
     return resp
 
 
@@ -58,7 +69,6 @@ def ensure_host(base_url: str, name: str, address: str, port: int) -> str:
                 "address": address,
                 "port": port,
                 "host_user": "root",
-                "password": "",
             },
         )
         if resp.status_code == 201:
