@@ -34,7 +34,10 @@ source "${REPO_ROOT}/demos/lib.sh"
 `lib.sh` provides:
 - Color constants: `GREEN`, `YELLOW`, `RED`, `CYAN`, `BOLD`, `DIM`, `NC`
 - `die()` — print error and exit 1
-- `find_qarax_bin()` — locates the `qarax` CLI binary (checks PATH then cargo build output)
+- `QARAX_TOKEN` — defaulted (to the local stack's `e2e-test-token`) and exported, so the CLI authenticates
+- `api_curl` — `curl` with the `Authorization: Bearer $QARAX_TOKEN` header; use it for every raw qarax API call
+- `require_server <url>` — die unless the API is reachable and accepts the token; `ensure_stack <url>` starts the stack first if needed
+- `find_qarax_bin()` — locates the `qarax` CLI binary (newest cargo build, then PATH)
 
 ## Existing demos to learn from
 
@@ -49,7 +52,7 @@ The hooks demo is the gold standard for style. Prefer that pattern for non-trivi
 The `qarax` CLI is the primary tool. Key subcommands:
 
 **Hosts:**
-- `qarax host list / get <name|id> / add --name --address --port --user --password`
+- `qarax host list / get <name|id> / add --name --address --port --user [--credential-ref env://NAME|file:///path]`
 - `qarax host init <name|id>` — connects via gRPC, marks host UP
 - `qarax host deploy <name|id> --image <ref>` — bootc deploy
 - `qarax host upgrade <name|id>`
@@ -89,7 +92,7 @@ The `qarax` CLI is the primary tool. Key subcommands:
 - `qarax instance-type list / get / create / delete`
 - `qarax job get <id>`
 
-**Output flag:** All commands accept `-o json` or `-o yaml` for machine-readable output. Use this when extracting IDs with `jq`.
+**Output flag:** All commands accept `-o json` or `-o yaml` (there is no `--json`) for machine-readable output. Use this when extracting IDs with `jq`.
 
 **Server flag:** `--server URL` overrides the default (`$QARAX_SERVER` env or `http://localhost:8000`).
 
@@ -100,9 +103,10 @@ The local stack is started with:
 ./hack/run-local.sh
 ```
 
+The stack enables API token auth (`AUTH_ENABLED=true`, token `e2e-test-token`).
 Check it's healthy before running a demo:
 ```bash
-curl -s http://localhost:8000/hosts | jq .
+curl -s -H "Authorization: Bearer ${QARAX_TOKEN:-e2e-test-token}" http://localhost:8000/hosts | jq .
 ```
 
 If the API is unreachable, start the stack: `./hack/run-local.sh`. If the CLI fails with deserialization errors against a running stack, rebuild it: `REBUILD=1 ./hack/run-local.sh`. The stack runs qarax, qarax-node, postgres, and a registry via Docker Compose (`e2e/docker-compose.yml`).
@@ -115,14 +119,26 @@ If the API is unreachable, start the stack: `./hack/run-local.sh`. If the CLI fa
 - After creating a VM with `--image-ref`, creation is async — the CLI polls the job.
 - Use `-o json | jq -r '.field'` to extract IDs when you need them as variables.
 - When selecting a host with `jq`, always filter by `status == "up"`: `jq -r '[.[] | select(.status == "up")] | .[0].id'` — there may be stale `down` hosts registered from e2e runs.
+- `--wait` on `vm stop`/`force-stop` has no timeout. Never use it in cleanup traps: `vm force-stop` (no wait) then `vm delete`, or wrap in `timeout`.
+- `make run-local` registers the node as host `local-node` (address `qarax-node`). It also starts `qarax-node-2` but does **not** register it. Look hosts up by address or `status == "up"` rather than hardcoding names, and use `docker compose -f e2e/docker-compose.yml exec -T qarax-node ...` rather than container names like `e2e-qarax-node-1`.
+- shfmt rewrites unquoted associative-array keys containing `-` as arithmetic (`[k8s-control-0]` → `[k8s - control - 0]`). Quote them: `["k8s-control-0"]`.
 - If `qarax host list -o json` or other commands fail with a deserialization error (e.g. `missing field`), the running server is out of sync with the CLI binary. Fix with `REBUILD=1 ./hack/run-local.sh` to rebuild the Docker images, then retry.
+
+## Demo conventions
+
+Every demo should:
+- Be re-runnable: detect and reuse (or clearly reject) resources left by a previous run instead of failing on name conflicts.
+- Offer `--cleanup` (and `--help`); a `trap` should remove what the run created on failure.
+- Bound every wait loop with a timeout and print the job error / last VM status when it expires.
+- Never hide errors with `2>/dev/null || true` on create steps; that masks 401s and real failures.
+- Be listed in `demos/README.md`.
 
 ## Verification process
 
 1. **Read** `demos/lib.sh` and at least one relevant existing demo.
 2. **Write** the demo to `demos/<feature>/run.sh` (and `README.md`).
 3. **Make it executable:** `chmod +x demos/<feature>/run.sh`
-4. **Ensure stack is running:** `curl -s http://localhost:8000/hosts` — if it fails, run `./hack/run-local.sh`.
+4. **Ensure stack is running:** the check above — if it fails, run `./hack/run-local.sh`. A 401 means the token is wrong, not that the stack is down.
 5. **Run the demo:** `./demos/<feature>/run.sh`
 6. **If it fails:** read the error, check docker logs if needed, fix the script, re-run:
    ```bash

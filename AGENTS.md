@@ -71,6 +71,8 @@ Follow this order before touching code:
    - Docker Compose mode: `docker compose ps` and `docker compose logs qarax-node`
    - Hyperconverged mode: `systemctl status qarax-node`, `ps aux | grep cloud-hypervisor`
    - Verify Postgres: `docker compose ps postgres` or `docker compose exec postgres pg_isready -U qarax`
+   - Verify API auth: `curl -H "Authorization: Bearer $QARAX_TOKEN" localhost:8000/hosts`. A 401 means a wrong/missing token, not a down stack (`/` is public, so it can't tell you).
+   - Verify host kernel modules: qarax-node (even in a container) loads `target_core_user`, `tcm_loop` and `ip_tables` from the host kernel on demand. If `uname -r` has no matching `/lib/modules/` dir (kernel upgraded without reboot), VM start fails with TCMU configfs `ENOENT` or iptables "do you need to insmod?" errors. Reboot; it is not a code bug.
 3. **Read service logs** before grep-ing source files. Most runtime failures are infrastructure, not code.
 4. **Only after confirming infrastructure is healthy**, investigate code-level issues.
 
@@ -80,13 +82,16 @@ Do not jump to code investigation when services may not be running or the wrong 
 
 ### Control Plane (qarax)
 
-- `qarax/src/handlers/` — Axum HTTP handlers by resource (hosts, vms, instance_types, vm_templates, storage_pools, storage_objects, boot_sources, networks, transfers, lifecycle_hooks, jobs)
+- `qarax/src/handlers/` — Axum HTTP handlers by resource (hosts, vms, instance_types, vm_templates, storage_pools, storage_objects, boot_sources, networks, security_groups, transfers, lifecycle_hooks, jobs, sandboxes, backups, events (SSE), audit_log)
+- `qarax/src/auth.rs` — Bearer-token middleware (see API Authentication)
+- `qarax/src/secret_provider.rs` — Resolves host `credential_ref`s (`env://NAME`, `file:///path`); passwords are never stored in the DB
 - `qarax/src/model/` — Database models with inline SQLx queries
 - `qarax/src/grpc_client.rs` — Tonic client for communicating with qarax-node instances
 - `qarax/src/vm_monitor.rs` — Background task that periodically reconciles VM status with nodes
 - `qarax/src/resource_monitor.rs` — Background task polling host resource metrics
 - `qarax/src/ha_monitor.rs` — Background task failing over HA-enabled VMs from dead hosts
 - `qarax/src/hook_executor.rs` — Background task managing lifecycle hook executions
+- `qarax/src/sandbox_reaper.rs` / `sandbox_pool_manager.rs` — Background tasks reaping idle sandboxes and keeping prewarmed pools filled
 - `qarax/src/transfer_executor.rs` — Async file transfer handling
 - `qarax/src/host_deployer.rs` — Host deployment via SSH + bootc
 - `qarax/src/configuration.rs` — YAML config with env var overrides
@@ -140,11 +145,20 @@ gRPC services in `qarax-node/src/services/` implement generated tonic traits:
 
 ### App Startup
 
-`qarax/src/startup.rs` wires the app: load config → run migrations → create pool → build `App` (wraps `Arc<PgPool>` + VM defaults) → spawn background tasks (`vm_monitor`, `resource_monitor`, `hook_executor`) → start Axum with middleware (request ID, tracing).
+`qarax/src/startup.rs` wires the app: load config → run migrations → create pool → build `App` (wraps `Arc<PgPool>` + VM defaults) → spawn background tasks (`vm_monitor`, `resource_monitor`, `ha_monitor`, `hook_executor`, `sandbox_reaper`, `sandbox_pool_manager`) → start Axum with middleware (request ID, tracing).
 
 ## Configuration
 
 YAML files in `configuration/` (base.yaml, local.yaml, production.yaml), selected by `APP_ENVIRONMENT` env var (default: local). Key env var overrides: `DATABASE_HOST`, `DATABASE_PORT`, `DATABASE_USERNAME`, `DATABASE_PASSWORD`, `DATABASE_NAME`.
+
+### API Authentication
+
+Static bearer tokens, configured by `AUTH_ENABLED` / `AUTH_TOKENS` (comma-separated):
+
+- **Off** by default (`base.yaml`; `local.yaml` doesn't override it), e.g. `cargo run` against `make test-deps`.
+- **On** in `production.yaml` (no default tokens: set `AUTH_TOKENS`) and in `e2e/docker-compose.yml`, which is also what `make run-local` uses. There the token is `${QARAX_TEST_TOKEN:-e2e-test-token}`.
+- Public routes: `/`, `/swagger-ui*`, `/api-docs/openapi.json`. Everything else needs `Authorization: Bearer <token>`.
+- The CLI reads `--token` / `QARAX_TOKEN`. `demos/lib.sh`, `hack/run-local.sh`, `hack/setup_vm.py` and `e2e/run_e2e_tests.sh` default it to `e2e-test-token`.
 
 ## CI
 
@@ -209,7 +223,7 @@ Key component versions are pinned in `Makefile` (`CLOUD_HYPERVISOR_VERSION`) and
 
 ## Additional Directories
 
-- `demos/` — Working demo setups (k8s-cluster, gpu-passthrough, hooks, hyperconverged, oci, boot-source, etcd-cluster)
+- `demos/` — Runnable demos, one per directory (`run.sh` + `README.md`); see `demos/README.md` for the index and stack requirements. Shared helpers (`api_curl`, `require_server`, `ensure_stack`, `find_qarax_bin`) live in `demos/lib.sh`.
 - `docs/` — Additional development documentation (`DEVELOPMENT.md`)
 
 ## Rules
@@ -219,7 +233,8 @@ Key component versions are pinned in `Makefile` (`CLOUD_HYPERVISOR_VERSION`) and
 - **Always run `make lint` after changes.** Zero clippy warnings are required. Check all workspace crates, not just the one you edited.
 - **Verify changes work before reporting done.** After any Rust code change: `make lint` to confirm zero warnings, then `cargo nextest run -p <crate>` (or `make test`) to confirm tests pass. Do not present a change as complete without verifying it compiles and tests pass.
 - **After any SQL query change:** run `cargo sqlx prepare --workspace` to update the offline query cache.
-- **When renaming anything:** search `hack/`, `e2e/`, `.github/`, and all workspace crates for stale references before finishing.
+- **When renaming anything:** search `hack/`, `e2e/`, `demos/`, `.github/`, and all workspace crates for stale references before finishing.
+- **When changing an API request shape, CLI flag, or auth behavior:** grep `demos/` and `hack/` for raw callers (`curl`, python `requests`, CLI invocations). Nothing in CI exercises them, so they break silently. Some request types (e.g. `NewHost`) use `#[serde(deny_unknown_fields)]`, so removing a field from them turns old callers into 422s.
 - **Plan before implementing on non-trivial changes.** List files to modify and describe the approach. Do not create or edit files until the plan is clear.
 - **When making user facing changes** Make sure you have implemented a CLI and added working e2e tests.
 - **Never embed credentials, secrets, or personal data in source code.** Use environment variables or config files excluded from version control.
