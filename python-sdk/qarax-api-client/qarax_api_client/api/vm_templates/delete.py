@@ -13,7 +13,6 @@ from ...types import Response
 def _get_kwargs(
     vm_template_id: UUID,
 ) -> dict[str, Any]:
-
     _kwargs: dict[str, Any] = {
         "method": "delete",
         "url": "/vm-templates/{vm_template_id}".format(
@@ -29,6 +28,9 @@ def _parse_response(*, client: AuthenticatedClient | Client, response: httpx.Res
         return None
 
     if response.status_code == 404:
+        return None
+
+    if response.status_code == 409:
         return None
 
     if response.status_code == 500:

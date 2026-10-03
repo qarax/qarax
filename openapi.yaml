@@ -1873,6 +1873,8 @@ paths:
           description: VM template deleted successfully
         '404':
           description: VM template not found
+        '409':
+          description: VM template still has a sandbox pool
         '500':
           description: Internal server error
   /vm-templates/{vm_template_id}/sandbox-pool:
