@@ -184,7 +184,7 @@ paths:
         '409':
           description: Backup is still being created
         '422':
-          description: No host available to remove the VM snapshot
+          description: No UP host can reach the VM snapshot
         '500':
           description: Internal server error
   /backups/{backup_id}/restore:
