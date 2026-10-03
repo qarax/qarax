@@ -87,6 +87,13 @@ require_cmd() {
 	fi
 }
 
+# The local stack enables API token auth (see e2e/docker-compose.yml).
+: "${QARAX_TOKEN:=${QARAX_TEST_TOKEN:-e2e-test-token}}"
+
+qarax_curl() {
+	curl -H "Authorization: Bearer ${QARAX_TOKEN}" "$@"
+}
+
 wait_for_http() {
 	local url="$1"
 	local timeout_s="${2:-60}"
@@ -424,7 +431,7 @@ wait_for_tcp() {
 
 lookup_host_id_by_address() {
 	local address="$1"
-	curl -sS "${API_URL}/hosts" | python3 -c "
+	qarax_curl -sS "${API_URL}/hosts" | python3 -c "
 import json, sys
 address = '$address'
 for host in json.load(sys.stdin):
@@ -436,7 +443,7 @@ for host in json.load(sys.stdin):
 
 lookup_host_status() {
 	local host_id="$1"
-	curl -sS "${API_URL}/hosts" | python3 -c "
+	qarax_curl -sS "${API_URL}/hosts" | python3 -c "
 import json, sys
 host_id = '$host_id'
 for host in json.load(sys.stdin):
@@ -460,7 +467,7 @@ register_host() {
 	local body_file code host_id
 	body_file="$(mktemp)"
 	code="$(
-		curl -sS -o "${body_file}" -w "%{http_code}" \
+		qarax_curl -sS -o "${body_file}" -w "%{http_code}" \
 			-X POST "${API_URL}/hosts" \
 			-H "Content-Type: application/json" \
 			-d "${payload}"
@@ -497,7 +504,7 @@ trigger_deploy() {
 
 	body_file="$(mktemp)"
 	code="$(
-		curl -sS -o "${body_file}" -w "%{http_code}" \
+		qarax_curl -sS -o "${body_file}" -w "%{http_code}" \
 			-X POST "${API_URL}/hosts/${host_id}/deploy" \
 			-H "Content-Type: application/json" \
 			-d "${payload}"
