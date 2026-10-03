@@ -15,13 +15,19 @@ HOST_NAME="${4:-e2e-node}"
 MUSL_TARGET="x86_64-unknown-linux-musl"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
+# Prefer the newest repo build over a `qarax` on PATH: an installed CLI can be
+# older than the server it talks to (e.g. predate API token support).
 find_qarax_bin() {
-	if command -v qarax &>/dev/null; then
+	local debug="$REPO_ROOT/target/$MUSL_TARGET/debug/qarax"
+	local release="$REPO_ROOT/target/$MUSL_TARGET/release/qarax"
+	if [[ -x "$debug" && -x "$release" ]]; then
+		if [[ "$release" -nt "$debug" ]]; then echo "$release"; else echo "$debug"; fi
+	elif [[ -x "$debug" ]]; then
+		echo "$debug"
+	elif [[ -x "$release" ]]; then
+		echo "$release"
+	elif command -v qarax &>/dev/null; then
 		echo "qarax"
-	elif [[ -x "$REPO_ROOT/target/$MUSL_TARGET/release/qarax" ]]; then
-		echo "$REPO_ROOT/target/$MUSL_TARGET/release/qarax"
-	elif [[ -x "$REPO_ROOT/target/$MUSL_TARGET/debug/qarax" ]]; then
-		echo "$REPO_ROOT/target/$MUSL_TARGET/debug/qarax"
 	else
 		echo ""
 	fi
