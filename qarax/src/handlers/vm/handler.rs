@@ -1233,17 +1233,25 @@ async fn run_overlaybd_create(
     // Optionally create a persistent OverlaybdUpper StorageObject on the
     // caller-supplied pool so that writes survive VM deletion.
     let upper_so_id = if let Some(upper_pool_id) = persistent_upper_pool_id {
-        match storage_objects::create(
-            db_pool,
-            storage_objects::NewStorageObject {
-                name: format!("overlaybd-upper-{}", vm_id),
-                storage_pool_id: Some(upper_pool_id),
-                object_type: storage_objects::StorageObjectType::OverlaybdUpper,
-                size_bytes: 0,
-                config: serde_json::Value::Object(serde_json::Map::new()),
-                parent_id: None,
-            },
-        )
+        match async {
+            let host_id = vms::get(db_pool, vm_id)
+                .await?
+                .host_id
+                .ok_or(sqlx::Error::RowNotFound)?;
+            storage_objects::create_managed(
+                db_pool,
+                storage_objects::NewStorageObject {
+                    name: format!("overlaybd-upper-{}", vm_id),
+                    storage_pool_id: Some(upper_pool_id),
+                    object_type: storage_objects::StorageObjectType::OverlaybdUpper,
+                    size_bytes: 0,
+                    config: serde_json::Value::Object(serde_json::Map::new()),
+                    parent_id: None,
+                },
+                host_id,
+            )
+            .await
+        }
         .await
         {
             Ok(id) => Some(id),
@@ -4323,7 +4331,7 @@ async fn run_vm_commit_inner(
     use anyhow::Context;
 
     // Step 1: Create the target Disk storage object (this derives the on-disk path)
-    let disk_so = storage_objects::create_returning(
+    let disk_so = storage_objects::create_managed_returning(
         db_pool,
         NewStorageObject {
             name: format!("committed-{}", vm_id),
@@ -4333,6 +4341,10 @@ async fn run_vm_commit_inner(
             config: serde_json::Value::Object(serde_json::Map::new()),
             parent_id: None,
         },
+        vms::get(db_pool, vm_id)
+            .await?
+            .host_id
+            .context("VM has no host")?,
     )
     .await
     .context("Failed to create target disk storage object")?;
@@ -4384,6 +4396,8 @@ async fn run_vm_commit_copy_and_swap(
         "Starting OverlayBD to raw disk copy"
     );
 
+    let mut storage_tx = db_pool.begin().await?;
+    storage_objects::get_for_update(&mut storage_tx, disk_so_id).await?;
     let mut last_pct = 0i32;
     node_client
         .create_disk_from_overlaybd(
@@ -4420,9 +4434,15 @@ async fn run_vm_commit_copy_and_swap(
     let _ = jobs::update_progress(db_pool, job_id, 80).await;
 
     // Step 3: Swap vm_disk to the new storage object
-    vm_disks::update_storage_object(db_pool, oci_disk.disk_id, disk_so_id, None)
-        .await
-        .context("Failed to update vm_disk storage object")?;
+    sqlx::query(
+        "UPDATE vm_disks SET storage_object_id = $1, upper_storage_object_id = NULL WHERE id = $2",
+    )
+    .bind(disk_so_id)
+    .bind(oci_disk.disk_id)
+    .execute(storage_tx.as_mut())
+    .await
+    .context("Failed to update vm_disk storage object")?;
+    storage_tx.commit().await?;
 
     // Step 4: Clean up old OCI storage objects (non-fatal)
     if let Err(e) = storage_objects::delete(db_pool, oci_disk.oci_storage_object_id).await {

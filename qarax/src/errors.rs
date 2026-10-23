@@ -72,6 +72,15 @@ impl From<sqlx::Error> for Error {
                 )
             }
             sqlx::Error::Database(ref db_err)
+                if db_err.code().as_deref() == Some("23503")
+                    && matches!(
+                        db_err.constraint(),
+                        Some("vm_disks_storage_object_id_fkey" | "storage_cleanup_pool_id_fkey")
+                    ) =>
+            {
+                Error::Conflict("Storage is still in use or has pending file cleanup".into())
+            }
+            sqlx::Error::Database(ref db_err)
                 if db_err.code().as_deref() == Some("23514")
                     && db_err.constraint() == Some("storage_pool_capacity") =>
             {

@@ -863,6 +863,31 @@ impl NodeClient {
         Ok(())
     }
 
+    pub async fn delete_storage_files(
+        &self,
+        pool: &crate::model::storage_pools::StoragePool,
+        object_id: Uuid,
+        upper_layer: bool,
+    ) -> Result<()> {
+        use crate::model::storage_pools::StoragePoolType;
+        let pool_kind = match pool.pool_type {
+            StoragePoolType::Local => StoragePoolKind::Local,
+            StoragePoolType::Nfs => StoragePoolKind::Nfs,
+            _ => anyhow::bail!("File cleanup requires a Local or NFS pool"),
+        };
+        self.connect_file_transfer_service()
+            .await?
+            .delete_storage_files(node::DeleteStorageFilesRequest {
+                pool_id: pool.id.to_string(),
+                pool_kind: pool_kind as i32,
+                config_json: pool.config.to_string(),
+                object_id: object_id.to_string(),
+                upper_layer,
+            })
+            .await?;
+        Ok(())
+    }
+
     /// Attach a storage pool on the node (mount NFS, verify OverlayBD registry, create local dir).
     /// Returns an error if the pool kind is unrecognised or the underlying operation fails.
     #[instrument(skip(self))]

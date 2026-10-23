@@ -1456,6 +1456,8 @@ paths:
           type: string
           format: uuid
       responses:
+        '202':
+          description: Deletion accepted; node file cleanup will be retried
         '204':
           description: Storage object deleted successfully
         '404':
@@ -1551,6 +1553,8 @@ paths:
           description: Storage pool deleted successfully
         '404':
           description: Storage pool not found
+        '409':
+          description: Storage pool has pending file cleanup
         '500':
           description: Internal server error
   /storage-pools/{pool_id}/disks:

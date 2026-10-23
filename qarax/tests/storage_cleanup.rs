@@ -261,3 +261,212 @@ async fn deleting_attached_persistent_upper_preserves_the_reference() {
     let response = client.delete(url).send().await.unwrap();
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
 }
+
+#[derive(Clone)]
+struct CleanupNode {
+    unavailable: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+#[tonic::async_trait]
+impl qarax::grpc_client::node::file_transfer_service_server::FileTransferService for CleanupNode {
+    async fn delete_storage_files(
+        &self,
+        request: tonic::Request<qarax::grpc_client::node::DeleteStorageFilesRequest>,
+    ) -> Result<tonic::Response<qarax::grpc_client::node::DeleteStorageFilesResponse>, tonic::Status>
+    {
+        use std::sync::atomic::Ordering;
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        if self.unavailable.load(Ordering::SeqCst) {
+            return Err(tonic::Status::unavailable("test outage"));
+        }
+        let req = request.into_inner();
+        let config: serde_json::Value = serde_json::from_str(&req.config_json).unwrap();
+        let path = std::path::Path::new(config["path"].as_str().unwrap()).join(req.object_id);
+        tokio::fs::remove_file(path).await.unwrap();
+        Ok(tonic::Response::new(
+            qarax::grpc_client::node::DeleteStorageFilesResponse {},
+        ))
+    }
+
+    async fn download_file(
+        &self,
+        _: tonic::Request<qarax::grpc_client::node::DownloadFileRequest>,
+    ) -> Result<tonic::Response<qarax::grpc_client::node::TransferResponse>, tonic::Status> {
+        Err(tonic::Status::unimplemented("unused"))
+    }
+    async fn copy_file(
+        &self,
+        _: tonic::Request<qarax::grpc_client::node::CopyFileRequest>,
+    ) -> Result<tonic::Response<qarax::grpc_client::node::TransferResponse>, tonic::Status> {
+        Err(tonic::Status::unimplemented("unused"))
+    }
+    type CreateDiskStream =
+        futures::stream::Empty<Result<qarax::grpc_client::node::TransferResponse, tonic::Status>>;
+    async fn create_disk(
+        &self,
+        _: tonic::Request<qarax::grpc_client::node::CreateDiskRequest>,
+    ) -> Result<tonic::Response<Self::CreateDiskStream>, tonic::Status> {
+        Err(tonic::Status::unimplemented("unused"))
+    }
+}
+
+#[tokio::test]
+async fn managed_disk_cleanup_retries_without_losing_allocation_or_deleting_registered_files() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    };
+    let app = spawn_app().await;
+    let directory = tempfile::tempdir().unwrap();
+    let pool_id = storage_pools::create(
+        &app.pool,
+        NewStoragePool {
+            name: "managed".into(),
+            pool_type: StoragePoolType::Local,
+            config: json!({"path": directory.path()}),
+            capacity_bytes: Some(64),
+        },
+    )
+    .await
+    .unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let node = CleanupNode {
+        unavailable: Arc::new(AtomicBool::new(true)),
+        calls: Arc::new(AtomicUsize::new(0)),
+    };
+    let incoming = async_stream::stream! {
+        loop { yield listener.accept().await.map(|(stream, _)| stream); }
+    };
+    let server = tokio::spawn(tonic::transport::Server::builder()
+        .add_service(qarax::grpc_client::node::file_transfer_service_server::FileTransferServiceServer::new(node.clone()))
+        .serve_with_incoming(incoming));
+    let host_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO hosts(id, name, address, port, host_user, status) VALUES ($1, 'cleanup-node', '127.0.0.1', $2, 'root', 'DOWN')")
+        .bind(host_id).bind(i32::from(port)).execute(&app.pool).await.unwrap();
+    storage_pools::attach_host(&app.pool, pool_id, host_id)
+        .await
+        .unwrap();
+    let disk = storage_objects::create_managed_returning(
+        &app.pool,
+        NewStorageObject {
+            name: "owned".into(),
+            storage_pool_id: Some(pool_id),
+            object_type: StorageObjectType::Disk,
+            size_bytes: 64,
+            config: json!({}),
+            parent_id: None,
+        },
+        host_id,
+    )
+    .await
+    .unwrap();
+    let path = disk.config["path"].as_str().unwrap();
+    tokio::fs::write(path, b"owned").await.unwrap();
+    let client = reqwest::Client::new();
+
+    // Registering the same path does not grant permission to delete its file.
+    let registration = storage_objects::create(
+        &app.pool,
+        NewStorageObject {
+            name: "external".into(),
+            storage_pool_id: Some(pool_id),
+            object_type: StorageObjectType::Disk,
+            size_bytes: 0,
+            config: disk.config.clone(),
+            parent_id: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        client
+            .delete(format!("{}/storage-objects/{registration}", app.address))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert!(std::path::Path::new(path).exists());
+    assert_eq!(node.calls.load(Ordering::SeqCst), 0);
+
+    // An attached managed disk must fail before making any destructive RPC.
+    let vm_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO vms(id, name, status, hypervisor, config, boot_vcpus, max_vcpus, memory_size) VALUES ($1, 'cleanup-vm', 'CREATED', 'CLOUD_HV', '{}', 1, 1, 268435456)")
+        .bind(vm_id).execute(&app.pool).await.unwrap();
+    sqlx::query("INSERT INTO vm_disks(vm_id, storage_object_id, logical_name, device_path) VALUES ($1, $2, 'rootfs', '/dev/vda')")
+        .bind(vm_id).bind(disk.id).execute(&app.pool).await.unwrap();
+    let url = format!("{}/storage-objects/{}", app.address, disk.id);
+    assert_eq!(
+        client.delete(&url).send().await.unwrap().status(),
+        StatusCode::CONFLICT
+    );
+    assert_eq!(node.calls.load(Ordering::SeqCst), 0);
+    qarax::model::vm_disks::delete_by_vm(&app.pool, vm_id)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        client.delete(&url).send().await.unwrap().status(),
+        StatusCode::ACCEPTED
+    );
+    assert!(matches!(
+        storage_objects::get(&app.pool, disk.id).await,
+        Err(sqlx::Error::RowNotFound)
+    ));
+    assert_eq!(
+        storage_pools::get(&app.pool, pool_id)
+            .await
+            .unwrap()
+            .allocated_bytes,
+        Some(64)
+    );
+    assert!(std::path::Path::new(path).exists());
+    let attempts: i32 =
+        sqlx::query_scalar("SELECT attempts FROM storage_cleanup WHERE object_id = $1")
+            .bind(disk.id)
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+    assert!(attempts > 0);
+    assert_eq!(
+        client
+            .delete(format!("{}/storage-pools/{pool_id}", app.address))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::CONFLICT
+    );
+
+    node.unavailable.store(false, Ordering::SeqCst);
+    // Repeating DELETE retries the durable task even though the object is gone.
+    assert_eq!(
+        client.delete(&url).send().await.unwrap().status(),
+        StatusCode::NO_CONTENT
+    );
+    assert!(!std::path::Path::new(path).exists());
+    assert_eq!(
+        storage_pools::get(&app.pool, pool_id)
+            .await
+            .unwrap()
+            .allocated_bytes,
+        Some(0)
+    );
+    assert_eq!(
+        client.delete(&url).send().await.unwrap().status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        client
+            .delete(format!("{}/storage-pools/{pool_id}", app.address))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    server.abort();
+}

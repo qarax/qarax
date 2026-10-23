@@ -90,9 +90,12 @@ pub async fn create_object(client: &Client, obj: &NewStorageObject) -> anyhow::R
     client.post_text("/storage-objects", obj).await
 }
 
-pub async fn delete_object(client: &Client, object_id: Uuid) -> anyhow::Result<()> {
+pub async fn delete_object(
+    client: &Client,
+    object_id: Uuid,
+) -> anyhow::Result<reqwest::StatusCode> {
     client
-        .delete(&format!("/storage-objects/{object_id}"))
+        .delete_status(&format!("/storage-objects/{object_id}"))
         .await
 }
 

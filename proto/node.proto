@@ -541,7 +541,19 @@ message OverlayBdDiskSource {
   optional string upper_index = 4;  // persistent upper index path (optional)
 }
 
+message DeleteStorageFilesRequest {
+  string pool_id = 1;
+  StoragePoolKind pool_kind = 2;
+  string config_json = 3;
+  string object_id = 4;
+  bool upper_layer = 5;
+}
+
+message DeleteStorageFilesResponse {}
+
 service FileTransferService {
+  // Idempotently remove only the UUID-named files owned by this object.
+  rpc DeleteStorageFiles(DeleteStorageFilesRequest) returns (DeleteStorageFilesResponse) {}
   rpc DownloadFile(DownloadFileRequest) returns (TransferResponse) {}
   rpc CopyFile(CopyFileRequest) returns (TransferResponse) {}
   // Create a disk file: blank, downloaded from a URL, or copied from an OverlayBD

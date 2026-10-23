@@ -300,38 +300,47 @@ async fn resolve_new_object(
 }
 
 pub async fn create(pool: &PgPool, new_object: NewStorageObject) -> Result<Uuid, sqlx::Error> {
-    let (id, pool_id, config) = resolve_new_object(pool, &new_object).await?;
-
-    sqlx::query(
-        r#"
-INSERT INTO storage_objects (id, name, storage_pool_id, object_type, size_bytes, config, parent_id)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
-        "#,
-    )
-    .bind(id)
-    .bind(&new_object.name)
-    .bind(pool_id)
-    .bind(new_object.object_type)
-    .bind(new_object.size_bytes)
-    .bind(config)
-    .bind(new_object.parent_id)
-    .execute(pool)
-    .await?;
-
-    Ok(id)
+    Ok(create_returning(pool, new_object).await?.id)
 }
 
-/// Like `create`, but returns the full `StorageObject` without a re-fetch.
+/// Register external storage without taking ownership of its files.
 pub async fn create_returning(
     pool: &PgPool,
     new_object: NewStorageObject,
+) -> Result<StorageObject, sqlx::Error> {
+    insert_object(pool, new_object, None).await
+}
+
+/// Record ownership and the node on which Qarax provisions the files.
+pub async fn create_managed(
+    pool: &PgPool,
+    new_object: NewStorageObject,
+    host_id: Uuid,
+) -> Result<Uuid, sqlx::Error> {
+    Ok(create_managed_returning(pool, new_object, host_id)
+        .await?
+        .id)
+}
+
+pub async fn create_managed_returning(
+    pool: &PgPool,
+    new_object: NewStorageObject,
+    host_id: Uuid,
+) -> Result<StorageObject, sqlx::Error> {
+    insert_object(pool, new_object, Some(vec![host_id])).await
+}
+
+async fn insert_object(
+    pool: &PgPool,
+    new_object: NewStorageObject,
+    managed_host_ids: Option<Vec<Uuid>>,
 ) -> Result<StorageObject, sqlx::Error> {
     let (id, pool_id, config) = resolve_new_object(pool, &new_object).await?;
 
     sqlx::query(
         r#"
-INSERT INTO storage_objects (id, name, storage_pool_id, object_type, size_bytes, config, parent_id)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO storage_objects (id, name, storage_pool_id, object_type, size_bytes, config, parent_id, managed_host_ids)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         "#,
     )
     .bind(id)
@@ -341,6 +350,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7)
     .bind(new_object.size_bytes)
     .bind(&config)
     .bind(new_object.parent_id)
+    .bind(managed_host_ids)
     .execute(pool)
     .await?;
 

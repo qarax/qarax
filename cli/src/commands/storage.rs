@@ -562,8 +562,14 @@ pub async fn run_object(
 
         StorageObjectCommand::Delete { object } => {
             let id = resolve_object_id(client, &object).await?;
-            api::storage::delete_object(client, id).await?;
-            println!("Deleted storage object: {id}");
+            let status = api::storage::delete_object(client, id).await?;
+            if status == reqwest::StatusCode::ACCEPTED {
+                println!(
+                    "Deletion accepted for storage object {id}; file cleanup is pending and will be retried automatically"
+                );
+            } else {
+                println!("Deleted storage object: {id}");
+            }
         }
     }
 
