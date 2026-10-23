@@ -388,9 +388,9 @@ class Vm:
             try:
                 if not isinstance(data, dict):
                     raise TypeError()
-                placement_policy_type_1 = PlacementPolicy.from_dict(data)
+                placement_policy_type_0 = PlacementPolicy.from_dict(data)
 
-                return placement_policy_type_1
+                return placement_policy_type_0
             except (TypeError, ValueError, AttributeError, KeyError):
                 pass
             return cast(None | PlacementPolicy | Unset, data)

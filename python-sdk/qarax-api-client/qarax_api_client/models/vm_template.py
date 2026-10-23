@@ -311,9 +311,9 @@ class VmTemplate:
             try:
                 if not isinstance(data, str):
                     raise TypeError()
-                boot_mode_type_1 = BootMode(data)
+                boot_mode_type_0 = BootMode(data)
 
-                return boot_mode_type_1
+                return boot_mode_type_0
             except (TypeError, ValueError, AttributeError, KeyError):
                 pass
             return cast(BootMode | None | Unset, data)
@@ -392,9 +392,9 @@ class VmTemplate:
             try:
                 if not isinstance(data, str):
                     raise TypeError()
-                hypervisor_type_1 = Hypervisor(data)
+                hypervisor_type_0 = Hypervisor(data)
 
-                return hypervisor_type_1
+                return hypervisor_type_0
             except (TypeError, ValueError, AttributeError, KeyError):
                 pass
             return cast(Hypervisor | None | Unset, data)

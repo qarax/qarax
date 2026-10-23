@@ -18,8 +18,8 @@ paths:
         required: false
         schema:
           oneOf:
-          - type: 'null'
           - $ref: '#/components/schemas/AuditResourceType'
+          - type: 'null'
       - name: resource_id
         in: query
         description: Filter by resource UUID
@@ -35,8 +35,8 @@ paths:
         required: false
         schema:
           oneOf:
-          - type: 'null'
           - $ref: '#/components/schemas/AuditAction'
+          - type: 'null'
       - name: limit
         in: query
         description: 'Maximum number of entries to return (default: 100, max: 1000)'
@@ -104,8 +104,8 @@ paths:
         required: false
         schema:
           oneOf:
-          - type: 'null'
           - $ref: '#/components/schemas/BackupType'
+          - type: 'null'
       responses:
         '200':
           description: List backups
@@ -1385,8 +1385,8 @@ paths:
         required: false
         schema:
           oneOf:
-          - type: 'null'
           - $ref: '#/components/schemas/StorageObjectType'
+          - type: 'null'
       responses:
         '200':
           description: List all storage objects
@@ -4299,8 +4299,8 @@ components:
           - 'null'
         boot_mode:
           oneOf:
-          - type: 'null'
           - $ref: '#/components/schemas/BootMode'
+          - type: 'null'
         boot_source_id:
           type:
           - string
@@ -4351,8 +4351,8 @@ components:
             to live on shared storage pools.
         hypervisor:
           oneOf:
-          - type: 'null'
           - $ref: '#/components/schemas/Hypervisor'
+          - type: 'null'
         image_ref:
           type:
           - string
@@ -4442,11 +4442,11 @@ components:
             must be attached to the host running the VM.
         placement_policy:
           oneOf:
-          - type: 'null'
           - $ref: '#/components/schemas/PlacementPolicy'
             description: |-
               Placement policy controlling host reservation classes, labels, affinity,
               anti-affinity, and spread preferences during scheduling.
+          - type: 'null'
         root_disk_object_id:
           type:
           - string
@@ -4488,9 +4488,9 @@ components:
           description: Unique device id (e.g. "net0")
         interface_type:
           oneOf:
-          - type: 'null'
           - $ref: '#/components/schemas/InterfaceType'
             description: Override interface type (inferred from tap/vhost_user if not set)
+          - type: 'null'
         iommu:
           type:
           - boolean
@@ -4558,9 +4558,9 @@ components:
           description: Size of each queue
         rate_limiter:
           oneOf:
-          - type: 'null'
           - $ref: '#/components/schemas/RateLimiterConfig'
             description: Rate limiter configuration
+          - type: 'null'
         tap:
           type:
           - string
@@ -4568,9 +4568,9 @@ components:
           description: Pre-created TAP device name (optional)
         vhost_mode:
           oneOf:
-          - type: 'null'
           - $ref: '#/components/schemas/VhostMode'
             description: Vhost-user mode (client or server)
+          - type: 'null'
         vhost_socket:
           type:
           - string
@@ -4588,8 +4588,8 @@ components:
       properties:
         boot_mode:
           oneOf:
-          - type: 'null'
           - $ref: '#/components/schemas/BootMode'
+          - type: 'null'
         boot_source_id:
           type:
           - string
@@ -4620,8 +4620,8 @@ components:
           - 'null'
         hypervisor:
           oneOf:
-          - type: 'null'
           - $ref: '#/components/schemas/Hypervisor'
+          - type: 'null'
         image_ref:
           type:
           - string
@@ -4730,12 +4730,12 @@ components:
       properties:
         bandwidth:
           oneOf:
-          - type: 'null'
           - $ref: '#/components/schemas/TokenBucket'
+          - type: 'null'
         ops:
           oneOf:
-          - type: 'null'
           - $ref: '#/components/schemas/TokenBucket'
+          - type: 'null'
     RegisterLunRequest:
       type: object
       required:
@@ -4823,8 +4823,8 @@ components:
           format: uuid
         vm_status:
           oneOf:
-          - type: 'null'
           - $ref: '#/components/schemas/VmStatus'
+          - type: 'null'
         vm_template_id:
           type:
           - string
@@ -5199,8 +5199,8 @@ components:
             type: string
         scope:
           oneOf:
-          - type: 'null'
           - $ref: '#/components/schemas/HookScope'
+          - type: 'null'
         scope_value:
           type:
           - string
@@ -5318,8 +5318,8 @@ components:
           type: string
         placement_policy:
           oneOf:
-          - type: 'null'
           - $ref: '#/components/schemas/PlacementPolicy'
+          - type: 'null'
         status:
           $ref: '#/components/schemas/VmStatus'
         tags:
@@ -5423,8 +5423,8 @@ components:
           - 'null'
         boot_mode:
           oneOf:
-          - type: 'null'
           - $ref: '#/components/schemas/BootMode'
+          - type: 'null'
         host_id:
           type:
           - string
@@ -5554,8 +5554,8 @@ components:
       properties:
         boot_mode:
           oneOf:
-          - type: 'null'
           - $ref: '#/components/schemas/BootMode'
+          - type: 'null'
         boot_source_id:
           type:
           - string
@@ -5586,8 +5586,8 @@ components:
           - 'null'
         hypervisor:
           oneOf:
-          - type: 'null'
           - $ref: '#/components/schemas/Hypervisor'
+          - type: 'null'
         id:
           type: string
           format: uuid

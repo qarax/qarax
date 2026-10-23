@@ -129,9 +129,9 @@ class UpdateLifecycleHook:
             try:
                 if not isinstance(data, str):
                     raise TypeError()
-                scope_type_1 = HookScope(data)
+                scope_type_0 = HookScope(data)
 
-                return scope_type_1
+                return scope_type_0
             except (TypeError, ValueError, AttributeError, KeyError):
                 pass
             return cast(HookScope | None | Unset, data)
