@@ -970,6 +970,91 @@ async fn test_create_vm_rejects_root_disk_reused_by_other_vm() {
 }
 
 #[tokio::test]
+async fn test_block_disk_has_one_writer_even_with_concurrent_attachments() {
+    use qarax::model::{storage_objects, storage_pools};
+
+    let app = spawn_app().await;
+    let client = reqwest::Client::new();
+    let host_id = ensure_host_up(&client, &app.address).await;
+    let pool_id = storage_pools::create(
+        &app.pool,
+        storage_pools::NewStoragePool {
+            name: "block-pool".into(),
+            pool_type: storage_pools::StoragePoolType::Block,
+            config: json!({"portal": "127.0.0.1:3260", "iqn": "iqn.2026-10.qarax:test"}),
+            capacity_bytes: None,
+        },
+    )
+    .await
+    .unwrap();
+    storage_pools::attach_host(&app.pool, pool_id, host_id.parse().unwrap())
+        .await
+        .unwrap();
+    let object_id = storage_objects::create(
+        &app.pool,
+        storage_objects::NewStorageObject {
+            name: "lun0".into(),
+            storage_pool_id: Some(pool_id),
+            object_type: storage_objects::StorageObjectType::Disk,
+            size_bytes: 1024,
+            config: json!({"lun": 0}),
+            parent_id: None,
+        },
+    )
+    .await
+    .unwrap();
+    let mut vm_ids = Vec::new();
+    for name in ["block-writer-a", "block-writer-b"] {
+        vm_ids.push(
+            create_vm(
+                &client,
+                &app.address,
+                json!({
+                    "name": name, "hypervisor": "cloud_hv", "boot_vcpus": 1,
+                    "max_vcpus": 1, "memory_size": 268435456, "config": {}
+                }),
+            )
+            .await,
+        );
+    }
+    let attach = |vm_id: &str| {
+        client
+            .post(format!("{}/vms/{vm_id}/disks", app.address))
+            .json(&json!({"storage_object_id": object_id}))
+            .send()
+    };
+    let (a, b) = tokio::join!(attach(&vm_ids[0]), attach(&vm_ids[1]));
+    let mut statuses = [a.unwrap().status().as_u16(), b.unwrap().status().as_u16()];
+    statuses.sort();
+    assert_eq!(statuses, [201, 409]);
+    let disks = qarax::model::vm_disks::list_by_storage_object(&app.pool, object_id)
+        .await
+        .unwrap();
+    assert_eq!(disks.len(), 1);
+    assert!(!disks[0].read_only);
+
+    let response = client
+        .post(format!("{}/vms", app.address))
+        .json(&json!({
+            "name": "block-root-writer", "hypervisor": "cloud_hv", "boot_vcpus": 1,
+            "max_vcpus": 1, "memory_size": 268435456, "root_disk_object_id": object_id,
+            "config": {}
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+
+    qarax::model::vm_disks::delete(&app.pool, disks[0].id)
+        .await
+        .unwrap();
+    assert_eq!(
+        attach(&vm_ids[0]).await.unwrap().status(),
+        StatusCode::CREATED
+    );
+}
+
+#[tokio::test]
 async fn test_start_with_conflicting_disk_keeps_vm_created() {
     let app = spawn_app().await;
     let client = reqwest::Client::new();

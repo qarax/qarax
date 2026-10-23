@@ -405,7 +405,9 @@ fn storage_object_requires_exclusive_attachment(
 ) -> bool {
     matches!(
         storage_pool.pool_type,
-        storage_pools::StoragePoolType::Local | storage_pools::StoragePoolType::Nfs
+        storage_pools::StoragePoolType::Local
+            | storage_pools::StoragePoolType::Nfs
+            | storage_pools::StoragePoolType::Block
     ) && matches!(
         object.object_type,
         StorageObjectType::Disk | StorageObjectType::Snapshot

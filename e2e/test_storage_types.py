@@ -424,6 +424,44 @@ async def test_vm_commit_converts_oci_to_raw_disk(client, oci_image_ref):
 
 
 @pytest.mark.asyncio
+async def test_block_disk_rejects_second_vm_writer(client):
+    """A registered LUN can have only one VM writer, including before boot."""
+    test_id = uuid.uuid4().hex[:8]
+    async with client as c:
+        http = c.get_async_httpx_client()
+        pool_id = await _create_pool(
+            c, f"e2e-block-exclusive-{test_id}", StoragePoolType.BLOCK,
+            {"portal": "127.0.0.1:1", "iqn": "iqn.2026-10.qarax:exclusive-test"},
+        )
+        vm_ids = []
+        object_id = None
+        try:
+            response = await http.post(f"/storage-pools/{pool_id}/luns", json={
+                "name": "lun0", "lun": 0, "size_bytes": 1024,
+            })
+            assert response.status_code == 201, response.text
+            object_id = response.json()["storage_object_id"]
+            for i in range(2):
+                response = await http.post("/vms", json={
+                    "name": f"block-writer-{test_id}-{i}", "hypervisor": "cloud_hv",
+                    "boot_vcpus": 1, "max_vcpus": 1, "memory_size": 268435456,
+                })
+                assert response.status_code == 201, response.text
+                vm_ids.append(response.json())
+            for vm_id, expected in zip(vm_ids, [201, 409]):
+                response = await http.post(f"/vms/{vm_id}/disks", json={
+                    "storage_object_id": object_id,
+                })
+                assert response.status_code == expected, response.text
+        finally:
+            for vm_id in vm_ids:
+                await http.delete(f"/vms/{vm_id}")
+            if object_id:
+                await http.delete(f"/storage-objects/{object_id}")
+            await http.delete(f"/storage-pools/{pool_id}")
+
+
+@pytest.mark.asyncio
 async def test_nfs_storage_pool_attach(client):
     """Create an NFS pool, attach it to the host (which mounts the share), then clean up."""
     async with client as c:
