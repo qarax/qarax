@@ -90,6 +90,7 @@ pub async fn create(
     responses(
         (status = 204, description = "Storage object deleted successfully"),
         (status = 404, description = "Storage object not found"),
+        (status = 409, description = "Storage object is still in use"),
         (status = 500, description = "Internal server error")
     ),
     tag = "storage-objects"

@@ -295,6 +295,13 @@ async def test_create_vm_with_persistent_overlaybd_upper_has_storage_object(
                 f"/var/lib/qarax/e2e-overlaybd-upper-{test_id}/"
             )
 
+            delete_resp = await delete_storage_object.asyncio_detailed(
+                client=c, object_id=upper_object.id
+            )
+            assert delete_resp.status_code == 409, delete_resp.content.decode()
+            remaining = await list_storage_objects.asyncio(client=c, name=upper_name)
+            assert remaining and remaining[0].id == upper_object.id
+
             resize_resp = await resize_disk.asyncio_detailed(
                 client=c,
                 vm_id=vm_id,

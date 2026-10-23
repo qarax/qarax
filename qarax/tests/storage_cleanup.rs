@@ -190,3 +190,74 @@ async fn deleting_completed_transfer_artifacts_via_api_succeeds() {
     let err = transfers::get(&app.pool, transfer.id).await.unwrap_err();
     assert!(matches!(err, sqlx::Error::RowNotFound));
 }
+
+#[tokio::test]
+async fn deleting_attached_persistent_upper_preserves_the_reference() {
+    let app = spawn_app().await;
+    let pool_id = create_test_pool(&app.pool).await;
+    let mut object_ids = Vec::new();
+    for object_type in [
+        StorageObjectType::OciImage,
+        StorageObjectType::OverlaybdUpper,
+    ] {
+        object_ids.push(
+            storage_objects::create(
+                &app.pool,
+                NewStorageObject {
+                    name: object_type.to_string(),
+                    storage_pool_id: Some(pool_id),
+                    object_type,
+                    size_bytes: 0,
+                    config: json!({}),
+                    parent_id: None,
+                },
+            )
+            .await
+            .unwrap(),
+        );
+    }
+    let vm_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO vms (id, name, status, hypervisor, config, boot_vcpus, max_vcpus, memory_size)
+         VALUES ($1, 'persistent-vm', 'CREATED', 'CLOUD_HV', '{}', 1, 1, 268435456)",
+    )
+    .bind(vm_id)
+    .execute(&app.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO vm_disks (vm_id, storage_object_id, upper_storage_object_id, logical_name, device_path)
+         VALUES ($1, $2, $3, 'rootfs', '/dev/vda')",
+    )
+    .bind(vm_id)
+    .bind(object_ids[0])
+    .bind(object_ids[1])
+    .execute(&app.pool)
+    .await
+    .unwrap();
+
+    let client = reqwest::Client::new();
+    let url = format!("{}/storage-objects/{}", app.address, object_ids[1]);
+    let response = client.delete(&url).send().await.unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert!(
+        response
+            .text()
+            .await
+            .unwrap()
+            .contains("persistent VM write layer")
+    );
+    let disks = qarax::model::vm_disks::list_by_vm(&app.pool, vm_id)
+        .await
+        .unwrap();
+    assert_eq!(disks[0].upper_storage_object_id, Some(object_ids[1]));
+    storage_objects::get(&app.pool, object_ids[1])
+        .await
+        .unwrap();
+
+    qarax::model::vm_disks::delete_by_vm(&app.pool, vm_id)
+        .await
+        .unwrap();
+    let response = client.delete(url).send().await.unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+}

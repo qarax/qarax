@@ -63,6 +63,14 @@ impl From<sqlx::Error> for Error {
                 let msg = unique_violation_message(db_err.as_ref());
                 Error::Conflict(msg)
             }
+            sqlx::Error::Database(ref db_err)
+                if db_err.code().as_deref() == Some("23503")
+                    && db_err.constraint() == Some("vm_disks_upper_storage_object_id_fkey") =>
+            {
+                Error::Conflict(
+                    "Storage object is still used as a persistent VM write layer".into(),
+                )
+            }
             _ => {
                 tracing::error!(error = %err, error.debug = ?err, "database error");
                 Error::Sqlx(err)

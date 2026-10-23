@@ -1460,6 +1460,8 @@ paths:
           description: Storage object deleted successfully
         '404':
           description: Storage object not found
+        '409':
+          description: Storage object is still in use
         '500':
           description: Internal server error
   /storage-pools:
