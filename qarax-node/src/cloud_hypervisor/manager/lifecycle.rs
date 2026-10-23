@@ -130,6 +130,15 @@ impl VmManager {
 
             let vsock_socket_path = Self::vsock_socket_path_from_config(&proto_config.vsock);
 
+            // create_vm persists resolved /dev paths after clearing OCI fields.
+            // Recover ownership from the backend's durable state instead.
+            let storage_backend_kind = match self.storage_backends.get(StoragePoolKind::Overlaybd) {
+                Some(backend) if backend.has_mapping(&vm_id).await => {
+                    Some(StoragePoolKind::Overlaybd)
+                }
+                _ => None,
+            };
+
             let instance = VmInstance {
                 proto_config,
                 process: None, // We don't have the child process handle for recovered VMs
@@ -141,7 +150,7 @@ impl VmManager {
                 serial_pty_path: None,
                 console_pty_path: None,
                 vsock_socket_path,
-                storage_backend_kind: None, // Recovery doesn't restore OverlayBD state
+                storage_backend_kind,
             };
 
             let mut vms = self.vms.lock().await;
