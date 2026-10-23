@@ -41,6 +41,7 @@ pub async fn run(
 
     // Spawn background task to reconcile VM status with the live node state
     tokio::spawn(crate::vm_monitor::start_vm_monitor(a.clone()));
+    tokio::spawn(crate::storage_cleanup::start(a.clone()));
 
     // Spawn background task to poll host resource metrics
     tokio::spawn(crate::resource_monitor::start_resource_monitor(a.clone()));

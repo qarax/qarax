@@ -1,5 +1,28 @@
+mod cleanup;
+
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, Weak};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
+
+type FileLock = tokio::sync::Mutex<()>;
+#[derive(Default)]
+struct FileLocks(Mutex<HashMap<PathBuf, Weak<FileLock>>>);
+
+impl FileLocks {
+    fn get(&self, path: &Path) -> Arc<FileLock> {
+        let mut locks = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        locks.retain(|_, lock| lock.strong_count() > 0);
+        if let Some(lock) = locks.get(path).and_then(Weak::upgrade) {
+            return lock;
+        }
+        let lock = Arc::new(FileLock::new(()));
+        locks.insert(path.to_owned(), Arc::downgrade(&lock));
+        lock
+    }
+}
 
 use futures::StreamExt;
 use tokio::io::AsyncWriteExt;
@@ -20,6 +43,7 @@ use crate::rpc::node::{
 #[derive(Clone, Default)]
 pub struct FileTransferServiceImpl {
     overlaybd_manager: Option<Arc<OverlayBdManager>>,
+    file_locks: Arc<FileLocks>,
 }
 
 impl FileTransferServiceImpl {
@@ -28,12 +52,30 @@ impl FileTransferServiceImpl {
     }
 
     pub fn with_overlaybd(overlaybd_manager: Option<Arc<OverlayBdManager>>) -> Self {
-        Self { overlaybd_manager }
+        Self {
+            overlaybd_manager,
+            ..Self::default()
+        }
     }
 }
 
 #[tonic::async_trait]
 impl FileTransferService for FileTransferServiceImpl {
+    async fn delete_storage_files(
+        &self,
+        request: Request<crate::rpc::node::DeleteStorageFilesRequest>,
+    ) -> Result<Response<crate::rpc::node::DeleteStorageFilesResponse>, Status> {
+        let paths = cleanup::paths(request.into_inner()).await?;
+        let lock = self.file_locks.get(&paths[0]);
+        let _guard = lock.lock().await;
+        for path in paths {
+            cleanup::unlink(&path).await?;
+        }
+        Ok(Response::new(
+            crate::rpc::node::DeleteStorageFilesResponse {},
+        ))
+    }
+
     async fn download_file(
         &self,
         request: Request<DownloadFileRequest>,
@@ -128,6 +170,10 @@ impl FileTransferService for FileTransferServiceImpl {
         request: Request<CreateDiskRequest>,
     ) -> Result<Response<Self::CreateDiskStream>, Status> {
         let req = request.into_inner();
+        // Hold the same per-file lock as deletion, including after the caller
+        // disconnects while the spawned copy/download is still running.
+        let lock = self.file_locks.get(Path::new(&req.path));
+        let guard = lock.lock_owned().await;
         info!(
             dest = %req.path,
             size_bytes = req.size_bytes,
@@ -139,6 +185,7 @@ impl FileTransferService for FileTransferServiceImpl {
         let overlaybd_manager = self.overlaybd_manager.clone();
 
         tokio::spawn(async move {
+            let _guard = guard;
             let result = match req.source {
                 Some(Source::Overlaybd(ref source)) => {
                     do_create_from_overlaybd(
@@ -371,5 +418,37 @@ async fn do_download(source_url: &str, destination_path: &str) -> anyhow::Result
             let _ = tokio::fs::remove_file(&tmp_path).await;
             Err(e)
         }
+    }
+}
+
+#[cfg(test)]
+mod cleanup_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn deletion_waits_for_a_writer_before_unlinking() {
+        let directory = tempfile::tempdir().unwrap();
+        let object_id = uuid::Uuid::new_v4().to_string();
+        let path = directory.path().join(&object_id);
+        let service = FileTransferServiceImpl::new();
+        let writer = service.file_locks.get(&path).lock_owned().await;
+        let req = crate::rpc::node::DeleteStorageFilesRequest {
+            pool_id: uuid::Uuid::new_v4().to_string(),
+            object_id,
+            pool_kind: crate::rpc::node::StoragePoolKind::Local as i32,
+            config_json: serde_json::json!({"path": directory.path()}).to_string(),
+            upper_layer: false,
+        };
+        let mut deletion =
+            tokio::spawn(async move { service.delete_storage_files(Request::new(req)).await });
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), &mut deletion)
+                .await
+                .is_err()
+        );
+        tokio::fs::write(&path, b"last write").await.unwrap();
+        drop(writer);
+        deletion.await.unwrap().unwrap();
+        assert!(!path.exists());
     }
 }

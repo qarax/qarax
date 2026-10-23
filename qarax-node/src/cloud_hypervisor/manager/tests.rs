@@ -193,3 +193,114 @@ fn build_guest_exec_request_is_newline_framed_json() {
     assert_eq!(json["command"], serde_json::json!(["/bin/echo", "hello"]));
     assert_eq!(json["timeout_secs"], 5);
 }
+
+#[tokio::test]
+async fn recovered_vm_deletion_cleans_overlaybd_state_and_preserves_external_upper() {
+    use crate::storage::overlaybd::OverlayBdBackend;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::UnixListener;
+
+    // Cover both historical device-path results and daemon status messages,
+    // plus a plain disk VM that has no OverlayBD state.
+    for result in [Some("/dev/sdz"), Some("success"), None] {
+        let directory = TempDir::new().unwrap();
+        let runtime = directory.path().join("vms");
+        tokio::fs::create_dir(&runtime).await.unwrap();
+        let cache = directory.path().join("overlaybd");
+        let vm_id = Uuid::new_v4().to_string();
+        let mapping_dir = cache.join(&vm_id);
+        let upper = directory.path().join("persistent.upper.data");
+        tokio::fs::write(&upper, b"guest data").await.unwrap();
+        if let Some(result) = result {
+            tokio::fs::create_dir_all(&mapping_dir).await.unwrap();
+            tokio::fs::write(
+                mapping_dir.join("config.json"),
+                serde_json::json!({
+                    "upper": {"data": upper}, "lowers": [],
+                })
+                .to_string(),
+            )
+            .await
+            .unwrap();
+            tokio::fs::write(mapping_dir.join("result"), result)
+                .await
+                .unwrap();
+        }
+        let overlaybd = Arc::new(OverlayBdManager::new("unused-convertor", &cache));
+        overlaybd.recover().await;
+        assert_eq!(overlaybd.has_mapping(&vm_id).await, result.is_some());
+        let mut backends = StorageBackendRegistry::new();
+        backends.register(
+            StoragePoolKind::Overlaybd,
+            Arc::new(OverlayBdBackend::new(overlaybd.clone(), None)),
+        );
+        let manager = VmManager::with_storage(
+            &runtime,
+            "unused-cloud-hypervisor",
+            backends,
+            Some(overlaybd.clone()),
+            None,
+        );
+        let config = ProtoVmConfig {
+            vm_id: vm_id.clone(),
+            disks: vec![ProtoDiskConfig {
+                id: "rootfs".into(),
+                path: Some("/dev/sdz".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        tokio::fs::write(manager.config_path(&vm_id), config.encode_to_vec())
+            .await
+            .unwrap();
+        let socket = manager.socket_path(&vm_id);
+        let listener = UnixListener::bind(&socket).unwrap();
+        let hypervisor = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            for expected in ["GET /api/v1/vm.info", "PUT /api/v1/vm.shutdown"] {
+                let mut request = vec![0; 4096];
+                let size = stream.read(&mut request).await.unwrap();
+                let request = String::from_utf8_lossy(&request[..size]);
+                let (method, path) = expected.split_once(' ').unwrap();
+                let mut parts = request.split_whitespace();
+                assert_eq!(parts.next(), Some(method), "{request}");
+                assert!(parts.next().unwrap().ends_with(path), "{request}");
+                let response = if expected.starts_with("GET") {
+                    let body = serde_json::to_string(&models::VmInfo::new(
+                        VmConfig::default(),
+                        models::vm_info::State::Running,
+                    ))
+                    .unwrap();
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}",
+                        body.len(),
+                        body
+                    )
+                } else {
+                    "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n".into()
+                };
+                stream.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+        manager.recover_vms().await;
+        {
+            let vms = manager.vms.lock().await;
+            let instance = vms.get(&vm_id).unwrap();
+            assert_eq!(instance.status, VmStatus::Running);
+            assert_eq!(
+                instance.storage_backend_kind,
+                result.map(|_| StoragePoolKind::Overlaybd)
+            );
+        }
+        manager.delete_vm(&vm_id).await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), hypervisor)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!mapping_dir.exists());
+        assert!(!overlaybd.has_mapping(&vm_id).await);
+        assert!(!socket.exists());
+        assert!(!manager.config_path(&vm_id).exists());
+        assert_eq!(tokio::fs::read(&upper).await.unwrap(), b"guest data");
+    }
+}

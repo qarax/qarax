@@ -681,6 +681,14 @@ impl OverlayBdManager {
         }
     }
 
+    /// The TCMU config is also an ownership record. Its result file can contain
+    /// a daemon status (such as "success") instead of a device path. Unmount can
+    /// derive the resource names from the VM ID even without an in-memory entry.
+    pub async fn has_mapping(&self, vm_id: &str) -> bool {
+        self.mounts.lock().await.contains_key(vm_id)
+            || self.cache_dir.join(vm_id).join("config.json").is_file()
+    }
+
     /// Scan the cache directory on startup and rebuild the mounts map from any
     /// existing result files left over from a previous run.
     pub async fn recover(&self) {
@@ -707,10 +715,9 @@ impl OverlayBdManager {
 
             if !looks_like_device_path(&device_path) {
                 warn!(
-                    "Ignoring stale OverlayBD recovery state for VM {}: invalid result '{}'",
+                    "OverlayBD result for VM {} is not a device path ('{}'); preserving mapping metadata",
                     vm_id, device_path
                 );
-                self.unmount(&vm_id).await;
                 continue;
             }
 

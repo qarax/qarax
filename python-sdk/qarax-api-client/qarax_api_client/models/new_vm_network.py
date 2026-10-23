@@ -265,9 +265,9 @@ class NewVmNetwork:
             try:
                 if not isinstance(data, str):
                     raise TypeError()
-                interface_type_type_1 = InterfaceType(data)
+                interface_type_type_0 = InterfaceType(data)
 
-                return interface_type_type_1
+                return interface_type_type_0
             except (TypeError, ValueError, AttributeError, KeyError):
                 pass
             return cast(InterfaceType | None | Unset, data)
@@ -398,9 +398,9 @@ class NewVmNetwork:
             try:
                 if not isinstance(data, dict):
                     raise TypeError()
-                rate_limiter_type_1 = RateLimiterConfig.from_dict(data)
+                rate_limiter_type_0 = RateLimiterConfig.from_dict(data)
 
-                return rate_limiter_type_1
+                return rate_limiter_type_0
             except (TypeError, ValueError, AttributeError, KeyError):
                 pass
             return cast(None | RateLimiterConfig | Unset, data)
@@ -424,9 +424,9 @@ class NewVmNetwork:
             try:
                 if not isinstance(data, str):
                     raise TypeError()
-                vhost_mode_type_1 = VhostMode(data)
+                vhost_mode_type_0 = VhostMode(data)
 
-                return vhost_mode_type_1
+                return vhost_mode_type_0
             except (TypeError, ValueError, AttributeError, KeyError):
                 pass
             return cast(None | Unset | VhostMode, data)

@@ -33,6 +33,12 @@ pub trait StorageBackend: Send + Sync {
     /// Release the mapping created by map().
     async fn unmap(&self, vm_id: &str) -> anyhow::Result<()>;
 
+    /// Whether this backend owns mapping state for the VM, including durable
+    /// state from before a node restart.
+    async fn has_mapping(&self, _vm_id: &str) -> bool {
+        false
+    }
+
     /// Rebuild internal state after a restart.
     async fn recover(&self) -> anyhow::Result<()> {
         Ok(())

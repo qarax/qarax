@@ -112,6 +112,10 @@ impl StorageBackend for OverlayBdBackend {
         Ok(())
     }
 
+    async fn has_mapping(&self, vm_id: &str) -> bool {
+        self.manager.has_mapping(vm_id).await
+    }
+
     async fn recover(&self) -> anyhow::Result<()> {
         self.manager.recover().await;
         Ok(())

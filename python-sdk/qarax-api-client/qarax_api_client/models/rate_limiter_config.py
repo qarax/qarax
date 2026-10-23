@@ -69,9 +69,9 @@ class RateLimiterConfig:
             try:
                 if not isinstance(data, dict):
                     raise TypeError()
-                bandwidth_type_1 = TokenBucket.from_dict(data)
+                bandwidth_type_0 = TokenBucket.from_dict(data)
 
-                return bandwidth_type_1
+                return bandwidth_type_0
             except (TypeError, ValueError, AttributeError, KeyError):
                 pass
             return cast(None | TokenBucket | Unset, data)
@@ -86,9 +86,9 @@ class RateLimiterConfig:
             try:
                 if not isinstance(data, dict):
                     raise TypeError()
-                ops_type_1 = TokenBucket.from_dict(data)
+                ops_type_0 = TokenBucket.from_dict(data)
 
-                return ops_type_1
+                return ops_type_0
             except (TypeError, ValueError, AttributeError, KeyError):
                 pass
             return cast(None | TokenBucket | Unset, data)

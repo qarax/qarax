@@ -15,6 +15,7 @@ pub mod sandbox_reaper;
 pub mod sandbox_runtime;
 pub mod secret_provider;
 pub mod startup;
+pub mod storage_cleanup;
 pub mod transfer_executor;
 pub mod vm_monitor;
 

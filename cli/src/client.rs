@@ -186,14 +186,19 @@ impl Client {
 
     /// DELETE request, discarding the response body.
     pub async fn delete(&self, path: &str) -> anyhow::Result<()> {
+        self.delete_status(path).await?;
+        Ok(())
+    }
+
+    /// DELETE request retaining the status for asynchronous operations.
+    pub async fn delete_status(&self, path: &str) -> anyhow::Result<reqwest::StatusCode> {
         let resp = self
             .inner
             .delete(self.url(path))
             .send()
             .await
             .with_context(|| format!("DELETE {path}"))?;
-        Self::check_error(resp).await?;
-        Ok(())
+        Ok(Self::check_error(resp).await?.status())
     }
 }
 

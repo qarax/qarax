@@ -155,9 +155,9 @@ class Sandbox:
             try:
                 if not isinstance(data, str):
                     raise TypeError()
-                vm_status_type_1 = VmStatus(data)
+                vm_status_type_0 = VmStatus(data)
 
-                return vm_status_type_1
+                return vm_status_type_0
             except (TypeError, ValueError, AttributeError, KeyError):
                 pass
             return cast(None | Unset | VmStatus, data)

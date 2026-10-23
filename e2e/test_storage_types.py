@@ -295,6 +295,13 @@ async def test_create_vm_with_persistent_overlaybd_upper_has_storage_object(
                 f"/var/lib/qarax/e2e-overlaybd-upper-{test_id}/"
             )
 
+            delete_resp = await delete_storage_object.asyncio_detailed(
+                client=c, object_id=upper_object.id
+            )
+            assert delete_resp.status_code == 409, delete_resp.content.decode()
+            remaining = await list_storage_objects.asyncio(client=c, name=upper_name)
+            assert remaining and remaining[0].id == upper_object.id
+
             resize_resp = await resize_disk.asyncio_detailed(
                 client=c,
                 vm_id=vm_id,
@@ -414,6 +421,44 @@ async def test_vm_commit_converts_oci_to_raw_disk(client, oci_image_ref):
 
 
 # NFS storage pool tests
+
+
+@pytest.mark.asyncio
+async def test_block_disk_rejects_second_vm_writer(client):
+    """A registered LUN can have only one VM writer, including before boot."""
+    test_id = uuid.uuid4().hex[:8]
+    async with client as c:
+        http = c.get_async_httpx_client()
+        pool_id = await _create_pool(
+            c, f"e2e-block-exclusive-{test_id}", StoragePoolType.BLOCK,
+            {"portal": "127.0.0.1:1", "iqn": "iqn.2026-10.qarax:exclusive-test"},
+        )
+        vm_ids = []
+        object_id = None
+        try:
+            response = await http.post(f"/storage-pools/{pool_id}/luns", json={
+                "name": "lun0", "lun": 0, "size_bytes": 1024,
+            })
+            assert response.status_code == 201, response.text
+            object_id = response.json()["storage_object_id"]
+            for i in range(2):
+                response = await http.post("/vms", json={
+                    "name": f"block-writer-{test_id}-{i}", "hypervisor": "cloud_hv",
+                    "boot_vcpus": 1, "max_vcpus": 1, "memory_size": 268435456,
+                })
+                assert response.status_code == 201, response.text
+                vm_ids.append(response.json())
+            for vm_id, expected in zip(vm_ids, [201, 409]):
+                response = await http.post(f"/vms/{vm_id}/disks", json={
+                    "storage_object_id": object_id,
+                })
+                assert response.status_code == expected, response.text
+        finally:
+            for vm_id in vm_ids:
+                await http.delete(f"/vms/{vm_id}")
+            if object_id:
+                await http.delete(f"/storage-objects/{object_id}")
+            await http.delete(f"/storage-pools/{pool_id}")
 
 
 @pytest.mark.asyncio

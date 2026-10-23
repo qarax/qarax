@@ -63,6 +63,35 @@ impl From<sqlx::Error> for Error {
                 let msg = unique_violation_message(db_err.as_ref());
                 Error::Conflict(msg)
             }
+            sqlx::Error::Database(ref db_err)
+                if db_err.code().as_deref() == Some("23503")
+                    && db_err.constraint() == Some("vm_disks_upper_storage_object_id_fkey") =>
+            {
+                Error::Conflict(
+                    "Storage object is still used as a persistent VM write layer".into(),
+                )
+            }
+            sqlx::Error::Database(ref db_err)
+                if db_err.code().as_deref() == Some("23503")
+                    && matches!(
+                        db_err.constraint(),
+                        Some("vm_disks_storage_object_id_fkey" | "storage_cleanup_pool_id_fkey")
+                    ) =>
+            {
+                Error::Conflict("Storage is still in use or has pending file cleanup".into())
+            }
+            sqlx::Error::Database(ref db_err)
+                if db_err.code().as_deref() == Some("23514")
+                    && db_err.constraint() == Some("storage_pool_capacity") =>
+            {
+                Error::UnprocessableEntity("Insufficient storage pool capacity".into())
+            }
+            sqlx::Error::Database(ref db_err)
+                if db_err.code().as_deref() == Some("23514")
+                    && db_err.constraint() == Some("storage_object_size_nonnegative") =>
+            {
+                Error::UnprocessableEntity("size_bytes must not be negative".into())
+            }
             _ => {
                 tracing::error!(error = %err, error.debug = ?err, "database error");
                 Error::Sqlx(err)

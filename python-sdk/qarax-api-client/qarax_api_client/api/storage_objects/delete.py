@@ -13,7 +13,6 @@ from ...types import Response
 def _get_kwargs(
     object_id: UUID,
 ) -> dict[str, Any]:
-
     _kwargs: dict[str, Any] = {
         "method": "delete",
         "url": "/storage-objects/{object_id}".format(
@@ -25,10 +24,16 @@ def _get_kwargs(
 
 
 def _parse_response(*, client: AuthenticatedClient | Client, response: httpx.Response) -> Any | None:
+    if response.status_code == 202:
+        return None
+
     if response.status_code == 204:
         return None
 
     if response.status_code == 404:
+        return None
+
+    if response.status_code == 409:
         return None
 
     if response.status_code == 500:

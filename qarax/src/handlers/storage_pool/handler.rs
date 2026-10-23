@@ -130,6 +130,7 @@ pub async fn create(
     responses(
         (status = 204, description = "Storage pool deleted successfully"),
         (status = 404, description = "Storage pool not found"),
+        (status = 409, description = "Storage pool has pending file cleanup"),
         (status = 500, description = "Internal server error")
     ),
     tag = "storage-pools"
@@ -346,7 +347,7 @@ pub async fn create_disk(
     let host = require_up_host_for_pool(&env, pool_id).await?;
 
     // Create the StorageObject record — path is auto-derived from pool config.
-    let storage_object_id = storage_objects::create(
+    let storage_object_id = storage_objects::create_managed(
         env.pool(),
         NewStorageObject {
             name: name.clone(),
@@ -356,6 +357,7 @@ pub async fn create_disk(
             config: serde_json::Value::Object(Default::default()),
             parent_id: None,
         },
+        host.id,
     )
     .await?;
 
@@ -390,6 +392,21 @@ pub async fn create_disk(
         let db_pool = env.pool_arc();
 
         tokio::spawn(async move {
+            // Serialize provisioning with deletion. If deletion won the race,
+            // do not create a file after its metadata has disappeared.
+            let reservation = async {
+                let mut tx = db_pool.begin().await?;
+                storage_objects::get_for_update(&mut tx, storage_object_id).await?;
+                Ok::<_, sqlx::Error>(tx)
+            }
+            .await;
+            let mut storage_tx = match reservation {
+                Ok(tx) => tx,
+                Err(err) => {
+                    let _ = jobs::mark_failed(&db_pool, job_id, &err.to_string()).await;
+                    return;
+                }
+            };
             if let Err(e) = jobs::mark_running(&db_pool, job_id).await {
                 tracing::error!(job_id = %job_id, error = %e, "Failed to mark disk creation job running");
                 return;
@@ -400,12 +417,24 @@ pub async fn create_disk(
                 .await
             {
                 Ok(bytes_written) => {
-                    let _ = storage_objects::update_size_bytes(
-                        &db_pool,
+                    if let Err(e) = storage_objects::update_size_bytes_tx(
+                        &mut storage_tx,
                         storage_object_id,
                         bytes_written,
                     )
-                    .await;
+                    .await
+                    {
+                        let _ = storage_tx.rollback().await;
+                        let msg = format!("Failed to account for downloaded disk: {e}");
+                        let _ = jobs::mark_failed(&db_pool, job_id, &msg).await;
+                        let _ = storage_objects::delete(&db_pool, storage_object_id).await;
+                        return;
+                    }
+                    if let Err(e) = storage_tx.commit().await {
+                        let _ = jobs::mark_failed(&db_pool, job_id, &e.to_string()).await;
+                        let _ = storage_objects::delete(&db_pool, storage_object_id).await;
+                        return;
+                    }
                     let _ = jobs::mark_completed(
                         &db_pool,
                         job_id,
@@ -414,6 +443,7 @@ pub async fn create_disk(
                     .await;
                 }
                 Err(e) => {
+                    let _ = storage_tx.rollback().await;
                     let msg = format!("Disk creation failed: {e}");
                     tracing::error!(storage_object_id = %storage_object_id, error = %msg);
                     let _ = jobs::mark_failed(&db_pool, job_id, &msg).await;
@@ -432,10 +462,13 @@ pub async fn create_disk(
         .into_response())
     } else {
         // Sync path: creating a blank disk is fast.
-        match node_client
+        let mut storage_tx = env.pool().begin().await?;
+        storage_objects::get_for_update(&mut storage_tx, storage_object_id).await?;
+        let result = node_client
             .create_disk(&dest_path, size_bytes, None, preallocate)
-            .await
-        {
+            .await;
+        storage_tx.commit().await?;
+        match result {
             Ok(_) => Ok(ApiResponse {
                 data: CreateDiskResponse {
                     storage_object_id,
