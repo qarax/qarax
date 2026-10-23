@@ -400,12 +400,18 @@ pub async fn create_disk(
                 .await
             {
                 Ok(bytes_written) => {
-                    let _ = storage_objects::update_size_bytes(
+                    if let Err(e) = storage_objects::update_size_bytes(
                         &db_pool,
                         storage_object_id,
                         bytes_written,
                     )
-                    .await;
+                    .await
+                    {
+                        let msg = format!("Failed to account for downloaded disk: {e}");
+                        let _ = jobs::mark_failed(&db_pool, job_id, &msg).await;
+                        let _ = storage_objects::delete(&db_pool, storage_object_id).await;
+                        return;
+                    }
                     let _ = jobs::mark_completed(
                         &db_pool,
                         job_id,

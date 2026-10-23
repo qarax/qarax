@@ -4038,7 +4038,8 @@ pub async fn resize_disk(
         crate::errors::Error::UnprocessableEntity("disk has no backing storage object".into())
     })?;
 
-    let obj = storage_objects::get(env.pool(), so_id).await?;
+    let mut tx = env.pool().begin().await?;
+    let obj = storage_objects::get_for_update(&mut tx, so_id).await?;
     let pool_record = storage_pools::get(env.pool(), obj.storage_pool_id).await?;
     let target = resolve_disk_resize_target(&disk, &obj, &pool_record)?;
 
@@ -4055,6 +4056,8 @@ pub async fn resize_disk(
         )));
     }
 
+    storage_objects::update_size_bytes_tx(&mut tx, target.storage_object_id, req.new_size_bytes)
+        .await?;
     let host = host_for_vm(&env, vm_id).await?;
     NodeClient::new(&host.address, host.port as u16)
         .resize_disk(vm_id, &disk.logical_name, &target.path, req.new_size_bytes)
@@ -4064,8 +4067,7 @@ pub async fn resize_disk(
             crate::errors::Error::InternalServerError
         })?;
 
-    storage_objects::update_size_bytes(env.pool(), target.storage_object_id, req.new_size_bytes)
-        .await?;
+    tx.commit().await?;
     let updated_obj = storage_objects::get(env.pool(), target.storage_object_id).await?;
 
     Ok(ApiResponse {

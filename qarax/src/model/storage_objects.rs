@@ -395,6 +395,21 @@ pub async fn update_size_bytes(
     Ok(())
 }
 
+/// Reserve the new logical size until the node operation succeeds. Rolling
+/// back the transaction also releases the reservation.
+pub async fn update_size_bytes_tx(
+    tx: &mut PgTransaction<'_>,
+    object_id: Uuid,
+    size_bytes: i64,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE storage_objects SET size_bytes = $1 WHERE id = $2")
+        .bind(size_bytes)
+        .bind(object_id)
+        .execute(tx.as_mut())
+        .await?;
+    Ok(())
+}
+
 /// Extract the path from a storage object's config JSONB field.
 /// Expected format: {"path": "/var/lib/qarax/images/vmlinux"}
 pub fn get_path_from_config(config: &serde_json::Value) -> Option<String> {

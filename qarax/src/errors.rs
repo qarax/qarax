@@ -71,6 +71,18 @@ impl From<sqlx::Error> for Error {
                     "Storage object is still used as a persistent VM write layer".into(),
                 )
             }
+            sqlx::Error::Database(ref db_err)
+                if db_err.code().as_deref() == Some("23514")
+                    && db_err.constraint() == Some("storage_pool_capacity") =>
+            {
+                Error::UnprocessableEntity("Insufficient storage pool capacity".into())
+            }
+            sqlx::Error::Database(ref db_err)
+                if db_err.code().as_deref() == Some("23514")
+                    && db_err.constraint() == Some("storage_object_size_nonnegative") =>
+            {
+                Error::UnprocessableEntity("size_bytes must not be negative".into())
+            }
             _ => {
                 tracing::error!(error = %err, error.debug = ?err, "database error");
                 Error::Sqlx(err)
