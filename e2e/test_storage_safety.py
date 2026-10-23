@@ -84,7 +84,7 @@ async def test_pool_capacity_accounts_for_create_resize_and_delete(pool_type):
             assert response.status_code == 422, response.text
             assert (await client.delete(f"/vms/{vm_id}")).status_code == 204
             vm_id = None
-            cli = os.getenv("QARAX_CLI", str(Path(__file__).resolve().parents[1] / "target/x86_64-unknown-linux-musl/debug/qarax"))
+            cli = os.getenv("QARAX_CLI", str(Path(__file__).resolve().parents[1] / "target/x86_64-unknown-linux-musl/release/qarax"))
             result = subprocess.run([
                 cli, "--server", QARAX_URL, "--token", QARAX_TEST_TOKEN,
                 "storage-object", "delete", object_id,
