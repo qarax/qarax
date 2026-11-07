@@ -34,12 +34,24 @@ impl VmManager {
 
         // Disks
         if !config.disks.is_empty() {
-            sdk_config.disks = Some(config.disks.iter().map(Self::proto_disk_to_sdk).collect());
+            sdk_config.disks = Some(
+                config
+                    .disks
+                    .iter()
+                    .map(Self::proto_disk_to_sdk)
+                    .collect::<Result<_, _>>()?,
+            );
         }
 
         // Networks
         if !config.networks.is_empty() {
-            sdk_config.net = Some(config.networks.iter().map(Self::proto_net_to_sdk).collect());
+            sdk_config.net = Some(
+                config
+                    .networks
+                    .iter()
+                    .map(Self::proto_net_to_sdk)
+                    .collect::<Result<_, _>>()?,
+            );
         }
 
         // RNG
@@ -49,7 +61,7 @@ impl VmManager {
 
         // Serial console
         if let Some(serial) = &config.serial {
-            sdk_config.serial = Some(Box::new(Self::proto_console_to_sdk(serial)));
+            sdk_config.serial = Some(Box::new(Self::proto_serial_to_sdk(serial)));
         }
 
         // Console
@@ -64,7 +76,7 @@ impl VmManager {
                     .devices
                     .iter()
                     .map(Self::proto_vfio_device_to_sdk)
-                    .collect(),
+                    .collect::<Result<_, _>>()?,
             );
         }
 
@@ -94,12 +106,7 @@ impl VmManager {
                 Box::new(CpusConfig {
                     boot_vcpus: 1,
                     max_vcpus: 1,
-                    topology: None,
-                    kvm_hyperv: None,
-                    max_phys_bits: None,
-                    affinity: None,
-                    features: None,
-                    nested: None,
+                    ..Default::default()
                 })
             });
             cpus.affinity = Some(
@@ -119,16 +126,7 @@ impl VmManager {
             let memory = sdk_config.memory.get_or_insert_with(|| {
                 Box::new(MemoryConfig {
                     size: 0,
-                    hotplug_size: None,
-                    hotplugged_size: None,
-                    mergeable: None,
-                    hotplug_method: None,
-                    shared: None,
-                    hugepages: None,
-                    hugepage_size: None,
-                    prefault: None,
-                    thp: None,
-                    zones: None,
+                    ..Default::default()
                 })
             });
 
@@ -199,9 +197,7 @@ impl VmManager {
                 .map(|t| Box::new(Self::proto_topology_to_sdk(t))),
             kvm_hyperv: cpus.kvm_hyperv,
             max_phys_bits: cpus.max_phys_bits,
-            affinity: None,
-            features: None,
-            nested: None,
+            ..Default::default()
         }
     }
 
@@ -218,15 +214,13 @@ impl VmManager {
         MemoryConfig {
             size: memory.size,
             hotplug_size: memory.hotplug_size,
-            hotplugged_size: None,
             mergeable: memory.mergeable,
-            hotplug_method: None,
             shared: memory.shared,
             hugepages: memory.hugepages,
             hugepage_size: memory.hugepage_size,
             prefault: memory.prefault,
             thp: memory.thp,
-            zones: None,
+            ..Default::default()
         }
     }
 
@@ -253,12 +247,13 @@ impl VmManager {
             .unwrap_or(false)
     }
 
-    pub(super) fn proto_disk_to_sdk(disk: &ProtoDiskConfig) -> models::DiskConfig {
-        models::DiskConfig {
+    pub(super) fn proto_disk_to_sdk(
+        disk: &ProtoDiskConfig,
+    ) -> Result<models::DiskConfig, VmManagerError> {
+        Ok(models::DiskConfig {
             path: disk.path.clone(),
             readonly: disk.readonly,
             direct: disk.direct,
-            iommu: None,
             num_queues: disk.num_queues,
             queue_size: disk.queue_size,
             vhost_user: disk.vhost_user,
@@ -267,12 +262,10 @@ impl VmManager {
                 .rate_limiter
                 .as_ref()
                 .map(|r| Box::new(Self::proto_rate_limiter_to_sdk(r))),
-            pci_segment: disk.pci_segment,
+            pci_segment: Self::pci_segment_to_sdk(disk.pci_segment)?,
             id: Some(disk.id.clone()),
             serial: disk.serial.clone(),
             rate_limit_group: disk.rate_limit_group.clone(),
-            queue_affinity: None,
-            backing_files: None,
             // Detect qcow2 by magic bytes (QFI\xfb); otherwise force Raw to
             // prevent CH from autodetecting and disabling sector 0 writes,
             // which breaks ext4 superblock updates on raw images.
@@ -283,19 +276,21 @@ impl VmManager {
                     ImageType::Raw
                 },
             ),
-            sparse: None,
-        }
+            ..Default::default()
+        })
     }
 
-    pub(super) fn proto_net_to_sdk(net: &ProtoNetConfig) -> models::NetConfig {
-        models::NetConfig {
+    pub(super) fn proto_net_to_sdk(
+        net: &ProtoNetConfig,
+    ) -> Result<models::NetConfig, VmManagerError> {
+        Ok(models::NetConfig {
             tap: net.tap.clone(),
             ip: net.ip.clone(),
             mask: net.mask.clone(),
             mac: net.mac.clone(),
             host_mac: net.host_mac.clone(),
             mtu: net.mtu,
-            iommu: net.iommu,
+            iommu: Self::iommu_to_sdk(net.iommu),
             num_queues: net.num_queues,
             queue_size: net.queue_size,
             vhost_user: net.vhost_user,
@@ -308,7 +303,7 @@ impl VmManager {
                 }
             }),
             id: Some(net.id.clone()),
-            pci_segment: net.pci_segment,
+            pci_segment: Self::pci_segment_to_sdk(net.pci_segment)?,
             rate_limiter_config: net
                 .rate_limiter
                 .as_ref()
@@ -316,18 +311,20 @@ impl VmManager {
             offload_tso: net.offload_tso,
             offload_ufo: net.offload_ufo,
             offload_csum: net.offload_csum,
-        }
+            ..Default::default()
+        })
     }
 
     fn proto_rng_to_sdk(rng: &ProtoRngConfig) -> models::RngConfig {
         models::RngConfig {
             src: rng.src.clone(),
-            iommu: rng.iommu,
+            iommu: Self::iommu_to_sdk(rng.iommu),
+            ..Default::default()
         }
     }
 
-    pub(super) fn proto_console_to_sdk(console: &ProtoConsoleConfig) -> models::ConsoleConfig {
-        let mode = match ProtoConsoleMode::try_from(console.mode) {
+    fn proto_console_mode_to_sdk(mode: i32) -> ConsoleMode {
+        match ProtoConsoleMode::try_from(mode) {
             Ok(ProtoConsoleMode::Off) => ConsoleMode::Off,
             Ok(ProtoConsoleMode::Pty) => ConsoleMode::Pty,
             Ok(ProtoConsoleMode::Tty) => ConsoleMode::Tty,
@@ -335,13 +332,25 @@ impl VmManager {
             Ok(ProtoConsoleMode::Socket) => ConsoleMode::Socket,
             Ok(ProtoConsoleMode::Null) => ConsoleMode::Null,
             _ => ConsoleMode::Null,
-        };
+        }
+    }
 
+    pub(super) fn proto_console_to_sdk(console: &ProtoConsoleConfig) -> models::ConsoleConfig {
         models::ConsoleConfig {
             file: console.file.clone(),
             socket: console.socket.clone(),
-            mode,
-            iommu: console.iommu,
+            mode: Self::proto_console_mode_to_sdk(console.mode),
+            iommu: Self::iommu_to_sdk(console.iommu),
+            ..Default::default()
+        }
+    }
+
+    /// The serial port isn't a virtio device, so it has no `iommu` setting.
+    pub(super) fn proto_serial_to_sdk(serial: &ProtoConsoleConfig) -> models::SerialConfig {
+        models::SerialConfig {
+            file: serial.file.clone(),
+            socket: serial.socket.clone(),
+            mode: Self::proto_console_mode_to_sdk(serial.mode),
         }
     }
 
@@ -359,20 +368,48 @@ impl VmManager {
         Ok(SdkVsockConfig {
             cid,
             socket,
-            iommu: vsock.iommu,
-            pci_segment: vsock.pci_segment,
+            iommu: Self::iommu_to_sdk(vsock.iommu),
+            pci_segment: Self::pci_segment_to_sdk(vsock.pci_segment)?,
             id: vsock.id.clone(),
+            ..Default::default()
         })
     }
 
-    pub(super) fn proto_vfio_device_to_sdk(device: &ProtoVfioDeviceConfig) -> models::DeviceConfig {
-        models::DeviceConfig {
-            path: device.path.clone(),
-            iommu: device.iommu,
-            pci_segment: device.pci_segment,
+    pub(super) fn proto_vfio_device_to_sdk(
+        device: &ProtoVfioDeviceConfig,
+    ) -> Result<models::DeviceConfig, VmManagerError> {
+        Ok(models::DeviceConfig {
+            path: Some(device.path.clone()),
+            iommu: Self::iommu_to_sdk(device.iommu),
+            pci_segment: Self::pci_segment_to_sdk(device.pci_segment)?,
             id: Some(device.id.clone()),
-            x_nv_gpudirect_clique: None,
-        }
+            ..Default::default()
+        })
+    }
+
+    /// Cloud Hypervisor 54 replaced the boolean `iommu` device flag with the
+    /// IOMMU to attach the device to. qarax only exposes on/off, and "on" has
+    /// always meant virtio-iommu.
+    pub(super) fn iommu_to_sdk(iommu: Option<bool>) -> Option<IommuType> {
+        iommu.map(|on| {
+            if on {
+                IommuType::Virtio
+            } else {
+                IommuType::Off
+            }
+        })
+    }
+
+    /// The API carries PCI segments as i32, Cloud Hypervisor as i16. Reject
+    /// values that don't fit instead of wrapping them onto another segment.
+    pub(super) fn pci_segment_to_sdk(segment: Option<i32>) -> Result<Option<i16>, VmManagerError> {
+        segment
+            .map(|s| {
+                i16::try_from(s).map_err(|_| {
+                    VmManagerError::InvalidConfig(format!("pci_segment {s} is out of range"))
+                })
+            })
+            .transpose()
     }
 
     fn proto_rate_limiter_to_sdk(

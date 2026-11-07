@@ -8,25 +8,11 @@ fn base_vm_config(memory_size: i64, boot_vcpus: i32) -> VmConfig {
         cpus: Some(Box::new(CpusConfig {
             boot_vcpus,
             max_vcpus: boot_vcpus,
-            topology: None,
-            kvm_hyperv: None,
-            max_phys_bits: None,
-            affinity: None,
-            features: None,
-            nested: None,
+            ..Default::default()
         })),
         memory: Some(Box::new(MemoryConfig {
             size: memory_size,
-            hotplug_size: None,
-            hotplugged_size: None,
-            mergeable: None,
-            hotplug_method: None,
-            shared: None,
-            hugepages: None,
-            hugepage_size: None,
-            prefault: None,
-            thp: None,
-            zones: None,
+            ..Default::default()
         })),
         ..Default::default()
     }
@@ -268,7 +254,7 @@ async fn recovered_vm_deletion_cleans_overlaybd_state_and_preserves_external_upp
                 let response = if expected.starts_with("GET") {
                     let body = serde_json::to_string(&models::VmInfo::new(
                         VmConfig::default(),
-                        models::vm_info::State::Running,
+                        models::VmState::Running,
                     ))
                     .unwrap();
                     format!(
@@ -303,4 +289,52 @@ async fn recovered_vm_deletion_cleans_overlaybd_state_and_preserves_external_upp
         assert!(!manager.config_path(&vm_id).exists());
         assert_eq!(tokio::fs::read(&upper).await.unwrap(), b"guest data");
     }
+}
+
+#[test]
+fn iommu_flag_maps_to_virtio_iommu() {
+    assert_eq!(VmManager::iommu_to_sdk(Some(true)), Some(IommuType::Virtio));
+    assert_eq!(VmManager::iommu_to_sdk(Some(false)), Some(IommuType::Off));
+    assert_eq!(VmManager::iommu_to_sdk(None), None);
+}
+
+#[test]
+fn vfio_device_iommu_is_sent_as_iommu_type() {
+    let device = ProtoVfioDeviceConfig {
+        id: "gpu0".into(),
+        path: "/sys/bus/pci/devices/0000:01:00.0".into(),
+        iommu: Some(true),
+        ..Default::default()
+    };
+    let json = serde_json::to_value(VmManager::proto_vfio_device_to_sdk(&device).unwrap()).unwrap();
+    assert_eq!(json["iommu"], "Virtio");
+    assert_eq!(json["path"], "/sys/bus/pci/devices/0000:01:00.0");
+}
+
+#[test]
+fn pci_segment_must_fit_in_i16() {
+    assert_eq!(VmManager::pci_segment_to_sdk(None).unwrap(), None);
+    assert_eq!(VmManager::pci_segment_to_sdk(Some(1)).unwrap(), Some(1));
+
+    let disk = ProtoDiskConfig {
+        id: "disk0".into(),
+        pci_segment: Some(i32::from(i16::MAX) + 1),
+        ..Default::default()
+    };
+    assert!(matches!(
+        VmManager::proto_disk_to_sdk(&disk),
+        Err(VmManagerError::InvalidConfig(_))
+    ));
+}
+
+#[test]
+fn serial_port_config_has_no_iommu() {
+    let serial = ProtoConsoleConfig {
+        mode: ProtoConsoleMode::Pty as i32,
+        iommu: Some(true),
+        ..Default::default()
+    };
+    let json = serde_json::to_value(VmManager::proto_serial_to_sdk(&serial)).unwrap();
+    assert_eq!(json["mode"], "Pty");
+    assert!(json.get("iommu").is_none());
 }
