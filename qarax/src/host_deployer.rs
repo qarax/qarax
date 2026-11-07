@@ -68,8 +68,11 @@ impl client::Handler for HostKeyCheckingHandler {
 
     async fn check_server_key(
         &mut self,
-        server_public_key: &keys::ssh_key::PublicKey,
+        server_key: &keys::PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
+        // A host certificate is checked by the host key it certifies, the same
+        // way as a plain host key.
+        let server_public_key = &server_key.public_key();
         match keys::check_known_hosts(&self.host, self.port, server_public_key) {
             Ok(true) => Ok(true),
             Ok(false) => {
