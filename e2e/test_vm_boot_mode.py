@@ -13,7 +13,6 @@ import os
 import pytest
 from qarax_api_client import Client
 from helpers import AUTH_HEADERS
-from qarax_api_client.api.hosts import list_ as list_hosts
 from qarax_api_client.api.storage_objects import (
     create as create_storage_object,
 )
@@ -171,14 +170,9 @@ async def test_list_vms_boot_mode(client):
 
 
 @pytest.fixture
-async def storage_pool_and_objects(client):
+async def storage_pool_and_objects(client, ensure_host_registered):
     """Create a local storage pool with 3 storage objects for disk tests."""
     async with client as c:
-        # Find a host to attach the pool to
-        hosts = await list_hosts.asyncio(client=c)
-        assert hosts and len(hosts) > 0, "No hosts registered"
-        host = hosts[0]
-
         pool = NewStoragePool(
             name="e2e-disk-test-pool",
             pool_type=StoragePoolType.LOCAL,
@@ -192,7 +186,9 @@ async def storage_pool_and_objects(client):
         await attach_pool_host.asyncio_detailed(
             client=c,
             pool_id=UUID(pool_id),
-            body=AttachHostRequest(host_id=host.id, bridge_name="unused"),
+            body=AttachHostRequest(
+                host_id=ensure_host_registered, bridge_name="unused"
+            ),
         )
 
         object_ids = []
