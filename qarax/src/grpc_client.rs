@@ -8,6 +8,11 @@ use uuid::Uuid;
 
 use crate::model::network_interfaces::NetworkInterface;
 
+/// How long to wait for a TCP connection to a qarax-node. Without a limit, a
+/// host whose address drops packets holds the request for the kernel's full
+/// SYN retry budget, about two minutes, before failing.
+const NODE_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
 // Include the generated proto code
 #[allow(clippy::result_large_err)]
 pub mod node {
@@ -215,6 +220,7 @@ impl NodeClient {
             .get_or_try_init(|| async {
                 tonic::transport::Channel::from_shared(self.address.clone())
                     .context("invalid qarax-node address")?
+                    .connect_timeout(NODE_CONNECT_TIMEOUT)
                     .connect()
                     .await
                     .context("Failed to connect to qarax-node")
@@ -237,6 +243,7 @@ impl NodeClient {
     async fn connect_file_transfer_service(&self) -> Result<FileTransferClient> {
         let channel = tonic::transport::Channel::from_shared(self.address.clone())
             .context("invalid qarax-node address")?
+            .connect_timeout(NODE_CONNECT_TIMEOUT)
             .connect()
             .await
             .context("Failed to connect to qarax-node")?;
@@ -1466,3 +1473,19 @@ where
 
 /// Type alias for console channel used in attach_console
 pub type ConsoleChannel = (mpsc::Sender<Vec<u8>>, mpsc::Receiver<Result<Vec<u8>>>);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn connecting_to_an_unreachable_node_fails_fast() {
+        // 192.0.2.0/24 (TEST-NET-1) is never routed, so a connect there gets
+        // no answer at all: only the connect timeout ends it early.
+        let client = NodeClient::new("192.0.2.1", 50051);
+        let started = std::time::Instant::now();
+        assert!(client.connect_vm_service().await.is_err());
+        assert!(client.connect_file_transfer_service().await.is_err());
+        assert!(started.elapsed() < 2 * NODE_CONNECT_TIMEOUT + Duration::from_secs(5));
+    }
+}

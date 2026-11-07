@@ -222,7 +222,12 @@ def telemetry_collector(_telemetry_store: _TelemetryStore) -> _TelemetryStore:
 
 @pytest.fixture(scope="session", autouse=True)
 def ensure_host_registered():
-    """Register the qarax-node host and initialize it before tests run."""
+    """Register the qarax-node host and initialize it before tests run.
+
+    Returns the host's id. Tests that need a real node should use it instead
+    of picking from list_hosts(): other tests register hosts with unreachable
+    addresses (the API has no host delete), and the list has no fixed order.
+    """
     client = Client(base_url=QARAX_URL, headers=AUTH_HEADERS)
 
     hosts = list_hosts.sync(client=client)
@@ -261,7 +266,7 @@ def ensure_host_registered():
 
         result = init_host.sync_detailed(host_id=host_id, client=client)
         if result.status_code.value == 200:
-            return
+            return host_id
 
         last_error = (
             f"Failed to initialize host {host_id} at {address}:{QARAX_NODE_PORT}: "
