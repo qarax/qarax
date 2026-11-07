@@ -107,12 +107,7 @@ impl VmManager {
 
             // Get current status from Cloud Hypervisor
             let status = match vm.get_info().await {
-                Ok(info) => match info.state {
-                    models::vm_info::State::Created => VmStatus::Created,
-                    models::vm_info::State::Running => VmStatus::Running,
-                    models::vm_info::State::Paused => VmStatus::Paused,
-                    models::vm_info::State::Shutdown => VmStatus::Shutdown,
-                },
+                Ok(info) => vm_status_from_sdk(info.state),
                 Err(e) => {
                     warn!("Failed to get info for recovered VM {}: {}", vm_id, e);
                     VmStatus::Unknown
@@ -700,12 +695,7 @@ impl VmManager {
 
         // Try to get live status from CH via SDK
         if let Ok(info) = instance.vm.get_info().await {
-            state.status = match info.state {
-                models::vm_info::State::Created => VmStatus::Created.into(),
-                models::vm_info::State::Running => VmStatus::Running.into(),
-                models::vm_info::State::Paused => VmStatus::Paused.into(),
-                models::vm_info::State::Shutdown => VmStatus::Shutdown.into(),
-            };
+            state.status = vm_status_from_sdk(info.state).into();
             state.memory_actual_size = info.memory_actual_size;
             instance.status = VmStatus::try_from(state.status).unwrap_or(VmStatus::Unknown);
         }
@@ -766,5 +756,16 @@ impl VmManager {
                 instance.socket_path.exists()
             }
         }
+    }
+}
+
+fn vm_status_from_sdk(state: models::VmState) -> VmStatus {
+    match state {
+        models::VmState::Created => VmStatus::Created,
+        models::VmState::Running => VmStatus::Running,
+        models::VmState::Paused => VmStatus::Paused,
+        models::VmState::Shutdown => VmStatus::Shutdown,
+        // Stopped at a gdb breakpoint: the vCPUs are halted, like a pause.
+        models::VmState::BreakPoint => VmStatus::Paused,
     }
 }

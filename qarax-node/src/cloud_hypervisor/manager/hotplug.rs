@@ -12,7 +12,7 @@ impl VmManager {
             .get(vm_id)
             .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
 
-        let sdk_config = Self::proto_net_to_sdk(config);
+        let sdk_config = Self::proto_net_to_sdk(config)?;
         let body = serde_json::to_string(&sdk_config)
             .map_err(|e| VmManagerError::InvalidConfig(e.to_string()))?;
 
@@ -66,7 +66,7 @@ impl VmManager {
             .get(vm_id)
             .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
 
-        let sdk_config = Self::proto_disk_to_sdk(config);
+        let sdk_config = Self::proto_disk_to_sdk(config)?;
         let body = serde_json::to_string(&sdk_config)
             .map_err(|e| VmManagerError::InvalidConfig(e.to_string()))?;
 
@@ -183,7 +183,7 @@ impl VmManager {
             .get(vm_id)
             .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
 
-        let sdk_config = Self::proto_vfio_device_to_sdk(config);
+        let sdk_config = Self::proto_vfio_device_to_sdk(config)?;
         let body = serde_json::to_string(&sdk_config)
             .map_err(|e| VmManagerError::InvalidConfig(e.to_string()))?;
 

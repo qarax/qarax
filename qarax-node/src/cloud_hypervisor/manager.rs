@@ -17,9 +17,8 @@ use bytes::Bytes;
 use cloud_hypervisor_sdk::client::TokioIo;
 use cloud_hypervisor_sdk::machine::{Machine, MachineConfig, VM};
 use cloud_hypervisor_sdk::models::{
-    self, CpuAffinity, CpusConfig, MemoryConfig, MemoryZoneConfig, NumaConfig, PayloadConfig,
-    VmConfig, VsockConfig as SdkVsockConfig, console_config::Mode as ConsoleMode,
-    disk_config::ImageType,
+    self, ConsoleMode, CpuAffinity, CpusConfig, ImageType, IommuType, MemoryConfig,
+    MemoryZoneConfig, NumaConfig, PayloadConfig, VmConfig, VsockConfig as SdkVsockConfig,
 };
 use futures::stream::StreamExt;
 use http_body_util::{Empty, Full, combinators::BoxBody};

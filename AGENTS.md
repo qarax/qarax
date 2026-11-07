@@ -213,7 +213,7 @@ E2E tests run automatically on push to master. On PRs, apply the `run-e2e` label
 
 ## Versioning
 
-Key component versions are pinned in `Makefile` (`CLOUD_HYPERVISOR_VERSION`) and `deployments/Containerfile.qarax-vmm` (Cloud Hypervisor, OverlayBD). Cloud Hypervisor SDK version is pinned via git tag in `qarax-node/Cargo.toml`. After bumping the SDK tag, always run `cargo build -p qarax-node` — minor releases can rename/move types (e.g., `DiskImageType` → `disk_config::ImageType` in v51.1).
+Key component versions are pinned in `Makefile` (`CLOUD_HYPERVISOR_VERSION`) and `deployments/Containerfile.qarax-vmm` (Cloud Hypervisor, OverlayBD). The Cloud Hypervisor and Firecracker SDKs are pinned via git tags in `qarax-node/Cargo.toml`; their repos (`qarax/cloud-hypervisor-sdk`, `qarax/firecracker-rust-sdk`) regenerate and tag a release automatically when upstream ships one (CH `vX.Y` becomes SDK `vX.Y.0`, Firecracker tags are used as is). Bump `versions/cloud-hypervisor-version` together with the CH SDK tag, since the SDK serializes that release's API. After bumping an SDK tag, always run `cargo build -p qarax-node`: releases can rename/move types (e.g., v54 moved `disk_config::ImageType` to `models::ImageType` and turned the device `iommu` flags into `IommuType`).
 
 ## E2E Test Patterns
 
