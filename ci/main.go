@@ -49,6 +49,10 @@ func (c *Ci) rustBase(src *dagger.Directory) *dagger.Container {
 		WithMountedCache("/usr/local/cargo/git", dag.CacheVolume("cargo-git"), dagger.ContainerWithMountedCacheOpts{Sharing: dagger.CacheSharingModeLocked}).
 		WithMountedCache("/src/target", dag.CacheVolume("cargo-target")).
 		WithEnvVariable("CARGO_NET_GIT_FETCH_WITH_CLI", "true").
+		// Dev and test builds only need line tables (file:line in panics and
+		// backtraces). Full debug info mostly costs link time and memory, for
+		// the many test binaries above all. Release builds have none anyway.
+		WithEnvVariable("CARGO_PROFILE_DEV_DEBUG", "line-tables-only").
 		WithDirectory("/src", src).
 		WithWorkdir("/src")
 }

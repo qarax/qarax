@@ -169,6 +169,7 @@ CI is driven by Dagger (`ci/main.go`) invoked from GitHub Actions (`.github/work
 Three jobs run on every PR and push to master:
 
 - **check** (`dagger call --mod ./ci all --src=.`): runs fmt, lint, test, sqlx-check, audit, openapi-check, and python-sdk-lint in parallel. All steps except `fmt` chain from a shared `prebuilt` container (debug build) so the workspace compiles exactly once per session.
+- **Caching:** hosted runners start with empty Dagger cache volumes, so Rust compiles start from scratch on every run (per-object caching through the Actions cache, e.g. sccache's GHA backend, gets rate-limited at this repo's ~2,400 compile outputs per run). The e2e images use BuildKit's GitHub Actions cache (`e2e/docker-compose.ci.yml`), whose entries are evicted after 7 days without use.
 - **build** (`dagger call --mod ./ci build --src=.`): release build targeting `x86_64-unknown-linux-musl`; uploads the four binaries as a workflow artifact.
 - **e2e**: downloads the build artifacts, starts a Docker Compose stack with KVM passthrough, runs pytest. Triggered on push to master inside `rust-ci.yml`, or in a dedicated PR E2E workflow when the `run-e2e` label is first added. After that, labeled PR updates run E2E from `rust-ci.yml` on `synchronize`.
 
