@@ -800,6 +800,46 @@ async fn test_remove_nic_releases_ip_allocation() {
 }
 
 #[tokio::test]
+async fn test_malformed_static_ip_is_rejected() {
+    let app = spawn_app().await;
+    let client = reqwest::Client::new();
+    let host_id = add_up_host(&client, &app.address, "bad-ip-host").await;
+    let network_id = create_network(
+        &client,
+        &app.address,
+        "bad-ip-net",
+        "10.93.0.0/24",
+        "10.93.0.1",
+    )
+    .await;
+    attach_network_to_host(&app.pool, network_id, host_id, "testbr93").await;
+
+    let res = client
+        .post(format!("{}/vms", &app.address))
+        .json(&with(
+            vm_body("vm-bad-ip"),
+            json!({"networks": [{"id": "net0", "network_id": network_id, "ip": ""}]}),
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_unprocessable(res, "Invalid IP address \"\"").await;
+
+    let vm_id = create_vm(&client, &app.address, vm_body("vm-bad-nic-ip")).await;
+    let res = client
+        .post(format!("{}/vms/{vm_id}/nics", &app.address))
+        .json(&json!({"id": "net0", "network_id": network_id, "ip": "10.93.0.300"}))
+        .send()
+        .await
+        .unwrap();
+    assert_unprocessable(res, "Invalid IP address \"10.93.0.300\"").await;
+    assert_eq!(
+        count_for_vm(&app.pool, "network_interfaces", vm_id).await,
+        0
+    );
+}
+
+#[tokio::test]
 async fn test_add_nic_hotplug_failure_cleans_up_allocation_and_record() {
     let app = spawn_app().await;
     let client = reqwest::Client::new();

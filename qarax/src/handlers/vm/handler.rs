@@ -506,11 +506,26 @@ async fn ensure_ip_address_is_available(
     Ok(())
 }
 
+/// Reject a malformed static IP before it reaches an `inet` cast in SQL, where
+/// it would surface as a 500.
+fn ensure_requested_ip_parses(net: &NewVmNetwork) -> Result<()> {
+    match net.ip.as_deref() {
+        Some(ip) if ip.parse::<std::net::IpAddr>().is_err() => {
+            Err(crate::errors::Error::UnprocessableEntity(format!(
+                "Invalid IP address {ip:?} for network interface '{}'",
+                net.id
+            )))
+        }
+        _ => Ok(()),
+    }
+}
+
 async fn validate_requested_static_ips_are_available(
     pool: &sqlx::PgPool,
     networks: Option<&[crate::model::vms::NewVmNetwork]>,
 ) -> Result<()> {
     for net in networks.unwrap_or(&[]) {
+        ensure_requested_ip_parses(net)?;
         if let (Some(network_id), Some(ip_address)) = (net.network_id, net.ip.as_deref()) {
             ensure_ip_address_is_available(pool, network_id, ip_address).await?;
         }
@@ -3224,7 +3239,7 @@ pub async fn remove_disk(
         (status = 201, description = "NIC added (and hotplugged if VM is running)", body = NetworkInterface),
         (status = 404, description = "VM not found"),
         (status = 409, description = "Device ID already in use"),
-        (status = 422, description = "VM not in Created or Running state"),
+        (status = 422, description = "VM not in Created or Running state, or invalid IP address"),
         (status = 500, description = "Internal server error")
     ),
     tag = "vms"
@@ -3246,6 +3261,7 @@ pub async fn add_nic(
             ));
         }
     }
+    ensure_requested_ip_parses(&req)?;
 
     let existing = network_interfaces::list_by_vm(env.pool(), vm_id).await?;
 
