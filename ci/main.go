@@ -208,6 +208,29 @@ func (c *Ci) PythonSdkLint(ctx context.Context, src *dagger.Directory) (string, 
 		Stdout(ctx)
 }
 
+// ShellLint runs shellcheck and shfmt over the repo's shell scripts. Nothing
+// else exercises demos/ and hack/, so this is what catches a broken script.
+func (c *Ci) ShellLint(ctx context.Context, src *dagger.Directory) (string, error) {
+	return dag.Container().
+		From("alpine:3.22").
+		WithExec([]string{"apk", "add", "--no-cache", "bash", "shellcheck", "shfmt"}).
+		WithDirectory("/src", src, dagger.ContainerWithDirectoryOpts{
+			Include: []string{"**/*.sh", ".shellcheckrc"},
+			Exclude: []string{"target/**", "**/.venv/**", "**/node_modules/**"},
+		}).
+		WithWorkdir("/src").
+		WithExec([]string{"sh", "-c",
+			`set -e
+             scripts=$(find . -name '*.sh' -type f | sort)
+             shellcheck --severity=warning $scripts
+             if ! shfmt -d -i 0 $scripts; then
+               echo "shell scripts need formatting: run 'make shfmt'"
+               exit 1
+             fi
+             echo "$(echo "$scripts" | wc -l) shell scripts are clean"`}).
+		Stdout(ctx)
+}
+
 // QaraxImage builds and returns the qarax control-plane container image.
 // Chain .Publish(ctx, address) to push to a registry.
 func (c *Ci) QaraxImage(ctx context.Context, src *dagger.Directory) (*dagger.Container, error) {
@@ -248,7 +271,7 @@ func (c *Ci) QaraxNodeImage(ctx context.Context, src *dagger.Directory) (*dagger
 	}), nil
 }
 
-// All runs Fmt, Lint, Test, SqlxCheck, Audit, OpenApiCheck, and PythonSdkLint in parallel.
+// All runs Fmt, Lint, Test, SqlxCheck, Audit, OpenApiCheck, PythonSdkLint and ShellLint in parallel.
 // Lint, Test, SqlxCheck, and OpenApiCheck all chain from prebuilt so the workspace
 // is compiled exactly once before checks fan out.
 // Use Build, QaraxImage, and QaraxNodeImage separately when you need binaries or images.
@@ -294,6 +317,12 @@ func (c *Ci) All(ctx context.Context, src *dagger.Directory) (string, error) {
 	g.Go(func() error {
 		if _, err := c.PythonSdkLint(ctx, src); err != nil {
 			return fmt.Errorf("python-sdk-lint: %w", err)
+		}
+		return nil
+	})
+	g.Go(func() error {
+		if _, err := c.ShellLint(ctx, src); err != nil {
+			return fmt.Errorf("shell-lint: %w", err)
 		}
 		return nil
 	})

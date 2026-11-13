@@ -3239,7 +3239,7 @@ pub async fn remove_disk(
         (status = 201, description = "NIC added (and hotplugged if VM is running)", body = NetworkInterface),
         (status = 404, description = "VM not found"),
         (status = 409, description = "Device ID already in use"),
-        (status = 422, description = "VM not in Created or Running state, or invalid IP address"),
+        (status = 422, description = "VM not in Created or Running state"),
         (status = 500, description = "Internal server error")
     ),
     tag = "vms"

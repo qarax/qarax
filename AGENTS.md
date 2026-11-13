@@ -20,10 +20,10 @@ make build          # Build all + regenerate OpenAPI spec
 make test           # Run tests (auto-starts Postgres via Docker)
 make test-deps      # Start Postgres in Docker for tests
 make lint           # cargo clippy --workspace -- -D warnings
-make fmt            # cargo fmt + shfmt
+make fmt            # cargo fmt + shfmt (all tracked *.sh)
 make openapi        # Regenerate openapi.yaml
 make sdk            # Regenerate Python SDK from OpenAPI
-make run-local      # Start full Docker stack (qarax + qarax-node + Postgres)
+make run-local      # Start the Docker stack (qarax + qarax-node + Postgres + registry), register local-node, create overlaybd-pool
 make run-local VM=1 # Same, but run qarax-node in a libvirt VM
 make stop-local      # Stop and remove the local Docker stack
 make appliance-build # Build bootc container image for qarax-node (hypervisor host)
@@ -41,7 +41,7 @@ Build/test a single crate: `cargo build -p qarax-node` or `cargo nextest run -p 
 
 **CI uses nightly for fmt:** `cargo +nightly fmt --all -- --check`
 
-**Build dependencies:** `protobuf-compiler` (protoc) is required for gRPC code generation. `shfmt` is required by `make fmt` for shell script formatting.
+**Build dependencies:** `protobuf-compiler` (protoc) is required for gRPC code generation. `shfmt` is required by `make fmt` for shell script formatting; `make shellcheck` needs `shellcheck` (CI runs both through the `ShellLint` Dagger check).
 
 ## Database
 
@@ -164,7 +164,7 @@ Static bearer tokens, configured by `AUTH_ENABLED` / `AUTH_TOKENS` (comma-separa
 - **Off** by default (`base.yaml`; `local.yaml` doesn't override it), e.g. `cargo run` against `make test-deps`.
 - **On** in `production.yaml` (no default tokens: set `AUTH_TOKENS`) and in `e2e/docker-compose.yml`, which is also what `make run-local` uses. There the token is `${QARAX_TEST_TOKEN:-e2e-test-token}`.
 - Public routes: `/`, `/swagger-ui*`, `/api-docs/openapi.json`. Everything else needs `Authorization: Bearer <token>`.
-- The CLI reads `--token` / `QARAX_TOKEN`. `demos/lib.sh`, `hack/run-local.sh`, `hack/setup_vm.py` and `e2e/run_e2e_tests.sh` default it to `e2e-test-token`.
+- The CLI reads `--token` / `QARAX_TOKEN`. `demos/lib.sh` (sourced by `hack/run-local.sh` and `e2e/setup_host.sh`) and `e2e/run_e2e_tests.sh` default it to `e2e-test-token`.
 
 ## CI
 
@@ -174,7 +174,7 @@ CI is driven by Dagger (`ci/main.go`) invoked from GitHub Actions (`.github/work
 
 Three jobs run on every PR and push to master:
 
-- **check** (`dagger call --mod ./ci all --src=.`): runs fmt, lint, test, sqlx-check, audit, openapi-check, and python-sdk-lint in parallel. Lint, test, openapi-check and python-sdk-lint (through the generated spec) chain from a shared `prebuilt` container (debug build with the otel features), so the workspace compiles once per session; fmt, sqlx-check and audit run in their own containers.
+- **check** (`dagger call --mod ./ci all --src=.`): runs fmt, lint, test, sqlx-check, audit, openapi-check, python-sdk-lint and shell-lint in parallel. Lint, test, openapi-check and python-sdk-lint (through the generated spec) chain from a shared `prebuilt` container (debug build with the otel features), so the workspace compiles once per session; fmt, sqlx-check, audit and shell-lint run in their own containers.
 - **Caching:** hosted runners start with empty Dagger cache volumes, so Rust compiles start from scratch on every run (per-object caching through the Actions cache, e.g. sccache's GHA backend, gets rate-limited at this repo's ~2,400 compile outputs per run). The e2e images use BuildKit's GitHub Actions cache (`e2e/docker-compose.ci.yml`), whose entries are evicted after 7 days without use.
 - **build** (`dagger call --mod ./ci build --src=.`): release build targeting `x86_64-unknown-linux-musl`; uploads the four binaries as a workflow artifact.
 - **e2e**: downloads the build artifacts, starts a Docker Compose stack with KVM passthrough, runs pytest. Triggered on push to master inside `rust-ci.yml`, or in a dedicated PR E2E workflow when the `run-e2e` label is first added. After that, labeled PR updates run E2E from `rust-ci.yml` on `synchronize`.
@@ -190,6 +190,7 @@ Three jobs run on every PR and push to master:
 | `Audit` | `cargo audit` (ignores configured in `.cargo/audit.toml`) |
 | `OpenApiCheck` | Regenerates `openapi.yaml` and diffs against the committed copy |
 | `PythonSdkLint` | Regenerates the Python SDK and runs `ruff check` |
+| `ShellLint` | `shellcheck --severity=warning` and `shfmt -d` over every `*.sh` (nothing else exercises `demos/` and `hack/`) |
 
 ### Running CI locally
 
@@ -205,6 +206,7 @@ dagger call --mod ./ci sqlx-check --src=.
 dagger call --mod ./ci audit --src=.
 dagger call --mod ./ci open-api-check --src=.
 dagger call --mod ./ci python-sdk-lint --src=.
+dagger call --mod ./ci shell-lint --src=.
 
 # Build release binaries via Dagger:
 dagger call --mod ./ci build --src=. export --path=./target/x86_64-unknown-linux-musl/release
@@ -224,13 +226,15 @@ E2E tests run automatically on push to master. On PRs, apply the `run-e2e` label
 
 ## Versioning
 
-Cloud Hypervisor and Firecracker versions are pinned in `versions/` (the `Makefile` reads them and passes them to `deployments/Containerfile.qarax-vmm` as build args); OverlayBD is pinned in the Containerfile itself. The Cloud Hypervisor and Firecracker SDKs are pinned via git tags in `qarax-node/Cargo.toml`; their repos (`qarax/cloud-hypervisor-sdk`, `qarax/firecracker-rust-sdk`) regenerate and tag a release automatically when upstream ships one (CH `vX.Y` becomes SDK `vX.Y.0`, Firecracker tags are used as is). Bump the matching `versions/` file together with each SDK tag (`cloud-hypervisor-version` with the CH SDK, `firecracker-version` with the Firecracker SDK), since each SDK serializes that release's API. After bumping an SDK tag, always run `cargo build -p qarax-node`: releases can rename/move types (e.g., v54 moved `disk_config::ImageType` to `models::ImageType` and turned the device `iommu` flags into `IommuType`).
+Cloud Hypervisor and Firecracker versions are pinned in `versions/` (the `Makefile` reads them and passes them to `deployments/Containerfile.qarax-vmm` as build args); OverlayBD, the ACI convertor, CLOUDHV.fd and the guest kernel are pinned in `versions/node-artifacts.env`, which the node Containerfiles read through a build-time bind mount. The Cloud Hypervisor and Firecracker SDKs are pinned via git tags in `qarax-node/Cargo.toml`; their repos (`qarax/cloud-hypervisor-sdk`, `qarax/firecracker-rust-sdk`) regenerate and tag a release automatically when upstream ships one (CH `vX.Y` becomes SDK `vX.Y.0`, Firecracker tags are used as is). Bump the matching `versions/` file together with each SDK tag (`cloud-hypervisor-version` with the CH SDK, `firecracker-version` with the Firecracker SDK), since each SDK serializes that release's API. After bumping an SDK tag, always run `cargo build -p qarax-node`: releases can rename/move types (e.g., v54 moved `disk_config::ImageType` to `models::ImageType` and turned the device `iommu` flags into `IommuType`).
 
 ## E2E Test Patterns
 
 - **Async fixture clients**: Pytest async fixtures that use `async with Client(...) as c:` must create their own `Client(base_url=QARAX_URL)` — never share the test's `client` fixture. httpx clients cannot be opened as a context manager more than once per instance.
-- **`docker compose` commands**: Must be run from `e2e/` (the compose file lives there). `make run-local` handles this via `cd e2e` internally.
-- **Compose Postgres is internal-only**: the E2E stack doesn't bind Postgres to a host port, so it can run alongside the standalone test database container.
+- **`docker compose` commands**: Run from `e2e/` (or pass `-f e2e/docker-compose.yml`). `make run-local` and the e2e runner share the compose project `e2e`.
+- **Compose profiles**: the default stack (`make run-local`) is registry, postgres, qarax-node and qarax. `nfs-server` (profile `e2e`), `qarax-node-2` (`multi-node`) and `bootc-vm` (`bootc`) start only when named, as `run_e2e_tests.sh` does, or on demand (`ensure_up_hosts 2` in `demos/lib.sh`). Tear down with `docker compose --profile '*' down -v`.
+- **Compose Postgres is internal-only**: the E2E stack doesn't bind Postgres to a host port, so it can run alongside the standalone test database container. VM mode (`docker-compose.vm-mode.yml`) publishes it on `127.0.0.1:15432` for the host-networked control plane.
+- **Pinned node artifacts**: OverlayBD, ACI, CLOUDHV.fd and guest kernel versions live in `versions/node-artifacts.env`; the node Containerfiles read it through a `RUN --mount=type=bind`, so bump them there.
 - **`call_api` raises on any status >= 400**; use `call_api_detailed` when a test expects an error status.
 - **Never `pytest.skip` on a product failure** (a VM that didn't reach RUNNING, a missing route): that turns a regression into a green run. Skip only on environment gates such as "needs two UP hosts".
 
@@ -245,7 +249,7 @@ E2E runs only on master and labelled PRs, so a contract that needs no real VM or
 
 ## Additional Directories
 
-- `demos/` — Runnable demos, one per directory (`run.sh` + `README.md`); see `demos/README.md` for the index and stack requirements. Shared helpers (`api_curl`, `require_server`, `ensure_stack`, `find_qarax_bin`) live in `demos/lib.sh`.
+- `demos/` — Runnable demos, one per directory (`run.sh` + `README.md`); see `demos/README.md` for the index, stack requirements and the conventions every demo follows (fixed name prefix swept at start, `KEEP=1`, `--cleanup`). Shared helpers (output, `ensure_stack`, `require_cli` + `qarax`, `ensure_up_hosts`, `wait_until`, `start_vms`, `sweep`, ...) live in `demos/lib.sh`; don't redefine them in a demo.
 - `docs/` — Additional development documentation (`DEVELOPMENT.md`)
 
 ## Rules

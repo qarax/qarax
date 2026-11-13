@@ -178,6 +178,6 @@ jobs:
       - name: Cleanup
         if: always()
         working-directory: e2e
-        run: docker compose down -v
+        run: docker compose --profile '*' down -v
         env:
           COMPOSE_FILE: docker-compose.yml:docker-compose.ci.yml
