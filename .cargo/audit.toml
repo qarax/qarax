@@ -16,4 +16,10 @@ ignore = [
     # proc-macro-error unmaintained; pulled in by validator_derive 0.16.
     # Requires upgrading validator 0.16 → 0.20 (breaking API changes).
     "RUSTSEC-2024-0370",
+
+    # libsqlite3-sys (C SQLite CVE): never built. It is in Cargo.lock only because
+    # sqlx-macros-core's weak `sqlx-sqlite?/...` features pull optional deps into the
+    # lockfile; qarax enables only the postgres driver (`cargo tree -i libsqlite3-sys
+    # --target all` is empty). Requires sqlx 0.8 → 0.9 to drop (breaking API changes).
+    "RUSTSEC-2026-0459",
 ]
