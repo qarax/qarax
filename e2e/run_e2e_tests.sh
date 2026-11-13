@@ -61,7 +61,7 @@ needs_bootc_vm() {
 
 	for arg in "$@"; do
 		case "$arg" in
-		*test_node_upgrade.py* | *test_node_upgrade.py::*)
+		*test_node_upgrade.py*)
 			return 0
 			;;
 		esac

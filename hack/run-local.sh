@@ -72,7 +72,9 @@ force_remove_nfs_container() {
 	echo -e "${YELLOW}Removing NFS container (killing host-side nfsd threads)...${NC}"
 	pkill -9 -x nfsd || true
 	pkill -9 -x nfsd4 || true
-	local procs="/sys/fs/cgroup/system.slice/docker-$(docker inspect --format '{{.Id}}' "$cid").scope/cgroup.procs"
+	local full_id procs
+	full_id=$(docker inspect --format '{{.Id}}' "$cid")
+	procs="/sys/fs/cgroup/system.slice/docker-${full_id}.scope/cgroup.procs"
 	if [[ -f "$procs" ]]; then
 		xargs -r kill -9 <"$procs" 2>/dev/null || true
 	fi

@@ -65,7 +65,7 @@ finish() {
 	local rc=$?
 	if ((rc == 0)); then
 		echo "=== k8s ${ROLE} setup complete $(date) ==="
-		echo done >"$STATUS_FILE"
+		echo "done" >"$STATUS_FILE"
 	else
 		echo "=== k8s ${ROLE} setup FAILED (exit ${rc}) $(date); debug snapshot in /var/log/k8s-setup-debug.log ==="
 		debug_snapshot
