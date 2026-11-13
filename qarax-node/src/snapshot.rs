@@ -27,7 +27,7 @@ pub enum SnapshotDeleteError {
 /// Delete the snapshot directory at `snapshot_url` (`file:///abs/path` or a
 /// bare absolute path). Returns `Ok(false)` if it does not exist.
 pub async fn delete_snapshot_dir(snapshot_url: &str) -> Result<bool, SnapshotDeleteError> {
-    let raw = snapshot_url.strip_prefix("file://").unwrap_or(snapshot_url);
+    let raw = snapshot_url.trim_prefix("file://");
     let path = Path::new(raw);
 
     if !path.is_absolute() {
@@ -71,6 +71,7 @@ pub async fn delete_snapshot_dir(snapshot_url: &str) -> Result<bool, SnapshotDel
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::assert_matches;
     use tempfile::TempDir;
 
     fn snapshot_dir(root: &TempDir, name: &str, files: &[&str]) -> String {
@@ -109,21 +110,19 @@ mod tests {
     async fn refuses_directory_without_snapshot_files() {
         let root = TempDir::new().unwrap();
         let dir = snapshot_dir(&root, "other", &["config.json", "important.db"]);
-        assert!(matches!(
+        assert_matches!(
             delete_snapshot_dir(&dir).await,
             Err(SnapshotDeleteError::NotASnapshot(_))
-        ));
+        );
         assert!(Path::new(&dir).exists());
     }
 
     #[tokio::test]
     async fn refuses_unsafe_paths() {
         for bad in ["relative/dir", "/var/lib/qarax/../../etc", "/", "file:///"] {
-            assert!(
-                matches!(
-                    delete_snapshot_dir(bad).await,
-                    Err(SnapshotDeleteError::InvalidPath(..))
-                ),
+            assert_matches!(
+                delete_snapshot_dir(bad).await,
+                Err(SnapshotDeleteError::InvalidPath(..)),
                 "{bad} should be rejected"
             );
         }

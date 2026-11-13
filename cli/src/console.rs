@@ -1,25 +1,11 @@
+use std::mem::DropGuard;
+
 use anyhow::Context;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use futures_util::{SinkExt, StreamExt};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use uuid::Uuid;
-
-/// RAII guard that disables raw mode when dropped.
-struct RawModeGuard;
-
-impl RawModeGuard {
-    fn enter() -> anyhow::Result<Self> {
-        enable_raw_mode().context("failed to enable terminal raw mode")?;
-        Ok(Self)
-    }
-}
-
-impl Drop for RawModeGuard {
-    fn drop(&mut self) {
-        let _ = disable_raw_mode();
-    }
-}
 
 /// Convert an HTTP(S) base URL to a WebSocket URL and append the console
 /// attach path for the given VM.
@@ -56,7 +42,10 @@ pub async fn attach(base_url: &str, vm_id: Uuid) -> anyhow::Result<()> {
     let (mut ws_write, mut ws_read) = ws_stream.split();
 
     // Enter terminal raw mode for the duration of the session.
-    let _raw = RawModeGuard::enter()?;
+    enable_raw_mode().context("failed to enable terminal raw mode")?;
+    let _raw = DropGuard::new((), |()| {
+        let _ = disable_raw_mode();
+    });
 
     // stdin → WebSocket
     let stdin_to_ws = async move {

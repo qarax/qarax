@@ -363,7 +363,7 @@ async fn run_cmd_capture(program: &str, args: &[&str]) -> Result<String> {
         .with_context(|| format!("Failed to execute: {} {}", program, args.join(" ")))?;
 
     if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+        Ok(String::from_utf8_lossy_owned(output.stdout))
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
         anyhow::bail!("{} {} failed: {}", program, args.join(" "), stderr.trim())

@@ -6,6 +6,11 @@
   },
   "packageRules": [
     {
+      "description": "Match the cargo dependency cooldown in .cargo/config.toml",
+      "matchDatasources": ["crate"],
+      "minimumReleaseAge": "7 days"
+    },
+    {
       "matchPackageNames": ["cloud-hypervisor-sdk"],
       "groupName": "cloud-hypervisor-sdk",
       "automerge": false
