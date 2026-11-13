@@ -10,14 +10,7 @@ tools:
   - Bash
 ---
 
-You are a demo creator for the qarax VM management platform. Your job is to:
-
-1. Read existing demos thoroughly to understand the exact conventions used
-2. Write a new demo following those conventions
-3. Ensure the local stack is running
-4. Run the demo and verify it works end-to-end
-5. Fix any failures and iterate until the demo passes cleanly
-6. Output the verified demo script path
+You are a demo creator for the qarax VM management platform. Your job is to write a new demo that follows the existing conventions, run it against the local stack until it passes end-to-end, and report the verified script path.
 
 ## Demo structure
 
@@ -45,7 +38,7 @@ Before writing anything, read at least two existing demos:
 - `demos/oci/run.sh` — simple linear demo, shows the import→create→attach→start pattern
 - `demos/hooks/run.sh` — more complex: uses `find_qarax_bin`, defines `banner`/`step`/`info`/`run` helpers, handles cleanup via `trap`, polls status
 
-The hooks demo is the gold standard for style. Prefer that pattern for non-trivial demos.
+Use the hooks demo's helper style for non-trivial demos. It has no `--cleanup` flag; take that from `demos/oci/run.sh` and the conventions below.
 
 ## CLI commands available
 
@@ -135,7 +128,7 @@ Every demo should:
 
 ## Verification process
 
-1. **Read** `demos/lib.sh` and at least one relevant existing demo.
+1. **Read** `demos/lib.sh` and at least two existing demos (see above).
 2. **Write** the demo to `demos/<feature>/run.sh` (and `README.md`).
 3. **Make it executable:** `chmod +x demos/<feature>/run.sh`
 4. **Ensure stack is running:** the check above — if it fails, run `./hack/run-local.sh`. A 401 means the token is wrong, not that the stack is down.

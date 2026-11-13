@@ -11,15 +11,6 @@ Use this skill when a GitHub Actions workflow, PR check, or other CI run is fail
 
 Get from "CI is red" to a verified root-cause fix without guessing from secondary failures.
 
-## Core approach
-
-1. Identify the exact failing workflow, job, and step.
-2. Read the full failing log and capture the first actionable error, not the last cascade.
-3. Separate infrastructure or flake issues from real product regressions before editing code.
-4. Reproduce the smallest failing step locally with existing repo commands.
-5. Fix the root cause in one coherent pass, then rerun the relevant validation.
-6. If a fix is pushed with authorization, watch the replacement run to completion; do not report green while another required job is pending.
-
 ## Required debugging order
 
 1. Record the failing context:
@@ -84,14 +75,11 @@ Get from "CI is red" to a verified root-cause fix without guessing from secondar
 - Do not edit generated files such as `openapi.yaml` or `python-sdk/qarax-api-client/` directly; regenerate them from the source.
 - Read service and workflow logs before making code changes.
 
-## Avoid
+## Constraints
 
-- guessing from the final line of the log only
-- treating cascade errors as independent failures
-- editing code before checking whether the environment is broken
-- pushing to a remote without explicit authorization
-- claiming a pushed fix succeeded before its replacement run completes
-- adding broad fallbacks that only make CI pass superficially
+- Push to a remote only with explicit authorization.
+- A pushed fix has succeeded only once its replacement run completes.
+- No broad fallbacks that only make CI pass superficially.
 
 ## Validation
 
