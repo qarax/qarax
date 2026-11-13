@@ -210,6 +210,10 @@ dagger call --mod ./ci build --src=. export --path=./target/x86_64-unknown-linux
 
 Known unfixable advisories are listed in `.cargo/audit.toml` with comments explaining why each is ignored and what upstream change would unblock removal.
 
+### Dependency cooldown
+
+`.cargo/config.toml` sets `registry.global-min-publish-age = "7 days"`, so Cargo won't resolve a crates.io version published less than a week ago unless it's already in `Cargo.lock`; Renovate's `minimumReleaseAge` matches it. When an advisory fix is younger than that, bump it explicitly: `CARGO_RESOLVER_INCOMPATIBLE_PUBLISH_AGE=allow cargo update -p <crate> --precise <version>`.
+
 ### E2E trigger
 
 E2E tests run automatically on push to master. On PRs, apply the `run-e2e` label to trigger a dedicated PR E2E workflow without re-running the other Rust CI jobs; future commits to that labeled PR still run E2E on `synchronize`.

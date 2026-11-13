@@ -1,2 +1,8 @@
 [build]
 target = "x86_64-unknown-linux-musl"
+
+# Dependency cooldown (Cargo 1.100): don't resolve crates.io versions younger
+# than this, unless they're already in Cargo.lock. For an urgent advisory fix,
+# override once: CARGO_RESOLVER_INCOMPATIBLE_PUBLISH_AGE=allow cargo update -p <crate> --precise <ver>
+[registry]
+global-min-publish-age = "7 days"
