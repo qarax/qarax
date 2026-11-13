@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\nSELECT id, name, address, port, host_user, credential_ref, status AS \"status: _\",\n       cloud_hypervisor_version, firecracker_version, kernel_version, node_version,\n       last_deployed_image, reservation_class, placement_labels AS \"placement_labels: _\",\n       architecture, total_cpus, total_memory_bytes, available_memory_bytes, load_average,\n       disk_total_bytes, disk_available_bytes, resources_updated_at\nFROM hosts\nWHERE name = $1\n        ",
+  "query": "\nSELECT id, name, address, port, host_user, credential_ref, status AS \"status: _\",\n       cloud_hypervisor_version, firecracker_version, kernel_version, node_version,\n       last_deployed_image, reservation_class, placement_labels AS \"placement_labels: _\",\n       architecture, total_cpus, total_memory_bytes, available_memory_bytes, load_average,\n       disk_total_bytes, disk_available_bytes, resources_updated_at, installation_error\nFROM hosts\nWHERE ($1::text IS NULL OR name = $1) AND ($2::text IS NULL OR architecture = $2)\n        ",
   "describe": {
     "columns": [
       {
@@ -127,10 +127,16 @@
         "ordinal": 21,
         "name": "resources_updated_at",
         "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 22,
+        "name": "installation_error",
+        "type_info": "Text"
       }
     ],
     "parameters": {
       "Left": [
+        "Text",
         "Text"
       ]
     },
@@ -156,8 +162,9 @@
       true,
       true,
       true,
+      true,
       true
     ]
   },
-  "hash": "1f37a2b29b0e6d3d723059f472dbd57c57714664827579eb6c06f48105eed0be"
+  "hash": "e88bed30b7b11256c19c7eac4c25cc2522242930ce4f46033f1fa60a588c6e9a"
 }

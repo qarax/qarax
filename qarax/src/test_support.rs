@@ -80,7 +80,7 @@ impl TestDatabase {
         )
         .await
         .expect("Failed to insert host");
-        hosts::update_status(&self.pool, host_id, status)
+        hosts::transition(&self.pool, host_id, &[HostStatus::Down], status)
             .await
             .expect("Failed to set host status");
         host_id

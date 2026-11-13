@@ -62,6 +62,7 @@ from helpers import (
     call_api,
     call_api_detailed,
     path_exists_in_any,
+    wait_for_start,
     wait_for_status,
 )
 
@@ -136,7 +137,10 @@ async def test_host_reports_firecracker_version(client, two_hosts):
 
 @pytest.mark.asyncio
 async def test_fc_vm_full_lifecycle(client):
-    """Full Firecracker lifecycle: create → start → pause → resume → stop → delete."""
+    """Full Firecracker lifecycle: create → start → pause → resume → stop → start → delete.
+
+    A microVM can't boot twice, so the second start runs on a fresh Firecracker process.
+    """
     async with client as c:
         new_vm = new_fc_vm("e2e-fc-lifecycle")
         vm_id_raw = await call_api(create_vm, client=c, body=new_vm)
@@ -166,13 +170,17 @@ async def test_fc_vm_full_lifecycle(client):
             await call_api(stop_vm, client=c, vm_id=vm_id)
             vm = await call_api(get_vm, client=c, vm_id=vm_id)
             assert vm.status == VmStatus.SHUTDOWN
+
+            # Start again
+            started = await call_api(start_vm, client=c, vm_id=vm_id)
+            await wait_for_start(c, vm_id, started.job_id)
         finally:
             await call_api(delete_vm, client=c, vm_id=vm_id)
 
 
 @pytest.mark.asyncio
 async def test_fc_vm_force_stop(client):
-    """Force-stop a running Firecracker VM."""
+    """Force-stop a running Firecracker VM, then start it again."""
     async with client as c:
         new_vm = new_fc_vm("e2e-fc-force-stop")
         vm_id_raw = await call_api(create_vm, client=c, body=new_vm)
@@ -186,6 +194,9 @@ async def test_fc_vm_force_stop(client):
             await call_api(force_stop_vm, client=c, vm_id=vm_id)
             vm = await call_api(get_vm, client=c, vm_id=vm_id)
             assert vm.status == VmStatus.SHUTDOWN
+
+            started = await call_api(start_vm, client=c, vm_id=vm_id)
+            await wait_for_start(c, vm_id, started.job_id)
         finally:
             await call_api(delete_vm, client=c, vm_id=vm_id)
 
@@ -214,8 +225,8 @@ runcmd:
 
         try:
             # Start the VM — it should boot with the cidata seed attached
-            await call_api(start_vm, client=c, vm_id=vm_id)
-            await wait_for_status(c, vm_id, VmStatus.RUNNING)
+            started = await call_api(start_vm, client=c, vm_id=vm_id)
+            await wait_for_start(c, vm_id, started.job_id)
             assert path_exists_in_any(NODE_CONTAINER_PREFIX, seed_path), (
                 f"cloud-init seed image {seed_path} not found on any node"
             )

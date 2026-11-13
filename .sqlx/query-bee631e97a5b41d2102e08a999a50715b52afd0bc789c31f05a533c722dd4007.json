@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nUPDATE transfers\nSET status = 'FAILED',\n    error_message = $2,\n    completed_at = CURRENT_TIMESTAMP,\n    updated_at = CURRENT_TIMESTAMP\nWHERE id = $1 AND status IN ('PENDING', 'RUNNING')\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "bee631e97a5b41d2102e08a999a50715b52afd0bc789c31f05a533c722dd4007"
+}

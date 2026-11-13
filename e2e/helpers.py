@@ -7,6 +7,7 @@ import subprocess
 import time
 
 from qarax_api_client.api.hosts import list_ as list_hosts
+from qarax_api_client.api.jobs import get as get_job
 from qarax_api_client.api.vms import get as get_vm
 from qarax_api_client.models import HostStatus, VmStatus
 
@@ -67,6 +68,17 @@ async def wait_for_status(
     raise TimeoutError(
         f"VM {vm_id} did not reach {expected_status} within {timeout}s. Current: {vm.status}"
     )
+
+
+async def wait_for_start(
+    client, vm_id, start_job_id, timeout: int = VM_OPERATION_TIMEOUT
+):
+    """Wait for a started VM to reach RUNNING; on timeout, say how its start job ended."""
+    try:
+        return await wait_for_status(client, vm_id, VmStatus.RUNNING, timeout)
+    except TimeoutError as e:
+        job = await call_api(get_job, client=client, job_id=start_job_id)
+        raise TimeoutError(f"{e}. Start job {job.status}: {job.error}") from e
 
 
 async def wait_for_host_status(

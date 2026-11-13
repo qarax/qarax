@@ -3,7 +3,9 @@ use crate::{
     App,
     grpc_client::NodeClient,
     handlers::audit::{AuditEvent, AuditEventExt},
-    handlers::vm::handler::{PlannedVmMigration, execute_planned_vm_migration, plan_vm_migration},
+    handlers::vm::handler::{
+        PlannedVmMigration, claim_for_migration, execute_planned_vm_migration, plan_vm_migration,
+    },
     host_deployer,
     model::{
         audit_log::{AuditAction, AuditResourceType},
@@ -47,7 +49,10 @@ fn spawn_deploy(
                         "Failed to store last deployed image"
                     );
                 }
-                if let Err(error) = hosts::update_status(&db_pool, host_id, HostStatus::Up).await {
+                if let Err(error) =
+                    hosts::transition(&db_pool, host_id, &[HostStatus::Installing], HostStatus::Up)
+                        .await
+                {
                     error!(
                         host_id = %host_id,
                         error = %error,
@@ -62,7 +67,7 @@ fn spawn_deploy(
                     "Host deployment failed"
                 );
                 if let Err(error) =
-                    hosts::update_status(&db_pool, host_id, HostStatus::InstallationFailed).await
+                    hosts::fail_installation(&db_pool, host_id, &format!("{deploy_error:#}")).await
                 {
                     error!(
                         host_id = %host_id,
@@ -175,13 +180,24 @@ async fn fail_host_evacuation(
     let mut error = error;
     let should_restore_host_status = evacuated_vm_names.is_empty();
     let (final_host_status, host_status_restored) = if should_restore_host_status {
-        match hosts::update_status(pool, host_id, original_host_status.clone()).await {
-            Ok(()) => {
+        match hosts::transition(
+            pool,
+            host_id,
+            &[HostStatus::Maintenance],
+            original_host_status.clone(),
+        )
+        .await
+        {
+            Ok(true) => {
                 error.push_str(&format!(
                     "; host status restored to {}",
                     original_host_status
                 ));
                 (original_host_status.clone(), true)
+            }
+            Ok(false) => {
+                error.push_str("; host status changed during the evacuation and was left as is");
+                (HostStatus::Maintenance, false)
             }
             Err(update_error) => {
                 warn!(
@@ -296,6 +312,8 @@ pub async fn add(
     responses(
         (status = 200, description = "Host updated successfully"),
         (status = 404, description = "Host not found"),
+        (status = 409, description = "Host is being installed"),
+        (status = 422, description = "Status is not up, down or maintenance"),
         (status = 500, description = "Internal server error")
     ),
     tag = "hosts"
@@ -306,7 +324,16 @@ pub async fn update(
     Path(host_id): Path<Uuid>,
     Json(body): Json<UpdateHostRequest>,
 ) -> Result<ApiResponse<()>> {
-    hosts::update_status(env.pool(), host_id, body.status).await?;
+    if !body.status.operator_settable() {
+        return Err(crate::errors::Error::UnprocessableEntity(format!(
+            "host status {} is set by qarax itself; set up, down or maintenance",
+            body.status
+        )));
+    }
+    hosts::require_by_id(env.pool(), host_id).await?;
+    if !hosts::transition(env.pool(), host_id, HostStatus::NOT_INSTALLING, body.status).await? {
+        return Err(host_installing(host_id));
+    }
     Ok(ApiResponse {
         data: (),
         code: StatusCode::OK,
@@ -390,7 +417,19 @@ pub async fn evacuate(
         pick_evacuation_plan(&env, vm, host_id).await?;
     }
 
-    hosts::update_status(env.pool(), host_id, HostStatus::Maintenance).await?;
+    if !hosts::transition(
+        env.pool(),
+        host_id,
+        std::slice::from_ref(&original_host_status),
+        HostStatus::Maintenance,
+    )
+    .await?
+    {
+        return Err(crate::errors::Error::Conflict(format!(
+            "host {} changed status while its evacuation was planned; retry",
+            host.name
+        )));
+    }
 
     let job = jobs::create(
         env.pool(),
@@ -458,7 +497,8 @@ pub async fn evacuate(
                 }
             };
 
-            if let Err(error) = vms::update_status(&db_pool, vm_id, VmStatus::Migrating).await {
+            let original_status = plan.original_status;
+            if let Err(error) = claim_for_migration(&db_pool, vm_id, original_status).await {
                 fail_host_evacuation(
                     db_pool.as_ref(),
                     job_id,
@@ -471,9 +511,9 @@ pub async fn evacuate(
                 return;
             }
 
-            let original_status = plan.original_status;
             if let Err(msg) = execute_planned_vm_migration(db_pool.as_ref(), plan, None).await {
-                let _ = vms::update_status(&db_pool, vm_id, original_status).await;
+                let _ =
+                    vms::transition(&db_pool, vm_id, &[VmStatus::Migrating], original_status).await;
                 fail_host_evacuation(
                     db_pool.as_ref(),
                     job_id,
@@ -520,6 +560,7 @@ pub async fn evacuate(
     responses(
         (status = 202, description = "Host deployment accepted", body = String),
         (status = 404, description = "Host not found"),
+        (status = 409, description = "Host is already being installed"),
         (status = 422, description = "Invalid input"),
         (status = 500, description = "Internal server error")
     ),
@@ -539,7 +580,16 @@ pub async fn deploy(
     }
     host.credential_ref = None;
     let host_name = host.name.clone();
-    hosts::update_status(env.pool(), host_id, HostStatus::Installing).await?;
+    if !hosts::transition(
+        env.pool(),
+        host_id,
+        HostStatus::NOT_INSTALLING,
+        HostStatus::Installing,
+    )
+    .await?
+    {
+        return Err(host_installing(host_id));
+    }
 
     spawn_deploy(env.pool_arc(), host, body, host_id);
 
@@ -565,6 +615,7 @@ pub async fn deploy(
     responses(
         (status = 200, description = "Host initialized successfully", body = Host),
         (status = 404, description = "Host not found"),
+        (status = 409, description = "Host is being installed"),
         (status = 500, description = "Internal server error")
     ),
     tag = "hosts"
@@ -618,7 +669,16 @@ pub async fn init(
     )
     .await?;
 
-    hosts::update_status(env.pool(), host_id, HostStatus::Up).await?;
+    if !hosts::transition(
+        env.pool(),
+        host_id,
+        HostStatus::NOT_INSTALLING,
+        HostStatus::Up,
+    )
+    .await?
+    {
+        return Err(host_installing(host_id));
+    }
     let numa_discoveries: Vec<host_numa::NumaNodeDiscovery> = node_info
         .numa_nodes
         .iter()
@@ -753,9 +813,14 @@ mod tests {
     async fn fail_host_evacuation_restores_original_status_when_no_vm_moved() {
         let db = TestDatabase::new().await;
         let host_id = db.add_host("host-no-progress", HostStatus::Up).await;
-        hosts::update_status(&db.pool, host_id, HostStatus::Maintenance)
-            .await
-            .expect("Failed to mark host maintenance");
+        hosts::transition(
+            &db.pool,
+            host_id,
+            &[HostStatus::Up],
+            HostStatus::Maintenance,
+        )
+        .await
+        .expect("Failed to mark host maintenance");
         let job_id = insert_host_evacuation_job(&db, host_id).await;
 
         fail_host_evacuation(
@@ -837,6 +902,7 @@ mod tests {
         (status = 202, description = "Node upgrade accepted", body = String),
         (status = 400, description = "No deployed image recorded for this host"),
         (status = 404, description = "Host not found"),
+        (status = 409, description = "Host is already being installed"),
         (status = 500, description = "Internal server error")
     ),
     tag = "hosts"
@@ -870,11 +936,27 @@ pub async fn node_upgrade(
         reboot: Some(true),
     };
 
-    hosts::update_status(env.pool(), host_id, HostStatus::Installing).await?;
+    if !hosts::transition(
+        env.pool(),
+        host_id,
+        HostStatus::NOT_INSTALLING,
+        HostStatus::Installing,
+    )
+    .await?
+    {
+        return Err(host_installing(host_id));
+    }
 
     spawn_deploy(env.pool_arc(), host, deploy_request, host_id);
 
     Ok((StatusCode::ACCEPTED, "Node upgrade started".to_string()))
+}
+
+/// A deploy or upgrade holds the host in `Installing` until it finishes.
+fn host_installing(host_id: Uuid) -> crate::errors::Error {
+    crate::errors::Error::Conflict(format!(
+        "host {host_id} is being installed; wait for the deploy to finish"
+    ))
 }
 
 fn resolved_host_password(env: &App, host: &Host) -> Result<Option<String>> {

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\nSELECT id, name, address, port, host_user, credential_ref, status AS \"status: _\",\n       cloud_hypervisor_version, firecracker_version, kernel_version, node_version,\n       last_deployed_image, reservation_class, placement_labels AS \"placement_labels: _\",\n       architecture, total_cpus, total_memory_bytes, available_memory_bytes, load_average,\n       disk_total_bytes, disk_available_bytes, resources_updated_at\nFROM hosts\nWHERE id = $1\n        ",
+  "query": "\nSELECT id, name, address, port, host_user, credential_ref, status AS \"status: _\",\n       cloud_hypervisor_version, firecracker_version, kernel_version, node_version,\n       last_deployed_image, reservation_class, placement_labels AS \"placement_labels: _\",\n       architecture, total_cpus, total_memory_bytes, available_memory_bytes, load_average,\n       disk_total_bytes, disk_available_bytes, resources_updated_at, installation_error\nFROM hosts\nWHERE status = 'DOWN'\n        ",
   "describe": {
     "columns": [
       {
@@ -127,12 +127,15 @@
         "ordinal": 21,
         "name": "resources_updated_at",
         "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 22,
+        "name": "installation_error",
+        "type_info": "Text"
       }
     ],
     "parameters": {
-      "Left": [
-        "Uuid"
-      ]
+      "Left": []
     },
     "nullable": [
       false,
@@ -156,8 +159,9 @@
       true,
       true,
       true,
+      true,
       true
     ]
   },
-  "hash": "26cbc3e915824bc8db8cecd408ae59ddaba9c7ea6fb505c8837900eb5395374f"
+  "hash": "4891ee0a13980dc88eaa9b24aa091c67b0da40c66932bb9978cb3eb554a1fa16"
 }

@@ -16,6 +16,8 @@
 ///   the stale copies are force-stopped and deleted before anything else.
 use std::collections::{HashMap, HashSet};
 
+use sqlx::{Postgres, Transaction};
+
 use tokio::time::{Duration, Instant, interval_at};
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -31,7 +33,7 @@ use crate::model::{
     hosts::{self, Host},
     jobs::{self, JobType, NewJob},
     storage_objects, storage_pools, vm_disks,
-    vms::{self, Vm, VmStatus},
+    vms::{self, Vm, VmOp, VmStatus},
 };
 
 #[derive(Default)]
@@ -166,13 +168,7 @@ async fn collect_failover_candidates(env: &App, host_id: Uuid) -> Result<Vec<Vm>
     let resident = vms::list_by_host(env.pool(), host_id).await?;
     Ok(resident
         .into_iter()
-        .filter(|vm| {
-            vm.ha_enabled
-                && matches!(
-                    vm.status,
-                    VmStatus::Running | VmStatus::Paused | VmStatus::Unknown
-                )
-        })
+        .filter(|vm| vm.ha_enabled && VmOp::Failover.allows(vm.status))
         .collect())
 }
 
@@ -271,31 +267,22 @@ async fn execute_failover(
     let _ = tokio::time::timeout(cleanup_timeout, old_client.force_stop_vm(vm.id)).await;
     let _ = tokio::time::timeout(cleanup_timeout, old_client.delete_vm(vm.id)).await;
 
-    // Tag the VM so the stale copy is cleaned up if the source host recovers.
-    let mut config = vm.config.clone();
-    vms::set_failed_over_from(&mut config, Some(dead_host.id));
-    vms::update_config(env.pool(), vm.id, &config).await?;
-
-    vms::update_host_id(env.pool(), vm.id, target.id).await?;
-    // Created makes the start path re-create the VM on the new host.
-    vms::update_status(env.pool(), vm.id, VmStatus::Created).await?;
-
-    if let Some(gpu_request) = &gpu_request
-        && let Err(e) = reallocate_vm_gpus(env, vm.id, target.id, gpu_request).await
-    {
-        revert_failover_state(env, vm, dead_host.id).await;
-        return Err(e);
-    }
+    let previous_status =
+        move_vm_to_failover_target(env, vm, dead_host.id, target.id, &gpu_request).await?;
 
     let start_job_id = match start_vm_internal(env, vm.id).await {
         Ok(job_id) => job_id,
         Err(e) => {
-            // Revert so the HA monitor picks this VM back up as a candidate
-            // and retries on a subsequent tick, instead of leaving it
+            // Put the VM back on the dead host so the HA monitor picks it up
+            // as a candidate again on a later tick, instead of leaving it
             // stranded in `Created` on the target host.
-            revert_failover_state(env, vm, dead_host.id).await;
-            if let Some(gpu_request) = &gpu_request {
-                let _ = reallocate_vm_gpus(env, vm.id, dead_host.id, gpu_request).await;
+            if let Err(revert_err) =
+                revert_failover_move(env, vm, previous_status, dead_host.id, &gpu_request).await
+            {
+                warn!(
+                    "HA monitor: failed to put VM {} back on host {} after its start failed: {}",
+                    vm.id, dead_host.name, revert_err
+                );
             }
             return Err(e);
         }
@@ -313,12 +300,70 @@ async fn execute_failover(
     }))
 }
 
-/// Best-effort revert of the VM's host/status/config changes made during a
-/// failed failover attempt, so the HA monitor retries it on a later tick.
-async fn revert_failover_state(env: &App, vm: &Vm, dead_host_id: Uuid) {
-    let _ = vms::update_host_id(env.pool(), vm.id, dead_host_id).await;
-    let _ = vms::update_status(env.pool(), vm.id, vm.status).await;
-    let _ = vms::update_config(env.pool(), vm.id, &vm.config).await;
+/// Point the VM at `target_host_id` in one transaction: status `Created`
+/// (which makes the start path re-create it there), the host, the
+/// `failed_over_from` marker that gets the stale copy cleaned up if the dead
+/// host recovers, and its GPUs. Returns the status the VM left.
+async fn move_vm_to_failover_target(
+    env: &App,
+    vm: &Vm,
+    dead_host_id: Uuid,
+    target_host_id: Uuid,
+    gpu_request: &Option<hosts::GpuRequest>,
+) -> Result<VmStatus, Error> {
+    let mut config = vm.config.clone();
+    vms::set_failed_over_from(&mut config, Some(dead_host_id));
+
+    let mut tx = env.pool().begin().await?;
+    let previous = vms::transition_tx(
+        &mut tx,
+        vm.id,
+        VmOp::Failover.allowed_from(),
+        VmOp::Failover.target(),
+    )
+    .await?
+    .ok_or_else(|| {
+        Error::Conflict(format!(
+            "VM {} is no longer running, paused or unknown",
+            vm.id
+        ))
+    })?;
+    vms::update_config(tx.as_mut(), vm.id, &config).await?;
+    vms::update_host_id(tx.as_mut(), vm.id, target_host_id).await?;
+    if let Some(gpu_request) = gpu_request {
+        reallocate_vm_gpus(&mut tx, vm.id, target_host_id, gpu_request).await?;
+    }
+    tx.commit().await?;
+
+    vms::announce_transition(env.pool(), vm.id, previous, VmOp::Failover.target()).await;
+    Ok(previous)
+}
+
+/// Undo [`move_vm_to_failover_target`] in one transaction. A VM that is no
+/// longer `Created` was taken over by someone else since, and stays as it is.
+async fn revert_failover_move(
+    env: &App,
+    vm: &Vm,
+    previous_status: VmStatus,
+    dead_host_id: Uuid,
+    gpu_request: &Option<hosts::GpuRequest>,
+) -> Result<(), Error> {
+    let mut tx = env.pool().begin().await?;
+    if vms::transition_tx(&mut tx, vm.id, &[VmStatus::Created], previous_status)
+        .await?
+        .is_none()
+    {
+        return Ok(());
+    }
+    vms::update_config(tx.as_mut(), vm.id, &vm.config).await?;
+    vms::update_host_id(tx.as_mut(), vm.id, dead_host_id).await?;
+    if let Some(gpu_request) = gpu_request {
+        reallocate_vm_gpus(&mut tx, vm.id, dead_host_id, gpu_request).await?;
+    }
+    tx.commit().await?;
+
+    vms::announce_transition(env.pool(), vm.id, VmStatus::Created, previous_status).await;
+    Ok(())
 }
 
 /// GPU requirements derived from the GPUs currently allocated to the VM on
@@ -337,19 +382,18 @@ async fn gpu_request_for_vm(env: &App, vm: &Vm) -> Result<Option<hosts::GpuReque
     }))
 }
 
-/// Move the VM's GPU allocation from the dead host to `target_host_id`,
-/// atomically within a transaction so a partial allocation never leaves the
-/// VM without its required GPUs.
+/// Move the VM's GPU allocation to `target_host_id` inside the caller's
+/// transaction, which must roll back on error so a partial allocation never
+/// leaves the VM without its required GPUs.
 async fn reallocate_vm_gpus(
-    env: &App,
+    tx: &mut Transaction<'_, Postgres>,
     vm_id: Uuid,
     target_host_id: Uuid,
     gpu_request: &hosts::GpuRequest,
 ) -> Result<(), Error> {
-    let mut tx = env.pool().begin().await?;
-    host_gpus::deallocate_by_vm_tx(&mut tx, vm_id).await?;
+    host_gpus::deallocate_by_vm_tx(tx, vm_id).await?;
     let allocated = host_gpus::allocate_gpus(
-        &mut tx,
+        tx,
         target_host_id,
         vm_id,
         gpu_request.count,
@@ -367,7 +411,6 @@ async fn reallocate_vm_gpus(
         )));
     }
 
-    tx.commit().await?;
     Ok(())
 }
 
@@ -650,9 +693,11 @@ mod tests {
             model: Some("A100".to_string()),
             min_vram_bytes: None,
         };
-        reallocate_vm_gpus(&db.app(), vm_id, target_host_id, &gpu_request)
+        let mut tx = db.pool.begin().await.expect("Failed to begin tx");
+        reallocate_vm_gpus(&mut tx, vm_id, target_host_id, &gpu_request)
             .await
             .expect("Failed to reallocate GPUs");
+        tx.commit().await.expect("Failed to commit");
 
         let allocated = host_gpus::list_by_vm(&db.pool, vm_id)
             .await
@@ -701,8 +746,10 @@ mod tests {
             model: Some("A100".to_string()),
             min_vram_bytes: None,
         };
-        let result = reallocate_vm_gpus(&db.app(), vm_id, target_host_id, &gpu_request).await;
+        let mut tx = db.pool.begin().await.expect("Failed to begin tx");
+        let result = reallocate_vm_gpus(&mut tx, vm_id, target_host_id, &gpu_request).await;
         assert!(result.is_err());
+        drop(tx);
 
         // The original allocation on the dead host must be untouched since
         // the transaction rolled back without committing the reallocation.

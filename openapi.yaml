@@ -528,6 +528,10 @@ paths:
           description: Host updated successfully
         '404':
           description: Host not found
+        '409':
+          description: Host is being installed
+        '422':
+          description: Status is not up, down or maintenance
         '500':
           description: Internal server error
   /hosts/{host_id}/deploy:
@@ -558,6 +562,8 @@ paths:
                 type: string
         '404':
           description: Host not found
+        '409':
+          description: Host is already being installed
         '422':
           description: Invalid input
         '500':
@@ -634,6 +640,8 @@ paths:
                 $ref: '#/components/schemas/Host'
         '404':
           description: Host not found
+        '409':
+          description: Host is being installed
         '500':
           description: Internal server error
   /hosts/{host_id}/numa:
@@ -736,6 +744,8 @@ paths:
           description: No deployed image recorded for this host
         '404':
           description: Host not found
+        '409':
+          description: Host is already being installed
         '500':
           description: Internal server error
   /instance-types:
@@ -2497,6 +2507,8 @@ paths:
           description: VM paused successfully
         '404':
           description: VM not found
+        '422':
+          description: VM is held by a running start, migrate or commit job
         '500':
           description: Internal server error
   /vms/{vm_id}/resize:
@@ -2581,6 +2593,8 @@ paths:
           description: VM resumed successfully
         '404':
           description: VM not found
+        '422':
+          description: VM is held by a running start, migrate or commit job
         '500':
           description: Internal server error
   /vms/{vm_id}/security-groups:
@@ -2768,6 +2782,8 @@ paths:
           description: VM stopped successfully
         '404':
           description: VM not found
+        '422':
+          description: VM is held by a running start, migrate or commit job
         '500':
           description: Internal server error
   /vms/{vm_id}/template:
@@ -3424,6 +3440,13 @@ components:
         id:
           type: string
           format: uuid
+        installation_error:
+          type:
+          - string
+          - 'null'
+          description: |-
+            Why the last deploy or upgrade failed. Set only while the status is
+            `installation_failed`.
         kernel_version:
           type:
           - string

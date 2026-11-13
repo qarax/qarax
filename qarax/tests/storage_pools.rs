@@ -55,9 +55,9 @@ async fn create_test_host(pool: &PgPool, status: HostStatus) -> Uuid {
     .await
     .unwrap();
 
-    if status != HostStatus::Down {
-        hosts::update_status(pool, host_id, status).await.unwrap();
-    }
+    hosts::transition(pool, host_id, &[HostStatus::Down], status)
+        .await
+        .unwrap();
 
     host_id
 }

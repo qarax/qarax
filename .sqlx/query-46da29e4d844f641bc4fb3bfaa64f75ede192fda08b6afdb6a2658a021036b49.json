@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE sandbox_pool_members SET status = 'READY', updated_at = NOW() WHERE id = $1 AND status = 'PROVISIONING'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "46da29e4d844f641bc4fb3bfaa64f75ede192fda08b6afdb6a2658a021036b49"
+}

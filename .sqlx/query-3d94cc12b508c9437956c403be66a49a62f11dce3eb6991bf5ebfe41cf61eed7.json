@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\nSELECT id, name, address, port, host_user, credential_ref, status AS \"status: _\",\n       cloud_hypervisor_version, firecracker_version, kernel_version, node_version,\n       last_deployed_image, reservation_class, placement_labels AS \"placement_labels: _\",\n       architecture, total_cpus, total_memory_bytes, available_memory_bytes, load_average,\n       disk_total_bytes, disk_available_bytes, resources_updated_at\nFROM hosts\nWHERE ($1::text IS NULL OR name = $1) AND ($2::text IS NULL OR architecture = $2)\n        ",
+  "query": "\nSELECT id, name, address, port, host_user, credential_ref, status AS \"status: _\",\n       cloud_hypervisor_version, firecracker_version, kernel_version, node_version,\n       last_deployed_image, reservation_class, placement_labels AS \"placement_labels: _\",\n       architecture, total_cpus, total_memory_bytes, available_memory_bytes, load_average,\n       disk_total_bytes, disk_available_bytes, resources_updated_at, installation_error\nFROM hosts\nWHERE status IN ('UP', 'MAINTENANCE')\n        ",
   "describe": {
     "columns": [
       {
@@ -127,13 +127,15 @@
         "ordinal": 21,
         "name": "resources_updated_at",
         "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 22,
+        "name": "installation_error",
+        "type_info": "Text"
       }
     ],
     "parameters": {
-      "Left": [
-        "Text",
-        "Text"
-      ]
+      "Left": []
     },
     "nullable": [
       false,
@@ -157,8 +159,9 @@
       true,
       true,
       true,
+      true,
       true
     ]
   },
-  "hash": "95b22c84fcb5c06d7d3a881d4b0b71888e822f272f9c19699dac5ce321b2408f"
+  "hash": "3d94cc12b508c9437956c403be66a49a62f11dce3eb6991bf5ebfe41cf61eed7"
 }

@@ -105,7 +105,7 @@ def wait_for_host_status(
         if host.status == HostStatus.INSTALLATION_FAILED:
             raise AssertionError(
                 f"Host {host_id} reached installation_failed "
-                f"(expected {expected_status})"
+                f"(expected {expected_status}): {host.installation_error}"
             )
         time.sleep(HOST_POLL_INTERVAL_SECONDS)
 

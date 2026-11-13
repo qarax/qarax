@@ -35,6 +35,8 @@ class Host:
         disk_available_bytes (int | None | Unset):
         disk_total_bytes (int | None | Unset):
         firecracker_version (None | str | Unset):
+        installation_error (None | str | Unset): Why the last deploy or upgrade failed. Set only while the status is
+            `installation_failed`.
         kernel_version (None | str | Unset):
         last_deployed_image (None | str | Unset): Last bootc image deployed to this host via the `/deploy` endpoint.
         load_average (float | None | Unset):
@@ -59,6 +61,7 @@ class Host:
     disk_available_bytes: int | None | Unset = UNSET
     disk_total_bytes: int | None | Unset = UNSET
     firecracker_version: None | str | Unset = UNSET
+    installation_error: None | str | Unset = UNSET
     kernel_version: None | str | Unset = UNSET
     last_deployed_image: None | str | Unset = UNSET
     load_average: float | None | Unset = UNSET
@@ -120,6 +123,12 @@ class Host:
             firecracker_version = UNSET
         else:
             firecracker_version = self.firecracker_version
+
+        installation_error: None | str | Unset
+        if isinstance(self.installation_error, Unset):
+            installation_error = UNSET
+        else:
+            installation_error = self.installation_error
 
         kernel_version: None | str | Unset
         if isinstance(self.kernel_version, Unset):
@@ -200,6 +209,8 @@ class Host:
             field_dict["disk_total_bytes"] = disk_total_bytes
         if firecracker_version is not UNSET:
             field_dict["firecracker_version"] = firecracker_version
+        if installation_error is not UNSET:
+            field_dict["installation_error"] = installation_error
         if kernel_version is not UNSET:
             field_dict["kernel_version"] = kernel_version
         if last_deployed_image is not UNSET:
@@ -293,6 +304,15 @@ class Host:
             return cast(None | str | Unset, data)
 
         firecracker_version = _parse_firecracker_version(d.pop("firecracker_version", UNSET))
+
+        def _parse_installation_error(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        installation_error = _parse_installation_error(d.pop("installation_error", UNSET))
 
         def _parse_kernel_version(data: object) -> None | str | Unset:
             if data is None:
@@ -395,6 +415,7 @@ class Host:
             disk_available_bytes=disk_available_bytes,
             disk_total_bytes=disk_total_bytes,
             firecracker_version=firecracker_version,
+            installation_error=installation_error,
             kernel_version=kernel_version,
             last_deployed_image=last_deployed_image,
             load_average=load_average,

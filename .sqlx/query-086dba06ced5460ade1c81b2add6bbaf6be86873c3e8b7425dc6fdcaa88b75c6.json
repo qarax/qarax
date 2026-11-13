@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nUPDATE jobs\nSET status = 'FAILED',\n    error = $2,\n    result = $3,\n    completed_at = NOW(),\n    updated_at = NOW()\nWHERE id = $1 AND status IN ('PENDING', 'RUNNING')\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "086dba06ced5460ade1c81b2add6bbaf6be86873c3e8b7425dc6fdcaa88b75c6"
+}

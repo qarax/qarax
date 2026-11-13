@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE sandboxes SET status = 'ERROR', error_message = $2 WHERE id = $1 AND status = 'PROVISIONING'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5cbad3352e2d94cc63a94624f5aaeec3d2bf50d8504975ce35987362ebc6317b"
+}

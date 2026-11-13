@@ -62,7 +62,6 @@ async fn record_ready_vm_backup(
         &NewBackup {
             name: snapshot.name.clone(),
             backup_type: BackupType::Vm,
-            status: BackupStatus::Ready,
             vm_id: Some(snapshot.vm_id),
             snapshot_id: Some(snapshot.id),
             storage_object_id: snapshot.storage_object_id,
@@ -231,7 +230,6 @@ async fn create_database_backup(env: &App, request: &CreateBackupRequest) -> Res
         &NewBackup {
             name,
             backup_type: BackupType::Database,
-            status: BackupStatus::Ready,
             vm_id: None,
             snapshot_id: None,
             storage_object_id: storage_object.id,

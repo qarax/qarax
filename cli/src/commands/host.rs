@@ -282,6 +282,9 @@ pub async fn run(args: HostArgs, client: &Client, output: OutputFormat) -> anyho
                 println!("Address: {}", h.address);
                 println!("Port:    {}", h.port);
                 println!("Status:  {}", h.status);
+                if let Some(error) = &h.installation_error {
+                    println!("Failure: {error}");
+                }
                 println!("User:    {}", h.host_user);
                 println!("Arch:    {}", h.architecture.as_deref().unwrap_or("-"));
                 println!("Reserve: {}", h.reservation_class.as_deref().unwrap_or("-"));

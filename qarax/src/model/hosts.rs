@@ -39,6 +39,7 @@ struct HostRow {
     disk_total_bytes: Option<i64>,
     disk_available_bytes: Option<i64>,
     resources_updated_at: Option<chrono::DateTime<chrono::Utc>>,
+    installation_error: Option<String>,
 }
 
 impl From<HostRow> for Host {
@@ -71,6 +72,7 @@ impl From<HostRow> for Host {
             disk_total_bytes: r.disk_total_bytes,
             disk_available_bytes: r.disk_available_bytes,
             resources_updated_at: r.resources_updated_at,
+            installation_error: r.installation_error,
         }
     }
 }
@@ -112,6 +114,9 @@ pub struct Host {
     pub disk_total_bytes: Option<i64>,
     pub disk_available_bytes: Option<i64>,
     pub resources_updated_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Why the last deploy or upgrade failed. Set only while the status is
+    /// `installation_failed`.
+    pub installation_error: Option<String>,
 }
 
 impl std::fmt::Debug for Host {
@@ -134,13 +139,44 @@ impl std::fmt::Debug for Host {
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum HostStatus {
+    /// Not written by this version; kept for rows and clients that have it.
     Unknown,
+    /// Registered but not probed yet, or a probe of an `Up` host failed.
     Down,
+    /// A deploy or upgrade is running. Only that deploy moves the host on,
+    /// to `Up` or `InstallationFailed`.
     Installing,
+    /// The last deploy or upgrade failed; `installation_error` says why.
     InstallationFailed,
+    /// Not written by this version; kept for rows and clients that have it.
     Initializing,
     Maintenance,
     Up,
+}
+
+impl HostStatus {
+    /// Every status but `Installing`: what any writer other than the running
+    /// deploy may move a host from.
+    pub const NOT_INSTALLING: &[HostStatus] = &[
+        HostStatus::Unknown,
+        HostStatus::Down,
+        HostStatus::InstallationFailed,
+        HostStatus::Initializing,
+        HostStatus::Maintenance,
+        HostStatus::Up,
+    ];
+
+    /// Whether an operator may set this status with `PATCH /hosts/{id}`.
+    /// The others record what qarax itself did to the host.
+    pub fn operator_settable(&self) -> bool {
+        match self {
+            HostStatus::Up | HostStatus::Down | HostStatus::Maintenance => true,
+            HostStatus::Unknown
+            | HostStatus::Installing
+            | HostStatus::InstallationFailed
+            | HostStatus::Initializing => false,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
@@ -384,7 +420,7 @@ SELECT id, name, address, port, host_user, credential_ref, status AS "status: _"
        cloud_hypervisor_version, firecracker_version, kernel_version, node_version,
        last_deployed_image, reservation_class, placement_labels AS "placement_labels: _",
        architecture, total_cpus, total_memory_bytes, available_memory_bytes, load_average,
-       disk_total_bytes, disk_available_bytes, resources_updated_at
+       disk_total_bytes, disk_available_bytes, resources_updated_at, installation_error
 FROM hosts
 WHERE ($1::text IS NULL OR name = $1) AND ($2::text IS NULL OR architecture = $2)
         "#,
@@ -433,15 +469,39 @@ pub async fn add(pool: &PgPool, host: &NewHost) -> Result<Uuid, sqlx::Error> {
     Ok(row.id)
 }
 
-pub async fn update_status(pool: &PgPool, id: Uuid, status: HostStatus) -> Result<(), sqlx::Error> {
-    sqlx::query!(
-        "UPDATE hosts SET status = $1 WHERE id = $2",
-        status as HostStatus,
-        id
+/// Move a host to `to` if its status is one of `from`, and return whether it
+/// did. Every host status write goes through here (or [`fail_installation`]),
+/// so a writer acting on an earlier read can't overwrite a newer status.
+pub async fn transition(
+    pool: &PgPool,
+    id: Uuid,
+    from: &[HostStatus],
+    to: HostStatus,
+) -> Result<bool, sqlx::Error> {
+    let updated = sqlx::query!(
+        "UPDATE hosts SET status = $3, installation_error = NULL WHERE id = $1 AND status = ANY($2)",
+        id,
+        from as &[HostStatus],
+        to as HostStatus
     )
     .execute(pool)
-    .await?;
-    Ok(())
+    .await?
+    .rows_affected();
+    Ok(updated == 1)
+}
+
+/// `Installing` -> `InstallationFailed`, recording why.
+pub async fn fail_installation(pool: &PgPool, id: Uuid, error: &str) -> Result<bool, sqlx::Error> {
+    let updated = sqlx::query!(
+        "UPDATE hosts SET status = 'INSTALLATION_FAILED', installation_error = $2 \
+         WHERE id = $1 AND status = 'INSTALLING'",
+        id,
+        error
+    )
+    .execute(pool)
+    .await?
+    .rows_affected();
+    Ok(updated == 1)
 }
 
 pub async fn update_placement(
@@ -476,7 +536,7 @@ SELECT id, name, address, port, host_user, credential_ref, status AS "status: _"
        cloud_hypervisor_version, firecracker_version, kernel_version, node_version,
        last_deployed_image, reservation_class, placement_labels AS "placement_labels: _",
        architecture, total_cpus, total_memory_bytes, available_memory_bytes, load_average,
-       disk_total_bytes, disk_available_bytes, resources_updated_at
+       disk_total_bytes, disk_available_bytes, resources_updated_at, installation_error
 FROM hosts
 WHERE id = $1
         "#,
@@ -501,7 +561,8 @@ SELECT h.id, h.name, h.address, h.port, h.host_user, h.credential_ref,
        h.architecture,
        h.total_cpus, h.total_memory_bytes, h.available_memory_bytes,
        h.load_average, h.disk_total_bytes, h.disk_available_bytes,
-       h.resources_updated_at
+       h.resources_updated_at,
+       h.installation_error
 FROM hosts h
 LEFT JOIN (
     SELECT host_id,
@@ -668,7 +729,7 @@ SELECT id, name, address, port, host_user, credential_ref, status AS "status: _"
        cloud_hypervisor_version, firecracker_version, kernel_version, node_version,
        last_deployed_image, reservation_class, placement_labels AS "placement_labels: _",
        architecture, total_cpus, total_memory_bytes, available_memory_bytes, load_average,
-       disk_total_bytes, disk_available_bytes, resources_updated_at
+       disk_total_bytes, disk_available_bytes, resources_updated_at, installation_error
 FROM hosts
 WHERE status = 'UP'
         "#,
@@ -688,7 +749,7 @@ SELECT id, name, address, port, host_user, credential_ref, status AS "status: _"
        cloud_hypervisor_version, firecracker_version, kernel_version, node_version,
        last_deployed_image, reservation_class, placement_labels AS "placement_labels: _",
        architecture, total_cpus, total_memory_bytes, available_memory_bytes, load_average,
-       disk_total_bytes, disk_available_bytes, resources_updated_at
+       disk_total_bytes, disk_available_bytes, resources_updated_at, installation_error
 FROM hosts
 WHERE status = 'DOWN'
         "#,
@@ -708,7 +769,7 @@ SELECT id, name, address, port, host_user, credential_ref, status AS "status: _"
        cloud_hypervisor_version, firecracker_version, kernel_version, node_version,
        last_deployed_image, reservation_class, placement_labels AS "placement_labels: _",
        architecture, total_cpus, total_memory_bytes, available_memory_bytes, load_average,
-       disk_total_bytes, disk_available_bytes, resources_updated_at
+       disk_total_bytes, disk_available_bytes, resources_updated_at, installation_error
 FROM hosts
 WHERE status IN ('UP', 'MAINTENANCE')
         "#,
@@ -806,7 +867,7 @@ SELECT id, name, address, port, host_user, credential_ref, status AS "status: _"
        cloud_hypervisor_version, firecracker_version, kernel_version, node_version,
        last_deployed_image, reservation_class, placement_labels AS "placement_labels: _",
        architecture, total_cpus, total_memory_bytes, available_memory_bytes, load_average,
-       disk_total_bytes, disk_available_bytes, resources_updated_at
+       disk_total_bytes, disk_available_bytes, resources_updated_at, installation_error
 FROM hosts
 WHERE name = $1
         "#,

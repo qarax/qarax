@@ -112,12 +112,12 @@ pub async fn start_vm_monitor(env: App) {
 /// handler, a job) changed the VM after `list_active` read it. That newer
 /// status wins; the next tick compares it against the node again.
 async fn record_status(env: &App, vm: &vms::Vm, status: VmStatus, reason: &str) {
-    match vms::update_status_from(env.pool(), vm, status).await {
-        Ok(true) => info!(
+    match vms::transition(env.pool(), vm.id, &[vm.status], status).await {
+        Ok(Some(_)) => info!(
             "VM monitor: VM {} {}: {:?} -> {:?}",
             vm.id, reason, vm.status, status
         ),
-        Ok(false) => debug!(
+        Ok(None) => debug!(
             "VM monitor: VM {} changed since this tick read it, leaving it to the next tick",
             vm.id
         ),

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\nINSERT INTO backups (id, name, backup_type, status, vm_id, snapshot_id, storage_object_id)\nVALUES ($1, $2, $3, $4, $5, $6, $7)\nRETURNING id,\n          name,\n          backup_type AS \"backup_type: _\",\n          status AS \"status: _\",\n          vm_id,\n          snapshot_id,\n          storage_object_id,\n          error_message,\n          created_at,\n          updated_at\n        ",
+  "query": "\nINSERT INTO backups (id, name, backup_type, status, vm_id, snapshot_id, storage_object_id)\nVALUES ($1, $2, $3, 'READY', $4, $5, $6)\nRETURNING id,\n          name,\n          backup_type AS \"backup_type: _\",\n          status AS \"status: _\",\n          vm_id,\n          snapshot_id,\n          storage_object_id,\n          error_message,\n          created_at,\n          updated_at\n        ",
   "describe": {
     "columns": [
       {
@@ -90,18 +90,6 @@
             }
           }
         },
-        {
-          "Custom": {
-            "name": "backup_status",
-            "kind": {
-              "Enum": [
-                "CREATING",
-                "READY",
-                "FAILED"
-              ]
-            }
-          }
-        },
         "Uuid",
         "Uuid",
         "Uuid"
@@ -120,5 +108,5 @@
       false
     ]
   },
-  "hash": "623cea81d7f3487100d9c81ee615772cce7eb2b9bd88d12e96cfe0ee3b327d26"
+  "hash": "78d00ea5a2d15b5f212fba33ae69fff6010accd5ee8ace127912bbb1a84c0ba9"
 }

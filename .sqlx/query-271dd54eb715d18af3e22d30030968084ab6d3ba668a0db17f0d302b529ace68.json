@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE hosts SET status = 'INSTALLATION_FAILED', installation_error = $2 WHERE id = $1 AND status = 'INSTALLING'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "271dd54eb715d18af3e22d30030968084ab6d3ba668a0db17f0d302b529ace68"
+}

@@ -169,20 +169,30 @@ WHERE id = $1
     Ok(job)
 }
 
+// A job moves PENDING -> RUNNING -> COMPLETED | FAILED (or straight from
+// PENDING to a final status). Each write below moves it only from the
+// statuses that may precede its own, so a final status is never overwritten:
+// the first completion or failure recorded wins.
+
+/// Errors with `RowNotFound` unless the job is still pending.
 pub async fn mark_running(pool: &PgPool, job_id: Uuid) -> Result<(), sqlx::Error> {
-    sqlx::query!(
+    let updated = sqlx::query!(
         r#"
 UPDATE jobs
 SET status = 'RUNNING',
     started_at = NOW(),
     updated_at = NOW()
-WHERE id = $1
+WHERE id = $1 AND status = 'PENDING'
         "#,
         job_id
     )
     .execute(pool)
-    .await?;
+    .await?
+    .rows_affected();
 
+    if updated == 0 {
+        return Err(sqlx::Error::RowNotFound);
+    }
     Ok(())
 }
 
@@ -199,7 +209,7 @@ SET status = 'COMPLETED',
     progress = 100,
     completed_at = NOW(),
     updated_at = NOW()
-WHERE id = $1
+WHERE id = $1 AND status IN ('PENDING', 'RUNNING')
         "#,
         job_id,
         result
@@ -228,7 +238,7 @@ SET status = 'FAILED',
     result = $3,
     completed_at = NOW(),
     updated_at = NOW()
-WHERE id = $1
+WHERE id = $1 AND status IN ('PENDING', 'RUNNING')
         "#,
         job_id,
         error,
@@ -250,7 +260,7 @@ pub async fn update_progress(
 UPDATE jobs
 SET progress = $2,
     updated_at = NOW()
-WHERE id = $1
+WHERE id = $1 AND status IN ('PENDING', 'RUNNING')
         "#,
         job_id,
         progress

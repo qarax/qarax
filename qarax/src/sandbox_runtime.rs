@@ -76,19 +76,33 @@ pub(crate) enum ReadyOutcome {
     Gone,
 }
 
+/// What a new sandbox VM waits on before it can be ready.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum ReadyWait {
+    /// An OCI VM pulling its image; the watcher starts it once it reaches
+    /// `Created`.
+    PullingImage { job_id: Uuid },
+    /// A VM whose start job is running.
+    Starting { job_id: Uuid },
+}
+
+impl ReadyWait {
+    /// The job whose failure fails the wait.
+    pub(crate) fn job_id(self) -> Uuid {
+        match self {
+            ReadyWait::PullingImage { job_id } | ReadyWait::Starting { job_id } => job_id,
+        }
+    }
+}
+
 /// Event-driven wait until the sandbox VM either reaches Running or fails.
 ///
-/// Listens on the broadcast event bus emitted by `vms::update_status`, with a
+/// Listens on the broadcast event bus emitted by `vms::transition`, with a
 /// low-cadence job-status poll as a backstop for failures that don't transition
 /// the VM (e.g. `start_vm` failing reverts the VM to its previous state and only
 /// marks the job as failed). For OCI sandboxes, transitioning to `Created`
 /// triggers `start_vm_internal` exactly once.
-pub(crate) async fn watch_for_ready(
-    env: &App,
-    vm_id: Uuid,
-    initial_job_id: Uuid,
-    is_oci: bool,
-) -> ReadyOutcome {
+pub(crate) async fn watch_for_ready(env: &App, vm_id: Uuid, mut wait: ReadyWait) -> ReadyOutcome {
     // Subscribe first so we don't miss events between the initial poll and the loop.
     let mut events_rx = events::subscribe();
 
@@ -102,23 +116,11 @@ pub(crate) async fn watch_for_ready(
     let mut job_backstop = interval(Duration::from_secs(cfg.ready_watcher_interval_secs.max(5)));
     job_backstop.tick().await; // consume the immediate first tick
 
-    let mut start_kicked = !is_oci;
-    let mut current_job_id = initial_job_id;
-
     // Initial state check (covers races where the VM is already Running/failed by
     // the time we subscribe, and gets OCI sandboxes off the launchpad).
     match vms::get(env.pool(), vm_id).await {
         Ok(vm) => {
-            if let Some(outcome) = handle_vm_status(
-                env,
-                vm.status,
-                is_oci,
-                &mut start_kicked,
-                &mut current_job_id,
-                vm_id,
-            )
-            .await
-            {
+            if let Some(outcome) = handle_vm_status(env, vm.status, &mut wait, vm_id).await {
                 return outcome;
             }
         }
@@ -139,14 +141,7 @@ pub(crate) async fn watch_for_ready(
                     Ok(evt) if evt.vm_id == vm_id => {
                         let parsed: Option<VmStatus> = evt.new_status.parse().ok();
                         if let Some(status) = parsed
-                            && let Some(outcome) = handle_vm_status(
-                                env,
-                                status,
-                                is_oci,
-                                &mut start_kicked,
-                                &mut current_job_id,
-                                vm_id,
-                            ).await
+                            && let Some(outcome) = handle_vm_status(env, status, &mut wait, vm_id).await
                         {
                             return outcome;
                         }
@@ -156,14 +151,7 @@ pub(crate) async fn watch_for_ready(
                         // We may have missed events; re-sync from the DB.
                         match vms::get(env.pool(), vm_id).await {
                             Ok(vm) => {
-                                if let Some(outcome) = handle_vm_status(
-                                    env,
-                                    vm.status,
-                                    is_oci,
-                                    &mut start_kicked,
-                                    &mut current_job_id,
-                                    vm_id,
-                                )
+                                if let Some(outcome) = handle_vm_status(env, vm.status, &mut wait, vm_id)
                                 .await
                                 {
                                     return outcome;
@@ -183,10 +171,7 @@ pub(crate) async fn watch_for_ready(
             }
 
             _ = job_backstop.tick() => {
-                if current_job_id.is_nil() {
-                    continue;
-                }
-                if let Ok(job) = jobs::get(env.pool(), current_job_id).await
+                if let Ok(job) = jobs::get(env.pool(), wait.job_id()).await
                     && job.status == jobs::JobStatus::Failed
                 {
                     let msg = job.error.unwrap_or_else(|| "VM failed to start".to_string());
@@ -201,9 +186,7 @@ pub(crate) async fn watch_for_ready(
 async fn handle_vm_status(
     env: &App,
     status: VmStatus,
-    is_oci: bool,
-    start_kicked: &mut bool,
-    current_job_id: &mut Uuid,
+    wait: &mut ReadyWait,
     vm_id: Uuid,
 ) -> Option<ReadyOutcome> {
     match status {
@@ -211,22 +194,22 @@ async fn handle_vm_status(
         VmStatus::Shutdown | VmStatus::Unknown => {
             Some(ReadyOutcome::Failed("VM failed to start".to_string()))
         }
-        VmStatus::Created if is_oci && !*start_kicked => {
-            match start_vm_internal(env, vm_id).await {
-                Ok(start_job_id) => {
-                    *current_job_id = start_job_id;
-                    *start_kicked = true;
+        VmStatus::Created => match *wait {
+            ReadyWait::PullingImage { .. } => match start_vm_internal(env, vm_id).await {
+                Ok(job_id) => {
+                    *wait = ReadyWait::Starting { job_id };
                     tracing::info!(
                         vm_id = %vm_id,
-                        job_id = %start_job_id,
+                        job_id = %job_id,
                         "OCI sandbox image pulled; starting VM"
                     );
                     None
                 }
                 Err(e) => Some(ReadyOutcome::Failed(e.to_string())),
-            }
-        }
-        _ => None,
+            },
+            ReadyWait::Starting { .. } => None,
+        },
+        VmStatus::Pending | VmStatus::Paused | VmStatus::Migrating | VmStatus::Committing => None,
     }
 }
 
