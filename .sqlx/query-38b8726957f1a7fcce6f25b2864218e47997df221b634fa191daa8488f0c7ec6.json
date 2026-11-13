@@ -1,0 +1,60 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nINSERT INTO vm_templates (\n    id,\n    name,\n    description,\n    hypervisor,\n    boot_vcpus,\n    max_vcpus,\n    cpu_topology,\n    kvm_hyperv,\n    memory_size,\n    memory_hotplug_size,\n    memory_mergeable,\n    memory_shared,\n    memory_hugepages,\n    memory_hugepage_size,\n    memory_prefault,\n    memory_thp,\n    boot_source_id,\n    root_disk_object_id,\n    boot_mode,\n    image_ref,\n    cloud_init_user_data,\n    cloud_init_meta_data,\n    cloud_init_network_config,\n    network_id,\n    networks,\n    config\n)\nVALUES (\n    $1, $2, $3, $4, $5, $6, $7, $8,\n    $9, $10, $11, $12, $13, $14, $15, $16,\n    $17, $18, $19, $20, $21, $22, $23, $24, $25,\n    $26\n)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Varchar",
+        "Text",
+        {
+          "Custom": {
+            "name": "hypervisor",
+            "kind": {
+              "Enum": [
+                "CLOUD_HV",
+                "FIRECRACKER",
+                "QEMU"
+              ]
+            }
+          }
+        },
+        "Int4",
+        "Int4",
+        "Jsonb",
+        "Bool",
+        "Int8",
+        "Int8",
+        "Bool",
+        "Bool",
+        "Bool",
+        "Int8",
+        "Bool",
+        "Bool",
+        "Uuid",
+        "Uuid",
+        {
+          "Custom": {
+            "name": "boot_mode",
+            "kind": {
+              "Enum": [
+                "KERNEL",
+                "FIRMWARE"
+              ]
+            }
+          }
+        },
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Uuid",
+        "Jsonb",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "38b8726957f1a7fcce6f25b2864218e47997df221b634fa191daa8488f0c7ec6"
+}

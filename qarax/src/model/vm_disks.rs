@@ -41,7 +41,6 @@ pub struct VmDisk {
     pub upper_storage_object_id: Option<Uuid>,
 }
 
-#[derive(sqlx::FromRow)]
 pub struct VmDiskRow {
     pub id: Uuid,
     pub vm_id: Uuid,
@@ -222,7 +221,8 @@ pub async fn list_by_storage_object(
     pool: &PgPool,
     storage_object_id: Uuid,
 ) -> Result<Vec<VmDisk>, sqlx::Error> {
-    let vm_disks: Vec<VmDiskRow> = sqlx::query_as::<_, VmDiskRow>(
+    let vm_disks: Vec<VmDiskRow> = sqlx::query_as!(
+        VmDiskRow,
         r#"
 SELECT id,
         vm_id,
@@ -230,24 +230,24 @@ SELECT id,
         logical_name,
         device_path,
         boot_order,
-        read_only,
-        direct,
-        vhost_user,
+        read_only AS "read_only!",
+        direct AS "direct!",
+        vhost_user AS "vhost_user!",
         vhost_socket,
-        num_queues,
-        queue_size,
-        rate_limiter,
+        num_queues AS "num_queues!",
+        queue_size AS "queue_size!",
+        rate_limiter AS "rate_limiter: _",
         rate_limit_group,
-        pci_segment,
+        pci_segment AS "pci_segment!",
         serial_number,
-        config,
+        config AS "config: _",
         upper_storage_object_id
 FROM vm_disks
 WHERE storage_object_id = $1
 ORDER BY vm_id, boot_order NULLS LAST, device_path
         "#,
+        storage_object_id
     )
-    .bind(storage_object_id)
     .fetch_all(pool)
     .await?;
 
@@ -258,7 +258,8 @@ pub async fn list_by_storage_object_tx(
     tx: &mut PgTransaction<'_>,
     storage_object_id: Uuid,
 ) -> Result<Vec<VmDisk>, sqlx::Error> {
-    let vm_disks: Vec<VmDiskRow> = sqlx::query_as::<_, VmDiskRow>(
+    let vm_disks: Vec<VmDiskRow> = sqlx::query_as!(
+        VmDiskRow,
         r#"
 SELECT id,
        vm_id,
@@ -266,24 +267,24 @@ SELECT id,
        logical_name,
        device_path,
        boot_order,
-       read_only,
-       direct,
-       vhost_user,
+       read_only AS "read_only!",
+       direct AS "direct!",
+       vhost_user AS "vhost_user!",
        vhost_socket,
-       num_queues,
-       queue_size,
-       rate_limiter,
+       num_queues AS "num_queues!",
+       queue_size AS "queue_size!",
+       rate_limiter AS "rate_limiter: _",
        rate_limit_group,
-       pci_segment,
+       pci_segment AS "pci_segment!",
        serial_number,
-       config,
+       config AS "config: _",
        upper_storage_object_id
 FROM vm_disks
 WHERE storage_object_id = $1
 ORDER BY vm_id, boot_order NULLS LAST, device_path
         "#,
+        storage_object_id
     )
-    .bind(storage_object_id)
     .fetch_all(tx.as_mut())
     .await?;
 
@@ -326,7 +327,7 @@ fn insert_disk_query<'a>(
     id: Uuid,
     disk: &'a NewVmDisk,
 ) -> sqlx::query::Query<'a, sqlx::Postgres, sqlx::postgres::PgArguments> {
-    sqlx::query(
+    sqlx::query!(
         r#"
 INSERT INTO vm_disks (
     id, vm_id, storage_object_id, logical_name, device_path, boot_order,
@@ -336,30 +337,29 @@ INSERT INTO vm_disks (
 )
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
         "#,
+        id,
+        disk.vm_id,
+        disk.storage_object_id,
+        &disk.logical_name,
+        &disk.device_path,
+        disk.boot_order,
+        disk.read_only.unwrap_or(false),
+        disk.direct.unwrap_or(false),
+        disk.vhost_user.unwrap_or(false),
+        disk.vhost_socket.as_deref(),
+        disk.num_queues.unwrap_or(1),
+        disk.queue_size.unwrap_or(128),
+        disk.rate_limiter.as_ref(),
+        disk.rate_limit_group.as_deref(),
+        disk.pci_segment.unwrap_or(0),
+        disk.serial_number.as_deref(),
+        &disk.config,
+        disk.upper_storage_object_id
     )
-    .bind(id)
-    .bind(disk.vm_id)
-    .bind(disk.storage_object_id)
-    .bind(&disk.logical_name)
-    .bind(&disk.device_path)
-    .bind(disk.boot_order)
-    .bind(disk.read_only.unwrap_or(false))
-    .bind(disk.direct.unwrap_or(false))
-    .bind(disk.vhost_user.unwrap_or(false))
-    .bind(&disk.vhost_socket)
-    .bind(disk.num_queues.unwrap_or(1))
-    .bind(disk.queue_size.unwrap_or(128))
-    .bind(disk.rate_limiter.as_ref().map(sqlx::types::Json))
-    .bind(&disk.rate_limit_group)
-    .bind(disk.pci_segment.unwrap_or(0))
-    .bind(&disk.serial_number)
-    .bind(sqlx::types::Json(&disk.config))
-    .bind(disk.upper_storage_object_id)
 }
 
 pub async fn delete(pool: &PgPool, disk_id: Uuid) -> Result<(), sqlx::Error> {
-    sqlx::query("DELETE FROM vm_disks WHERE id = $1")
-        .bind(disk_id)
+    sqlx::query!("DELETE FROM vm_disks WHERE id = $1", disk_id)
         .execute(pool)
         .await?;
     Ok(())
@@ -373,19 +373,18 @@ pub async fn update_storage_object(
     storage_object_id: Uuid,
     upper_storage_object_id: Option<Uuid>,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(
+    sqlx::query!(
         "UPDATE vm_disks SET storage_object_id = $1, upper_storage_object_id = $2 WHERE id = $3",
+        storage_object_id,
+        upper_storage_object_id,
+        disk_id
     )
-    .bind(storage_object_id)
-    .bind(upper_storage_object_id)
-    .bind(disk_id)
     .execute(pool)
     .await?;
     Ok(())
 }
 
 /// Row type for the OCI disk join query (find_oci_disk_for_vm).
-#[derive(sqlx::FromRow)]
 pub struct OciDiskRow {
     pub disk_id: Uuid,
     pub oci_storage_object_id: Uuid,
@@ -402,14 +401,15 @@ pub async fn find_oci_disk_for_vm(
     pool: &PgPool,
     vm_id: Uuid,
 ) -> Result<Option<OciDiskRow>, sqlx::Error> {
-    let row = sqlx::query_as::<_, OciDiskRow>(
+    let row = sqlx::query_as!(
+        OciDiskRow,
         r#"
         SELECT
             vd.id                       AS disk_id,
             so.id                       AS oci_storage_object_id,
-            so.config                   AS oci_config,
+            so.config AS "oci_config: _",
             vd.upper_storage_object_id,
-            upper_so.config             AS upper_config
+            upper_so.config AS "upper_config: _"
         FROM vm_disks vd
         JOIN storage_objects so ON vd.storage_object_id = so.id
         JOIN storage_pools sp ON so.storage_pool_id = sp.id
@@ -419,8 +419,8 @@ pub async fn find_oci_disk_for_vm(
           AND sp.pool_type = 'OVERLAYBD'
         LIMIT 1
         "#,
+        vm_id
     )
-    .bind(vm_id)
     .fetch_optional(pool)
     .await?;
     Ok(row)

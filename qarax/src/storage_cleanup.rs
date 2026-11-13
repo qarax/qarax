@@ -11,7 +11,6 @@ use crate::{
     model::{hosts, storage_pools},
 };
 
-#[derive(sqlx::FromRow)]
 struct Cleanup {
     pool_id: Uuid,
     upper_layer: bool,
@@ -22,11 +21,12 @@ struct Cleanup {
 /// the queue row; failed RPCs leave a durable record for the next attempt.
 pub async fn process(pool: &PgPool, object_id: Uuid) -> Result<bool, sqlx::Error> {
     let mut tx = pool.begin().await?;
-    let task = sqlx::query_as::<_, Cleanup>(
+    let task = sqlx::query_as!(
+        Cleanup,
         "SELECT pool_id, upper_layer, host_ids FROM storage_cleanup
          WHERE object_id = $1 FOR UPDATE",
+        object_id
     )
-    .bind(object_id)
     .fetch_optional(tx.as_mut())
     .await?;
     let Some(task) = task else {
@@ -64,20 +64,22 @@ pub async fn process(pool: &PgPool, object_id: Uuid) -> Result<bool, sqlx::Error
         }
     }
     if completed {
-        sqlx::query("DELETE FROM storage_cleanup WHERE object_id = $1")
-            .bind(object_id)
-            .execute(tx.as_mut())
-            .await?;
+        sqlx::query!(
+            "DELETE FROM storage_cleanup WHERE object_id = $1",
+            object_id
+        )
+        .execute(tx.as_mut())
+        .await?;
     } else {
         tracing::warn!(%object_id, error = %last_error, "Storage cleanup will be retried");
-        sqlx::query(
+        sqlx::query!(
             "UPDATE storage_cleanup SET host_ids = $2, attempts = attempts + 1,
                      last_error = $3, next_attempt_at = NOW() + INTERVAL '30 seconds'
                      WHERE object_id = $1",
+            object_id,
+            &remaining,
+            last_error
         )
-        .bind(object_id)
-        .bind(remaining)
-        .bind(last_error)
         .execute(tx.as_mut())
         .await?;
     }
@@ -89,9 +91,9 @@ pub async fn start(app: App) {
     let mut interval = tokio::time::interval(Duration::from_secs(30));
     loop {
         interval.tick().await;
-        let result = sqlx::query_scalar::<_, Uuid>(
+        let result = sqlx::query_scalar!(
             "SELECT object_id FROM storage_cleanup WHERE next_attempt_at <= NOW()
-             ORDER BY next_attempt_at LIMIT 100",
+             ORDER BY next_attempt_at LIMIT 100"
         )
         .fetch_all(app.pool())
         .await;

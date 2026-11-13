@@ -123,17 +123,17 @@ pub struct NewAuditLog {
 }
 
 pub async fn record(pool: &PgPool, entry: NewAuditLog) -> Result<(), sqlx::Error> {
-    sqlx::query(
+    sqlx::query!(
         r#"
 INSERT INTO audit_logs (action, resource_type, resource_id, resource_name, metadata)
 VALUES ($1, $2, $3, $4, $5)
         "#,
+        entry.action.to_string(),
+        entry.resource_type.to_string(),
+        entry.resource_id,
+        entry.resource_name,
+        entry.metadata
     )
-    .bind(entry.action.to_string())
-    .bind(entry.resource_type.to_string())
-    .bind(entry.resource_id)
-    .bind(entry.resource_name)
-    .bind(entry.metadata.map(sqlx::types::Json))
     .execute(pool)
     .await?;
 
@@ -199,14 +199,15 @@ pub async fn list(
 }
 
 pub async fn get(pool: &PgPool, id: Uuid) -> Result<AuditLog, crate::errors::Error> {
-    let row = sqlx::query_as::<_, AuditLogRow>(
+    let row = sqlx::query_as!(
+        AuditLogRow,
         r#"
 SELECT id, action, resource_type, resource_id, resource_name, metadata, created_at
 FROM audit_logs
 WHERE id = $1
         "#,
+        id
     )
-    .bind(id)
     .fetch_one(pool)
     .await?;
 

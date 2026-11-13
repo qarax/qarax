@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT hsp.host_id FROM host_storage_pools hsp JOIN hosts h ON h.id = hsp.host_id WHERE hsp.storage_pool_id = $1 ORDER BY CASE WHEN h.status = 'UP' THEN 0 ELSE 1 END, h.load_average ASC NULLS LAST LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "host_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "11f209ed34902788219c856379d4521a777742ac8e28baabf0bfd903d16381fb"
+}

@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nSELECT sg.id, sg.name, sg.description\nFROM security_groups sg\nJOIN vm_security_groups vsg ON vsg.security_group_id = sg.id\nWHERE vsg.vm_id = $1\nORDER BY sg.name\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "description",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "588692b264640166a32d9cf5fd5a9c3021e8be756e2a39a83eb3d81ddb60bf74"
+}

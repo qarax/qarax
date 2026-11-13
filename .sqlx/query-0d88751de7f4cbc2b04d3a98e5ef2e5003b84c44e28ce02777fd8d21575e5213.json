@@ -1,0 +1,193 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nSELECT id,\n       name,\n       description,\n       hypervisor AS \"hypervisor: _\",\n       boot_vcpus,\n       max_vcpus,\n       cpu_topology AS \"cpu_topology: _\",\n       kvm_hyperv,\n       memory_size,\n       memory_hotplug_size,\n       memory_mergeable,\n       memory_shared,\n       memory_hugepages,\n       memory_hugepage_size,\n       memory_prefault,\n       memory_thp,\n       boot_source_id,\n       root_disk_object_id,\n       boot_mode AS \"boot_mode: _\",\n       image_ref,\n       cloud_init_user_data,\n       cloud_init_meta_data,\n       cloud_init_network_config,\n       network_id,\n       networks AS \"networks: _\",\n       config AS \"config: _\"\nFROM vm_templates\nWHERE ($1::text IS NULL OR name = $1)\nORDER BY name\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "description",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "hypervisor: _",
+        "type_info": {
+          "Custom": {
+            "name": "hypervisor",
+            "kind": {
+              "Enum": [
+                "CLOUD_HV",
+                "FIRECRACKER",
+                "QEMU"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "boot_vcpus",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "max_vcpus",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "cpu_topology: _",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 7,
+        "name": "kvm_hyperv",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 8,
+        "name": "memory_size",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 9,
+        "name": "memory_hotplug_size",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 10,
+        "name": "memory_mergeable",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 11,
+        "name": "memory_shared",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 12,
+        "name": "memory_hugepages",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 13,
+        "name": "memory_hugepage_size",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 14,
+        "name": "memory_prefault",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 15,
+        "name": "memory_thp",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 16,
+        "name": "boot_source_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 17,
+        "name": "root_disk_object_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 18,
+        "name": "boot_mode: _",
+        "type_info": {
+          "Custom": {
+            "name": "boot_mode",
+            "kind": {
+              "Enum": [
+                "KERNEL",
+                "FIRMWARE"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 19,
+        "name": "image_ref",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 20,
+        "name": "cloud_init_user_data",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 21,
+        "name": "cloud_init_meta_data",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 22,
+        "name": "cloud_init_network_config",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 23,
+        "name": "network_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 24,
+        "name": "networks: _",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 25,
+        "name": "config: _",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "0d88751de7f4cbc2b04d3a98e5ef2e5003b84c44e28ce02777fd8d21575e5213"
+}

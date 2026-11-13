@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE vms SET status = 'COMMITTING' WHERE id = $1 AND status IN ('CREATED', 'SHUTDOWN')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "34c2869e0a4807cf96dd546506f0d21c22338410f2acf5b24293abe1647cdb38"
+}

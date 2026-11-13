@@ -26,7 +26,6 @@ pub struct Transfer {
     pub completed_at: Option<NaiveDateTime>,
 }
 
-#[derive(sqlx::FromRow)]
 pub struct TransferRow {
     pub id: Uuid,
     pub name: String,

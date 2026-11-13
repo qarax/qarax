@@ -1,0 +1,89 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nSELECT id, name, url, secret, scope AS \"scope: _\", scope_value, events, active,\n       created_at, updated_at\nFROM lifecycle_hooks\nWHERE active = TRUE\n  AND (\n      scope = 'GLOBAL'\n      OR (scope = 'VM'  AND scope_value = $1::text)\n      OR (scope = 'TAG' AND scope_value = ANY($2))\n  )\n  AND (\n      events = ARRAY[]::TEXT[]\n      OR $3 = ANY(events)\n  )\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "url",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "secret",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "scope: _",
+        "type_info": {
+          "Custom": {
+            "name": "hook_scope",
+            "kind": {
+              "Enum": [
+                "GLOBAL",
+                "VM",
+                "TAG"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "scope_value",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "events",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 7,
+        "name": "active",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 8,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 9,
+        "name": "updated_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "TextArray",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "79c465cdcd4b618ffbb158fdb57a4e1b08b131c263792efafc9cf26af2e002d6"
+}

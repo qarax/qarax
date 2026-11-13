@@ -1,0 +1,58 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nSELECT id, action, resource_type, resource_id, resource_name, metadata, created_at\nFROM audit_logs\nWHERE id = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "action",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "resource_type",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "resource_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 4,
+        "name": "resource_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "metadata",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 6,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "60da9957044cc09bef958bed8b6e36b81c35decc59e31e1880e82f9203d3740a"
+}

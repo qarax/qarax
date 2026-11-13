@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT pool_id, upper_layer, host_ids FROM storage_cleanup\n         WHERE object_id = $1 FOR UPDATE",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "pool_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "upper_layer",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 2,
+        "name": "host_ids",
+        "type_info": "UuidArray"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "0852d6dfe8b12541ba84645cefd76b38b8bf8fa59295032ab9b4a346d1907e7b"
+}

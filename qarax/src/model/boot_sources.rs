@@ -15,7 +15,6 @@ pub struct BootSource {
     pub initrd_image_id: Option<Uuid>,
 }
 
-#[derive(sqlx::FromRow)]
 pub struct BootSourceRow {
     pub id: Uuid,
     pub name: String,

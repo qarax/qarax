@@ -1,0 +1,44 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO hosts (\n            name,\n            address,\n            port,\n            host_user,\n            credential_ref,\n            status,\n            reservation_class,\n            placement_labels\n        )\n        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)\n        RETURNING id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Varchar",
+        "Int4",
+        "Varchar",
+        "Text",
+        {
+          "Custom": {
+            "name": "host_status",
+            "kind": {
+              "Enum": [
+                "UNKNOWN",
+                "DOWN",
+                "INSTALLING",
+                "INSTALLATION_FAILED",
+                "INITIALIZING",
+                "UP",
+                "MAINTENANCE"
+              ]
+            }
+          }
+        },
+        "Text",
+        "Jsonb"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "e2b000ccbc7b07555c17bf501106fb3df3b6309d3d1db26b94bdc642bbd85295"
+}

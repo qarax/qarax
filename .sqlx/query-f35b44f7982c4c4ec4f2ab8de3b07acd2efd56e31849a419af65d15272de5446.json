@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE hook_executions SET status = 'PENDING' WHERE status = 'PROCESSING'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "f35b44f7982c4c4ec4f2ab8de3b07acd2efd56e31849a419af65d15272de5446"
+}

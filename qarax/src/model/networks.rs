@@ -4,33 +4,6 @@ use strum_macros::{Display, EnumString};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-type HostNetworkListRow = (
-    Uuid,
-    String,
-    String,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    NetworkStatus,
-    String,
-);
-
-type AttachedNetworkRow = (
-    Uuid,
-    String,
-    String,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    NetworkStatus,
-    Uuid,
-    String,
-    i32,
-    String,
-);
-
 #[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
 pub struct Network {
     pub id: Uuid,
@@ -44,7 +17,6 @@ pub struct Network {
     pub status: NetworkStatus,
 }
 
-#[derive(sqlx::FromRow)]
 struct NetworkRow {
     id: Uuid,
     name: String,
@@ -52,7 +24,6 @@ struct NetworkRow {
     gateway: Option<String>,
     dns: Option<String>,
     vpc_name: Option<String>,
-    #[sqlx(rename = "type")]
     network_type: Option<String>,
     status: NetworkStatus,
 }
@@ -120,7 +91,6 @@ pub struct AttachedNetwork {
     pub bridge_name: String,
 }
 
-#[derive(sqlx::FromRow)]
 struct IpAllocationRow {
     id: Uuid,
     network_id: Uuid,
@@ -146,14 +116,15 @@ pub type PgTransaction<'a> = Transaction<'a, Postgres>;
 // CRUD
 
 pub async fn list(pool: &PgPool, name_filter: Option<&str>) -> Result<Vec<Network>, sqlx::Error> {
-    let rows: Vec<NetworkRow> = sqlx::query_as::<_, NetworkRow>(
+    let rows: Vec<NetworkRow> = sqlx::query_as!(
+        NetworkRow,
         r#"
-SELECT id, name, subnet::text, gateway::text, dns::text, vpc_name, type, status
+SELECT id, name, subnet::text AS "subnet!", gateway::text, dns::text, vpc_name, type AS network_type, status AS "status: _"
 FROM networks
 WHERE ($1::text IS NULL OR name = $1)
         "#,
+        name_filter,
     )
-    .bind(name_filter)
     .fetch_all(pool)
     .await?;
 
@@ -161,14 +132,15 @@ WHERE ($1::text IS NULL OR name = $1)
 }
 
 pub async fn get(pool: &PgPool, network_id: Uuid) -> Result<Network, sqlx::Error> {
-    let row: NetworkRow = sqlx::query_as::<_, NetworkRow>(
+    let row: NetworkRow = sqlx::query_as!(
+        NetworkRow,
         r#"
-SELECT id, name, subnet::text, gateway::text, dns::text, vpc_name, type, status
+SELECT id, name, subnet::text AS "subnet!", gateway::text, dns::text, vpc_name, type AS network_type, status AS "status: _"
 FROM networks
 WHERE id = $1
         "#,
+        network_id,
     )
-    .bind(network_id)
     .fetch_one(pool)
     .await?;
 
@@ -178,20 +150,20 @@ WHERE id = $1
 pub async fn create(pool: &PgPool, new: NewNetwork) -> Result<Uuid, sqlx::Error> {
     let id = Uuid::new_v4();
 
-    sqlx::query(
+    sqlx::query!(
         r#"
 INSERT INTO networks (id, name, subnet, gateway, dns, vpc_name, type, status)
-VALUES ($1, $2, $3::cidr, $4::inet, $5::inet, $6, $7, $8)
+VALUES ($1, $2, $3::text::cidr, $4::text::inet, $5::text::inet, $6, $7, $8)
         "#,
+        id,
+        &new.name,
+        &new.subnet,
+        new.gateway.as_deref(),
+        new.dns.as_deref(),
+        new.vpc_name.as_deref(),
+        new.network_type.as_deref(),
+        NetworkStatus::Active as NetworkStatus
     )
-    .bind(id)
-    .bind(&new.name)
-    .bind(&new.subnet)
-    .bind(&new.gateway)
-    .bind(&new.dns)
-    .bind(&new.vpc_name)
-    .bind(&new.network_type)
-    .bind(NetworkStatus::Active)
     .execute(pool)
     .await?;
 
@@ -199,8 +171,7 @@ VALUES ($1, $2, $3::cidr, $4::inet, $5::inet, $6, $7, $8)
 }
 
 pub async fn delete(pool: &PgPool, network_id: Uuid) -> Result<(), sqlx::Error> {
-    sqlx::query("DELETE FROM networks WHERE id = $1")
-        .bind(network_id)
+    sqlx::query!("DELETE FROM networks WHERE id = $1", network_id)
         .execute(pool)
         .await?;
 
@@ -215,16 +186,16 @@ pub async fn attach_host(
     host_id: Uuid,
     bridge_name: &str,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(
+    sqlx::query!(
         r#"
 INSERT INTO host_networks (host_id, network_id, bridge_name)
 VALUES ($1, $2, $3)
 ON CONFLICT DO NOTHING
         "#,
+        host_id,
+        network_id,
+        bridge_name
     )
-    .bind(host_id)
-    .bind(network_id)
-    .bind(bridge_name)
     .execute(pool)
     .await?;
 
@@ -236,11 +207,13 @@ pub async fn detach_host(
     network_id: Uuid,
     host_id: Uuid,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query("DELETE FROM host_networks WHERE host_id = $1 AND network_id = $2")
-        .bind(host_id)
-        .bind(network_id)
-        .execute(pool)
-        .await?;
+    sqlx::query!(
+        "DELETE FROM host_networks WHERE host_id = $1 AND network_id = $2",
+        host_id,
+        network_id
+    )
+    .execute(pool)
+    .await?;
 
     Ok(())
 }
@@ -250,15 +223,15 @@ pub async fn host_has_network(
     host_id: Uuid,
     network_id: Uuid,
 ) -> Result<bool, sqlx::Error> {
-    let row = sqlx::query_as::<_, (i64,)>(
-        "SELECT COUNT(*) FROM host_networks WHERE host_id = $1 AND network_id = $2",
+    let row = sqlx::query_scalar!(
+        "SELECT COUNT(*) AS \"count!\" FROM host_networks WHERE host_id = $1 AND network_id = $2",
+        host_id,
+        network_id
     )
-    .bind(host_id)
-    .bind(network_id)
     .fetch_one(pool)
     .await?;
 
-    Ok(row.0 > 0)
+    Ok(row > 0)
 }
 
 /// Return the bridge name for a network on a specific host.
@@ -267,138 +240,125 @@ pub async fn get_host_bridge(
     host_id: Uuid,
     network_id: Uuid,
 ) -> Result<Option<String>, sqlx::Error> {
-    let row = sqlx::query_as::<_, (String,)>(
+    let row = sqlx::query_scalar!(
         "SELECT bridge_name FROM host_networks WHERE host_id = $1 AND network_id = $2",
+        host_id,
+        network_id
     )
-    .bind(host_id)
-    .bind(network_id)
     .fetch_optional(pool)
     .await?;
 
-    Ok(row.map(|(name,)| name))
+    Ok(row)
 }
 
 pub async fn list_for_host(
     pool: &PgPool,
     host_id: Uuid,
 ) -> Result<Vec<(Network, String)>, sqlx::Error> {
-    let rows: Vec<HostNetworkListRow> = sqlx::query_as(
+    let rows = sqlx::query!(
         r#"
 SELECT n.id,
        n.name,
-       n.subnet::text,
-       n.gateway::text,
-       n.dns::text,
+       n.subnet::text AS "subnet!",
+       n.gateway::text AS gateway,
+       n.dns::text AS dns,
        n.vpc_name,
-       n.type,
-       n.status,
+       n.type AS network_type,
+       n.status AS "status: NetworkStatus",
        hn.bridge_name
 FROM networks n
 JOIN host_networks hn ON hn.network_id = n.id
 WHERE hn.host_id = $1
 ORDER BY n.name
             "#,
+        host_id
     )
-    .bind(host_id)
     .fetch_all(pool)
     .await?;
 
     Ok(rows
         .into_iter()
-        .map(
-            |(id, name, subnet, gateway, dns, vpc_name, network_type, status, bridge_name)| {
-                (
-                    Network {
-                        id,
-                        name,
-                        subnet,
-                        gateway: gateway.map(|v| v.split('/').next().unwrap_or(&v).to_string()),
-                        dns: dns.map(|v| v.split('/').next().unwrap_or(&v).to_string()),
-                        vpc_name,
-                        network_type,
-                        status,
-                    },
-                    bridge_name,
-                )
-            },
-        )
+        .map(|r| {
+            (
+                Network {
+                    id: r.id,
+                    name: r.name,
+                    subnet: r.subnet,
+                    gateway: r
+                        .gateway
+                        .map(|v| v.split('/').next().unwrap_or(&v).to_string()),
+                    dns: r.dns.map(|v| v.split('/').next().unwrap_or(&v).to_string()),
+                    vpc_name: r.vpc_name,
+                    network_type: r.network_type,
+                    status: r.status,
+                },
+                r.bridge_name,
+            )
+        })
         .collect())
 }
 
 pub async fn list_attached(pool: &PgPool) -> Result<Vec<AttachedNetwork>, sqlx::Error> {
-    let rows: Vec<AttachedNetworkRow> = sqlx::query_as(
+    let rows = sqlx::query!(
         r#"
 SELECT n.id,
        n.name,
-       n.subnet::text,
-       n.gateway::text,
-       n.dns::text,
+       n.subnet::text AS "subnet!",
+       n.gateway::text AS gateway,
+       n.dns::text AS dns,
        n.vpc_name,
-       n.type,
-       n.status,
-       h.id,
-       h.address,
-       h.port,
+       n.type AS network_type,
+       n.status AS "status: NetworkStatus",
+       h.id AS host_id,
+       h.address AS host_address,
+       h.port AS host_port,
        hn.bridge_name
 FROM networks n
 JOIN host_networks hn ON hn.network_id = n.id
 JOIN hosts h ON h.id = hn.host_id
 ORDER BY h.id, n.name
-        "#,
+        "#
     )
     .fetch_all(pool)
     .await?;
 
     Ok(rows
         .into_iter()
-        .map(
-            |(
-                id,
-                name,
-                subnet,
-                gateway,
-                dns,
-                vpc_name,
-                network_type,
-                status,
-                host_id,
-                host_address,
-                host_port,
-                bridge_name,
-            )| AttachedNetwork {
-                host_id,
-                host_address,
-                host_port,
-                bridge_name,
-                network: Network {
-                    id,
-                    name,
-                    subnet,
-                    gateway: gateway.map(|v| v.split('/').next().unwrap_or(&v).to_string()),
-                    dns: dns.map(|v| v.split('/').next().unwrap_or(&v).to_string()),
-                    vpc_name,
-                    network_type,
-                    status,
-                },
+        .map(|r| AttachedNetwork {
+            host_id: r.host_id,
+            host_address: r.host_address,
+            host_port: r.host_port,
+            bridge_name: r.bridge_name,
+            network: Network {
+                id: r.id,
+                name: r.name,
+                subnet: r.subnet,
+                gateway: r
+                    .gateway
+                    .map(|v| v.split('/').next().unwrap_or(&v).to_string()),
+                dns: r.dns.map(|v| v.split('/').next().unwrap_or(&v).to_string()),
+                vpc_name: r.vpc_name,
+                network_type: r.network_type,
+                status: r.status,
             },
-        )
+        })
         .collect())
 }
 
 pub async fn list_vpc_host_ids(pool: &PgPool) -> Result<Vec<Uuid>, sqlx::Error> {
-    let rows = sqlx::query_as::<_, (Uuid,)>(
+    let rows = sqlx::query_scalar!(
         r#"
 SELECT DISTINCT hn.host_id
 FROM host_networks hn
 JOIN networks n ON n.id = hn.network_id
 WHERE n.vpc_name IS NOT NULL
 ORDER BY hn.host_id
-        "#,
+        "#
     )
     .fetch_all(pool)
     .await?;
 
-    Ok(rows.into_iter().map(|(host_id,)| host_id).collect())
+    Ok(rows)
 }
 
 // IPAM
@@ -409,18 +369,19 @@ pub async fn allocate_ip(
     ip_address: &str,
     vm_id: Option<Uuid>,
 ) -> Result<IpAllocation, sqlx::Error> {
-    let row = sqlx::query_as::<_, IpAllocationRow>(
+    let row = sqlx::query_as!(
+        IpAllocationRow,
         r#"
 INSERT INTO ip_allocations (network_id, ip_address, vm_id)
-VALUES ($1, $2::inet, $3)
+VALUES ($1, $2::text::inet, $3)
 ON CONFLICT (network_id, ip_address) DO UPDATE
     SET vm_id = EXCLUDED.vm_id, allocated_at = now()
-RETURNING id, network_id, ip_address::text, vm_id, allocated_at
+RETURNING id, network_id, ip_address::text AS "ip_address!", vm_id, allocated_at
         "#,
+        network_id,
+        ip_address,
+        vm_id
     )
-    .bind(network_id)
-    .bind(ip_address)
-    .bind(vm_id)
     .fetch_one(pool)
     .await?;
 
@@ -433,17 +394,18 @@ pub async fn try_allocate_ip_tx(
     ip_address: &str,
     vm_id: Option<Uuid>,
 ) -> Result<Option<IpAllocation>, sqlx::Error> {
-    let row = sqlx::query_as::<_, IpAllocationRow>(
+    let row = sqlx::query_as!(
+        IpAllocationRow,
         r#"
 INSERT INTO ip_allocations (network_id, ip_address, vm_id)
-VALUES ($1, $2::inet, $3)
+VALUES ($1, $2::text::inet, $3)
 ON CONFLICT (network_id, ip_address) DO NOTHING
-RETURNING id, network_id, ip_address::text, vm_id, allocated_at
+RETURNING id, network_id, ip_address::text AS "ip_address!", vm_id, allocated_at
         "#,
+        network_id,
+        ip_address,
+        vm_id
     )
-    .bind(network_id)
-    .bind(ip_address)
-    .bind(vm_id)
     .fetch_optional(tx.as_mut())
     .await?;
 
@@ -454,14 +416,15 @@ pub async fn list_allocations_by_vm(
     pool: &PgPool,
     vm_id: Uuid,
 ) -> Result<Vec<IpAllocation>, sqlx::Error> {
-    let rows = sqlx::query_as::<_, IpAllocationRow>(
+    let rows = sqlx::query_as!(
+        IpAllocationRow,
         r#"
-SELECT id, network_id, ip_address::text, vm_id, allocated_at
+SELECT id, network_id, ip_address::text AS "ip_address!", vm_id, allocated_at
 FROM ip_allocations
 WHERE vm_id = $1
         "#,
+        vm_id
     )
-    .bind(vm_id)
     .fetch_all(pool)
     .await?;
 
@@ -473,15 +436,16 @@ pub async fn get_allocation(
     network_id: Uuid,
     ip_address: &str,
 ) -> Result<Option<IpAllocation>, sqlx::Error> {
-    let row = sqlx::query_as::<_, IpAllocationRow>(
+    let row = sqlx::query_as!(
+        IpAllocationRow,
         r#"
-SELECT id, network_id, ip_address::text, vm_id, allocated_at
+SELECT id, network_id, ip_address::text AS "ip_address!", vm_id, allocated_at
 FROM ip_allocations
-WHERE network_id = $1 AND ip_address = $2::inet
+WHERE network_id = $1 AND ip_address = $2::text::inet
         "#,
+        network_id,
+        ip_address
     )
-    .bind(network_id)
-    .bind(ip_address)
     .fetch_optional(pool)
     .await?;
 
@@ -489,8 +453,7 @@ WHERE network_id = $1 AND ip_address = $2::inet
 }
 
 pub async fn release_ip(pool: &PgPool, allocation_id: Uuid) -> Result<(), sqlx::Error> {
-    sqlx::query("DELETE FROM ip_allocations WHERE id = $1")
-        .bind(allocation_id)
+    sqlx::query!("DELETE FROM ip_allocations WHERE id = $1", allocation_id)
         .execute(pool)
         .await?;
 
@@ -502,12 +465,13 @@ pub async fn release_ip_by_network_and_address(
     network_id: Uuid,
     ip_address: &str,
 ) -> Result<bool, sqlx::Error> {
-    let result =
-        sqlx::query("DELETE FROM ip_allocations WHERE network_id = $1 AND ip_address = $2::inet")
-            .bind(network_id)
-            .bind(ip_address)
-            .execute(pool)
-            .await?;
+    let result = sqlx::query!(
+        "DELETE FROM ip_allocations WHERE network_id = $1 AND ip_address = $2::text::inet",
+        network_id,
+        ip_address
+    )
+    .execute(pool)
+    .await?;
 
     Ok(result.rows_affected() > 0)
 }
@@ -517,12 +481,13 @@ pub async fn release_ip_by_network_and_address_tx(
     network_id: Uuid,
     ip_address: &str,
 ) -> Result<bool, sqlx::Error> {
-    let result =
-        sqlx::query("DELETE FROM ip_allocations WHERE network_id = $1 AND ip_address = $2::inet")
-            .bind(network_id)
-            .bind(ip_address)
-            .execute(tx.as_mut())
-            .await?;
+    let result = sqlx::query!(
+        "DELETE FROM ip_allocations WHERE network_id = $1 AND ip_address = $2::text::inet",
+        network_id,
+        ip_address
+    )
+    .execute(tx.as_mut())
+    .await?;
 
     Ok(result.rows_affected() > 0)
 }
@@ -531,15 +496,16 @@ pub async fn list_allocations(
     pool: &PgPool,
     network_id: Uuid,
 ) -> Result<Vec<IpAllocation>, sqlx::Error> {
-    let rows = sqlx::query_as::<_, IpAllocationRow>(
+    let rows = sqlx::query_as!(
+        IpAllocationRow,
         r#"
-SELECT id, network_id, ip_address::text, vm_id, allocated_at
+SELECT id, network_id, ip_address::text AS "ip_address!", vm_id, allocated_at
 FROM ip_allocations
 WHERE network_id = $1
 ORDER BY ip_address
         "#,
+        network_id
     )
-    .bind(network_id)
     .fetch_all(pool)
     .await?;
 
@@ -589,17 +555,14 @@ pub async fn next_available_ip(
     });
 
     // Get already-allocated IPs
-    let allocated: Vec<String> = sqlx::query_as::<_, (String,)>(
-        "SELECT ip_address::text FROM ip_allocations WHERE network_id = $1",
+    let allocated_set: std::collections::HashSet<String> = sqlx::query_scalar!(
+        "SELECT ip_address::text AS \"ip_address!\" FROM ip_allocations WHERE network_id = $1",
+        network_id
     )
-    .bind(network_id)
     .fetch_all(pool)
     .await?
     .into_iter()
-    .map(|(ip,)| ip)
     .collect();
-
-    let allocated_set: std::collections::HashSet<String> = allocated.into_iter().collect();
 
     // Iterate from network+1 to broadcast-1
     for addr in (network_addr + 1)..broadcast_addr {

@@ -1,0 +1,82 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, host_id, pci_address, model, vendor, vram_bytes, iommu_group, numa_node, vm_id, discovered_at, updated_at FROM host_gpus WHERE host_id = $1 ORDER BY pci_address",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "host_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "pci_address",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "model",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "vendor",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "vram_bytes",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 6,
+        "name": "iommu_group",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "numa_node",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 8,
+        "name": "vm_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 9,
+        "name": "discovered_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 10,
+        "name": "updated_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "fa1fd283609b769872d6b6e511bf116391fee1a682ee27c5e5f615658d00a7a3"
+}

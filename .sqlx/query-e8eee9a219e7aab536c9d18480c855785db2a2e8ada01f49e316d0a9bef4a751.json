@@ -1,0 +1,86 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nSELECT sgr.id,\n       sgr.security_group_id,\n       sgr.direction AS \"direction: _\",\n       sgr.protocol AS \"protocol: _\",\n       sgr.cidr::text,\n       sgr.port_start,\n       sgr.port_end,\n       sgr.description\nFROM security_group_rules sgr\nJOIN vm_security_groups vsg ON vsg.security_group_id = sgr.security_group_id\nWHERE vsg.vm_id = $1\nORDER BY sgr.direction, sgr.protocol, sgr.cidr NULLS FIRST, sgr.port_start NULLS FIRST, sgr.id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "security_group_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "direction: _",
+        "type_info": {
+          "Custom": {
+            "name": "security_group_direction",
+            "kind": {
+              "Enum": [
+                "INGRESS",
+                "EGRESS"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "protocol: _",
+        "type_info": {
+          "Custom": {
+            "name": "security_group_protocol",
+            "kind": {
+              "Enum": [
+                "ANY",
+                "TCP",
+                "UDP",
+                "ICMP"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "cidr",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "port_start",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "port_end",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "description",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      null,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "e8eee9a219e7aab536c9d18480c855785db2a2e8ada01f49e316d0a9bef4a751"
+}

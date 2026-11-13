@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM host_storage_pools WHERE host_id = $1 AND storage_pool_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b62e1021babb1b010262fe2ad6e62c34952b4e1f6875823d0938684c1447e0fe"
+}

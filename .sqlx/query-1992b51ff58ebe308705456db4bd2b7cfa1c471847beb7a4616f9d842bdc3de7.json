@@ -1,0 +1,31 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nINSERT INTO lifecycle_hooks (id, name, url, secret, scope, scope_value, events)\nVALUES ($1, $2, $3, $4, $5, $6, $7)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        {
+          "Custom": {
+            "name": "hook_scope",
+            "kind": {
+              "Enum": [
+                "GLOBAL",
+                "VM",
+                "TAG"
+              ]
+            }
+          }
+        },
+        "Text",
+        "TextArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1992b51ff58ebe308705456db4bd2b7cfa1c471847beb7a4616f9d842bdc3de7"
+}

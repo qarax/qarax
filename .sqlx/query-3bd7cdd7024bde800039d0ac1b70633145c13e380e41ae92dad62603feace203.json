@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE host_gpus SET vm_id = NULL, updated_at = NOW() WHERE vm_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "3bd7cdd7024bde800039d0ac1b70633145c13e380e41ae92dad62603feace203"
+}

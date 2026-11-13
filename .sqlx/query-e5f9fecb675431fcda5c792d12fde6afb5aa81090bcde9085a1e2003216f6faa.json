@@ -1,0 +1,46 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            vd.id                       AS disk_id,\n            so.id                       AS oci_storage_object_id,\n            so.config AS \"oci_config: _\",\n            vd.upper_storage_object_id,\n            upper_so.config AS \"upper_config: _\"\n        FROM vm_disks vd\n        JOIN storage_objects so ON vd.storage_object_id = so.id\n        JOIN storage_pools sp ON so.storage_pool_id = sp.id\n        LEFT JOIN storage_objects upper_so ON vd.upper_storage_object_id = upper_so.id\n        WHERE vd.vm_id = $1\n          AND so.object_type = 'OCI_IMAGE'\n          AND sp.pool_type = 'OVERLAYBD'\n        LIMIT 1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "disk_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "oci_storage_object_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "oci_config: _",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 3,
+        "name": "upper_storage_object_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 4,
+        "name": "upper_config: _",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "e5f9fecb675431fcda5c792d12fde6afb5aa81090bcde9085a1e2003216f6faa"
+}

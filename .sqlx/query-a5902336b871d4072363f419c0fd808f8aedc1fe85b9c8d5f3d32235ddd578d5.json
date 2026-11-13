@@ -1,0 +1,86 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nSELECT id,\n       security_group_id,\n       direction AS \"direction: _\",\n       protocol AS \"protocol: _\",\n       cidr::text,\n       port_start,\n       port_end,\n       description\nFROM security_group_rules\nWHERE security_group_id = $1\nORDER BY direction, protocol, cidr NULLS FIRST, port_start NULLS FIRST, id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "security_group_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "direction: _",
+        "type_info": {
+          "Custom": {
+            "name": "security_group_direction",
+            "kind": {
+              "Enum": [
+                "INGRESS",
+                "EGRESS"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "protocol: _",
+        "type_info": {
+          "Custom": {
+            "name": "security_group_protocol",
+            "kind": {
+              "Enum": [
+                "ANY",
+                "TCP",
+                "UDP",
+                "ICMP"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "cidr",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "port_start",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "port_end",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "description",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      null,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "a5902336b871d4072363f419c0fd808f8aedc1fe85b9c8d5f3d32235ddd578d5"
+}

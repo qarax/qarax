@@ -1,0 +1,80 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nSELECT n.id,\n       n.name,\n       n.subnet::text AS \"subnet!\",\n       n.gateway::text AS gateway,\n       n.dns::text AS dns,\n       n.vpc_name,\n       n.type AS network_type,\n       n.status AS \"status: NetworkStatus\",\n       hn.bridge_name\nFROM networks n\nJOIN host_networks hn ON hn.network_id = n.id\nWHERE hn.host_id = $1\nORDER BY n.name\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "subnet!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "gateway",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "dns",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "vpc_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 6,
+        "name": "network_type",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 7,
+        "name": "status: NetworkStatus",
+        "type_info": {
+          "Custom": {
+            "name": "network_status",
+            "kind": {
+              "Enum": [
+                "ACTIVE",
+                "INACTIVE"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "bridge_name",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null,
+      null,
+      null,
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "a69985961baf330f9010f09a3fd62485f45fbc9e06e666fe6c17b3a3b9357f5d"
+}

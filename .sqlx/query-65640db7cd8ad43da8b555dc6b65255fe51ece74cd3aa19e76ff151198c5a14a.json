@@ -1,0 +1,122 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nSELECT id,\n       job_type AS \"job_type: _\",\n       status AS \"status: _\",\n       description,\n       resource_id,\n       resource_type,\n       progress,\n       result,\n       error,\n       created_at,\n       updated_at,\n       started_at,\n       completed_at\nFROM jobs\nWHERE id = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "job_type: _",
+        "type_info": {
+          "Custom": {
+            "name": "job_type",
+            "kind": {
+              "Enum": [
+                "IMAGE_PULL",
+                "VM_START",
+                "VM_MIGRATE",
+                "DISK_CREATE",
+                "VM_COMMIT",
+                "SANDBOX_CLAIM",
+                "HOST_EVACUATE",
+                "VM_FAILOVER"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "status: _",
+        "type_info": {
+          "Custom": {
+            "name": "job_status",
+            "kind": {
+              "Enum": [
+                "PENDING",
+                "RUNNING",
+                "COMPLETED",
+                "FAILED"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "description",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "resource_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 5,
+        "name": "resource_type",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "progress",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "result",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 8,
+        "name": "error",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 10,
+        "name": "updated_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 11,
+        "name": "started_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 12,
+        "name": "completed_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "65640db7cd8ad43da8b555dc6b65255fe51ece74cd3aa19e76ff151198c5a14a"
+}

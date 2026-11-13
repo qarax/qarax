@@ -234,7 +234,6 @@ pub struct Vm {
     pub config: serde_json::Value,
 }
 
-#[derive(sqlx::FromRow)]
 pub struct VmRow {
     pub id: Uuid,
     pub name: String,
@@ -983,10 +982,8 @@ pub async fn create_tx_with_status(
     status: VmStatus,
 ) -> Result<Uuid, sqlx::Error> {
     let id = Uuid::new_v4();
-    let cpu_topology = vm.cpu_topology.as_ref().map(|t| Json(t.clone()));
-    let config = Json(&vm.config);
 
-    sqlx::query(
+    sqlx::query!(
         r#"
 INSERT INTO vms (
     id, name, tags, status, host_id, hypervisor,
@@ -1007,33 +1004,33 @@ VALUES (
     $26
 )
         "#,
+        id,
+        &vm.name,
+        &vm.tags,
+        status as VmStatus,
+        host_id,
+        vm.hypervisor.clone() as Hypervisor,
+        vm.boot_vcpus,
+        vm.max_vcpus,
+        vm.cpu_topology.as_ref(),
+        vm.kvm_hyperv.unwrap_or(false),
+        vm.memory_size,
+        vm.memory_hotplug_size,
+        vm.memory_mergeable.unwrap_or(false),
+        vm.memory_shared.unwrap_or(false),
+        vm.memory_hugepages.unwrap_or(false),
+        vm.memory_hugepage_size,
+        vm.memory_prefault.unwrap_or(false),
+        vm.memory_thp.unwrap_or(false),
+        vm.boot_source_id,
+        vm.boot_mode.clone().unwrap_or(BootMode::Kernel) as BootMode,
+        vm.description.as_deref(),
+        vm.image_ref.as_deref(),
+        vm.cloud_init_user_data.as_deref(),
+        vm.cloud_init_meta_data.as_deref(),
+        vm.cloud_init_network_config.as_deref(),
+        &vm.config
     )
-    .bind(id)
-    .bind(&vm.name)
-    .bind(&vm.tags)
-    .bind(status)
-    .bind(host_id)
-    .bind(vm.hypervisor.clone())
-    .bind(vm.boot_vcpus)
-    .bind(vm.max_vcpus)
-    .bind(cpu_topology)
-    .bind(vm.kvm_hyperv.unwrap_or(false))
-    .bind(vm.memory_size)
-    .bind(vm.memory_hotplug_size)
-    .bind(vm.memory_mergeable.unwrap_or(false))
-    .bind(vm.memory_shared.unwrap_or(false))
-    .bind(vm.memory_hugepages.unwrap_or(false))
-    .bind(vm.memory_hugepage_size)
-    .bind(vm.memory_prefault.unwrap_or(false))
-    .bind(vm.memory_thp.unwrap_or(false))
-    .bind(vm.boot_source_id)
-    .bind(vm.boot_mode.clone().unwrap_or(BootMode::Kernel))
-    .bind(&vm.description)
-    .bind(&vm.image_ref)
-    .bind(&vm.cloud_init_user_data)
-    .bind(&vm.cloud_init_meta_data)
-    .bind(&vm.cloud_init_network_config)
-    .bind(config)
     .execute(tx.as_mut())
     .await?;
 
@@ -1041,38 +1038,39 @@ VALUES (
 }
 
 pub async fn list_active(pool: &PgPool) -> Result<Vec<Vm>, sqlx::Error> {
-    let vms = sqlx::query_as::<_, VmRow>(
+    let vms = sqlx::query_as!(
+        VmRow,
         r#"
 SELECT id,
         name,
         tags,
-        status,
+        status AS "status: _",
         host_id,
-        hypervisor,
+        hypervisor AS "hypervisor: _",
         boot_source_id,
-        boot_mode,
+        boot_mode AS "boot_mode: _",
         description,
         boot_vcpus,
         max_vcpus,
-        cpu_topology,
-        kvm_hyperv,
+        cpu_topology AS "cpu_topology: _",
+        kvm_hyperv AS "kvm_hyperv!",
         memory_size,
         memory_hotplug_size,
-        memory_mergeable,
-        memory_shared,
-        memory_hugepages,
+        memory_mergeable AS "memory_mergeable!",
+        memory_shared AS "memory_shared!",
+        memory_hugepages AS "memory_hugepages!",
         memory_hugepage_size,
-        memory_prefault,
-        memory_thp,
+        memory_prefault AS "memory_prefault!",
+        memory_thp AS "memory_thp!",
         image_ref,
         cloud_init_user_data,
         cloud_init_meta_data,
         cloud_init_network_config,
-        config
+        config AS "config: _"
 FROM vms
 WHERE status NOT IN ('SHUTDOWN', 'UNKNOWN', 'PENDING')
   AND host_id IS NOT NULL
-        "#,
+        "#
     )
     .fetch_all(pool)
     .await?;
@@ -1088,11 +1086,13 @@ pub async fn update_status(
     // Fetch the VM before the update so we have previous status + metadata for hooks
     let vm = get(pool, vm_id).await.ok();
 
-    sqlx::query("UPDATE vms SET status = $1 WHERE id = $2")
-        .bind(status)
-        .bind(vm_id)
-        .execute(pool)
-        .await?;
+    sqlx::query!(
+        "UPDATE vms SET status = $1 WHERE id = $2",
+        status as VmStatus,
+        vm_id
+    )
+    .execute(pool)
+    .await?;
 
     if let Some(vm) = vm {
         notify_status_change(pool, &vm, status).await;
@@ -1110,13 +1110,15 @@ pub async fn update_status_from(
     vm: &Vm,
     status: VmStatus,
 ) -> Result<bool, sqlx::Error> {
-    let updated = sqlx::query("UPDATE vms SET status = $1 WHERE id = $2 AND status = $3")
-        .bind(status)
-        .bind(vm.id)
-        .bind(vm.status)
-        .execute(pool)
-        .await?
-        .rows_affected()
+    let updated = sqlx::query!(
+        "UPDATE vms SET status = $1 WHERE id = $2 AND status = $3",
+        status as VmStatus,
+        vm.id,
+        vm.status as VmStatus
+    )
+    .execute(pool)
+    .await?
+    .rows_affected()
         == 1;
 
     if updated {
@@ -1157,10 +1159,10 @@ async fn notify_status_change(pool: &PgPool, vm: &Vm, status: VmStatus) {
 /// succeeded, `false` if the VM was in a different state (another commit or
 /// start is already in progress).
 pub async fn try_set_committing(pool: &PgPool, vm_id: Uuid) -> Result<bool, sqlx::Error> {
-    let result = sqlx::query(
+    let result = sqlx::query!(
         "UPDATE vms SET status = 'COMMITTING' WHERE id = $1 AND status IN ('CREATED', 'SHUTDOWN')",
+        vm_id
     )
-    .bind(vm_id)
     .execute(pool)
     .await?;
 
@@ -1168,8 +1170,7 @@ pub async fn try_set_committing(pool: &PgPool, vm_id: Uuid) -> Result<bool, sqlx
 }
 
 pub async fn clear_image_ref(pool: &PgPool, vm_id: Uuid) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE vms SET image_ref = NULL WHERE id = $1")
-        .bind(vm_id)
+    sqlx::query!("UPDATE vms SET image_ref = NULL WHERE id = $1", vm_id)
         .execute(pool)
         .await?;
     Ok(())
@@ -1180,9 +1181,7 @@ pub async fn update_config(
     vm_id: Uuid,
     config: &serde_json::Value,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE vms SET config = $1 WHERE id = $2")
-        .bind(Json(config))
-        .bind(vm_id)
+    sqlx::query!("UPDATE vms SET config = $1 WHERE id = $2", config, vm_id)
         .execute(pool)
         .await?;
 
@@ -1236,9 +1235,7 @@ WHERE config->>'failed_over_from' = $1
 }
 
 pub async fn update_host_id(pool: &PgPool, vm_id: Uuid, host_id: Uuid) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE vms SET host_id = $1 WHERE id = $2")
-        .bind(host_id)
-        .bind(vm_id)
+    sqlx::query!("UPDATE vms SET host_id = $1 WHERE id = $2", host_id, vm_id)
         .execute(pool)
         .await?;
 
@@ -1246,9 +1243,7 @@ pub async fn update_host_id(pool: &PgPool, vm_id: Uuid, host_id: Uuid) -> Result
 }
 
 pub async fn update_name(pool: &PgPool, vm_id: Uuid, name: &str) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE vms SET name = $1 WHERE id = $2")
-        .bind(name)
-        .bind(vm_id)
+    sqlx::query!("UPDATE vms SET name = $1 WHERE id = $2", name, vm_id)
         .execute(pool)
         .await?;
     Ok(())
@@ -1259,9 +1254,7 @@ pub async fn update_name_tx(
     vm_id: Uuid,
     name: &str,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE vms SET name = $1 WHERE id = $2")
-        .bind(name)
-        .bind(vm_id)
+    sqlx::query!("UPDATE vms SET name = $1 WHERE id = $2", name, vm_id)
         .execute(tx.as_mut())
         .await?;
     Ok(())
@@ -1277,24 +1270,22 @@ pub async fn update_resize(
 ) -> Result<(), sqlx::Error> {
     match (boot_vcpus, memory_size) {
         (Some(vcpus), Some(mem)) => {
-            sqlx::query("UPDATE vms SET boot_vcpus = $1, memory_size = $2 WHERE id = $3")
-                .bind(vcpus)
-                .bind(mem)
-                .bind(vm_id)
-                .execute(pool)
-                .await?;
+            sqlx::query!(
+                "UPDATE vms SET boot_vcpus = $1, memory_size = $2 WHERE id = $3",
+                vcpus,
+                mem,
+                vm_id
+            )
+            .execute(pool)
+            .await?;
         }
         (Some(vcpus), None) => {
-            sqlx::query("UPDATE vms SET boot_vcpus = $1 WHERE id = $2")
-                .bind(vcpus)
-                .bind(vm_id)
+            sqlx::query!("UPDATE vms SET boot_vcpus = $1 WHERE id = $2", vcpus, vm_id)
                 .execute(pool)
                 .await?;
         }
         (None, Some(mem)) => {
-            sqlx::query("UPDATE vms SET memory_size = $1 WHERE id = $2")
-                .bind(mem)
-                .bind(vm_id)
+            sqlx::query!("UPDATE vms SET memory_size = $1 WHERE id = $2", mem, vm_id)
                 .execute(pool)
                 .await?;
         }
@@ -1304,8 +1295,7 @@ pub async fn update_resize(
 }
 
 pub async fn delete(pool: &PgPool, vm_id: Uuid) -> Result<(), sqlx::Error> {
-    sqlx::query("DELETE FROM vms WHERE id = $1")
-        .bind(vm_id)
+    sqlx::query!("DELETE FROM vms WHERE id = $1", vm_id)
         .execute(pool)
         .await?;
 

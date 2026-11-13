@@ -1,0 +1,47 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nSELECT id, network_id, ip_address::text AS \"ip_address!\", vm_id, allocated_at\nFROM ip_allocations\nWHERE network_id = $1 AND ip_address = $2::text::inet\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "network_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "ip_address!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "vm_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 4,
+        "name": "allocated_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null,
+      true,
+      false
+    ]
+  },
+  "hash": "d0d062fab77f1d317aeabd5a7cff5cb3cf0753a8348a14776501c93351622c5c"
+}

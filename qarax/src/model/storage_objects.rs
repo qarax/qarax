@@ -19,7 +19,6 @@ pub struct StorageObject {
     pub parent_id: Option<Uuid>,
 }
 
-#[derive(sqlx::FromRow)]
 pub struct StorageObjectRow {
     pub id: Uuid,
     pub name: String,
@@ -115,20 +114,21 @@ WHERE ($1::text IS NULL OR name = $1)
 }
 
 pub async fn get_batch(pool: &PgPool, ids: &[Uuid]) -> Result<Vec<StorageObject>, sqlx::Error> {
-    let rows: Vec<StorageObjectRow> = sqlx::query_as::<_, StorageObjectRow>(
+    let rows: Vec<StorageObjectRow> = sqlx::query_as!(
+        StorageObjectRow,
         r#"
 SELECT id,
         name,
         storage_pool_id,
-        object_type,
+        object_type AS "object_type: _",
         size_bytes,
         config,
         parent_id
 FROM storage_objects
 WHERE id = ANY($1)
         "#,
+        ids
     )
-    .bind(ids)
     .fetch_all(pool)
     .await?;
 
@@ -161,12 +161,13 @@ pub async fn get_for_update(
     tx: &mut PgTransaction<'_>,
     object_id: Uuid,
 ) -> Result<StorageObject, sqlx::Error> {
-    let storage_object: StorageObjectRow = sqlx::query_as::<_, StorageObjectRow>(
+    let storage_object: StorageObjectRow = sqlx::query_as!(
+        StorageObjectRow,
         r#"
 SELECT id,
        name,
        storage_pool_id,
-       object_type,
+       object_type AS "object_type: _",
        size_bytes,
        config,
        parent_id
@@ -174,8 +175,8 @@ FROM storage_objects
 WHERE id = $1
 FOR UPDATE
         "#,
+        object_id
     )
-    .bind(object_id)
     .fetch_one(tx.as_mut())
     .await?;
 
@@ -337,20 +338,20 @@ async fn insert_object(
 ) -> Result<StorageObject, sqlx::Error> {
     let (id, pool_id, config) = resolve_new_object(pool, &new_object).await?;
 
-    sqlx::query(
+    sqlx::query!(
         r#"
 INSERT INTO storage_objects (id, name, storage_pool_id, object_type, size_bytes, config, parent_id, managed_host_ids)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         "#,
+        id,
+        &new_object.name,
+        pool_id,
+        &new_object.object_type as &StorageObjectType,
+        new_object.size_bytes,
+        &config,
+        new_object.parent_id,
+        managed_host_ids.as_deref(),
     )
-    .bind(id)
-    .bind(&new_object.name)
-    .bind(pool_id)
-    .bind(&new_object.object_type)
-    .bind(new_object.size_bytes)
-    .bind(&config)
-    .bind(new_object.parent_id)
-    .bind(managed_host_ids)
     .execute(pool)
     .await?;
 
@@ -384,11 +385,13 @@ pub async fn update_config(
     object_id: Uuid,
     config: &serde_json::Value,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE storage_objects SET config = $1 WHERE id = $2")
-        .bind(sqlx::types::Json(config))
-        .bind(object_id)
-        .execute(pool)
-        .await?;
+    sqlx::query!(
+        "UPDATE storage_objects SET config = $1 WHERE id = $2",
+        config,
+        object_id
+    )
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -399,11 +402,13 @@ pub async fn update_size_bytes_tx(
     object_id: Uuid,
     size_bytes: i64,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE storage_objects SET size_bytes = $1 WHERE id = $2")
-        .bind(size_bytes)
-        .bind(object_id)
-        .execute(tx.as_mut())
-        .await?;
+    sqlx::query!(
+        "UPDATE storage_objects SET size_bytes = $1 WHERE id = $2",
+        size_bytes,
+        object_id
+    )
+    .execute(tx.as_mut())
+    .await?;
     Ok(())
 }
 

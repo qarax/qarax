@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nUPDATE vm_snapshots\nSET status = $2\nWHERE id = $1\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        {
+          "Custom": {
+            "name": "snapshot_status",
+            "kind": {
+              "Enum": [
+                "CREATING",
+                "READY",
+                "FAILED"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5dd959dcc23608e37fe8a2534bdeca2aca1b80bda8e150ff45ac15861548031c"
+}

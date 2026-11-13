@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id FROM storage_pools WHERE id = $1 AND status = 'ACTIVE' AND pool_type != 'OVERLAYBD'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "0f8e060f0d7d140c13c00e7b16ac3340672220d7de276a82a15e6e65b2546f86"
+}

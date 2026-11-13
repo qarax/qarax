@@ -1,0 +1,96 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nSELECT n.id,\n       n.name,\n       n.subnet::text AS \"subnet!\",\n       n.gateway::text AS gateway,\n       n.dns::text AS dns,\n       n.vpc_name,\n       n.type AS network_type,\n       n.status AS \"status: NetworkStatus\",\n       h.id AS host_id,\n       h.address AS host_address,\n       h.port AS host_port,\n       hn.bridge_name\nFROM networks n\nJOIN host_networks hn ON hn.network_id = n.id\nJOIN hosts h ON h.id = hn.host_id\nORDER BY h.id, n.name\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "subnet!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "gateway",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "dns",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "vpc_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 6,
+        "name": "network_type",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 7,
+        "name": "status: NetworkStatus",
+        "type_info": {
+          "Custom": {
+            "name": "network_status",
+            "kind": {
+              "Enum": [
+                "ACTIVE",
+                "INACTIVE"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "host_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 9,
+        "name": "host_address",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 10,
+        "name": "host_port",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 11,
+        "name": "bridge_name",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      null,
+      null,
+      null,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "5139529e2c90b11d943ed017fc4d1ef18f3c2b91861751b14b5d01f216d95db6"
+}

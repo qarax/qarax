@@ -1,0 +1,124 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nSELECT id,\n       name,\n       description,\n       architecture,\n       boot_vcpus,\n       max_vcpus,\n       cpu_topology AS \"cpu_topology: _\",\n       kvm_hyperv,\n       memory_size,\n       memory_hotplug_size,\n       memory_mergeable,\n       memory_shared,\n       memory_hugepages,\n       memory_hugepage_size,\n       memory_prefault,\n       memory_thp,\n       accelerator_config AS \"accelerator_config: _\",\n       numa_config AS \"numa_config: _\"\nFROM instance_types\nWHERE id = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "description",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "architecture",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "boot_vcpus",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "max_vcpus",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "cpu_topology: _",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 7,
+        "name": "kvm_hyperv",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 8,
+        "name": "memory_size",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 9,
+        "name": "memory_hotplug_size",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 10,
+        "name": "memory_mergeable",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 11,
+        "name": "memory_shared",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 12,
+        "name": "memory_hugepages",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 13,
+        "name": "memory_hugepage_size",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 14,
+        "name": "memory_prefault",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 15,
+        "name": "memory_thp",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 16,
+        "name": "accelerator_config: _",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 17,
+        "name": "numa_config: _",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "5e3b660de160c5b9400ad57215688aa17435202af42ae83d50faef5e8bfca169"
+}

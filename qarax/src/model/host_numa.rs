@@ -3,7 +3,7 @@ use sqlx::{PgPool, Postgres, QueryBuilder};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-#[derive(Serialize, Deserialize, Debug, Clone, ToSchema, sqlx::FromRow)]
+#[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
 pub struct HostNumaNode {
     pub id: Uuid,
     pub host_id: Uuid,
@@ -25,15 +25,16 @@ pub struct NumaNodeDiscovery {
 
 /// List all NUMA nodes for a host.
 pub async fn list_by_host(pool: &PgPool, host_id: Uuid) -> Result<Vec<HostNumaNode>, sqlx::Error> {
-    sqlx::query_as::<_, HostNumaNode>(
+    sqlx::query_as!(
+        HostNumaNode,
         r#"
 SELECT id, host_id, node_id, cpu_list, memory_bytes, distances, updated_at
 FROM host_numa_nodes
 WHERE host_id = $1
 ORDER BY node_id
         "#,
+        host_id
     )
-    .bind(host_id)
     .fetch_all(pool)
     .await
 }
@@ -70,17 +71,18 @@ pub async fn sync_numa_nodes(
 
     // Remove nodes that are no longer reported by the host
     if nodes.is_empty() {
-        sqlx::query("DELETE FROM host_numa_nodes WHERE host_id = $1")
-            .bind(host_id)
+        sqlx::query!("DELETE FROM host_numa_nodes WHERE host_id = $1", host_id)
             .execute(tx.as_mut())
             .await?;
     } else {
         let node_ids: Vec<i32> = nodes.iter().map(|n| n.node_id).collect();
-        sqlx::query("DELETE FROM host_numa_nodes WHERE host_id = $1 AND node_id != ALL($2)")
-            .bind(host_id)
-            .bind(&node_ids)
-            .execute(tx.as_mut())
-            .await?;
+        sqlx::query!(
+            "DELETE FROM host_numa_nodes WHERE host_id = $1 AND node_id != ALL($2)",
+            host_id,
+            &node_ids
+        )
+        .execute(tx.as_mut())
+        .await?;
     }
 
     tx.commit().await?;

@@ -1,0 +1,124 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nINSERT INTO backups (id, name, backup_type, status, vm_id, snapshot_id, storage_object_id)\nVALUES ($1, $2, $3, $4, $5, $6, $7)\nRETURNING id,\n          name,\n          backup_type AS \"backup_type: _\",\n          status AS \"status: _\",\n          vm_id,\n          snapshot_id,\n          storage_object_id,\n          error_message,\n          created_at,\n          updated_at\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "backup_type: _",
+        "type_info": {
+          "Custom": {
+            "name": "backup_type",
+            "kind": {
+              "Enum": [
+                "VM",
+                "DATABASE"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "status: _",
+        "type_info": {
+          "Custom": {
+            "name": "backup_status",
+            "kind": {
+              "Enum": [
+                "CREATING",
+                "READY",
+                "FAILED"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "vm_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 5,
+        "name": "snapshot_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 6,
+        "name": "storage_object_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 7,
+        "name": "error_message",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 9,
+        "name": "updated_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        {
+          "Custom": {
+            "name": "backup_type",
+            "kind": {
+              "Enum": [
+                "VM",
+                "DATABASE"
+              ]
+            }
+          }
+        },
+        {
+          "Custom": {
+            "name": "backup_status",
+            "kind": {
+              "Enum": [
+                "CREATING",
+                "READY",
+                "FAILED"
+              ]
+            }
+          }
+        },
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "623cea81d7f3487100d9c81ee615772cce7eb2b9bd88d12e96cfe0ee3b327d26"
+}

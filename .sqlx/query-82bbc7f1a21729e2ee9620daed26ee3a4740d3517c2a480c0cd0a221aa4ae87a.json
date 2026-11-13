@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nSELECT id, name, description\nFROM security_groups\nWHERE id = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "description",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "82bbc7f1a21729e2ee9620daed26ee3a4740d3517c2a480c0cd0a221aa4ae87a"
+}

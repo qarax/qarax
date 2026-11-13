@@ -1,0 +1,31 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nINSERT INTO networks (id, name, subnet, gateway, dns, vpc_name, type, status)\nVALUES ($1, $2, $3::text::cidr, $4::text::inet, $5::text::inet, $6, $7, $8)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Varchar",
+        "Text",
+        "Text",
+        "Text",
+        "Varchar",
+        "Varchar",
+        {
+          "Custom": {
+            "name": "network_status",
+            "kind": {
+              "Enum": [
+                "ACTIVE",
+                "INACTIVE"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a51656c3fa6ae7b2edf95728318d55b855f19edfa43568d256980fe714f46182"
+}

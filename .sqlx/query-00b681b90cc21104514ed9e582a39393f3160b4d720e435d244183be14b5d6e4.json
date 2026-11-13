@@ -1,0 +1,48 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE vms SET status = $1 WHERE id = $2 AND status = $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        {
+          "Custom": {
+            "name": "vm_status",
+            "kind": {
+              "Enum": [
+                "UNKNOWN",
+                "CREATED",
+                "RUNNING",
+                "PAUSED",
+                "SHUTDOWN",
+                "PENDING",
+                "MIGRATING",
+                "COMMITTING"
+              ]
+            }
+          }
+        },
+        "Uuid",
+        {
+          "Custom": {
+            "name": "vm_status",
+            "kind": {
+              "Enum": [
+                "UNKNOWN",
+                "CREATED",
+                "RUNNING",
+                "PAUSED",
+                "SHUTDOWN",
+                "PENDING",
+                "MIGRATING",
+                "COMMITTING"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "00b681b90cc21104514ed9e582a39393f3160b4d720e435d244183be14b5d6e4"
+}

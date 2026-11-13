@@ -4434,11 +4434,11 @@ async fn run_vm_commit_copy_and_swap(
     let _ = jobs::update_progress(db_pool, job_id, 80).await;
 
     // Step 3: Swap vm_disk to the new storage object
-    sqlx::query(
+    sqlx::query!(
         "UPDATE vm_disks SET storage_object_id = $1, upper_storage_object_id = NULL WHERE id = $2",
+        disk_so_id,
+        oci_disk.disk_id
     )
-    .bind(disk_so_id)
-    .bind(oci_disk.disk_id)
     .execute(storage_tx.as_mut())
     .await
     .context("Failed to update vm_disk storage object")?;
