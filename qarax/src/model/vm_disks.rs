@@ -357,14 +357,6 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $
     .bind(disk.upper_storage_object_id)
 }
 
-pub async fn delete_by_vm(pool: &PgPool, vm_id: Uuid) -> Result<(), sqlx::Error> {
-    sqlx::query("DELETE FROM vm_disks WHERE vm_id = $1")
-        .bind(vm_id)
-        .execute(pool)
-        .await?;
-    Ok(())
-}
-
 pub async fn delete(pool: &PgPool, disk_id: Uuid) -> Result<(), sqlx::Error> {
     sqlx::query("DELETE FROM vm_disks WHERE id = $1")
         .bind(disk_id)

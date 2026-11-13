@@ -392,19 +392,6 @@ pub async fn update_config(
     Ok(())
 }
 
-pub async fn update_size_bytes(
-    pool: &PgPool,
-    object_id: Uuid,
-    size_bytes: i64,
-) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE storage_objects SET size_bytes = $1 WHERE id = $2")
-        .bind(size_bytes)
-        .bind(object_id)
-        .execute(pool)
-        .await?;
-    Ok(())
-}
-
 /// Reserve the new logical size until the node operation succeeds. Rolling
 /// back the transaction also releases the reservation.
 pub async fn update_size_bytes_tx(

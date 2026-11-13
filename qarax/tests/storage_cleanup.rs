@@ -1,122 +1,16 @@
-use tokio::net::TcpListener;
+mod support;
 
-use common::telemtry::{get_subscriber, init_subscriber};
-use once_cell::sync::Lazy;
-use qarax::{
-    configuration::{DatabaseSettings, default_control_plane_architecture, get_configuration},
-    model::{
-        storage_objects::{self, NewStorageObject, StorageObjectType},
-        storage_pools::{self, NewStoragePool, StoragePoolType},
-        transfers::{self, NewTransfer, TransferType},
-    },
-    startup::run,
+use qarax::model::{
+    storage_objects::{self, NewStorageObject, StorageObjectType},
+    storage_pools::{self, NewStoragePool, StoragePoolType},
+    transfers::{self, NewTransfer, TransferType},
 };
 use reqwest::StatusCode;
 use serde_json::json;
-use sqlx::{Connection, Executor, PgConnection, PgPool};
-use tokio::runtime::Runtime;
+use sqlx::PgPool;
+use support::spawn_app;
+use tokio::net::TcpListener;
 use uuid::Uuid;
-
-struct TestApp {
-    db_name: String,
-    address: String,
-    pool: PgPool,
-}
-
-static TRACING: Lazy<()> = Lazy::new(|| {
-    let default_filter_level = "info".to_string();
-    let subscriber_name = "test".to_string();
-    if std::env::var("TEST_LOG").is_ok() {
-        let subscriber = get_subscriber(subscriber_name, default_filter_level, std::io::stdout);
-        init_subscriber(subscriber);
-    } else {
-        let subscriber = get_subscriber(subscriber_name, default_filter_level, std::io::sink);
-        init_subscriber(subscriber);
-    }
-});
-
-async fn configure_database(config: &DatabaseSettings) -> PgPool {
-    let mut connection = PgConnection::connect(&config.connection_string_without_db())
-        .await
-        .expect("Failed to connect to Postgres");
-    connection
-        .execute(format!(r#"CREATE DATABASE "{}";"#, config.name).as_str())
-        .await
-        .expect("Failed to create database.");
-
-    let connection_pool = PgPool::connect(&config.connection_string())
-        .await
-        .expect("Failed to connect to Postgres.");
-    sqlx::migrate!("../migrations")
-        .run(&connection_pool)
-        .await
-        .expect("Failed to migrate the database");
-    connection_pool
-}
-
-async fn spawn_app() -> TestApp {
-    Lazy::force(&TRACING);
-
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("Failed to bind random port");
-    let port = listener.local_addr().unwrap().port();
-    let address = format!("http://127.0.0.1:{}", port);
-
-    let mut configuration = get_configuration().expect("Failed to read configuration.");
-    configuration.database.name = Uuid::new_v4().to_string();
-    let connection_pool = configure_database(&configuration.database).await;
-
-    let server = run(
-        listener,
-        connection_pool.clone(),
-        configuration.database.clone(),
-        configuration.vm_defaults.clone(),
-        configuration.scheduling.clone(),
-        configuration.sandbox.clone(),
-        configuration.auth.clone(),
-        configuration.ha.clone(),
-        default_control_plane_architecture(),
-    )
-    .await
-    .unwrap();
-
-    std::thread::spawn(move || {
-        let rt = Runtime::new().unwrap();
-        let _ = rt.block_on(async move { server.await });
-    });
-
-    TestApp {
-        db_name: configuration.database.name,
-        address,
-        pool: connection_pool,
-    }
-}
-
-impl Drop for TestApp {
-    fn drop(&mut self) {
-        let (tx, rx) = std::sync::mpsc::channel();
-        let db_name = self.db_name.clone();
-
-        std::thread::spawn(move || {
-            let rt = Runtime::new().unwrap();
-            rt.block_on(async {
-                let config = get_configuration().expect("Failed to read configuration");
-                let mut conn = PgConnection::connect_with(&config.database.without_db())
-                    .await
-                    .expect("Failed to connect to Postgres");
-
-                conn.execute(&*format!("DROP DATABASE \"{}\" WITH (FORCE)", db_name))
-                    .await
-                    .expect("Failed to drop database.");
-
-                let _ = tx.send(());
-            })
-        });
-
-        let _ = rx.recv();
-    }
-}
 
 async fn create_test_pool(pool: &PgPool) -> Uuid {
     storage_pools::create(
@@ -255,9 +149,12 @@ async fn deleting_attached_persistent_upper_preserves_the_reference() {
         .await
         .unwrap();
 
-    qarax::model::vm_disks::delete_by_vm(&app.pool, vm_id)
+    let response = client
+        .delete(format!("{}/vms/{vm_id}/disks/rootfs", app.address))
+        .send()
         .await
         .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
     let response = client.delete(url).send().await.unwrap();
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
 }
@@ -404,9 +301,12 @@ async fn managed_disk_cleanup_retries_without_losing_allocation_or_deleting_regi
         StatusCode::CONFLICT
     );
     assert_eq!(node.calls.load(Ordering::SeqCst), 0);
-    qarax::model::vm_disks::delete_by_vm(&app.pool, vm_id)
+    let response = client
+        .delete(format!("{}/vms/{vm_id}/disks/rootfs", app.address))
+        .send()
         .await
         .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
 
     assert_eq!(
         client.delete(&url).send().await.unwrap().status(),
