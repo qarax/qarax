@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE sandboxes SET status = 'READY' WHERE id = $1 AND status = 'PROVISIONING'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "fe3b8fee58bbb22fc4d8b92ab1054c8ed9fd2f28476306647adea31c448077ca"
+}

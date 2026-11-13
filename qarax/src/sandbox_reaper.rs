@@ -3,10 +3,7 @@ use tokio::time::{Duration, interval};
 use tracing::{info, warn};
 
 use crate::sandbox_runtime::destroy_vm;
-use crate::{
-    App,
-    model::{sandboxes, sandboxes::SandboxStatus},
-};
+use crate::{App, model::sandboxes};
 
 pub async fn start_sandbox_reaper(env: App) {
     let mut ticker = interval(Duration::from_secs(env.sandbox().reaper_interval_secs));
@@ -33,16 +30,18 @@ pub async fn start_sandbox_reaper(env: App) {
                 "Reaping idle sandbox"
             );
 
-            if let Err(e) =
-                sandboxes::update_status(env.pool(), sandbox.id, SandboxStatus::Destroying, None)
-                    .await
-            {
-                warn!(
-                    sandbox_id = %sandbox.id,
-                    error = %e,
-                    "Sandbox reaper: failed to update status to DESTROYING"
-                );
-                continue;
+            match sandboxes::mark_destroying(env.pool(), sandbox.id).await {
+                Ok(true) => {}
+                // A delete request got there first and destroys it.
+                Ok(false) => continue,
+                Err(e) => {
+                    warn!(
+                        sandbox_id = %sandbox.id,
+                        error = %e,
+                        "Sandbox reaper: failed to update status to DESTROYING"
+                    );
+                    continue;
+                }
             }
 
             destroy_vm(env.pool(), sandbox.vm_id).await;

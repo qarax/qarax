@@ -315,21 +315,52 @@ ORDER BY created_at DESC
     .await
 }
 
-pub async fn update_status(
-    pool: &PgPool,
-    sandbox_id: Uuid,
-    status: SandboxStatus,
-    error_message: Option<String>,
-) -> Result<(), sqlx::Error> {
-    sqlx::query!(
-        r#"UPDATE sandboxes SET status = $1, error_message = $2 WHERE id = $3"#,
-        status as SandboxStatus,
-        error_message,
+// A sandbox moves PROVISIONING -> READY | ERROR, and from any status to
+// DESTROYING. `error_message` says why it failed: set with ERROR and kept
+// while the sandbox is destroyed. Each write below moves it only from the
+// statuses that may precede its own and returns whether it did.
+
+/// PROVISIONING -> READY.
+pub async fn mark_ready(pool: &PgPool, sandbox_id: Uuid) -> Result<bool, sqlx::Error> {
+    let updated = sqlx::query!(
+        "UPDATE sandboxes SET status = 'READY' WHERE id = $1 AND status = 'PROVISIONING'",
         sandbox_id
     )
     .execute(pool)
-    .await?;
-    Ok(())
+    .await?
+    .rows_affected();
+    Ok(updated == 1)
+}
+
+/// PROVISIONING -> ERROR.
+pub async fn mark_error(
+    pool: &PgPool,
+    sandbox_id: Uuid,
+    error_message: &str,
+) -> Result<bool, sqlx::Error> {
+    let updated = sqlx::query!(
+        "UPDATE sandboxes SET status = 'ERROR', error_message = $2 \
+         WHERE id = $1 AND status = 'PROVISIONING'",
+        sandbox_id,
+        error_message
+    )
+    .execute(pool)
+    .await?
+    .rows_affected();
+    Ok(updated == 1)
+}
+
+/// Any status but DESTROYING -> DESTROYING. `false` means someone else is
+/// already destroying it.
+pub async fn mark_destroying(pool: &PgPool, sandbox_id: Uuid) -> Result<bool, sqlx::Error> {
+    let updated = sqlx::query!(
+        "UPDATE sandboxes SET status = 'DESTROYING' WHERE id = $1 AND status <> 'DESTROYING'",
+        sandbox_id
+    )
+    .execute(pool)
+    .await?
+    .rows_affected();
+    Ok(updated == 1)
 }
 
 pub async fn touch_activity(pool: &PgPool, sandbox_id: Uuid) -> Result<u64, sqlx::Error> {

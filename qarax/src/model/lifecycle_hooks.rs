@@ -443,6 +443,10 @@ pub async fn reset_processing_to_pending(pool: &PgPool) -> Result<u64, sqlx::Err
     Ok(result.rows_affected())
 }
 
+// An execution moves PENDING -> PROCESSING (claimed by the executor) ->
+// DELIVERED | FAILED, or back to PENDING for a retry. The writes below each
+// finish a claimed execution, so they move it only out of PROCESSING.
+
 pub async fn mark_delivered(
     pool: &PgPool,
     execution_id: Uuid,
@@ -457,7 +461,7 @@ SET status          = 'DELIVERED',
     response_status = $2,
     response_body   = $3,
     delivered_at    = NOW()
-WHERE id = $1
+WHERE id = $1 AND status = 'PROCESSING'
         "#,
         execution_id,
         response_status,
@@ -482,7 +486,7 @@ SET status        = 'PENDING',
     attempt_count = attempt_count + 1,
     last_error    = $2,
     next_retry_at = $3
-WHERE id = $1
+WHERE id = $1 AND status = 'PROCESSING'
         "#,
         execution_id,
         error,
@@ -505,7 +509,7 @@ UPDATE hook_executions
 SET status     = 'FAILED',
     last_error = $2,
     attempt_count = attempt_count + 1
-WHERE id = $1
+WHERE id = $1 AND status = 'PROCESSING'
         "#,
         execution_id,
         error

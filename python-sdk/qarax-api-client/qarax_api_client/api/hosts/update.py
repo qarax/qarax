@@ -40,6 +40,12 @@ def _parse_response(*, client: AuthenticatedClient | Client, response: httpx.Res
     if response.status_code == 404:
         return None
 
+    if response.status_code == 409:
+        return None
+
+    if response.status_code == 422:
+        return None
+
     if response.status_code == 500:
         return None
 

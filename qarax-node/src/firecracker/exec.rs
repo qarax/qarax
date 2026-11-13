@@ -142,7 +142,7 @@ impl FirecrackerManager {
                 .ok_or_else(|| VmmError::VmNotFound(vm_id.to_string()))?;
 
             (
-                instance.status,
+                instance.status(),
                 Self::vsock_socket_path_from_config(&instance.proto_config.vsock),
             )
         };

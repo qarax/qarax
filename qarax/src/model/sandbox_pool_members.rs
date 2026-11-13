@@ -141,27 +141,56 @@ WHERE sandbox_pool_id = $1
     Ok(row)
 }
 
-pub async fn update_status(
+// A member moves PROVISIONING -> READY | ERROR, then to DESTROYING (or is
+// claimed: its row is deleted and its VM handed to a sandbox).
+// `error_message` says why it failed: set with ERROR and kept while the
+// member is destroyed. Each write below moves it only from the statuses that
+// may precede its own and returns whether it did.
+
+/// PROVISIONING -> READY.
+pub async fn mark_ready(pool: &PgPool, member_id: Uuid) -> Result<bool, sqlx::Error> {
+    let updated = sqlx::query!(
+        "UPDATE sandbox_pool_members SET status = 'READY', updated_at = NOW() \
+         WHERE id = $1 AND status = 'PROVISIONING'",
+        member_id
+    )
+    .execute(pool)
+    .await?
+    .rows_affected();
+    Ok(updated == 1)
+}
+
+/// PROVISIONING -> ERROR.
+pub async fn mark_error(
     pool: &PgPool,
     member_id: Uuid,
-    status: SandboxPoolMemberStatus,
-    error_message: Option<String>,
-) -> Result<(), sqlx::Error> {
-    sqlx::query!(
-        r#"
-UPDATE sandbox_pool_members
-SET status = $2,
-    error_message = $3,
-    updated_at = NOW()
-WHERE id = $1
-        "#,
+    error_message: &str,
+) -> Result<bool, sqlx::Error> {
+    let updated = sqlx::query!(
+        "UPDATE sandbox_pool_members SET status = 'ERROR', error_message = $2, updated_at = NOW() \
+         WHERE id = $1 AND status = 'PROVISIONING'",
         member_id,
-        status as SandboxPoolMemberStatus,
         error_message
     )
     .execute(pool)
-    .await?;
-    Ok(())
+    .await?
+    .rows_affected();
+    Ok(updated == 1)
+}
+
+/// Any status but DESTROYING -> DESTROYING. `false` means the member is gone
+/// (claimed by a sandbox) or someone else is already destroying it: either
+/// way its VM is not this caller's to destroy.
+pub async fn mark_destroying(pool: &PgPool, member_id: Uuid) -> Result<bool, sqlx::Error> {
+    let updated = sqlx::query!(
+        "UPDATE sandbox_pool_members SET status = 'DESTROYING', updated_at = NOW() \
+         WHERE id = $1 AND status <> 'DESTROYING'",
+        member_id
+    )
+    .execute(pool)
+    .await?
+    .rows_affected();
+    Ok(updated == 1)
 }
 
 pub async fn delete(pool: &PgPool, member_id: Uuid) -> Result<(), sqlx::Error> {

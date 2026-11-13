@@ -103,6 +103,102 @@ async fn test_deploy_resolves_file_credential_without_exposing_it() {
     assert_eq!(response.status(), StatusCode::ACCEPTED);
 }
 
+/// Operators set up, down or maintenance. The other statuses record what
+/// qarax did to the host, and a host is out of reach while a deploy runs.
+#[tokio::test]
+async fn test_update_host_status_is_limited_to_operator_statuses() {
+    let app = spawn_app().await;
+    let client = reqwest::Client::new();
+    let host_id = add_host(&client, &app.address, "operator-status-host").await;
+    let set_status = |status: &str| {
+        client
+            .patch(format!("{}/hosts/{host_id}", app.address))
+            .json(&json!({ "status": status }))
+            .send()
+    };
+
+    for status in [
+        "installing",
+        "installation_failed",
+        "initializing",
+        "unknown",
+    ] {
+        let response = set_status(status).await.unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{status}"
+        );
+    }
+    assert_eq!(
+        set_status("maintenance").await.unwrap().status(),
+        StatusCode::OK
+    );
+
+    sqlx::query("UPDATE hosts SET status = 'INSTALLING' WHERE id = $1")
+        .bind(host_id)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        set_status("up").await.unwrap().status(),
+        StatusCode::CONFLICT
+    );
+}
+
+/// A deploy that fails leaves the host INSTALLATION_FAILED and says why,
+/// without the SSH password it was given.
+#[tokio::test]
+async fn test_failed_deploy_records_why() {
+    let app = spawn_app().await;
+    let client = reqwest::Client::new();
+    let host_id = add_host(&client, &app.address, "failed-deploy-host").await;
+    let password = "not-a-real-password";
+
+    // Port 1 is closed, so the SSH connection fails right away.
+    let response = client
+        .post(format!("{}/hosts/{host_id}/deploy", &app.address))
+        .json(&json!({
+            "image": "example.invalid/qarax:test",
+            "ssh_port": 1,
+            "ssh_password": password,
+            "reboot": false,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let host = loop {
+        let hosts: Vec<serde_json::Value> = client
+            .get(format!("{}/hosts", &app.address))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let host = hosts
+            .into_iter()
+            .find(|h| h["id"] == host_id.to_string())
+            .unwrap();
+        if host["status"] != "installing" {
+            break host;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "deploy did not finish"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    };
+
+    assert_eq!(host["status"], "installation_failed");
+    let error = host["installation_error"].as_str().unwrap();
+    assert!(!error.is_empty());
+    assert!(!error.contains(password), "{error}");
+}
+
 #[tokio::test]
 async fn test_add_host_rejects_legacy_password_field() {
     let app = spawn_app().await;

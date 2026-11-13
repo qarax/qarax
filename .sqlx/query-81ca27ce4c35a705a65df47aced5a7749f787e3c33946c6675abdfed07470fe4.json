@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nUPDATE hook_executions\nSET status          = 'DELIVERED',\n    attempt_count   = attempt_count + 1,\n    response_status = $2,\n    response_body   = $3,\n    delivered_at    = NOW()\nWHERE id = $1 AND status = 'PROCESSING'\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "81ca27ce4c35a705a65df47aced5a7749f787e3c33946c6675abdfed07470fe4"
+}

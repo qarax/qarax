@@ -353,6 +353,88 @@ pub enum VmStatus {
     Committing,
 }
 
+/// The operations that move a VM out of its current status: the statuses
+/// each one may start from, and the status it moves the VM to.
+///
+/// `Pending`, `Migrating` and `Committing` belong to the job that set them,
+/// and only that job moves the VM out again (with [`transition`] from that
+/// status). The one exception is a force-stop, the way out for a VM whose job
+/// died with the control plane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VmOp {
+    Start,
+    Stop,
+    ForceStop,
+    Pause,
+    Resume,
+    Restore,
+    Migrate,
+    Commit,
+    Failover,
+}
+
+impl VmOp {
+    pub fn allowed_from(self) -> &'static [VmStatus] {
+        use VmStatus::*;
+        match self {
+            VmOp::Start | VmOp::Restore => &[Created, Shutdown, Unknown],
+            VmOp::Stop | VmOp::Pause | VmOp::Resume => {
+                &[Unknown, Created, Running, Paused, Shutdown]
+            }
+            VmOp::ForceStop => &[
+                Unknown, Pending, Created, Running, Paused, Shutdown, Migrating, Committing,
+            ],
+            VmOp::Migrate => &[Running, Paused],
+            VmOp::Commit => &[Created, Shutdown],
+            VmOp::Failover => &[Running, Paused, Unknown],
+        }
+    }
+
+    /// The status the VM takes: for a job (start, restore, migrate, commit)
+    /// the one it holds while the job runs, otherwise the final one.
+    pub fn target(self) -> VmStatus {
+        match self {
+            VmOp::Start | VmOp::Restore => VmStatus::Pending,
+            VmOp::Stop | VmOp::ForceStop => VmStatus::Shutdown,
+            VmOp::Pause => VmStatus::Paused,
+            VmOp::Resume => VmStatus::Running,
+            VmOp::Migrate => VmStatus::Migrating,
+            VmOp::Commit => VmStatus::Committing,
+            VmOp::Failover => VmStatus::Created,
+        }
+    }
+
+    pub fn allows(self, status: VmStatus) -> bool {
+        self.allowed_from().contains(&status)
+    }
+
+    /// Reject a VM in a status this operation can't start from, with a 422
+    /// saying why.
+    pub fn check(self, status: VmStatus) -> Result<(), Error> {
+        if self.allows(status) {
+            return Ok(());
+        }
+        let reason = match (self, status) {
+            (_, VmStatus::Pending) => {
+                "VM is pending job completion; wait for the job to finish".to_string()
+            }
+            (_, VmStatus::Migrating) => "VM is being migrated; wait for migration to finish".into(),
+            (_, VmStatus::Committing) => "VM is being committed; wait for commit to finish".into(),
+            (VmOp::Start, VmStatus::Paused) => {
+                "VM is paused; use POST /vms/{vm_id}/resume instead".into()
+            }
+            (VmOp::Start, _) => "VM is already running".into(),
+            (VmOp::Restore, _) => "VM must be stopped before restoring".into(),
+            (VmOp::Migrate, _) => {
+                format!("VM must be running or paused to migrate (current status: {status})")
+            }
+            (VmOp::Commit, _) => "VM must be stopped (Created or Shutdown) to commit".into(),
+            (op, _) => format!("{op:?} is not allowed for a VM in status {status}"),
+        };
+        Err(Error::UnprocessableEntity(reason))
+    }
+}
+
 /// Network interface config for create-VM request. Passed to qarax-node; id is required.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, ToSchema)]
 pub struct NewVmNetwork {
@@ -1037,6 +1119,8 @@ VALUES (
     Ok(id)
 }
 
+/// VMs the VM monitor reconciles against their node. VMs held by a job
+/// (`Pending`, `Migrating`, `Committing`) are left to that job.
 pub async fn list_active(pool: &PgPool) -> Result<Vec<Vm>, sqlx::Error> {
     let vms = sqlx::query_as!(
         VmRow,
@@ -1068,7 +1152,7 @@ SELECT id,
         cloud_init_network_config,
         config AS "config: _"
 FROM vms
-WHERE status NOT IN ('SHUTDOWN', 'UNKNOWN', 'PENDING')
+WHERE status NOT IN ('SHUTDOWN', 'UNKNOWN', 'PENDING', 'MIGRATING', 'COMMITTING')
   AND host_id IS NOT NULL
         "#
     )
@@ -1078,65 +1162,84 @@ WHERE status NOT IN ('SHUTDOWN', 'UNKNOWN', 'PENDING')
     Ok(vms.into_iter().map(|vm| vm.into()).collect())
 }
 
-pub async fn update_status(
+/// Start `op` on a VM: move it to `op.target()` if its current status is one
+/// `op` may start from, and return the status it left. A VM in any other
+/// status gets `op`'s 422, also when another writer changed it after the
+/// caller's own read.
+pub async fn apply(pool: &PgPool, vm_id: Uuid, op: VmOp) -> Result<VmStatus, Error> {
+    if let Some(previous) = transition(pool, vm_id, op.allowed_from(), op.target()).await? {
+        return Ok(previous);
+    }
+    let current = get(pool, vm_id).await?.status;
+    op.check(current)?;
+    // The status left `op`'s set and came back between the update and the read.
+    Err(Error::Conflict(format!(
+        "VM status changed while starting {op:?}; retry"
+    )))
+}
+
+/// Move a VM to `to` if its status is one of `from`, and return the status it
+/// left, or `None` (nothing written) when it is in none of them. Every VM
+/// status write goes through here, so a writer acting on an earlier read, or a
+/// job finishing after someone else took the VM over, can't overwrite a newer
+/// status.
+pub async fn transition(
     pool: &PgPool,
     vm_id: Uuid,
-    status: VmStatus,
-) -> Result<(), sqlx::Error> {
-    // Fetch the VM before the update so we have previous status + metadata for hooks
-    let vm = get(pool, vm_id).await.ok();
-
-    sqlx::query!(
-        "UPDATE vms SET status = $1 WHERE id = $2",
-        status as VmStatus,
-        vm_id
-    )
-    .execute(pool)
-    .await?;
-
-    if let Some(vm) = vm {
-        notify_status_change(pool, &vm, status).await;
+    from: &[VmStatus],
+    to: VmStatus,
+) -> Result<Option<VmStatus>, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let previous = transition_tx(&mut tx, vm_id, from, to).await?;
+    tx.commit().await?;
+    if let Some(previous) = previous {
+        announce_transition(pool, vm_id, previous, to).await;
     }
-
-    Ok(())
+    Ok(previous)
 }
 
-/// Set a VM's status only if it still has the status `vm` was read with, and
-/// return whether it did. For writers that act on an earlier read, like the VM
-/// monitor: a status another writer set since that read wins instead of being
-/// overwritten with stale data.
-pub async fn update_status_from(
-    pool: &PgPool,
-    vm: &Vm,
-    status: VmStatus,
-) -> Result<bool, sqlx::Error> {
-    let updated = sqlx::query!(
-        "UPDATE vms SET status = $1 WHERE id = $2 AND status = $3",
-        status as VmStatus,
-        vm.id,
-        vm.status as VmStatus
+/// [`transition`] inside the caller's transaction. It doesn't announce the
+/// change: call [`announce_transition`] after the transaction commits.
+pub async fn transition_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    vm_id: Uuid,
+    from: &[VmStatus],
+    to: VmStatus,
+) -> Result<Option<VmStatus>, sqlx::Error> {
+    sqlx::query_scalar!(
+        r#"
+WITH previous AS (
+    SELECT id, status FROM vms WHERE id = $1 AND status = ANY($2) FOR UPDATE
+)
+UPDATE vms SET status = $3
+FROM previous
+WHERE vms.id = previous.id
+RETURNING previous.status AS "status: VmStatus"
+        "#,
+        vm_id,
+        from as &[VmStatus],
+        to as VmStatus
     )
-    .execute(pool)
-    .await?
-    .rows_affected()
-        == 1;
-
-    if updated {
-        notify_status_change(pool, vm, status).await;
-    }
-
-    Ok(updated)
+    .fetch_optional(tx.as_mut())
+    .await
 }
 
-/// Emit the SSE event and enqueue lifecycle hooks for a status change.
-/// Best-effort: a failure here doesn't fail the status update.
-async fn notify_status_change(pool: &PgPool, vm: &Vm, status: VmStatus) {
-    if vm.status == status {
+/// Emit the SSE event and enqueue lifecycle hooks for a committed status
+/// change. Best-effort: a failure here doesn't undo the change.
+pub async fn announce_transition(pool: &PgPool, vm_id: Uuid, previous: VmStatus, to: VmStatus) {
+    if previous == to {
         return;
     }
+    let vm = match get(pool, vm_id).await {
+        Ok(vm) => vm,
+        Err(e) => {
+            tracing::warn!("failed to load VM {vm_id} to announce its status change: {e}");
+            return;
+        }
+    };
 
-    let new_status_str = status.to_string();
-    let prev_status_str = vm.status.to_string();
+    let new_status_str = to.to_string();
+    let prev_status_str = previous.to_string();
 
     super::events::emit(
         vm.id,
@@ -1148,25 +1251,10 @@ async fn notify_status_change(pool: &PgPool, vm: &Vm, status: VmStatus) {
     );
 
     if let Err(e) =
-        super::lifecycle_hooks::enqueue_matching(pool, vm, &prev_status_str, &new_status_str).await
+        super::lifecycle_hooks::enqueue_matching(pool, &vm, &prev_status_str, &new_status_str).await
     {
         tracing::warn!("failed to enqueue lifecycle hooks for VM {}: {}", vm.id, e);
     }
-}
-
-/// Atomically set a VM's status to Committing if it is currently in a
-/// committable state (Created or Shutdown). Returns `true` if the transition
-/// succeeded, `false` if the VM was in a different state (another commit or
-/// start is already in progress).
-pub async fn try_set_committing(pool: &PgPool, vm_id: Uuid) -> Result<bool, sqlx::Error> {
-    let result = sqlx::query!(
-        "UPDATE vms SET status = 'COMMITTING' WHERE id = $1 AND status IN ('CREATED', 'SHUTDOWN')",
-        vm_id
-    )
-    .execute(pool)
-    .await?;
-
-    Ok(result.rows_affected() > 0)
 }
 
 pub async fn clear_image_ref(pool: &PgPool, vm_id: Uuid) -> Result<(), sqlx::Error> {
@@ -1176,13 +1264,13 @@ pub async fn clear_image_ref(pool: &PgPool, vm_id: Uuid) -> Result<(), sqlx::Err
     Ok(())
 }
 
-pub async fn update_config(
-    pool: &PgPool,
+pub async fn update_config<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
     vm_id: Uuid,
     config: &serde_json::Value,
 ) -> Result<(), sqlx::Error> {
     sqlx::query!("UPDATE vms SET config = $1 WHERE id = $2", config, vm_id)
-        .execute(pool)
+        .execute(executor)
         .await?;
 
     Ok(())
@@ -1234,9 +1322,13 @@ WHERE config->>'failed_over_from' = $1
     Ok(vms.into_iter().map(Into::into).collect())
 }
 
-pub async fn update_host_id(pool: &PgPool, vm_id: Uuid, host_id: Uuid) -> Result<(), sqlx::Error> {
+pub async fn update_host_id<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
+    vm_id: Uuid,
+    host_id: Uuid,
+) -> Result<(), sqlx::Error> {
     sqlx::query!("UPDATE vms SET host_id = $1 WHERE id = $2", host_id, vm_id)
-        .execute(pool)
+        .execute(executor)
         .await?;
 
     Ok(())

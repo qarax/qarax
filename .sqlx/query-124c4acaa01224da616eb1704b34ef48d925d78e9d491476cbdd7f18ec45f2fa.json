@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE sandboxes SET status = 'DESTROYING' WHERE id = $1 AND status <> 'DESTROYING'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "124c4acaa01224da616eb1704b34ef48d925d78e9d491476cbdd7f18ec45f2fa"
+}

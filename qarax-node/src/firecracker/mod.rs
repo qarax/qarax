@@ -6,7 +6,8 @@
 //!
 //! Lifecycle mapping:
 //!   create_vm   — spawn process + configure via SDK (Machine)
-//!   start_vm    — Machine::start_instance() → MicroVm
+//!   start_vm    — Machine::start_instance() → MicroVm; a stopped VM gets
+//!                 a fresh process first, since a microVM can't boot twice
 //!   stop_vm     — MicroVm::send_ctrl_alt_del()
 //!   force_stop  — kill the process
 //!   pause_vm    — MicroVm::patch_vm(Paused)
@@ -37,29 +38,91 @@ use crate::vmm::{VmmError, VmmManager};
 mod exec;
 mod helpers;
 
-/// Tracks the SDK client state for a single Firecracker VM.
-enum FcApiClient {
-    /// FC process is up but `InstanceStart` has not been sent yet.
+/// Where a Firecracker VM is in its lifecycle, with the SDK handle that
+/// step needs. The status reported for the VM is derived from it.
+enum FcPhase {
+    /// The FC process is configured but `InstanceStart` has not been sent.
     PreBoot(Machine<'static>),
-    /// VM is running (or paused/snapshot-restoring).
-    Running(MicroVm<'static>),
+    /// Started (or recovered) and attached; `state` is what FC last reported.
+    Live {
+        micro_vm: MicroVm<'static>,
+        state: LiveState,
+    },
+    /// Stopped through qarax. Its FC process is gone or on its way out, and
+    /// a start launches a new one.
+    Stopped,
+    /// Recovered at startup, but its API socket could not be attached.
+    Detached,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LiveState {
+    Running,
+    Paused,
+    /// Recovered before `InstanceStart` was sent.
+    NotStarted,
+    /// FC did not answer the last time it was asked.
+    Unknown,
+}
+
+impl From<FcInstanceState> for LiveState {
+    fn from(state: FcInstanceState) -> Self {
+        match state {
+            FcInstanceState::Running => LiveState::Running,
+            FcInstanceState::Paused => LiveState::Paused,
+            FcInstanceState::NotStarted => LiveState::NotStarted,
+        }
+    }
+}
+
+impl FcPhase {
+    fn status(&self) -> VmStatus {
+        match self {
+            FcPhase::PreBoot(_) => VmStatus::Created,
+            FcPhase::Live { state, .. } => match state {
+                LiveState::Running => VmStatus::Running,
+                LiveState::Paused => VmStatus::Paused,
+                LiveState::NotStarted => VmStatus::Created,
+                LiveState::Unknown => VmStatus::Unknown,
+            },
+            FcPhase::Stopped => VmStatus::Shutdown,
+            FcPhase::Detached => VmStatus::Unknown,
+        }
+    }
 }
 
 struct FcVmInstance {
     proto_config: ProtoVmConfig,
+    /// The FC process qarax spawned. `None` for a VM recovered at startup.
     process: Option<Child>,
     socket_path: PathBuf,
-    status: VmStatus,
     tap_devices: Vec<String>,
-    client: Option<FcApiClient>,
+    phase: FcPhase,
 }
 
 impl FcVmInstance {
+    fn status(&self) -> VmStatus {
+        self.phase.status()
+    }
+
     fn to_vm_state(&self) -> VmState {
         VmState {
             config: Some(self.proto_config.clone()),
-            status: self.status.into(),
+            status: self.status().into(),
             memory_actual_size: None,
+        }
+    }
+
+    /// The attached client of a started VM, or the error for one that isn't.
+    fn live(
+        &mut self,
+        not_live: &str,
+    ) -> Result<(&mut MicroVm<'static>, &mut LiveState), VmmError> {
+        match &mut self.phase {
+            FcPhase::Live { micro_vm, state } => Ok((micro_vm, state)),
+            FcPhase::PreBoot(_) | FcPhase::Stopped | FcPhase::Detached => {
+                Err(VmmError::ProcessError(not_live.to_string()))
+            }
         }
     }
 }
@@ -88,6 +151,50 @@ impl FirecrackerManager {
 
     pub fn fc_binary(&self) -> &Path {
         &self.fc_binary
+    }
+
+    /// Launch a Firecracker process for `config` and configure it up to
+    /// `InstanceStart`. Dropping the returned process kills it.
+    async fn spawn_configured(
+        &self,
+        vm_id: &str,
+        config: &ProtoVmConfig,
+    ) -> Result<(Child, Machine<'static>), VmmError> {
+        let socket_path = self.socket_path(vm_id);
+        if socket_path.exists() {
+            let _ = tokio::fs::remove_file(&socket_path).await;
+        }
+        if let Some(path) = Self::vsock_socket_path_from_config(&config.vsock)
+            && path.exists()
+        {
+            let _ = tokio::fs::remove_file(path).await;
+        }
+
+        // Append, so a restart keeps the log of the boot before it.
+        let log_file = tokio::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.log_path(vm_id))
+            .await
+            .map_err(VmmError::SpawnError)?
+            .into_std()
+            .await;
+        let stderr_file = log_file.try_clone().map_err(VmmError::SpawnError)?;
+
+        let process = Command::new(&self.fc_binary)
+            .arg("--api-sock")
+            .arg(&socket_path)
+            .stdout(std::process::Stdio::from(log_file))
+            .stderr(std::process::Stdio::from(stderr_file))
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(VmmError::SpawnError)?;
+        info!("FC: process started with PID {:?}", process.id());
+
+        // Machine::attach waits for the socket to be ready.
+        let mut machine = Machine::attach(&socket_path).await.map_err(sdk_err)?;
+        Self::configure_vm(&mut machine, &socket_path, config).await?;
+        Ok((process, machine))
     }
 
     /// Configure a freshly-attached [`Machine`] from a proto VmConfig using
@@ -235,12 +342,6 @@ impl VmmManager for FirecrackerManager {
         if let Some(vsock) = config.vsock.as_mut() {
             self.resolve_vsock_config(&vm_id, vsock);
         }
-        let vsock_socket_path = Self::vsock_socket_path_from_config(&config.vsock);
-        if let Some(path) = &vsock_socket_path
-            && path.exists()
-        {
-            let _ = tokio::fs::remove_file(path).await;
-        }
 
         // Build cloud-init seed image if configured.
         if let Some(ci) = &config.cloud_init
@@ -264,58 +365,17 @@ impl VmmManager for FirecrackerManager {
             info!("FC: cloud-init seed disk attached for VM {}", vm_id);
         }
 
-        let socket_path = self.socket_path(&vm_id);
-        let log_path = self.log_path(&vm_id);
         let config_path = self.config_path(&vm_id);
 
-        if socket_path.exists() {
-            let _ = tokio::fs::remove_file(&socket_path).await;
-        }
-
-        let log_file = tokio::fs::File::create(&log_path)
-            .await
-            .map_err(VmmError::SpawnError)?
-            .into_std()
-            .await;
-        let stderr_file = log_file.try_clone().map_err(VmmError::SpawnError)?;
-
-        let process = match Command::new(&self.fc_binary)
-            .arg("--api-sock")
-            .arg(&socket_path)
-            .stdout(std::process::Stdio::from(log_file))
-            .stderr(std::process::Stdio::from(stderr_file))
-            .kill_on_drop(true)
-            .spawn()
-        {
-            Ok(p) => p,
+        let (process, machine) = match self.spawn_configured(&vm_id, &config).await {
+            Ok(spawned) => spawned,
             Err(e) => {
                 for tap in &tap_devices {
                     Self::delete_tap_device(tap).await;
                 }
-                return Err(VmmError::SpawnError(e));
+                return Err(e);
             }
         };
-
-        info!("FC: process started with PID {:?}", process.id());
-
-        // Attach SDK client — Machine::attach waits for the socket to be ready.
-        let mut machine = match Machine::attach(&socket_path).await {
-            Ok(m) => m,
-            Err(e) => {
-                for tap in &tap_devices {
-                    Self::delete_tap_device(tap).await;
-                }
-                return Err(sdk_err(e));
-            }
-        };
-
-        // Configure machine, boot source, drives, networks.
-        if let Err(e) = Self::configure_vm(&mut machine, &socket_path, &config).await {
-            for tap in &tap_devices {
-                Self::delete_tap_device(tap).await;
-            }
-            return Err(e);
-        }
 
         // Persist config for recovery.
         let config_bytes = config.encode_to_vec();
@@ -326,10 +386,9 @@ impl VmmManager for FirecrackerManager {
         let instance = FcVmInstance {
             proto_config: config.clone(),
             process: Some(process),
-            socket_path,
-            status: VmStatus::Created,
+            socket_path: self.socket_path(&vm_id),
             tap_devices,
-            client: Some(FcApiClient::PreBoot(machine)),
+            phase: FcPhase::PreBoot(machine),
         };
 
         let state = instance.to_vm_state();
@@ -346,19 +405,37 @@ impl VmmManager for FirecrackerManager {
             .get_mut(vm_id)
             .ok_or_else(|| VmmError::VmNotFound(vm_id.to_string()))?;
 
-        let client = instance
-            .client
-            .take()
-            .ok_or_else(|| VmmError::ProcessError("no client for VM".to_string()))?;
-
-        let FcApiClient::PreBoot(machine) = client else {
-            instance.client = Some(client);
-            return Err(VmmError::ProcessError("VM already started".to_string()));
+        // Until the instance starts, a failure leaves the VM stopped, and the
+        // next start launches a fresh process.
+        let machine = match std::mem::replace(&mut instance.phase, FcPhase::Stopped) {
+            FcPhase::PreBoot(machine) => machine,
+            FcPhase::Stopped => {
+                // A microVM that shut down can't boot again: replace its process.
+                if let Some(mut old) = instance.process.take() {
+                    let _ = old.kill().await;
+                }
+                let (process, machine) =
+                    self.spawn_configured(vm_id, &instance.proto_config).await?;
+                instance.process = Some(process);
+                machine
+            }
+            phase @ FcPhase::Live { .. } => {
+                instance.phase = phase;
+                return Err(VmmError::ProcessError("VM already started".to_string()));
+            }
+            FcPhase::Detached => {
+                instance.phase = FcPhase::Detached;
+                return Err(VmmError::ProcessError(
+                    "VM API socket could not be attached".to_string(),
+                ));
+            }
         };
 
         let micro_vm = machine.start_instance().await.map_err(sdk_err)?;
-        instance.client = Some(FcApiClient::Running(micro_vm));
-        instance.status = VmStatus::Running;
+        instance.phase = FcPhase::Live {
+            micro_vm,
+            state: LiveState::Running,
+        };
         info!("FC: VM {} started successfully", vm_id);
         Ok(())
     }
@@ -371,19 +448,25 @@ impl VmmManager for FirecrackerManager {
             .get_mut(vm_id)
             .ok_or_else(|| VmmError::VmNotFound(vm_id.to_string()))?;
 
-        if let Some(FcApiClient::Running(ref mut micro_vm)) = instance.client {
-            match micro_vm.send_ctrl_alt_del().await {
-                Ok(_) => {}
-                Err(e) => {
+        match &mut instance.phase {
+            FcPhase::Live { micro_vm, .. } => {
+                if let Err(e) = micro_vm.send_ctrl_alt_del().await {
                     warn!(
                         "FC: VM {} soft-stop failed (treating as stopped): {}",
                         vm_id, e
                     );
                 }
             }
+            // Never booted, so there is no guest to shut down.
+            FcPhase::PreBoot(_) => {
+                if let Some(mut process) = instance.process.take() {
+                    let _ = process.kill().await;
+                }
+            }
+            FcPhase::Stopped | FcPhase::Detached => {}
         }
 
-        instance.status = VmStatus::Shutdown;
+        instance.phase = FcPhase::Stopped;
         info!("FC: VM {} stopped", vm_id);
         Ok(())
     }
@@ -402,7 +485,7 @@ impl VmmManager for FirecrackerManager {
             warn!("FC: Failed to kill process for VM {}: {}", vm_id, e);
         }
 
-        instance.status = VmStatus::Shutdown;
+        instance.phase = FcPhase::Stopped;
         info!("FC: VM {} force stopped", vm_id);
         Ok(())
     }
@@ -415,21 +498,18 @@ impl VmmManager for FirecrackerManager {
             .get_mut(vm_id)
             .ok_or_else(|| VmmError::VmNotFound(vm_id.to_string()))?;
 
-        if instance.status == VmStatus::Paused {
+        let (micro_vm, state) = instance.live("VM is not running")?;
+        if *state == LiveState::Paused {
             info!("FC: VM {} already paused, skipping", vm_id);
             return Ok(());
         }
-
-        let Some(FcApiClient::Running(ref mut micro_vm)) = instance.client else {
-            return Err(VmmError::ProcessError("VM is not running".to_string()));
-        };
 
         micro_vm
             .patch_vm(&Vm::new(FcVmState::Paused))
             .await
             .map_err(sdk_err)?;
 
-        instance.status = VmStatus::Paused;
+        *state = LiveState::Paused;
         info!("FC: VM {} paused", vm_id);
         Ok(())
     }
@@ -442,16 +522,14 @@ impl VmmManager for FirecrackerManager {
             .get_mut(vm_id)
             .ok_or_else(|| VmmError::VmNotFound(vm_id.to_string()))?;
 
-        let Some(FcApiClient::Running(ref mut micro_vm)) = instance.client else {
-            return Err(VmmError::ProcessError("VM is not paused".to_string()));
-        };
+        let (micro_vm, state) = instance.live("VM is not paused")?;
 
         micro_vm
             .patch_vm(&Vm::new(FcVmState::Resumed))
             .await
             .map_err(sdk_err)?;
 
-        instance.status = VmStatus::Running;
+        *state = LiveState::Running;
         info!("FC: VM {} resumed", vm_id);
         Ok(())
     }
@@ -513,20 +591,12 @@ impl VmmManager for FirecrackerManager {
             .get_mut(vm_id)
             .ok_or_else(|| VmmError::VmNotFound(vm_id.to_string()))?;
 
-        // Trust explicit Shutdown — the FC process may still be responding on
-        // the socket briefly after stop_vm (e.g. paused VM sent Ctrl+Alt+Del).
-        if instance.status == VmStatus::Shutdown {
-            return Ok(instance.to_vm_state());
-        }
-
-        if let Some(FcApiClient::Running(ref mut micro_vm)) = instance.client
+        // Only a live VM is asked: a stopped one may still answer on its
+        // socket briefly after stop_vm (e.g. a paused VM sent Ctrl+Alt+Del).
+        if let FcPhase::Live { micro_vm, state } = &mut instance.phase
             && let Ok(info) = micro_vm.describe_instance().await
         {
-            instance.status = match info.state {
-                FcInstanceState::Running => VmStatus::Running,
-                FcInstanceState::Paused => VmStatus::Paused,
-                FcInstanceState::NotStarted => VmStatus::Created,
-            };
+            *state = info.state.into();
         }
 
         Ok(instance.to_vm_state())
@@ -545,16 +615,14 @@ impl VmmManager for FirecrackerManager {
             .get_mut(vm_id)
             .ok_or_else(|| VmmError::VmNotFound(vm_id.to_string()))?;
 
+        let (micro_vm, state) = instance.live("VM is not running")?;
         // Only pause if not already paused — FC returns 400 on a redundant pause.
-        if instance.status != VmStatus::Paused {
-            let Some(FcApiClient::Running(ref mut micro_vm)) = instance.client else {
-                return Err(VmmError::ProcessError("VM is not running".to_string()));
-            };
+        if *state != LiveState::Paused {
             micro_vm
                 .patch_vm(&Vm::new(FcVmState::Paused))
                 .await
                 .map_err(sdk_err)?;
-            instance.status = VmStatus::Paused;
+            *state = LiveState::Paused;
         }
 
         let dest = destination_url
@@ -571,9 +639,7 @@ impl VmmManager for FirecrackerManager {
         let mem_path = format!("{}/mem.snap", dest);
         let state_path = format!("{}/vm.snap", dest);
 
-        let Some(FcApiClient::Running(ref mut micro_vm)) = instance.client else {
-            return Err(VmmError::ProcessError("VM is not running".to_string()));
-        };
+        let (micro_vm, _) = instance.live("VM is not running")?;
 
         micro_vm
             .create_snapshot(&SnapshotCreateParams::new(mem_path, state_path))
@@ -655,9 +721,11 @@ impl VmmManager for FirecrackerManager {
             proto_config,
             process: Some(process),
             socket_path,
-            status: VmStatus::Running,
             tap_devices: vec![],
-            client: Some(FcApiClient::Running(micro_vm)),
+            phase: FcPhase::Live {
+                micro_vm,
+                state: LiveState::Running,
+            },
         };
 
         self.vms.lock().await.insert(vm_id.to_string(), instance);
@@ -716,22 +784,18 @@ impl VmmManager for FirecrackerManager {
                 .collect();
 
             // Attach to the socket and check live status.
-            let (status, client) = match Machine::attach(&path).await {
+            let phase = match Machine::attach(&path).await {
                 Ok(machine) => {
                     let mut micro_vm = machine.assume_running();
-                    let status = match micro_vm.describe_instance().await {
-                        Ok(info) => match info.state {
-                            FcInstanceState::Running => VmStatus::Running,
-                            FcInstanceState::Paused => VmStatus::Paused,
-                            FcInstanceState::NotStarted => VmStatus::Unknown,
-                        },
-                        Err(_) => VmStatus::Unknown,
+                    let state = match micro_vm.describe_instance().await {
+                        Ok(info) => info.state.into(),
+                        Err(_) => LiveState::Unknown,
                     };
-                    (status, Some(FcApiClient::Running(micro_vm)))
+                    FcPhase::Live { micro_vm, state }
                 }
                 Err(e) => {
                     warn!("FC: Failed to attach to recovered VM {}: {}", vm_id, e);
-                    (VmStatus::Unknown, None)
+                    FcPhase::Detached
                 }
             };
 
@@ -739,15 +803,15 @@ impl VmmManager for FirecrackerManager {
                 proto_config,
                 process: None,
                 socket_path: path.clone(),
-                status,
                 tap_devices,
-                client,
+                phase,
             };
 
             if let Some(cid) = instance.proto_config.vsock.as_ref().and_then(|v| v.cid) {
                 Self::advance_vsock_cid_past(cid);
             }
 
+            let status = instance.status();
             let mut vms = self.vms.lock().await;
             vms.insert(vm_id.clone(), instance);
             info!("FC: Recovered VM {} with status {:?}", vm_id, status);
@@ -763,8 +827,12 @@ impl VmmManager for FirecrackerManager {
         let Some(instance) = vms.get_mut(vm_id) else {
             return false;
         };
+        if let FcPhase::Stopped = instance.phase {
+            return false;
+        }
         match &mut instance.process {
             Some(child) => child.try_wait().ok().flatten().is_none(),
+            // Recovered at startup: qarax holds no handle to its process.
             None => instance.socket_path.exists(),
         }
     }

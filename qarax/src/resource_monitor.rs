@@ -99,12 +99,10 @@ async fn handle_probe_result(env: &App, host: &Host, node_info: Result<NodeInfo>
                 host.name, e
             );
 
-            if host.status == HostStatus::Maintenance {
-                return;
-            }
-
+            // Only an UP host goes DOWN: a host in maintenance stays there,
+            // as does one whose status changed since this tick read it.
             if let Err(update_error) =
-                hosts::update_status(env.pool(), host.id, HostStatus::Down).await
+                hosts::transition(env.pool(), host.id, &[HostStatus::Up], HostStatus::Down).await
             {
                 warn!(
                     "Resource monitor: failed to mark host {} DOWN after probe failure: {}",
@@ -197,9 +195,14 @@ mod tests {
     async fn probe_failure_keeps_maintenance_host_in_maintenance() {
         let db = TestDatabase::new().await;
         let host = insert_up_host(&db).await;
-        hosts::update_status(&db.pool, host.id, HostStatus::Maintenance)
-            .await
-            .expect("mark maintenance");
+        hosts::transition(
+            &db.pool,
+            host.id,
+            &[HostStatus::Up],
+            HostStatus::Maintenance,
+        )
+        .await
+        .expect("mark maintenance");
         let host = hosts::get_by_id(&db.pool, host.id)
             .await
             .expect("fetch maintenance host")

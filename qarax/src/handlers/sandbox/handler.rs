@@ -17,7 +17,7 @@ use crate::{
         vms::{self, VmStatus},
     },
     sandbox_pool_manager,
-    sandbox_runtime::{self, ReadyOutcome, destroy_vm, resolve_sandbox_vm},
+    sandbox_runtime::{self, ReadyOutcome, ReadyWait, destroy_vm, resolve_sandbox_vm},
 };
 
 use super::super::vm::handler::{
@@ -52,14 +52,12 @@ pub async fn create(
     }
 
     let resolved_vm = resolve_sandbox_vm(&env, &req).await?;
-    let is_oci = resolved_vm.image_ref.is_some();
 
-    let (vm_id, initial_job_id) = if is_oci {
-        create_vm_with_image_internal(&env, resolved_vm).await?
+    let (vm_id, image_pull_job) = if resolved_vm.image_ref.is_some() {
+        let (vm_id, job_id) = create_vm_with_image_internal(&env, resolved_vm).await?;
+        (vm_id, Some(job_id))
     } else {
-        let id = create_vm_internal(&env, resolved_vm).await?;
-        // Placeholder; replaced by the start job below for the non-OCI path.
-        (id, Uuid::nil())
+        (create_vm_internal(&env, resolved_vm).await?, None)
     };
 
     // Create the sandbox record
@@ -81,26 +79,25 @@ pub async fn create(
     // For OCI: the image-pull job is the user-visible job; start_vm_internal
     // is invoked later by the watcher once the VM transitions to Created.
     // For non-OCI: start the VM eagerly.
-    let job_id = if is_oci {
-        initial_job_id
-    } else {
-        match start_vm_internal(&env, vm_id).await {
-            Ok(job_id) => job_id,
+    let wait = match image_pull_job {
+        Some(job_id) => ReadyWait::PullingImage { job_id },
+        None => match start_vm_internal(&env, vm_id).await {
+            Ok(job_id) => ReadyWait::Starting { job_id },
             Err(e) => {
                 destroy_vm(env.pool(), vm_id).await;
                 let _ = sandboxes::delete(env.pool(), sandbox_id).await;
                 return Err(e);
             }
-        }
+        },
     };
 
-    spawn_sandbox_ready_watcher(env.clone(), sandbox_id, vm_id, job_id, is_oci);
+    spawn_sandbox_ready_watcher(env.clone(), sandbox_id, vm_id, wait);
 
     Ok(ApiResponse {
         data: CreateSandboxResponse {
             id: sandbox_id,
             vm_id,
-            job_id,
+            job_id: wait.job_id(),
         },
         code: StatusCode::ACCEPTED,
     }
@@ -254,55 +251,27 @@ async fn try_claim_prewarmed_sandbox(
     }))
 }
 
-fn spawn_sandbox_ready_watcher(
-    env: App,
-    sandbox_id: Uuid,
-    vm_id: Uuid,
-    job_id: Uuid,
-    is_oci: bool,
-) {
+fn spawn_sandbox_ready_watcher(env: App, sandbox_id: Uuid, vm_id: Uuid, wait: ReadyWait) {
     tokio::spawn(async move {
-        let outcome = sandbox_runtime::watch_for_ready(&env, vm_id, job_id, is_oci).await;
-        match outcome {
+        let outcome = sandbox_runtime::watch_for_ready(&env, vm_id, wait).await;
+        let error = match outcome {
             ReadyOutcome::Ready => {
-                let _ =
-                    sandboxes::update_status(env.pool(), sandbox_id, SandboxStatus::Ready, None)
-                        .await;
+                let _ = sandboxes::mark_ready(env.pool(), sandbox_id).await;
                 tracing::info!(sandbox_id = %sandbox_id, vm_id = %vm_id, "Sandbox ready");
+                return;
             }
-            ReadyOutcome::Failed(msg) => {
-                tracing::warn!(
-                    sandbox_id = %sandbox_id,
-                    vm_id = %vm_id,
-                    error = %msg,
-                    "Sandbox watcher: VM failed"
-                );
-                let _ = sandboxes::update_status(
-                    env.pool(),
-                    sandbox_id,
-                    SandboxStatus::Error,
-                    Some(msg),
-                )
-                .await;
-            }
-            ReadyOutcome::TimedOut => {
-                tracing::warn!(
-                    sandbox_id = %sandbox_id,
-                    vm_id = %vm_id,
-                    "Timed out waiting for sandbox VM to start"
-                );
-                let _ = sandboxes::update_status(
-                    env.pool(),
-                    sandbox_id,
-                    SandboxStatus::Error,
-                    Some("timed out waiting for VM to start".to_string()),
-                )
-                .await;
-            }
-            ReadyOutcome::Gone => {
-                // VM row vanished; nothing to mark.
-            }
-        }
+            ReadyOutcome::Failed(msg) => msg,
+            ReadyOutcome::TimedOut => "timed out waiting for VM to start".to_string(),
+            // VM row vanished; nothing to mark.
+            ReadyOutcome::Gone => return,
+        };
+        tracing::warn!(
+            sandbox_id = %sandbox_id,
+            vm_id = %vm_id,
+            error = %error,
+            "Sandbox VM failed to become ready"
+        );
+        let _ = sandboxes::mark_error(env.pool(), sandbox_id, &error).await;
     });
 }
 
@@ -406,7 +375,9 @@ pub async fn delete(
     let sandbox = sandboxes::get(env.pool(), sandbox_id).await?;
     let vm_id = sandbox.vm_id;
 
-    sandboxes::update_status(env.pool(), sandbox_id, SandboxStatus::Destroying, None)
+    // Destroy even when the sandbox was already DESTROYING: a delete that
+    // failed half way must be retryable.
+    sandboxes::mark_destroying(env.pool(), sandbox_id)
         .await
         .map_err(crate::errors::Error::Sqlx)?;
 

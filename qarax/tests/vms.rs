@@ -939,6 +939,63 @@ async fn test_disk_resize_rejects_invalid_requests() {
     .await;
 }
 
+/// Start, migrate and commit hold a VM in Pending, Migrating or Committing
+/// until their job finishes. Meanwhile the other lifecycle operations are
+/// refused before they reach the node, and the status stays the job's.
+#[tokio::test]
+async fn test_vm_held_by_a_job_refuses_other_operations() {
+    let app = spawn_app().await;
+    let client = reqwest::Client::new();
+    add_up_host(&client, &app.address, "test-host").await;
+    let vm_id = create_vm(&client, &app.address, vm_body("vm-held-by-job")).await;
+    let post = |op: &str| {
+        client
+            .post(format!("{}/vms/{vm_id}/{op}", app.address))
+            .send()
+    };
+
+    for (status, held) in [
+        (VmStatus::Pending, "pending job completion"),
+        (VmStatus::Migrating, "being migrated"),
+        (VmStatus::Committing, "being committed"),
+    ] {
+        let db_status = status.to_string().to_uppercase();
+        set_vm_status(&app.pool, vm_id, &db_status).await;
+        for op in ["start", "stop", "pause", "resume"] {
+            assert_unprocessable(post(op).await.unwrap(), held).await;
+        }
+        assert_eq!(vms::get(&app.pool, vm_id).await.unwrap().status, status);
+    }
+}
+
+/// A commit moves the VM to Committing only once the request has passed
+/// validation, so a rejected commit doesn't strand the VM there.
+#[tokio::test]
+async fn test_rejected_commit_leaves_vm_status_alone() {
+    let app = spawn_app().await;
+    let client = reqwest::Client::new();
+    add_up_host(&client, &app.address, "test-host").await;
+    let vm_id = create_vm(&client, &app.address, vm_body("vm-commit-rejected")).await;
+    sqlx::query("UPDATE vms SET image_ref = 'registry.invalid/img:latest' WHERE id = $1")
+        .bind(vm_id)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+
+    let res = client
+        .post(format!("{}/vms/{vm_id}/commit", app.address))
+        .json(&json!({"storage_pool_id": Uuid::new_v4(), "size_bytes": GIB}))
+        .send()
+        .await
+        .unwrap();
+    assert_unprocessable(res, "VM has no OCI image disk to commit").await;
+
+    assert_eq!(
+        vms::get(&app.pool, vm_id).await.unwrap().status,
+        VmStatus::Created
+    );
+}
+
 #[tokio::test]
 async fn test_migrate_rejects_invalid_requests() {
     let app = spawn_app().await;
@@ -1016,10 +1073,10 @@ async fn test_preflight_rejects_selected_host_architecture_mismatch() {
     .await;
 }
 
-/// The VM monitor writes statuses it derived from an earlier read. A status
-/// another writer set since that read must survive the monitor's write.
+/// A writer acting on an earlier read, like the VM monitor, writes only from
+/// the status it read. A status another writer set since then must survive.
 #[tokio::test]
-async fn test_update_status_from_keeps_newer_status() {
+async fn test_transition_keeps_newer_status() {
     let app = spawn_app().await;
     let client = reqwest::Client::new();
     add_up_host(&client, &app.address, "test-host").await;
@@ -1030,27 +1087,27 @@ async fn test_update_status_from_keeps_newer_status() {
     assert_eq!(stale.status, VmStatus::Created);
 
     // ...a handler pauses it before the monitor writes...
-    vms::update_status(&app.pool, vm_id, VmStatus::Paused)
-        .await
-        .unwrap();
+    set_vm_status(&app.pool, vm_id, "PAUSED").await;
 
     // ...so the monitor's write from the stale read is skipped.
-    assert!(
-        !vms::update_status_from(&app.pool, &stale, VmStatus::Running)
+    assert_eq!(
+        vms::transition(&app.pool, vm_id, &[stale.status], VmStatus::Running)
             .await
-            .unwrap()
+            .unwrap(),
+        None
     );
     assert_eq!(
         vms::get(&app.pool, vm_id).await.unwrap().status,
         VmStatus::Paused
     );
 
-    // A write from a current read goes through.
+    // A write from a current read goes through and reports what it left.
     let current = vms::get(&app.pool, vm_id).await.unwrap();
-    assert!(
-        vms::update_status_from(&app.pool, &current, VmStatus::Running)
+    assert_eq!(
+        vms::transition(&app.pool, vm_id, &[current.status], VmStatus::Running)
             .await
-            .unwrap()
+            .unwrap(),
+        Some(VmStatus::Paused)
     );
     assert_eq!(
         vms::get(&app.pool, vm_id).await.unwrap().status,

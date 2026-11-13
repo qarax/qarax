@@ -30,7 +30,7 @@ use crate::{
     model::{
         audit_log::{AuditAction, AuditResourceType},
         backups,
-        backups::{Backup, BackupStatus, BackupType, NewBackup},
+        backups::{Backup, BackupType, NewBackup},
         boot_sources, host_gpus, host_numa, hosts,
         hosts::Host,
         jobs::{self, JobType, NewJob},
@@ -48,7 +48,7 @@ use crate::{
         vm_templates::{self, CreateVmTemplateFromVmRequest},
         vms::{
             self, BootMode, ExecVmRequest, ExecVmResponse, Hypervisor, NewVm, NewVmNetwork,
-            ResolvedNewVm, Vm, VmStatus,
+            ResolvedNewVm, Vm, VmOp, VmStatus,
         },
     },
     network_policy,
@@ -1091,7 +1091,13 @@ pub(crate) async fn create_vm_with_image_internal(
         tracing::info!(vm_id = %vm_id, job_id = %job_id, image_ref = %image_ref, "Starting async OCI image pull");
 
         if let Err(e) = jobs::mark_running(&db_pool, job_id).await {
-            tracing::error!(job_id = %job_id, error = %e, "Failed to mark job as running");
+            fail_overlaybd_create(
+                &db_pool,
+                vm_id,
+                job_id,
+                format!("failed to mark job as running: {e}"),
+            )
+            .await;
             return;
         }
 
@@ -1147,6 +1153,14 @@ async fn register_static_ips_tx(
     Ok(())
 }
 
+/// Fail an image-pull job. The VM it was creating never reached a node, so it
+/// leaves `Pending` for `Unknown`.
+async fn fail_overlaybd_create(db_pool: &sqlx::PgPool, vm_id: Uuid, job_id: Uuid, msg: String) {
+    tracing::error!(vm_id = %vm_id, job_id = %job_id, error = %msg, "VM image pull failed");
+    let _ = jobs::mark_failed(db_pool, job_id, &msg).await;
+    let _ = vms::transition(db_pool, vm_id, &[VmStatus::Pending], VmStatus::Unknown).await;
+}
+
 /// Background task for the OverlayBD lazy block loading path.
 #[allow(clippy::too_many_arguments)]
 async fn run_overlaybd_create(
@@ -1164,9 +1178,7 @@ async fn run_overlaybd_create(
         Some(cfg) => cfg.url,
         None => {
             let msg = "OverlayBD pool config missing 'url' field".to_string();
-            tracing::error!(vm_id = %vm_id, job_id = %job_id, error = %msg);
-            let _ = jobs::mark_failed(db_pool, job_id, &msg).await;
-            let _ = vms::update_status(db_pool, vm_id, VmStatus::Unknown).await;
+            fail_overlaybd_create(db_pool, vm_id, job_id, msg).await;
             return;
         }
     };
@@ -1179,9 +1191,7 @@ async fn run_overlaybd_create(
         Ok(r) => r,
         Err(e) => {
             let msg = format!("Failed to import OverlayBD image: {}", e);
-            tracing::error!(vm_id = %vm_id, job_id = %job_id, error = %msg);
-            let _ = jobs::mark_failed(db_pool, job_id, &msg).await;
-            let _ = vms::update_status(db_pool, vm_id, VmStatus::Unknown).await;
+            fail_overlaybd_create(db_pool, vm_id, job_id, msg).await;
             return;
         }
     };
@@ -1210,9 +1220,7 @@ async fn run_overlaybd_create(
         Ok(id) => id,
         Err(e) => {
             let msg = format!("Failed to create storage object for OverlayBD disk: {}", e);
-            tracing::error!(vm_id = %vm_id, job_id = %job_id, error = %msg);
-            let _ = jobs::mark_failed(db_pool, job_id, &msg).await;
-            let _ = vms::update_status(db_pool, vm_id, VmStatus::Unknown).await;
+            fail_overlaybd_create(db_pool, vm_id, job_id, msg).await;
             return;
         }
     };
@@ -1222,9 +1230,7 @@ async fn run_overlaybd_create(
         Ok(d) => d,
         Err(e) => {
             let msg = format!("Failed to list existing disks: {}", e);
-            tracing::error!(vm_id = %vm_id, job_id = %job_id, error = %msg);
-            let _ = jobs::mark_failed(db_pool, job_id, &msg).await;
-            let _ = vms::update_status(db_pool, vm_id, VmStatus::Unknown).await;
+            fail_overlaybd_create(db_pool, vm_id, job_id, msg).await;
             return;
         }
     };
@@ -1257,12 +1263,10 @@ async fn run_overlaybd_create(
             Ok(id) => Some(id),
             Err(e) => {
                 let msg = format!("Failed to create OverlaybdUpper storage object: {}", e);
-                tracing::error!(vm_id = %vm_id, job_id = %job_id, error = %msg);
                 if let Err(cleanup_err) = storage_objects::delete(db_pool, so_id).await {
                     tracing::warn!(vm_id = %vm_id, storage_object_id = %so_id, error = %cleanup_err, "Failed to clean up orphaned OciImage storage object");
                 }
-                let _ = jobs::mark_failed(db_pool, job_id, &msg).await;
-                let _ = vms::update_status(db_pool, vm_id, VmStatus::Unknown).await;
+                fail_overlaybd_create(db_pool, vm_id, job_id, msg).await;
                 return;
             }
         }
@@ -1282,7 +1286,6 @@ async fn run_overlaybd_create(
     };
     if let Err(e) = vm_disks::create(db_pool, &disk_record).await {
         let msg = format!("Failed to persist OverlayBD disk record: {}", e);
-        tracing::error!(vm_id = %vm_id, job_id = %job_id, error = %msg);
         if let Err(cleanup_err) = storage_objects::delete(db_pool, so_id).await {
             tracing::warn!(vm_id = %vm_id, storage_object_id = %so_id, error = %cleanup_err, "Failed to clean up orphaned storage object");
         }
@@ -1291,13 +1294,12 @@ async fn run_overlaybd_create(
         {
             tracing::warn!(vm_id = %vm_id, storage_object_id = %upper_id, error = %cleanup_err, "Failed to clean up orphaned OverlaybdUpper storage object");
         }
-        let _ = jobs::mark_failed(db_pool, job_id, &msg).await;
-        let _ = vms::update_status(db_pool, vm_id, VmStatus::Unknown).await;
+        fail_overlaybd_create(db_pool, vm_id, job_id, msg).await;
         return;
     }
 
     // Mark VM as created (node provisioning is deferred to vm start)
-    let _ = vms::update_status(db_pool, vm_id, VmStatus::Created).await;
+    let _ = vms::transition(db_pool, vm_id, &[VmStatus::Pending], VmStatus::Created).await;
     let result = serde_json::json!({ "digest": import_result.digest });
     let _ = jobs::mark_completed(db_pool, job_id, Some(result)).await;
 
@@ -1342,42 +1344,7 @@ pub async fn start(
 /// Returns the job ID.
 pub(crate) async fn start_vm_internal(env: &App, vm_id: Uuid) -> Result<Uuid> {
     let vm = vms::get(env.pool(), vm_id).await?;
-    let original_status = vm.status;
-    #[cfg(feature = "otel")]
-    let metrics = env.metrics_arc();
-    #[cfg(feature = "otel")]
-    let initial_status_label = original_status.to_string();
-
-    match vm.status {
-        VmStatus::Running => {
-            return Err(crate::errors::Error::UnprocessableEntity(
-                "VM is already running".into(),
-            ));
-        }
-        VmStatus::Paused => {
-            return Err(crate::errors::Error::UnprocessableEntity(
-                "VM is paused; use POST /vms/{vm_id}/resume instead".into(),
-            ));
-        }
-        VmStatus::Pending => {
-            return Err(crate::errors::Error::UnprocessableEntity(
-                "VM is pending job completion; wait for the job to finish".into(),
-            ));
-        }
-        VmStatus::Migrating => {
-            return Err(crate::errors::Error::UnprocessableEntity(
-                "VM is being migrated; wait for migration to finish".into(),
-            ));
-        }
-        VmStatus::Committing => {
-            return Err(crate::errors::Error::UnprocessableEntity(
-                "VM is being committed; wait for commit to finish".into(),
-            ));
-        }
-        VmStatus::Created | VmStatus::Shutdown | VmStatus::Unknown => {
-            // Valid states to start from
-        }
-    }
+    VmOp::Start.check(vm.status)?;
 
     let host = host_for_vm(env, vm_id).await?;
     if let Some(architecture) = persisted_vm_architecture(&vm) {
@@ -1385,8 +1352,13 @@ pub(crate) async fn start_vm_internal(env: &App, vm_id: Uuid) -> Result<Uuid> {
     }
     ensure_vm_disk_attachments_can_start(env.pool(), vm_id).await?;
 
-    // Set VM status to Pending to prevent double-start
-    vms::update_status(env.pool(), vm_id, VmStatus::Pending).await?;
+    // Holding the VM in Pending keeps a second start (or any other
+    // operation) out until this job moves it on.
+    let original_status = vms::apply(env.pool(), vm_id, VmOp::Start).await?;
+    #[cfg(feature = "otel")]
+    let metrics = env.metrics_arc();
+    #[cfg(feature = "otel")]
+    let initial_status_label = original_status.to_string();
 
     let start_setup: Result<(Option<CreateVmRequest>, Uuid)> = async {
         let create_req = if original_status == VmStatus::Created {
@@ -1416,7 +1388,9 @@ pub(crate) async fn start_vm_internal(env: &App, vm_id: Uuid) -> Result<Uuid> {
     let (create_req, job_id) = match start_setup {
         Ok(values) => values,
         Err(err) => {
-            if let Err(revert_err) = vms::update_status(env.pool(), vm_id, original_status).await {
+            if let Err(revert_err) =
+                vms::transition(env.pool(), vm_id, &[VmStatus::Pending], original_status).await
+            {
                 error!(
                     vm_id = %vm_id,
                     error = %revert_err,
@@ -1447,41 +1421,44 @@ pub(crate) async fn start_vm_internal(env: &App, vm_id: Uuid) -> Result<Uuid> {
             metrics.vm_start_jobs_total.add(1, &attrs);
         };
 
+        // Every failure fails the job and hands the VM back in the status
+        // it was started from.
+        let fail = |msg: String| {
+            let db_pool = &db_pool;
+            #[cfg(feature = "otel")]
+            let record_vm_start_metric = &record_vm_start_metric;
+            async move {
+                tracing::error!(vm_id = %vm_id, job_id = %job_id, error = %msg, "VM start failed");
+                let _ = jobs::mark_failed(db_pool, job_id, &msg).await;
+                let _ =
+                    vms::transition(db_pool, vm_id, &[VmStatus::Pending], original_status).await;
+                #[cfg(feature = "otel")]
+                record_vm_start_metric("failed");
+            }
+        };
+
         if let Err(e) = jobs::mark_running(&db_pool, job_id).await {
-            tracing::error!(job_id = %job_id, error = %e, "Failed to mark job as running");
+            fail(format!("failed to mark job as running: {e}")).await;
             return;
         }
 
         let node_client = NodeClient::new(&host.address, host.port as u16);
 
-        match ensure_vm_start_allowed(&db_pool, vm_id).await {
-            Ok(()) => {}
-            Err(msg) => {
-                let _ = jobs::mark_failed(&db_pool, job_id, &msg).await;
-                #[cfg(feature = "otel")]
-                record_vm_start_metric("failed");
-                return;
-            }
+        if let Err(msg) = ensure_vm_start_allowed(&db_pool, vm_id).await {
+            fail(msg).await;
+            return;
         }
 
         // For a VM in Created state, call create_vm first
         if let Some(req) = create_req {
             if let Err(e) = node_client.create_vm(req).await {
-                let msg = format!("create_vm failed: {:#}", e);
-                tracing::error!(vm_id = %vm_id, job_id = %job_id, error = %msg);
-                let _ = jobs::mark_failed(&db_pool, job_id, &msg).await;
-                let _ = vms::update_status(&db_pool, vm_id, original_status).await;
-                #[cfg(feature = "otel")]
-                record_vm_start_metric("failed");
+                fail(format!("create_vm failed: {:#}", e)).await;
                 return;
             }
 
             if let Err(msg) = ensure_vm_start_allowed(&db_pool, vm_id).await {
-                let _ = jobs::mark_failed(&db_pool, job_id, &msg).await;
                 let _ = node_client.delete_vm(vm_id).await;
-                let _ = vms::update_status(&db_pool, vm_id, original_status).await;
-                #[cfg(feature = "otel")]
-                record_vm_start_metric("failed");
+                fail(msg).await;
                 return;
             }
 
@@ -1489,37 +1466,24 @@ pub(crate) async fn start_vm_internal(env: &App, vm_id: Uuid) -> Result<Uuid> {
         }
 
         if let Err(msg) = ensure_vm_start_allowed(&db_pool, vm_id).await {
-            let _ = jobs::mark_failed(&db_pool, job_id, &msg).await;
-            let _ = vms::update_status(&db_pool, vm_id, original_status).await;
-            #[cfg(feature = "otel")]
-            record_vm_start_metric("failed");
+            fail(msg).await;
             return;
         }
 
         if let Err(e) = node_client.start_vm(vm_id).await {
-            let msg = format!("start_vm failed: {:#}", e);
-            tracing::error!(vm_id = %vm_id, job_id = %job_id, error = %msg);
-            let _ = jobs::mark_failed(&db_pool, job_id, &msg).await;
-            let _ = vms::update_status(&db_pool, vm_id, original_status).await;
-            #[cfg(feature = "otel")]
-            record_vm_start_metric("failed");
+            fail(format!("start_vm failed: {:#}", e)).await;
             return;
         }
 
         if let Err(e) =
             network_policy::sync_vm_firewall_on_host(&env_for_start, vm_id, host.id).await
         {
-            let msg = format!("sync_vm_firewall failed: {e}");
-            tracing::error!(vm_id = %vm_id, job_id = %job_id, error = %msg);
             let _ = node_client.force_stop_vm(vm_id).await;
-            let _ = jobs::mark_failed(&db_pool, job_id, &msg).await;
-            let _ = vms::update_status(&db_pool, vm_id, original_status).await;
-            #[cfg(feature = "otel")]
-            record_vm_start_metric("failed");
+            fail(format!("sync_vm_firewall failed: {e}")).await;
             return;
         }
 
-        let _ = vms::update_status(&db_pool, vm_id, VmStatus::Running).await;
+        let _ = vms::transition(&db_pool, vm_id, &[VmStatus::Pending], VmStatus::Running).await;
         let _ = jobs::mark_completed(&db_pool, job_id, None).await;
         #[cfg(feature = "otel")]
         record_vm_start_metric("success");
@@ -1562,6 +1526,7 @@ async fn ensure_vm_start_allowed(
     responses(
         (status = 200, description = "VM stopped successfully"),
         (status = 404, description = "VM not found"),
+        (status = 422, description = "VM is held by a running start, migrate or commit job"),
         (status = 500, description = "Internal server error")
     ),
     tag = "vms"
@@ -1571,6 +1536,7 @@ pub async fn stop(
     Extension(env): Extension<App>,
     Path(vm_id): Path<Uuid>,
 ) -> Result<axum::response::Response> {
+    VmOp::Stop.check(vms::get(env.pool(), vm_id).await?.status)?;
     let host = host_for_vm(&env, vm_id).await?;
     let node_client = NodeClient::new(&host.address, host.port as u16);
     match node_client.stop_vm(vm_id).await {
@@ -1589,7 +1555,7 @@ pub async fn stop(
         }
     }
 
-    vms::update_status(env.pool(), vm_id, VmStatus::Shutdown).await?;
+    vms::apply(env.pool(), vm_id, VmOp::Stop).await?;
 
     // Release any allocated GPUs
     if let Err(e) = host_gpus::deallocate_by_vm(env.pool(), vm_id).await {
@@ -1644,7 +1610,7 @@ pub async fn force_stop(
         }
     }
 
-    vms::update_status(env.pool(), vm_id, VmStatus::Shutdown).await?;
+    vms::apply(env.pool(), vm_id, VmOp::ForceStop).await?;
 
     // Release any allocated GPUs
     if let Err(e) = host_gpus::deallocate_by_vm(env.pool(), vm_id).await {
@@ -1673,6 +1639,7 @@ pub async fn force_stop(
     responses(
         (status = 200, description = "VM paused successfully"),
         (status = 404, description = "VM not found"),
+        (status = 422, description = "VM is held by a running start, migrate or commit job"),
         (status = 500, description = "Internal server error")
     ),
     tag = "vms"
@@ -1682,6 +1649,7 @@ pub async fn pause(
     Extension(env): Extension<App>,
     Path(vm_id): Path<Uuid>,
 ) -> Result<axum::response::Response> {
+    VmOp::Pause.check(vms::get(env.pool(), vm_id).await?.status)?;
     let host = host_for_vm(&env, vm_id).await?;
     let node_client = NodeClient::new(&host.address, host.port as u16);
     node_client.pause_vm(vm_id).await.map_err(|e| {
@@ -1689,7 +1657,7 @@ pub async fn pause(
         crate::errors::Error::InternalServerError
     })?;
 
-    vms::update_status(env.pool(), vm_id, VmStatus::Paused).await?;
+    vms::apply(env.pool(), vm_id, VmOp::Pause).await?;
 
     Ok(ApiResponse {
         data: (),
@@ -1713,6 +1681,7 @@ pub async fn pause(
     responses(
         (status = 200, description = "VM resumed successfully"),
         (status = 404, description = "VM not found"),
+        (status = 422, description = "VM is held by a running start, migrate or commit job"),
         (status = 500, description = "Internal server error")
     ),
     tag = "vms"
@@ -1722,6 +1691,7 @@ pub async fn resume(
     Extension(env): Extension<App>,
     Path(vm_id): Path<Uuid>,
 ) -> Result<axum::response::Response> {
+    VmOp::Resume.check(vms::get(env.pool(), vm_id).await?.status)?;
     let host = host_for_vm(&env, vm_id).await?;
     let node_client = NodeClient::new(&host.address, host.port as u16);
     node_client.resume_vm(vm_id).await.map_err(|e| {
@@ -1729,7 +1699,7 @@ pub async fn resume(
         crate::errors::Error::InternalServerError
     })?;
 
-    vms::update_status(env.pool(), vm_id, VmStatus::Running).await?;
+    vms::apply(env.pool(), vm_id, VmOp::Resume).await?;
 
     Ok(ApiResponse {
         data: (),
@@ -1790,7 +1760,6 @@ async fn record_ready_vm_backup(pool: &PgPool, snapshot: &Snapshot) -> Result<Ba
         &NewBackup {
             name: snapshot.name.clone(),
             backup_type: BackupType::Vm,
-            status: BackupStatus::Ready,
             vm_id: Some(snapshot.vm_id),
             snapshot_id: Some(snapshot.id),
             storage_object_id: snapshot.storage_object_id,
@@ -1952,15 +1921,7 @@ pub(crate) async fn restore_vm_from_snapshot(
     snapshot_id: Uuid,
 ) -> Result<Vm> {
     let vm = vms::get(env.pool(), vm_id).await?;
-
-    match vm.status {
-        VmStatus::Running | VmStatus::Paused | VmStatus::Pending | VmStatus::Committing => {
-            return Err(crate::errors::Error::UnprocessableEntity(
-                "VM must be stopped before restoring".into(),
-            ));
-        }
-        VmStatus::Shutdown | VmStatus::Created | VmStatus::Unknown | VmStatus::Migrating => {}
-    }
+    VmOp::Restore.check(vm.status)?;
 
     let snapshot = snapshots::get(env.pool(), snapshot_id)
         .await
@@ -1982,12 +1943,12 @@ pub(crate) async fn restore_vm_from_snapshot(
     let host = host_for_vm(env, vm_id).await?;
     let node_client = NodeClient::new(&host.address, host.port as u16);
 
-    vms::update_status(env.pool(), vm_id, VmStatus::Pending).await?;
-
     let so = storage_objects::get(env.pool(), snapshot.storage_object_id).await?;
     let dir_path = storage_objects::get_path_from_config(&so.config)
         .ok_or(crate::errors::Error::InternalServerError)?;
     let snapshot_url = format!("file://{}", dir_path);
+
+    vms::apply(env.pool(), vm_id, VmOp::Restore).await?;
 
     // The node handles the full restore flow: kills any existing CH process,
     // spawns a fresh one, and calls vm.restore directly (no vm.create needed).
@@ -1997,11 +1958,11 @@ pub(crate) async fn restore_vm_from_snapshot(
     {
         let msg = format!("restore_vm failed: {:#}", e);
         tracing::error!(vm_id = %vm_id, error = %msg);
-        let _ = vms::update_status(env.pool(), vm_id, VmStatus::Unknown).await;
+        let _ = vms::transition(env.pool(), vm_id, &[VmStatus::Pending], VmStatus::Unknown).await;
         return Err(crate::errors::Error::InternalServerError);
     }
 
-    vms::update_status(env.pool(), vm_id, VmStatus::Running).await?;
+    vms::transition(env.pool(), vm_id, &[VmStatus::Pending], VmStatus::Running).await?;
 
     vms::get(env.pool(), vm_id).await.map_err(Into::into)
 }
@@ -3556,16 +3517,7 @@ pub(crate) async fn plan_vm_migration(
     target_host_id: Uuid,
 ) -> Result<PlannedVmMigration> {
     let vm = vms::get(env.pool(), vm_id).await?;
-
-    match vm.status {
-        VmStatus::Running | VmStatus::Paused => {}
-        _ => {
-            return Err(crate::errors::Error::UnprocessableEntity(format!(
-                "VM must be running or paused to migrate (current status: {})",
-                vm.status
-            )));
-        }
-    }
+    VmOp::Migrate.check(vm.status)?;
 
     if vm.hypervisor != Hypervisor::CloudHv {
         return Err(crate::errors::Error::UnprocessableEntity(
@@ -3669,6 +3621,22 @@ pub(crate) async fn plan_vm_migration(
         original_status: vm.status,
         create_req,
     })
+}
+
+/// Move a VM into `Migrating`, but only from the status its migration plan
+/// read: a plan made for a running VM doesn't apply to one that was paused
+/// or stopped in the meantime.
+pub(crate) async fn claim_for_migration(
+    pool: &PgPool,
+    vm_id: Uuid,
+    planned_status: VmStatus,
+) -> Result<()> {
+    match vms::transition(pool, vm_id, &[planned_status], VmStatus::Migrating).await? {
+        Some(_) => Ok(()),
+        None => Err(crate::errors::Error::Conflict(format!(
+            "VM {vm_id} changed status while its migration was planned; retry"
+        ))),
+    }
 }
 
 pub(crate) async fn execute_planned_vm_migration(
@@ -3776,7 +3744,7 @@ pub(crate) async fn execute_planned_vm_migration(
             "Failed to update host_id after migration"
         );
     }
-    let _ = vms::update_status(db_pool, vm_id, original_status).await;
+    let _ = vms::transition(db_pool, vm_id, &[VmStatus::Migrating], original_status).await;
 
     if let Err(e) = source_client.delete_vm(vm_id).await {
         tracing::warn!(
@@ -3836,8 +3804,9 @@ pub async fn migrate(
     Json(req): Json<VmMigrateRequest>,
 ) -> Result<axum::response::Response> {
     let plan = plan_vm_migration(&env, vm_id, req.target_host_id).await?;
+    let original_status = plan.original_status;
 
-    vms::update_status(env.pool(), vm_id, VmStatus::Migrating).await?;
+    claim_for_migration(env.pool(), vm_id, original_status).await?;
 
     let job = jobs::create(
         env.pool(),
@@ -3851,23 +3820,28 @@ pub async fn migrate(
             resource_type: Some(jobs::resource_types::VM.to_string()),
         },
     )
-    .await?;
-    let job_id = job.id;
+    .await;
+    let job_id = match job {
+        Ok(job) => job.id,
+        Err(e) => {
+            let _ =
+                vms::transition(env.pool(), vm_id, &[VmStatus::Migrating], original_status).await;
+            return Err(e.into());
+        }
+    };
     let db_pool = env.pool_arc();
 
     tokio::spawn(async move {
         tracing::info!(vm_id = %vm_id, job_id = %job_id, "Starting async VM migration");
 
-        if let Err(e) = jobs::mark_running(&db_pool, job_id).await {
-            tracing::error!(job_id = %job_id, error = %e, "Failed to mark job as running");
-            return;
-        }
-
-        let original_status = plan.original_status;
-        if let Err(msg) = execute_planned_vm_migration(db_pool.as_ref(), plan, Some(job_id)).await {
+        let result = match jobs::mark_running(&db_pool, job_id).await {
+            Ok(()) => execute_planned_vm_migration(db_pool.as_ref(), plan, Some(job_id)).await,
+            Err(e) => Err(format!("failed to mark job as running: {e}")),
+        };
+        if let Err(msg) = result {
             tracing::error!(vm_id = %vm_id, job_id = %job_id, error = %msg);
             let _ = jobs::mark_failed(&db_pool, job_id, &msg).await;
-            let _ = vms::update_status(&db_pool, vm_id, original_status).await;
+            let _ = vms::transition(&db_pool, vm_id, &[VmStatus::Migrating], original_status).await;
             return;
         }
 
@@ -4134,14 +4108,7 @@ pub async fn commit(
         ));
     }
 
-    // Atomically transition VM to Committing — prevents concurrent commits
-    // and ensures VM was in a valid state (Created or Shutdown).
-    let transitioned = vms::try_set_committing(env.pool(), vm_id).await?;
-    if !transitioned {
-        return Err(crate::errors::Error::UnprocessableEntity(
-            "VM must be stopped (Created or Shutdown) to commit".into(),
-        ));
-    }
+    VmOp::Commit.check(vm.status)?;
 
     // VM must have a host assigned
     let host = host_for_vm(&env, vm_id).await?;
@@ -4182,7 +4149,10 @@ pub async fn commit(
         )));
     }
 
-    // Create the job
+    // Holding the VM in Committing keeps a start or a second commit out
+    // until the job hands it back in `previous_status`.
+    let previous_status = vms::apply(env.pool(), vm_id, VmOp::Commit).await?;
+
     let job = jobs::create(
         env.pool(),
         NewJob {
@@ -4192,15 +4162,21 @@ pub async fn commit(
             resource_type: Some(jobs::resource_types::VM.to_string()),
         },
     )
-    .await?;
-    let job_id = job.id;
+    .await;
+    let job_id = match job {
+        Ok(job) => job.id,
+        Err(e) => {
+            let _ =
+                vms::transition(env.pool(), vm_id, &[VmStatus::Committing], previous_status).await;
+            return Err(e.into());
+        }
+    };
 
-    // Spawn background task — pass the VM's previous status so we can restore it when done
     let db_pool = env.pool_arc();
     let commit_params = CommitParams {
         vm_id,
         job_id,
-        previous_status: vm.status,
+        previous_status,
         target_pool_id: target_pool.id,
         size_bytes: req.size_bytes,
     };
@@ -4284,7 +4260,9 @@ async fn run_vm_commit(
 
     if let Err(e) = jobs::mark_running(db_pool, job_id).await {
         error!(job_id = %job_id, error = %e, "Failed to mark commit job as running");
-        let _ = vms::update_status(db_pool, vm_id, params.previous_status).await;
+        let _ =
+            jobs::mark_failed(db_pool, job_id, &format!("failed to start commit job: {e}")).await;
+        release_committing_vm(db_pool, params).await;
         return;
     }
 
@@ -4315,8 +4293,18 @@ async fn run_vm_commit(
         }
     }
 
-    // Restore VM to its previous status now that commit is done
-    let _ = vms::update_status(db_pool, vm_id, params.previous_status).await;
+    release_committing_vm(db_pool, params).await;
+}
+
+/// Hand a VM back in the status it was committed from.
+async fn release_committing_vm(db_pool: &sqlx::PgPool, params: &CommitParams) {
+    let _ = vms::transition(
+        db_pool,
+        params.vm_id,
+        &[VmStatus::Committing],
+        params.previous_status,
+    )
+    .await;
 }
 
 async fn run_vm_commit_inner(

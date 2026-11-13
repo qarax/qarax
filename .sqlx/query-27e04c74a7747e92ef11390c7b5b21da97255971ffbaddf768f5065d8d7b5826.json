@@ -1,0 +1,79 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nWITH previous AS (\n    SELECT id, status FROM vms WHERE id = $1 AND status = ANY($2) FOR UPDATE\n)\nUPDATE vms SET status = $3\nFROM previous\nWHERE vms.id = previous.id\nRETURNING previous.status AS \"status: VmStatus\"\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "status: VmStatus",
+        "type_info": {
+          "Custom": {
+            "name": "vm_status",
+            "kind": {
+              "Enum": [
+                "UNKNOWN",
+                "CREATED",
+                "RUNNING",
+                "PAUSED",
+                "SHUTDOWN",
+                "PENDING",
+                "MIGRATING",
+                "COMMITTING"
+              ]
+            }
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        {
+          "Custom": {
+            "name": "vm_status[]",
+            "kind": {
+              "Array": {
+                "Custom": {
+                  "name": "vm_status",
+                  "kind": {
+                    "Enum": [
+                      "UNKNOWN",
+                      "CREATED",
+                      "RUNNING",
+                      "PAUSED",
+                      "SHUTDOWN",
+                      "PENDING",
+                      "MIGRATING",
+                      "COMMITTING"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "Custom": {
+            "name": "vm_status",
+            "kind": {
+              "Enum": [
+                "UNKNOWN",
+                "CREATED",
+                "RUNNING",
+                "PAUSED",
+                "SHUTDOWN",
+                "PENDING",
+                "MIGRATING",
+                "COMMITTING"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "27e04c74a7747e92ef11390c7b5b21da97255971ffbaddf768f5065d8d7b5826"
+}

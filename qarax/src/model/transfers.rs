@@ -207,20 +207,29 @@ ORDER BY created_at DESC
     Ok(rows.into_iter().map(|r| r.into()).collect())
 }
 
+// A transfer moves PENDING -> RUNNING -> COMPLETED | FAILED. Each write
+// below moves it only from the statuses that may precede its own, so a final
+// status is never overwritten: the first completion or failure recorded wins.
+
+/// Errors with `RowNotFound` unless the transfer is still pending.
 pub async fn mark_running(pool: &PgPool, transfer_id: Uuid) -> Result<(), sqlx::Error> {
-    sqlx::query!(
+    let updated = sqlx::query!(
         r#"
 UPDATE transfers
 SET status = 'RUNNING',
     started_at = CURRENT_TIMESTAMP,
     updated_at = CURRENT_TIMESTAMP
-WHERE id = $1
+WHERE id = $1 AND status = 'PENDING'
         "#,
         transfer_id
     )
     .execute(pool)
-    .await?;
+    .await?
+    .rows_affected();
 
+    if updated == 0 {
+        return Err(sqlx::Error::RowNotFound);
+    }
     Ok(())
 }
 
@@ -238,7 +247,7 @@ SET status = 'COMPLETED',
     transferred_bytes = $3,
     completed_at = CURRENT_TIMESTAMP,
     updated_at = CURRENT_TIMESTAMP
-WHERE id = $1
+WHERE id = $1 AND status IN ('PENDING', 'RUNNING')
         "#,
         transfer_id,
         storage_object_id,
@@ -262,7 +271,7 @@ SET status = 'FAILED',
     error_message = $2,
     completed_at = CURRENT_TIMESTAMP,
     updated_at = CURRENT_TIMESTAMP
-WHERE id = $1
+WHERE id = $1 AND status IN ('PENDING', 'RUNNING')
         "#,
         transfer_id,
         error_message,

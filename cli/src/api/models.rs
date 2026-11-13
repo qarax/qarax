@@ -284,6 +284,9 @@ pub struct Host {
     pub disk_total_bytes: Option<i64>,
     pub disk_available_bytes: Option<i64>,
     pub resources_updated_at: Option<String>,
+    /// Why the last deploy or upgrade failed (only while `installation_failed`).
+    #[serde(default)]
+    pub installation_error: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

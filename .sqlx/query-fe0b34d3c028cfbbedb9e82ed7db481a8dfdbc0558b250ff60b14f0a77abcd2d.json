@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\nSELECT id,\n        name,\n        tags,\n        status AS \"status: _\",\n        host_id,\n        hypervisor AS \"hypervisor: _\",\n        boot_source_id,\n        boot_mode AS \"boot_mode: _\",\n        description,\n        boot_vcpus,\n        max_vcpus,\n        cpu_topology AS \"cpu_topology: _\",\n        kvm_hyperv AS \"kvm_hyperv!\",\n        memory_size,\n        memory_hotplug_size,\n        memory_mergeable AS \"memory_mergeable!\",\n        memory_shared AS \"memory_shared!\",\n        memory_hugepages AS \"memory_hugepages!\",\n        memory_hugepage_size,\n        memory_prefault AS \"memory_prefault!\",\n        memory_thp AS \"memory_thp!\",\n        image_ref,\n        cloud_init_user_data,\n        cloud_init_meta_data,\n        cloud_init_network_config,\n        config AS \"config: _\"\nFROM vms\nWHERE status NOT IN ('SHUTDOWN', 'UNKNOWN', 'PENDING')\n  AND host_id IS NOT NULL\n        ",
+  "query": "\nSELECT id,\n        name,\n        tags,\n        status AS \"status: _\",\n        host_id,\n        hypervisor AS \"hypervisor: _\",\n        boot_source_id,\n        boot_mode AS \"boot_mode: _\",\n        description,\n        boot_vcpus,\n        max_vcpus,\n        cpu_topology AS \"cpu_topology: _\",\n        kvm_hyperv AS \"kvm_hyperv!\",\n        memory_size,\n        memory_hotplug_size,\n        memory_mergeable AS \"memory_mergeable!\",\n        memory_shared AS \"memory_shared!\",\n        memory_hugepages AS \"memory_hugepages!\",\n        memory_hugepage_size,\n        memory_prefault AS \"memory_prefault!\",\n        memory_thp AS \"memory_thp!\",\n        image_ref,\n        cloud_init_user_data,\n        cloud_init_meta_data,\n        cloud_init_network_config,\n        config AS \"config: _\"\nFROM vms\nWHERE status NOT IN ('SHUTDOWN', 'UNKNOWN', 'PENDING', 'MIGRATING', 'COMMITTING')\n  AND host_id IS NOT NULL\n        ",
   "describe": {
     "columns": [
       {
@@ -203,5 +203,5 @@
       false
     ]
   },
-  "hash": "063ea4a2b55ed958976660895883f602fbcd40ed71b361eb7898b2eeb6fc8354"
+  "hash": "fe0b34d3c028cfbbedb9e82ed7db481a8dfdbc0558b250ff60b14f0a77abcd2d"
 }

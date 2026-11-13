@@ -1,0 +1,53 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE hosts SET status = $3, installation_error = NULL WHERE id = $1 AND status = ANY($2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        {
+          "Custom": {
+            "name": "host_status[]",
+            "kind": {
+              "Array": {
+                "Custom": {
+                  "name": "host_status",
+                  "kind": {
+                    "Enum": [
+                      "UNKNOWN",
+                      "DOWN",
+                      "INSTALLING",
+                      "INSTALLATION_FAILED",
+                      "INITIALIZING",
+                      "UP",
+                      "MAINTENANCE"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "Custom": {
+            "name": "host_status",
+            "kind": {
+              "Enum": [
+                "UNKNOWN",
+                "DOWN",
+                "INSTALLING",
+                "INSTALLATION_FAILED",
+                "INITIALIZING",
+                "UP",
+                "MAINTENANCE"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "07d2bb09e3ddfbe376cd17b47cd24ed1765a465c0be6361b7ec3cccc6bbc5178"
+}

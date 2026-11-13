@@ -77,18 +77,20 @@ impl From<BackupRow> for Backup {
 pub struct NewBackup {
     pub name: String,
     pub backup_type: BackupType,
-    pub status: BackupStatus,
     pub vm_id: Option<Uuid>,
     pub snapshot_id: Option<Uuid>,
     pub storage_object_id: Uuid,
 }
 
+/// Record a backup whose data is already stored. Backups are only recorded
+/// once complete, so this version writes every one as `READY`: `CREATING`,
+/// `FAILED` and `error_message` stay in the schema and API for compatibility.
 pub async fn create(pool: &PgPool, new_backup: &NewBackup) -> Result<Backup, sqlx::Error> {
     let row = sqlx::query_as!(
         BackupRow,
         r#"
 INSERT INTO backups (id, name, backup_type, status, vm_id, snapshot_id, storage_object_id)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+VALUES ($1, $2, $3, 'READY', $4, $5, $6)
 RETURNING id,
           name,
           backup_type AS "backup_type: _",
@@ -103,7 +105,6 @@ RETURNING id,
         Uuid::new_v4(),
         &new_backup.name,
         &new_backup.backup_type as &BackupType,
-        &new_backup.status as &BackupStatus,
         new_backup.vm_id,
         new_backup.snapshot_id,
         new_backup.storage_object_id
@@ -169,27 +170,4 @@ ORDER BY created_at DESC
     .await?;
 
     Ok(rows.into_iter().map(Into::into).collect())
-}
-
-pub async fn update_status(
-    pool: &PgPool,
-    backup_id: Uuid,
-    status: BackupStatus,
-    error_message: Option<&str>,
-) -> Result<(), sqlx::Error> {
-    sqlx::query!(
-        r#"
-UPDATE backups
-SET status = $2,
-    error_message = $3
-WHERE id = $1
-        "#,
-        backup_id,
-        status as BackupStatus,
-        error_message
-    )
-    .execute(pool)
-    .await?;
-
-    Ok(())
 }
