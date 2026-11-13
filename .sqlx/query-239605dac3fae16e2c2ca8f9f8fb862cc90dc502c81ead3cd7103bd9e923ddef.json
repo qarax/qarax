@@ -1,0 +1,37 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nUPDATE lifecycle_hooks\nSET url         = CASE WHEN $2  THEN $3  ELSE url END,\n    secret      = CASE WHEN $4  THEN $5  ELSE secret END,\n    scope       = CASE WHEN $6  THEN $7  ELSE scope END,\n    scope_value = CASE WHEN $8  THEN $9  ELSE scope_value END,\n    events      = CASE WHEN $10 THEN $11 ELSE events END,\n    active      = CASE WHEN $12 THEN $13 ELSE active END,\n    updated_at  = NOW()\nWHERE id = $1\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Bool",
+        "Text",
+        "Bool",
+        "Text",
+        "Bool",
+        {
+          "Custom": {
+            "name": "hook_scope",
+            "kind": {
+              "Enum": [
+                "GLOBAL",
+                "VM",
+                "TAG"
+              ]
+            }
+          }
+        },
+        "Bool",
+        "Text",
+        "Bool",
+        "TextArray",
+        "Bool",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "239605dac3fae16e2c2ca8f9f8fb862cc90dc502c81ead3cd7103bd9e923ddef"
+}

@@ -1,0 +1,163 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nSELECT id, name, address, port, host_user, credential_ref, status AS \"status: _\",\n       cloud_hypervisor_version, firecracker_version, kernel_version, node_version,\n       last_deployed_image, reservation_class, placement_labels AS \"placement_labels: _\",\n       architecture, total_cpus, total_memory_bytes, available_memory_bytes, load_average,\n       disk_total_bytes, disk_available_bytes, resources_updated_at\nFROM hosts\nWHERE id = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "address",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "port",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "host_user",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "credential_ref",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "status: _",
+        "type_info": {
+          "Custom": {
+            "name": "host_status",
+            "kind": {
+              "Enum": [
+                "UNKNOWN",
+                "DOWN",
+                "INSTALLING",
+                "INSTALLATION_FAILED",
+                "INITIALIZING",
+                "UP",
+                "MAINTENANCE"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "cloud_hypervisor_version",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "firecracker_version",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "kernel_version",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "node_version",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 11,
+        "name": "last_deployed_image",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 12,
+        "name": "reservation_class",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 13,
+        "name": "placement_labels: _",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 14,
+        "name": "architecture",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 15,
+        "name": "total_cpus",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 16,
+        "name": "total_memory_bytes",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 17,
+        "name": "available_memory_bytes",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 18,
+        "name": "load_average",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 19,
+        "name": "disk_total_bytes",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 20,
+        "name": "disk_available_bytes",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 21,
+        "name": "resources_updated_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "26cbc3e915824bc8db8cecd408ae59ddaba9c7ea6fb505c8837900eb5395374f"
+}

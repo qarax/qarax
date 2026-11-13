@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM host_gpus WHERE host_id = $1 AND pci_address != ALL($2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "TextArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a082b274dffe0c08cc02caa7bf7a3db7e0171c114aa2291f213b8d2cf73ed36d"
+}

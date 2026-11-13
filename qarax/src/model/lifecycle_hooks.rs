@@ -35,7 +35,7 @@ pub enum HookExecutionStatus {
     Failed,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, ToSchema, sqlx::FromRow)]
+#[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
 pub struct LifecycleHook {
     pub id: Uuid,
     pub name: String,
@@ -43,14 +43,13 @@ pub struct LifecycleHook {
     pub secret: Option<String>,
     pub scope: HookScope,
     pub scope_value: Option<String>,
-    #[sqlx(default)]
     pub events: Vec<String>,
     pub active: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, ToSchema, sqlx::FromRow)]
+#[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
 pub struct HookExecution {
     pub id: Uuid,
     pub hook_id: Uuid,
@@ -110,19 +109,19 @@ pub struct UpdateLifecycleHook {
 pub async fn create(pool: &PgPool, hook: NewLifecycleHook) -> Result<Uuid, sqlx::Error> {
     let id = Uuid::new_v4();
 
-    sqlx::query(
+    sqlx::query!(
         r#"
 INSERT INTO lifecycle_hooks (id, name, url, secret, scope, scope_value, events)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
         "#,
+        id,
+        &hook.name,
+        &hook.url,
+        hook.secret.as_deref(),
+        &hook.scope as &HookScope,
+        hook.scope_value.as_deref(),
+        &hook.events
     )
-    .bind(id)
-    .bind(&hook.name)
-    .bind(&hook.url)
-    .bind(&hook.secret)
-    .bind(&hook.scope)
-    .bind(&hook.scope_value)
-    .bind(&hook.events)
     .execute(pool)
     .await?;
 
@@ -130,15 +129,16 @@ VALUES ($1, $2, $3, $4, $5, $6, $7)
 }
 
 pub async fn get(pool: &PgPool, hook_id: Uuid) -> Result<LifecycleHook, sqlx::Error> {
-    let hook = sqlx::query_as::<_, LifecycleHook>(
+    let hook = sqlx::query_as!(
+        LifecycleHook,
         r#"
-SELECT id, name, url, secret, scope, scope_value, events, active,
+SELECT id, name, url, secret, scope AS "scope: _", scope_value, events, active,
        created_at, updated_at
 FROM lifecycle_hooks
 WHERE id = $1
         "#,
+        hook_id
     )
-    .bind(hook_id)
     .fetch_one(pool)
     .await?;
 
@@ -149,16 +149,17 @@ pub async fn list(
     pool: &PgPool,
     name_filter: Option<&str>,
 ) -> Result<Vec<LifecycleHook>, sqlx::Error> {
-    let hooks = sqlx::query_as::<_, LifecycleHook>(
+    let hooks = sqlx::query_as!(
+        LifecycleHook,
         r#"
-SELECT id, name, url, secret, scope, scope_value, events, active,
+SELECT id, name, url, secret, scope AS "scope: _", scope_value, events, active,
        created_at, updated_at
 FROM lifecycle_hooks
 WHERE ($1::text IS NULL OR name = $1)
 ORDER BY created_at
         "#,
+        name_filter
     )
-    .bind(name_filter)
     .fetch_all(pool)
     .await?;
 
@@ -179,7 +180,7 @@ pub async fn update(
     let events_present = req.events.is_some();
     let active_present = req.active.is_some();
 
-    sqlx::query(
+    sqlx::query!(
         r#"
 UPDATE lifecycle_hooks
 SET url         = CASE WHEN $2  THEN $3  ELSE url END,
@@ -191,20 +192,20 @@ SET url         = CASE WHEN $2  THEN $3  ELSE url END,
     updated_at  = NOW()
 WHERE id = $1
         "#,
+        hook_id,
+        url_present,
+        req.url.as_deref(),
+        secret_present,
+        secret,
+        scope_present,
+        &req.scope as &Option<HookScope>,
+        scope_value_present,
+        scope_value,
+        events_present,
+        req.events.as_deref(),
+        active_present,
+        req.active
     )
-    .bind(hook_id)
-    .bind(url_present)
-    .bind(&req.url)
-    .bind(secret_present)
-    .bind(secret)
-    .bind(scope_present)
-    .bind(&req.scope)
-    .bind(scope_value_present)
-    .bind(scope_value)
-    .bind(events_present)
-    .bind(&req.events)
-    .bind(active_present)
-    .bind(req.active)
     .execute(pool)
     .await?;
 
@@ -323,8 +324,7 @@ mod tests {
 }
 
 pub async fn delete(pool: &PgPool, hook_id: Uuid) -> Result<(), sqlx::Error> {
-    sqlx::query("DELETE FROM lifecycle_hooks WHERE id = $1")
-        .bind(hook_id)
+    sqlx::query!("DELETE FROM lifecycle_hooks WHERE id = $1", hook_id)
         .execute(pool)
         .await?;
 
@@ -357,9 +357,10 @@ pub async fn enqueue_matching(
     new_status: &str,
 ) -> Result<(), sqlx::Error> {
     // Find hooks whose scope matches this VM and whose events filter matches.
-    let hooks = sqlx::query_as::<_, LifecycleHook>(
+    let hooks = sqlx::query_as!(
+        LifecycleHook,
         r#"
-SELECT id, name, url, secret, scope, scope_value, events, active,
+SELECT id, name, url, secret, scope AS "scope: _", scope_value, events, active,
        created_at, updated_at
 FROM lifecycle_hooks
 WHERE active = TRUE
@@ -373,10 +374,10 @@ WHERE active = TRUE
       OR $3 = ANY(events)
   )
         "#,
+        vm.id.to_string(),
+        &vm.tags,
+        new_status
     )
-    .bind(vm.id.to_string())
-    .bind(&vm.tags)
-    .bind(new_status)
     .fetch_all(pool)
     .await?;
 
@@ -407,7 +408,8 @@ pub async fn claim_pending_executions(
     pool: &PgPool,
     limit: i64,
 ) -> Result<Vec<HookExecution>, sqlx::Error> {
-    sqlx::query_as::<_, HookExecution>(
+    sqlx::query_as!(
+        HookExecution,
         r#"
 UPDATE hook_executions
 SET status = 'PROCESSING'
@@ -420,13 +422,13 @@ WHERE id IN (
     LIMIT $1
     FOR UPDATE SKIP LOCKED
 )
-RETURNING id, hook_id, vm_id, previous_status, new_status, status,
+RETURNING id, hook_id, vm_id, previous_status, new_status, status AS "status: _",
           attempt_count, max_attempts, next_retry_at, payload,
           response_status, response_body, last_error,
           created_at, delivered_at
         "#,
+        limit
     )
-    .bind(limit)
     .fetch_all(pool)
     .await
 }
@@ -435,7 +437,7 @@ RETURNING id, hook_id, vm_id, previous_status, new_status, status,
 /// from rows orphaned by a previous process crash).
 pub async fn reset_processing_to_pending(pool: &PgPool) -> Result<u64, sqlx::Error> {
     let result =
-        sqlx::query("UPDATE hook_executions SET status = 'PENDING' WHERE status = 'PROCESSING'")
+        sqlx::query!("UPDATE hook_executions SET status = 'PENDING' WHERE status = 'PROCESSING'")
             .execute(pool)
             .await?;
     Ok(result.rows_affected())
@@ -447,7 +449,7 @@ pub async fn mark_delivered(
     response_status: i32,
     response_body: Option<&str>,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(
+    sqlx::query!(
         r#"
 UPDATE hook_executions
 SET status          = 'DELIVERED',
@@ -457,10 +459,10 @@ SET status          = 'DELIVERED',
     delivered_at    = NOW()
 WHERE id = $1
         "#,
+        execution_id,
+        response_status,
+        response_body
     )
-    .bind(execution_id)
-    .bind(response_status)
-    .bind(response_body)
     .execute(pool)
     .await?;
 
@@ -473,7 +475,7 @@ pub async fn mark_retry(
     error: &str,
     next_retry_at: DateTime<Utc>,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(
+    sqlx::query!(
         r#"
 UPDATE hook_executions
 SET status        = 'PENDING',
@@ -482,10 +484,10 @@ SET status        = 'PENDING',
     next_retry_at = $3
 WHERE id = $1
         "#,
+        execution_id,
+        error,
+        next_retry_at
     )
-    .bind(execution_id)
-    .bind(error)
-    .bind(next_retry_at)
     .execute(pool)
     .await?;
 
@@ -497,7 +499,7 @@ pub async fn mark_failed(
     execution_id: Uuid,
     error: &str,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(
+    sqlx::query!(
         r#"
 UPDATE hook_executions
 SET status     = 'FAILED',
@@ -505,9 +507,9 @@ SET status     = 'FAILED',
     attempt_count = attempt_count + 1
 WHERE id = $1
         "#,
+        execution_id,
+        error
     )
-    .bind(execution_id)
-    .bind(error)
     .execute(pool)
     .await?;
 
@@ -518,9 +520,10 @@ pub async fn list_executions(
     pool: &PgPool,
     hook_id: Uuid,
 ) -> Result<Vec<HookExecution>, sqlx::Error> {
-    let executions = sqlx::query_as::<_, HookExecution>(
+    let executions = sqlx::query_as!(
+        HookExecution,
         r#"
-SELECT id, hook_id, vm_id, previous_status, new_status, status,
+SELECT id, hook_id, vm_id, previous_status, new_status, status AS "status: _",
        attempt_count, max_attempts, next_retry_at, payload,
        response_status, response_body, last_error,
        created_at, delivered_at
@@ -528,8 +531,8 @@ FROM hook_executions
 WHERE hook_id = $1
 ORDER BY created_at DESC
         "#,
+        hook_id
     )
-    .bind(hook_id)
     .fetch_all(pool)
     .await?;
 

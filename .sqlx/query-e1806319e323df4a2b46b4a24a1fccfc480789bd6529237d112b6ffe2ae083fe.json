@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE hosts SET status = $1 WHERE id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        {
+          "Custom": {
+            "name": "host_status",
+            "kind": {
+              "Enum": [
+                "UNKNOWN",
+                "DOWN",
+                "INSTALLING",
+                "INSTALLATION_FAILED",
+                "INITIALIZING",
+                "UP",
+                "MAINTENANCE"
+              ]
+            }
+          }
+        },
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e1806319e323df4a2b46b4a24a1fccfc480789bd6529237d112b6ffe2ae083fe"
+}

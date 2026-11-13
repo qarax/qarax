@@ -1,0 +1,118 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nUPDATE hook_executions\nSET status = 'PROCESSING'\nWHERE id IN (\n    SELECT id\n    FROM hook_executions\n    WHERE status = 'PENDING'\n      AND next_retry_at <= NOW()\n    ORDER BY next_retry_at\n    LIMIT $1\n    FOR UPDATE SKIP LOCKED\n)\nRETURNING id, hook_id, vm_id, previous_status, new_status, status AS \"status: _\",\n          attempt_count, max_attempts, next_retry_at, payload,\n          response_status, response_body, last_error,\n          created_at, delivered_at\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "hook_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "vm_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "previous_status",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "new_status",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "status: _",
+        "type_info": {
+          "Custom": {
+            "name": "hook_execution_status",
+            "kind": {
+              "Enum": [
+                "PENDING",
+                "DELIVERED",
+                "FAILED",
+                "PROCESSING"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "attempt_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "max_attempts",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 8,
+        "name": "next_retry_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 9,
+        "name": "payload",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 10,
+        "name": "response_status",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 11,
+        "name": "response_body",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 12,
+        "name": "last_error",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 13,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 14,
+        "name": "delivered_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "27a67dc4efadfb7d5be1ba6e13be7a0699868caea803017de189cc62dbf3232c"
+}

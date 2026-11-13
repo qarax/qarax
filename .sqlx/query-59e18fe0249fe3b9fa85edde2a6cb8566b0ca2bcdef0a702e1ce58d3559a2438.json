@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE vm_disks SET storage_object_id = $1, upper_storage_object_id = NULL WHERE id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "59e18fe0249fe3b9fa85edde2a6cb8566b0ca2bcdef0a702e1ce58d3559a2438"
+}

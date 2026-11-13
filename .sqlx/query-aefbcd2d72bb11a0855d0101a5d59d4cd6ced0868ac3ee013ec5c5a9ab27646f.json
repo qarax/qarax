@@ -1,0 +1,31 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nINSERT INTO instance_types (\n    id,\n    name,\n    description,\n    architecture,\n    boot_vcpus,\n    max_vcpus,\n    cpu_topology,\n    kvm_hyperv,\n    memory_size,\n    memory_hotplug_size,\n    memory_mergeable,\n    memory_shared,\n    memory_hugepages,\n    memory_hugepage_size,\n    memory_prefault,\n    memory_thp,\n    accelerator_config,\n    numa_config\n)\nVALUES (\n    $1, $2, $3, $4, $5, $6, $7, $8,\n    $9, $10, $11, $12, $13, $14, $15, $16, $17, $18\n)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Varchar",
+        "Text",
+        "Varchar",
+        "Int4",
+        "Int4",
+        "Jsonb",
+        "Bool",
+        "Int8",
+        "Int8",
+        "Bool",
+        "Bool",
+        "Bool",
+        "Int8",
+        "Bool",
+        "Bool",
+        "Jsonb",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "aefbcd2d72bb11a0855d0101a5d59d4cd6ced0868ac3ee013ec5c5a9ab27646f"
+}

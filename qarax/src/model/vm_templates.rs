@@ -42,7 +42,6 @@ pub struct VmTemplate {
     pub config: serde_json::Value,
 }
 
-#[derive(sqlx::FromRow)]
 struct VmTemplateRow {
     pub id: Uuid,
     pub name: String,
@@ -145,15 +144,16 @@ pub async fn list(
     pool: &PgPool,
     name_filter: Option<&str>,
 ) -> Result<Vec<VmTemplate>, sqlx::Error> {
-    let rows = sqlx::query_as::<_, VmTemplateRow>(
+    let rows = sqlx::query_as!(
+        VmTemplateRow,
         r#"
 SELECT id,
        name,
        description,
-       hypervisor,
+       hypervisor AS "hypervisor: _",
        boot_vcpus,
        max_vcpus,
-       cpu_topology,
+       cpu_topology AS "cpu_topology: _",
        kvm_hyperv,
        memory_size,
        memory_hotplug_size,
@@ -165,20 +165,20 @@ SELECT id,
        memory_thp,
        boot_source_id,
        root_disk_object_id,
-       boot_mode,
+       boot_mode AS "boot_mode: _",
        image_ref,
        cloud_init_user_data,
        cloud_init_meta_data,
        cloud_init_network_config,
        network_id,
-       networks,
-       config
+       networks AS "networks: _",
+       config AS "config: _"
 FROM vm_templates
 WHERE ($1::text IS NULL OR name = $1)
 ORDER BY name
         "#,
+        name_filter
     )
-    .bind(name_filter)
     .fetch_all(pool)
     .await?;
 
@@ -186,15 +186,16 @@ ORDER BY name
 }
 
 pub async fn get(pool: &PgPool, vm_template_id: Uuid) -> Result<VmTemplate, sqlx::Error> {
-    let row = sqlx::query_as::<_, VmTemplateRow>(
+    let row = sqlx::query_as!(
+        VmTemplateRow,
         r#"
 SELECT id,
        name,
        description,
-       hypervisor,
+       hypervisor AS "hypervisor: _",
        boot_vcpus,
        max_vcpus,
-       cpu_topology,
+       cpu_topology AS "cpu_topology: _",
        kvm_hyperv,
        memory_size,
        memory_hotplug_size,
@@ -206,19 +207,19 @@ SELECT id,
        memory_thp,
        boot_source_id,
        root_disk_object_id,
-       boot_mode,
+       boot_mode AS "boot_mode: _",
        image_ref,
        cloud_init_user_data,
        cloud_init_meta_data,
        cloud_init_network_config,
        network_id,
-       networks,
-       config
+       networks AS "networks: _",
+       config AS "config: _"
 FROM vm_templates
 WHERE id = $1
         "#,
+        vm_template_id
     )
-    .bind(vm_template_id)
     .fetch_one(pool)
     .await?;
 
@@ -227,11 +228,9 @@ WHERE id = $1
 
 pub async fn create(pool: &PgPool, new_vm_template: NewVmTemplate) -> Result<Uuid, sqlx::Error> {
     let id = Uuid::new_v4();
-    let cpu_topology = new_vm_template.cpu_topology.map(Json);
     let networks = new_vm_template.networks.map(Json);
-    let config = Json(new_vm_template.config);
 
-    sqlx::query(
+    sqlx::query!(
         r#"
 INSERT INTO vm_templates (
     id,
@@ -268,33 +267,33 @@ VALUES (
     $26
 )
         "#,
+        id,
+        new_vm_template.name,
+        new_vm_template.description,
+        new_vm_template.hypervisor as Option<Hypervisor>,
+        new_vm_template.boot_vcpus,
+        new_vm_template.max_vcpus,
+        new_vm_template.cpu_topology,
+        new_vm_template.kvm_hyperv,
+        new_vm_template.memory_size,
+        new_vm_template.memory_hotplug_size,
+        new_vm_template.memory_mergeable,
+        new_vm_template.memory_shared,
+        new_vm_template.memory_hugepages,
+        new_vm_template.memory_hugepage_size,
+        new_vm_template.memory_prefault,
+        new_vm_template.memory_thp,
+        new_vm_template.boot_source_id,
+        new_vm_template.root_disk_object_id,
+        new_vm_template.boot_mode as Option<BootMode>,
+        new_vm_template.image_ref,
+        new_vm_template.cloud_init_user_data,
+        new_vm_template.cloud_init_meta_data,
+        new_vm_template.cloud_init_network_config,
+        new_vm_template.network_id,
+        networks as _,
+        new_vm_template.config
     )
-    .bind(id)
-    .bind(new_vm_template.name)
-    .bind(new_vm_template.description)
-    .bind(new_vm_template.hypervisor)
-    .bind(new_vm_template.boot_vcpus)
-    .bind(new_vm_template.max_vcpus)
-    .bind(cpu_topology)
-    .bind(new_vm_template.kvm_hyperv)
-    .bind(new_vm_template.memory_size)
-    .bind(new_vm_template.memory_hotplug_size)
-    .bind(new_vm_template.memory_mergeable)
-    .bind(new_vm_template.memory_shared)
-    .bind(new_vm_template.memory_hugepages)
-    .bind(new_vm_template.memory_hugepage_size)
-    .bind(new_vm_template.memory_prefault)
-    .bind(new_vm_template.memory_thp)
-    .bind(new_vm_template.boot_source_id)
-    .bind(new_vm_template.root_disk_object_id)
-    .bind(new_vm_template.boot_mode)
-    .bind(new_vm_template.image_ref)
-    .bind(new_vm_template.cloud_init_user_data)
-    .bind(new_vm_template.cloud_init_meta_data)
-    .bind(new_vm_template.cloud_init_network_config)
-    .bind(new_vm_template.network_id)
-    .bind(networks)
-    .bind(config)
     .execute(pool)
     .await?;
 
@@ -351,13 +350,13 @@ pub async fn create_from_vm(
 }
 
 pub async fn delete(pool: &PgPool, vm_template_id: Uuid) -> Result<(), sqlx::Error> {
-    sqlx::query(
+    sqlx::query!(
         r#"
 DELETE FROM vm_templates
 WHERE id = $1
         "#,
+        vm_template_id
     )
-    .bind(vm_template_id)
     .execute(pool)
     .await?;
 

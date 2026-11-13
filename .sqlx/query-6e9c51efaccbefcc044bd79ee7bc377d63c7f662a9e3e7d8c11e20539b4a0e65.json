@@ -1,0 +1,118 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nSELECT id, hook_id, vm_id, previous_status, new_status, status AS \"status: _\",\n       attempt_count, max_attempts, next_retry_at, payload,\n       response_status, response_body, last_error,\n       created_at, delivered_at\nFROM hook_executions\nWHERE hook_id = $1\nORDER BY created_at DESC\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "hook_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "vm_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "previous_status",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "new_status",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "status: _",
+        "type_info": {
+          "Custom": {
+            "name": "hook_execution_status",
+            "kind": {
+              "Enum": [
+                "PENDING",
+                "DELIVERED",
+                "FAILED",
+                "PROCESSING"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "attempt_count",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "max_attempts",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 8,
+        "name": "next_retry_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 9,
+        "name": "payload",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 10,
+        "name": "response_status",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 11,
+        "name": "response_body",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 12,
+        "name": "last_error",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 13,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 14,
+        "name": "delivered_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "6e9c51efaccbefcc044bd79ee7bc377d63c7f662a9e3e7d8c11e20539b4a0e65"
+}

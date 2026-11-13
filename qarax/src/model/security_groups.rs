@@ -13,7 +13,6 @@ pub struct SecurityGroup {
     pub description: Option<String>,
 }
 
-#[derive(sqlx::FromRow)]
 struct SecurityGroupRow {
     id: Uuid,
     name: String,
@@ -68,7 +67,6 @@ pub struct SecurityGroupRule {
     pub description: Option<String>,
 }
 
-#[derive(sqlx::FromRow)]
 struct SecurityGroupRuleRow {
     id: Uuid,
     security_group_id: Uuid,
@@ -120,15 +118,16 @@ pub async fn list(
     pool: &PgPool,
     name_filter: Option<&str>,
 ) -> Result<Vec<SecurityGroup>, sqlx::Error> {
-    let rows: Vec<SecurityGroupRow> = sqlx::query_as(
+    let rows: Vec<SecurityGroupRow> = sqlx::query_as!(
+        SecurityGroupRow,
         r#"
 SELECT id, name, description
 FROM security_groups
 WHERE ($1::text IS NULL OR name = $1)
 ORDER BY name
         "#,
+        name_filter
     )
-    .bind(name_filter)
     .fetch_all(pool)
     .await?;
 
@@ -136,14 +135,15 @@ ORDER BY name
 }
 
 pub async fn get(pool: &PgPool, security_group_id: Uuid) -> Result<SecurityGroup, sqlx::Error> {
-    let row: SecurityGroupRow = sqlx::query_as(
+    let row: SecurityGroupRow = sqlx::query_as!(
+        SecurityGroupRow,
         r#"
 SELECT id, name, description
 FROM security_groups
 WHERE id = $1
         "#,
+        security_group_id
     )
-    .bind(security_group_id)
     .fetch_one(pool)
     .await?;
 
@@ -153,15 +153,15 @@ WHERE id = $1
 pub async fn create(pool: &PgPool, new_group: NewSecurityGroup) -> Result<Uuid, sqlx::Error> {
     let id = Uuid::new_v4();
 
-    sqlx::query(
+    sqlx::query!(
         r#"
 INSERT INTO security_groups (id, name, description)
 VALUES ($1, $2, $3)
         "#,
+        id,
+        new_group.name,
+        new_group.description
     )
-    .bind(id)
-    .bind(new_group.name)
-    .bind(new_group.description)
     .execute(pool)
     .await?;
 
@@ -169,10 +169,12 @@ VALUES ($1, $2, $3)
 }
 
 pub async fn delete(pool: &PgPool, security_group_id: Uuid) -> Result<(), sqlx::Error> {
-    sqlx::query("DELETE FROM security_groups WHERE id = $1")
-        .bind(security_group_id)
-        .execute(pool)
-        .await?;
+    sqlx::query!(
+        "DELETE FROM security_groups WHERE id = $1",
+        security_group_id
+    )
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -180,12 +182,13 @@ pub async fn list_rules(
     pool: &PgPool,
     security_group_id: Uuid,
 ) -> Result<Vec<SecurityGroupRule>, sqlx::Error> {
-    let rows: Vec<SecurityGroupRuleRow> = sqlx::query_as(
+    let rows: Vec<SecurityGroupRuleRow> = sqlx::query_as!(
+        SecurityGroupRuleRow,
         r#"
 SELECT id,
        security_group_id,
-       direction,
-       protocol,
+       direction AS "direction: _",
+       protocol AS "protocol: _",
        cidr::text,
        port_start,
        port_end,
@@ -194,8 +197,8 @@ FROM security_group_rules
 WHERE security_group_id = $1
 ORDER BY direction, protocol, cidr NULLS FIRST, port_start NULLS FIRST, id
         "#,
+        security_group_id
     )
-    .bind(security_group_id)
     .fetch_all(pool)
     .await?;
 
@@ -209,22 +212,22 @@ pub async fn create_rule(
 ) -> Result<Uuid, sqlx::Error> {
     let id = Uuid::new_v4();
 
-    sqlx::query(
+    sqlx::query!(
         r#"
 INSERT INTO security_group_rules (
     id, security_group_id, direction, protocol, cidr, port_start, port_end, description
 )
-VALUES ($1, $2, $3, $4, $5::cidr, $6, $7, $8)
+VALUES ($1, $2, $3, $4, $5::text::cidr, $6, $7, $8)
         "#,
+        id,
+        security_group_id,
+        rule.direction as SecurityGroupDirection,
+        rule.protocol as SecurityGroupProtocol,
+        rule.cidr,
+        rule.port_start,
+        rule.port_end,
+        rule.description
     )
-    .bind(id)
-    .bind(security_group_id)
-    .bind(rule.direction)
-    .bind(rule.protocol)
-    .bind(rule.cidr)
-    .bind(rule.port_start)
-    .bind(rule.port_end)
-    .bind(rule.description)
     .execute(pool)
     .await?;
 
@@ -236,16 +239,19 @@ pub async fn delete_rule(
     security_group_id: Uuid,
     rule_id: Uuid,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query("DELETE FROM security_group_rules WHERE security_group_id = $1 AND id = $2")
-        .bind(security_group_id)
-        .bind(rule_id)
-        .execute(pool)
-        .await?;
+    sqlx::query!(
+        "DELETE FROM security_group_rules WHERE security_group_id = $1 AND id = $2",
+        security_group_id,
+        rule_id
+    )
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
 pub async fn list_by_vm(pool: &PgPool, vm_id: Uuid) -> Result<Vec<SecurityGroup>, sqlx::Error> {
-    let rows: Vec<SecurityGroupRow> = sqlx::query_as(
+    let rows: Vec<SecurityGroupRow> = sqlx::query_as!(
+        SecurityGroupRow,
         r#"
 SELECT sg.id, sg.name, sg.description
 FROM security_groups sg
@@ -253,8 +259,8 @@ JOIN vm_security_groups vsg ON vsg.security_group_id = sg.id
 WHERE vsg.vm_id = $1
 ORDER BY sg.name
         "#,
+        vm_id
     )
-    .bind(vm_id)
     .fetch_all(pool)
     .await?;
 
@@ -265,12 +271,13 @@ pub async fn rule_set_for_vm(
     pool: &PgPool,
     vm_id: Uuid,
 ) -> Result<Vec<SecurityGroupRule>, sqlx::Error> {
-    let rows: Vec<SecurityGroupRuleRow> = sqlx::query_as(
+    let rows: Vec<SecurityGroupRuleRow> = sqlx::query_as!(
+        SecurityGroupRuleRow,
         r#"
 SELECT sgr.id,
        sgr.security_group_id,
-       sgr.direction,
-       sgr.protocol,
+       sgr.direction AS "direction: _",
+       sgr.protocol AS "protocol: _",
        sgr.cidr::text,
        sgr.port_start,
        sgr.port_end,
@@ -280,8 +287,8 @@ JOIN vm_security_groups vsg ON vsg.security_group_id = sgr.security_group_id
 WHERE vsg.vm_id = $1
 ORDER BY sgr.direction, sgr.protocol, sgr.cidr NULLS FIRST, sgr.port_start NULLS FIRST, sgr.id
         "#,
+        vm_id
     )
-    .bind(vm_id)
     .fetch_all(pool)
     .await?;
 
@@ -293,15 +300,15 @@ pub async fn add_to_vm(
     vm_id: Uuid,
     security_group_id: Uuid,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(
+    sqlx::query!(
         r#"
 INSERT INTO vm_security_groups (vm_id, security_group_id)
 VALUES ($1, $2)
 ON CONFLICT DO NOTHING
         "#,
+        vm_id,
+        security_group_id
     )
-    .bind(vm_id)
-    .bind(security_group_id)
     .execute(tx.as_mut())
     .await?;
 
@@ -313,22 +320,22 @@ pub async fn remove_from_vm(
     vm_id: Uuid,
     security_group_id: Uuid,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query("DELETE FROM vm_security_groups WHERE vm_id = $1 AND security_group_id = $2")
-        .bind(vm_id)
-        .bind(security_group_id)
-        .execute(tx.as_mut())
-        .await?;
+    sqlx::query!(
+        "DELETE FROM vm_security_groups WHERE vm_id = $1 AND security_group_id = $2",
+        vm_id,
+        security_group_id
+    )
+    .execute(tx.as_mut())
+    .await?;
 
     Ok(())
 }
 
 pub async fn list_vm_ids(pool: &PgPool, security_group_id: Uuid) -> Result<Vec<Uuid>, sqlx::Error> {
-    let rows: Vec<(Uuid,)> = sqlx::query_as(
+    sqlx::query_scalar!(
         "SELECT vm_id FROM vm_security_groups WHERE security_group_id = $1 ORDER BY vm_id",
+        security_group_id
     )
-    .bind(security_group_id)
     .fetch_all(pool)
-    .await?;
-
-    Ok(rows.into_iter().map(|(vm_id,)| vm_id).collect())
+    .await
 }

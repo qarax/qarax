@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nSELECT DISTINCT hn.host_id\nFROM host_networks hn\nJOIN networks n ON n.id = hn.network_id\nWHERE n.vpc_name IS NOT NULL\nORDER BY hn.host_id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "host_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "3f340934cde8ccf2d77e1dbe21388ac374120072ae93d92096e6f04c32024b49"
+}

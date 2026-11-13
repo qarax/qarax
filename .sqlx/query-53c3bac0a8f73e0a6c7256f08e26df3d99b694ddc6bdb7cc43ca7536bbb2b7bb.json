@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM sandbox_pools WHERE vm_template_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "53c3bac0a8f73e0a6c7256f08e26df3d99b694ddc6bdb7cc43ca7536bbb2b7bb"
+}

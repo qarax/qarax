@@ -43,7 +43,6 @@ pub struct StoragePool {
     pub allocated_bytes: Option<i64>,
 }
 
-#[derive(sqlx::FromRow)]
 pub struct StoragePoolRow {
     pub id: Uuid,
     pub name: String,
@@ -132,14 +131,15 @@ pub async fn list(
     pool: &PgPool,
     name_filter: Option<&str>,
 ) -> Result<Vec<StoragePool>, sqlx::Error> {
-    let rows: Vec<StoragePoolRow> = sqlx::query_as::<_, StoragePoolRow>(
+    let rows: Vec<StoragePoolRow> = sqlx::query_as!(
+        StoragePoolRow,
         r#"
-SELECT id, name, pool_type, status, config, capacity_bytes, allocated_bytes
+SELECT id, name, pool_type AS "pool_type: _", status AS "status: _", config, capacity_bytes, allocated_bytes
 FROM storage_pools
 WHERE ($1::text IS NULL OR name = $1)
         "#,
+        name_filter,
     )
-    .bind(name_filter)
     .fetch_all(pool)
     .await?;
 
@@ -147,14 +147,15 @@ WHERE ($1::text IS NULL OR name = $1)
 }
 
 pub async fn get(pool: &PgPool, pool_id: Uuid) -> Result<StoragePool, sqlx::Error> {
-    let row: StoragePoolRow = sqlx::query_as::<_, StoragePoolRow>(
+    let row: StoragePoolRow = sqlx::query_as!(
+        StoragePoolRow,
         r#"
-SELECT id, name, pool_type, status, config, capacity_bytes, allocated_bytes
+SELECT id, name, pool_type AS "pool_type: _", status AS "status: _", config, capacity_bytes, allocated_bytes
 FROM storage_pools
 WHERE id = $1
         "#,
+        pool_id,
     )
-    .bind(pool_id)
     .fetch_one(pool)
     .await?;
 
@@ -162,14 +163,15 @@ WHERE id = $1
 }
 
 pub async fn get_batch(pool: &PgPool, ids: &[Uuid]) -> Result<Vec<StoragePool>, sqlx::Error> {
-    let rows: Vec<StoragePoolRow> = sqlx::query_as::<_, StoragePoolRow>(
+    let rows: Vec<StoragePoolRow> = sqlx::query_as!(
+        StoragePoolRow,
         r#"
-SELECT id, name, pool_type, status, config, capacity_bytes, allocated_bytes
+SELECT id, name, pool_type AS "pool_type: _", status AS "status: _", config, capacity_bytes, allocated_bytes
 FROM storage_pools
 WHERE id = ANY($1)
         "#,
+        ids,
     )
-    .bind(ids)
     .fetch_all(pool)
     .await?;
 
@@ -179,18 +181,18 @@ WHERE id = ANY($1)
 pub async fn create(pool: &PgPool, new_pool: NewStoragePool) -> Result<Uuid, sqlx::Error> {
     let id = Uuid::new_v4();
 
-    sqlx::query(
+    sqlx::query!(
         r#"
 INSERT INTO storage_pools (id, name, pool_type, status, config, capacity_bytes)
 VALUES ($1, $2, $3, $4, $5, $6)
         "#,
+        id,
+        &new_pool.name,
+        new_pool.pool_type as StoragePoolType,
+        StoragePoolStatus::Active as StoragePoolStatus,
+        new_pool.config,
+        new_pool.capacity_bytes
     )
-    .bind(id)
-    .bind(&new_pool.name)
-    .bind(new_pool.pool_type)
-    .bind(StoragePoolStatus::Active)
-    .bind(new_pool.config)
-    .bind(new_pool.capacity_bytes)
     .execute(pool)
     .await?;
 
@@ -198,8 +200,7 @@ VALUES ($1, $2, $3, $4, $5, $6)
 }
 
 pub async fn delete(pool: &PgPool, pool_id: Uuid) -> Result<(), sqlx::Error> {
-    sqlx::query("DELETE FROM storage_pools WHERE id = $1")
-        .bind(pool_id)
+    sqlx::query!("DELETE FROM storage_pools WHERE id = $1", pool_id)
         .execute(pool)
         .await?;
 
@@ -214,22 +215,22 @@ pub async fn pick_active_non_overlaybd(
     prefer_pool_id: Option<Uuid>,
 ) -> Result<Option<Uuid>, sqlx::Error> {
     if let Some(id) = prefer_pool_id {
-        let row = sqlx::query_as::<_, (Uuid,)>(
+        let row = sqlx::query_scalar!(
             "SELECT id FROM storage_pools WHERE id = $1 AND status = 'ACTIVE' AND pool_type != 'OVERLAYBD'",
+            id,
         )
-        .bind(id)
         .fetch_optional(pool)
         .await?;
-        if let Some((found_id,)) = row {
+        if let Some(found_id) = row {
             return Ok(Some(found_id));
         }
     }
-    let row = sqlx::query_as::<_, (Uuid,)>(
-        "SELECT id FROM storage_pools WHERE status = 'ACTIVE' AND pool_type != 'OVERLAYBD' LIMIT 1",
+    let row = sqlx::query_scalar!(
+        "SELECT id FROM storage_pools WHERE status = 'ACTIVE' AND pool_type != 'OVERLAYBD' LIMIT 1"
     )
     .fetch_optional(pool)
     .await?;
-    Ok(row.map(|(id,)| id))
+    Ok(row)
 }
 
 /// Return any active Local pool. Database backups are written by the control
@@ -240,46 +241,44 @@ pub async fn pick_active_local_pool(
     prefer_pool_id: Option<Uuid>,
 ) -> Result<Option<Uuid>, sqlx::Error> {
     if let Some(id) = prefer_pool_id {
-        let row = sqlx::query_as::<_, (Uuid,)>(
+        let row = sqlx::query_scalar!(
             "SELECT id FROM storage_pools WHERE id = $1 AND status = 'ACTIVE' AND pool_type = 'LOCAL'",
+            id,
         )
-        .bind(id)
         .fetch_optional(pool)
         .await?;
-        if let Some((found_id,)) = row {
+        if let Some(found_id) = row {
             return Ok(Some(found_id));
         }
     }
-    let row = sqlx::query_as::<_, (Uuid,)>(
-        "SELECT id FROM storage_pools WHERE status = 'ACTIVE' AND pool_type = 'LOCAL' LIMIT 1",
+    let row = sqlx::query_scalar!(
+        "SELECT id FROM storage_pools WHERE status = 'ACTIVE' AND pool_type = 'LOCAL' LIMIT 1"
     )
     .fetch_optional(pool)
     .await?;
-    Ok(row.map(|(id,)| id))
+    Ok(row)
 }
 
 /// Return an active storage pool ID (used when none is specified for disk creation).
 pub async fn pick_active(pool: &PgPool) -> Result<Option<Uuid>, sqlx::Error> {
-    let row = sqlx::query_as::<_, (Uuid,)>(
-        "SELECT id FROM storage_pools WHERE status = 'ACTIVE' LIMIT 1",
-    )
-    .fetch_optional(pool)
-    .await?;
+    let row = sqlx::query_scalar!("SELECT id FROM storage_pools WHERE status = 'ACTIVE' LIMIT 1")
+        .fetch_optional(pool)
+        .await?;
 
-    Ok(row.map(|(id,)| id))
+    Ok(row)
 }
 
 /// Attach a host to a storage pool (idempotent).
 pub async fn attach_host(pool: &PgPool, pool_id: Uuid, host_id: Uuid) -> Result<(), sqlx::Error> {
-    sqlx::query(
+    sqlx::query!(
         r#"
 INSERT INTO host_storage_pools (host_id, storage_pool_id)
 VALUES ($1, $2)
 ON CONFLICT DO NOTHING
         "#,
+        host_id,
+        pool_id
     )
-    .bind(host_id)
-    .bind(pool_id)
     .execute(pool)
     .await?;
 
@@ -288,26 +287,29 @@ ON CONFLICT DO NOTHING
 
 /// Detach a host from a storage pool.
 pub async fn detach_host(pool: &PgPool, pool_id: Uuid, host_id: Uuid) -> Result<(), sqlx::Error> {
-    sqlx::query("DELETE FROM host_storage_pools WHERE host_id = $1 AND storage_pool_id = $2")
-        .bind(host_id)
-        .bind(pool_id)
-        .execute(pool)
-        .await?;
+    sqlx::query!(
+        "DELETE FROM host_storage_pools WHERE host_id = $1 AND storage_pool_id = $2",
+        host_id,
+        pool_id
+    )
+    .execute(pool)
+    .await?;
 
     Ok(())
 }
 
 /// List all storage pools attached to a specific host.
 pub async fn list_for_host(pool: &PgPool, host_id: Uuid) -> Result<Vec<StoragePool>, sqlx::Error> {
-    let rows: Vec<StoragePoolRow> = sqlx::query_as::<_, StoragePoolRow>(
+    let rows: Vec<StoragePoolRow> = sqlx::query_as!(
+        StoragePoolRow,
         r#"
-SELECT sp.id, sp.name, sp.pool_type, sp.status, sp.config, sp.capacity_bytes, sp.allocated_bytes
+SELECT sp.id, sp.name, sp.pool_type AS "pool_type: _", sp.status AS "status: _", sp.config, sp.capacity_bytes, sp.allocated_bytes
 FROM storage_pools sp
 JOIN host_storage_pools hsp ON hsp.storage_pool_id = sp.id
 WHERE hsp.host_id = $1
         "#,
+        host_id,
     )
-    .bind(host_id)
     .fetch_all(pool)
     .await?;
 
@@ -315,30 +317,30 @@ WHERE hsp.host_id = $1
 }
 
 pub async fn find_host_for_pool(pool: &PgPool, pool_id: Uuid) -> Result<Option<Uuid>, sqlx::Error> {
-    let row = sqlx::query_as::<_, (Uuid,)>(
+    let row = sqlx::query_scalar!(
         "SELECT hsp.host_id FROM host_storage_pools hsp \
          JOIN hosts h ON h.id = hsp.host_id \
          WHERE hsp.storage_pool_id = $1 \
          ORDER BY CASE WHEN h.status = 'UP' THEN 0 ELSE 1 END, h.load_average ASC NULLS LAST \
          LIMIT 1",
+        pool_id
     )
-    .bind(pool_id)
     .fetch_optional(pool)
     .await?;
 
-    Ok(row.map(|(id,)| id))
+    Ok(row)
 }
 
 /// All hosts attached to a storage pool.
 pub async fn list_host_ids(pool: &PgPool, pool_id: Uuid) -> Result<Vec<Uuid>, sqlx::Error> {
-    let rows = sqlx::query_as::<_, (Uuid,)>(
+    let rows = sqlx::query_scalar!(
         "SELECT host_id FROM host_storage_pools WHERE storage_pool_id = $1",
+        pool_id
     )
-    .bind(pool_id)
     .fetch_all(pool)
     .await?;
 
-    Ok(rows.into_iter().map(|(id,)| id).collect())
+    Ok(rows)
 }
 
 /// Check whether a host is attached to a given storage pool.
@@ -347,15 +349,15 @@ pub async fn host_has_pool(
     host_id: Uuid,
     pool_id: Uuid,
 ) -> Result<bool, sqlx::Error> {
-    let row = sqlx::query_as::<_, (i64,)>(
-        "SELECT COUNT(*) FROM host_storage_pools WHERE host_id = $1 AND storage_pool_id = $2",
+    let row = sqlx::query_scalar!(
+        "SELECT COUNT(*) AS \"count!\" FROM host_storage_pools WHERE host_id = $1 AND storage_pool_id = $2",
+        host_id,
+        pool_id,
     )
-    .bind(host_id)
-    .bind(pool_id)
     .fetch_one(pool)
     .await?;
 
-    Ok(row.0 > 0)
+    Ok(row > 0)
 }
 
 /// Return the first active OverlayBD storage pool that the given host is attached to, if any.
@@ -363,9 +365,10 @@ pub async fn find_overlaybd_for_host(
     pool: &PgPool,
     host_id: Uuid,
 ) -> Result<Option<StoragePool>, sqlx::Error> {
-    let row = sqlx::query_as::<_, StoragePoolRow>(
+    let row = sqlx::query_as!(
+        StoragePoolRow,
         r#"
-SELECT sp.id, sp.name, sp.pool_type, sp.status, sp.config, sp.capacity_bytes, sp.allocated_bytes
+SELECT sp.id, sp.name, sp.pool_type AS "pool_type: _", sp.status AS "status: _", sp.config, sp.capacity_bytes, sp.allocated_bytes
 FROM storage_pools sp
 JOIN host_storage_pools hsp ON hsp.storage_pool_id = sp.id
 WHERE hsp.host_id = $1
@@ -374,8 +377,8 @@ WHERE hsp.host_id = $1
 ORDER BY sp.name
 LIMIT 1
         "#,
+        host_id,
     )
-    .bind(host_id)
     .fetch_optional(pool)
     .await?;
 

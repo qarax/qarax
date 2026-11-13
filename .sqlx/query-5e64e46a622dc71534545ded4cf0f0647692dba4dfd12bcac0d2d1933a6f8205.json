@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM host_networks WHERE host_id = $1 AND network_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5e64e46a622dc71534545ded4cf0f0647692dba4dfd12bcac0d2d1933a6f8205"
+}

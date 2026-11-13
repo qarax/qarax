@@ -1,0 +1,37 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nINSERT INTO storage_objects (id, name, storage_pool_id, object_type, size_bytes, config, parent_id, managed_host_ids)\nVALUES ($1, $2, $3, $4, $5, $6, $7, $8)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Varchar",
+        "Uuid",
+        {
+          "Custom": {
+            "name": "storage_object_type",
+            "kind": {
+              "Enum": [
+                "DISK",
+                "KERNEL",
+                "INITRD",
+                "ISO",
+                "SNAPSHOT",
+                "OCI_IMAGE",
+                "OVERLAYBD_UPPER",
+                "DATABASE_BACKUP"
+              ]
+            }
+          }
+        },
+        "Int8",
+        "Jsonb",
+        "Uuid",
+        "UuidArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e03c0b9dc09db4d13d86a4ce10709272c87e6863fc2a45394858a3f2638a3f0f"
+}

@@ -18,7 +18,7 @@ pub enum SnapshotStatus {
     Failed,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, ToSchema, sqlx::FromRow)]
+#[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
 pub struct Snapshot {
     pub id: Uuid,
     pub vm_id: Uuid,
@@ -36,16 +36,16 @@ pub struct NewSnapshot {
 
 pub async fn create(pool: &PgPool, new: &NewSnapshot) -> Result<Uuid, sqlx::Error> {
     let id = Uuid::new_v4();
-    sqlx::query(
+    sqlx::query!(
         r#"
 INSERT INTO vm_snapshots (id, vm_id, storage_object_id, name)
 VALUES ($1, $2, $3, $4)
         "#,
+        id,
+        new.vm_id,
+        new.storage_object_id,
+        &new.name
     )
-    .bind(id)
-    .bind(new.vm_id)
-    .bind(new.storage_object_id)
-    .bind(&new.name)
     .execute(pool)
     .await?;
 
@@ -91,15 +91,15 @@ pub async fn update_status(
     snapshot_id: Uuid,
     status: SnapshotStatus,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(
+    sqlx::query!(
         r#"
 UPDATE vm_snapshots
 SET status = $2
 WHERE id = $1
         "#,
+        snapshot_id,
+        &status as &SnapshotStatus
     )
-    .bind(snapshot_id)
-    .bind(&status)
     .execute(pool)
     .await?;
 

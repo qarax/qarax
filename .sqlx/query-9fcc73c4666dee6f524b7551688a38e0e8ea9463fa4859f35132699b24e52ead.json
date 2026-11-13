@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM host_numa_nodes WHERE host_id = $1 AND node_id != ALL($2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4Array"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9fcc73c4666dee6f524b7551688a38e0e8ea9463fa4859f35132699b24e52ead"
+}

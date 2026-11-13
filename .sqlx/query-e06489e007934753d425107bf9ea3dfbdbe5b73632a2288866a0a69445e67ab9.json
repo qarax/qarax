@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nUPDATE hosts SET\n    architecture = $1,\n    total_cpus = $2,\n    total_memory_bytes = $3,\n    available_memory_bytes = $4,\n    load_average = $5,\n    disk_total_bytes = $6,\n    disk_available_bytes = $7,\n    resources_updated_at = NOW()\nWHERE id = $8\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Int4",
+        "Int8",
+        "Int8",
+        "Float8",
+        "Int8",
+        "Int8",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e06489e007934753d425107bf9ea3dfbdbe5b73632a2288866a0a69445e67ab9"
+}

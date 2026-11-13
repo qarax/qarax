@@ -1,0 +1,45 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nINSERT INTO network_interfaces (\n    id, vm_id, network_id, device_id,\n    tap_name, mac_address, host_mac, ip_address, mtu,\n    interface_type, vhost_user, vhost_socket, vhost_mode,\n    num_queues, queue_size, rate_limiter,\n    offload_tso, offload_ufo, offload_csum,\n    pci_segment, iommu\n) VALUES (\n    $1, $2, $3, $4,\n    $5, $6::text::macaddr, $7::text::macaddr, $8::text::inet, $9,\n    $10, $11, $12, $13,\n    $14, $15, $16,\n    $17, $18, $19,\n    $20, $21\n)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Varchar",
+        "Varchar",
+        "Text",
+        "Text",
+        "Text",
+        "Int4",
+        {
+          "Custom": {
+            "name": "interface_type",
+            "kind": {
+              "Enum": [
+                "macvtap",
+                "tap",
+                "vhost_user"
+              ]
+            }
+          }
+        },
+        "Bool",
+        "Varchar",
+        "Varchar",
+        "Int4",
+        "Int4",
+        "Jsonb",
+        "Bool",
+        "Bool",
+        "Bool",
+        "Int4",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4bfcad9221d4c767bfcf7ba65baccb703c76d5375ccd5b1b6eb826a4bade36a7"
+}

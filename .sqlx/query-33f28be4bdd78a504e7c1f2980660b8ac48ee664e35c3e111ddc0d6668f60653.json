@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM vm_security_groups WHERE vm_id = $1 AND security_group_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "33f28be4bdd78a504e7c1f2980660b8ac48ee664e35c3e111ddc0d6668f60653"
+}

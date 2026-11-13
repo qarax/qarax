@@ -17,7 +17,7 @@ pub struct SandboxPool {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(sqlx::FromRow, Debug, Clone)]
+#[derive(Debug, Clone)]
 struct SandboxPoolRow {
     pub id: Uuid,
     pub vm_template_id: Uuid,
@@ -51,7 +51,7 @@ pub struct ConfigureSandboxPoolRequest {
     pub min_ready: i32,
 }
 
-#[derive(sqlx::FromRow, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct SandboxPoolConfig {
     pub id: Uuid,
     pub vm_template_id: Uuid,
@@ -61,15 +61,16 @@ pub struct SandboxPoolConfig {
 }
 
 pub async fn list(pool: &PgPool) -> Result<Vec<SandboxPool>, sqlx::Error> {
-    let rows = sqlx::query_as::<_, SandboxPoolRow>(
+    let rows = sqlx::query_as!(
+        SandboxPoolRow,
         r#"
 SELECT sp.id,
        sp.vm_template_id,
        vt.name AS vm_template_name,
        sp.min_ready,
-       COUNT(*) FILTER (WHERE spm.status = 'READY')::bigint AS current_ready,
-       COUNT(*) FILTER (WHERE spm.status = 'PROVISIONING')::bigint AS current_provisioning,
-       COUNT(*) FILTER (WHERE spm.status = 'ERROR')::bigint AS current_error,
+       COUNT(*) FILTER (WHERE spm.status = 'READY')::bigint AS "current_ready!",
+       COUNT(*) FILTER (WHERE spm.status = 'PROVISIONING')::bigint AS "current_provisioning!",
+       COUNT(*) FILTER (WHERE spm.status = 'ERROR')::bigint AS "current_error!",
        sp.created_at,
        sp.updated_at
 FROM sandbox_pools sp
@@ -79,7 +80,7 @@ LEFT JOIN sandbox_pool_members spm
   ON spm.sandbox_pool_id = sp.id
 GROUP BY sp.id, vt.name
 ORDER BY vt.name
-        "#,
+        "#
     )
     .fetch_all(pool)
     .await?;
@@ -91,15 +92,16 @@ pub async fn get_by_template(
     pool: &PgPool,
     vm_template_id: Uuid,
 ) -> Result<SandboxPool, sqlx::Error> {
-    let row = sqlx::query_as::<_, SandboxPoolRow>(
+    let row = sqlx::query_as!(
+        SandboxPoolRow,
         r#"
 SELECT sp.id,
        sp.vm_template_id,
        vt.name AS vm_template_name,
        sp.min_ready,
-       COUNT(*) FILTER (WHERE spm.status = 'READY')::bigint AS current_ready,
-       COUNT(*) FILTER (WHERE spm.status = 'PROVISIONING')::bigint AS current_provisioning,
-       COUNT(*) FILTER (WHERE spm.status = 'ERROR')::bigint AS current_error,
+       COUNT(*) FILTER (WHERE spm.status = 'READY')::bigint AS "current_ready!",
+       COUNT(*) FILTER (WHERE spm.status = 'PROVISIONING')::bigint AS "current_provisioning!",
+       COUNT(*) FILTER (WHERE spm.status = 'ERROR')::bigint AS "current_error!",
        sp.created_at,
        sp.updated_at
 FROM sandbox_pools sp
@@ -110,8 +112,8 @@ LEFT JOIN sandbox_pool_members spm
 WHERE sp.vm_template_id = $1
 GROUP BY sp.id, vt.name
         "#,
+        vm_template_id
     )
-    .bind(vm_template_id)
     .fetch_one(pool)
     .await?;
 
@@ -122,14 +124,15 @@ pub async fn get_config(
     pool: &PgPool,
     vm_template_id: Uuid,
 ) -> Result<Option<SandboxPoolConfig>, sqlx::Error> {
-    sqlx::query_as::<_, SandboxPoolConfig>(
+    sqlx::query_as!(
+        SandboxPoolConfig,
         r#"
 SELECT id, vm_template_id, min_ready, created_at, updated_at
 FROM sandbox_pools
 WHERE vm_template_id = $1
         "#,
+        vm_template_id
     )
-    .bind(vm_template_id)
     .fetch_optional(pool)
     .await
 }
@@ -139,7 +142,7 @@ pub async fn upsert(
     vm_template_id: Uuid,
     min_ready: i32,
 ) -> Result<SandboxPool, sqlx::Error> {
-    sqlx::query(
+    sqlx::query!(
         r#"
 INSERT INTO sandbox_pools (vm_template_id, min_ready)
 VALUES ($1, $2)
@@ -147,9 +150,9 @@ ON CONFLICT (vm_template_id)
 DO UPDATE SET min_ready = EXCLUDED.min_ready,
               updated_at = NOW()
         "#,
+        vm_template_id,
+        min_ready
     )
-    .bind(vm_template_id)
-    .bind(min_ready)
     .execute(pool)
     .await?;
 
@@ -160,9 +163,11 @@ pub async fn delete_tx(
     tx: &mut Transaction<'_, Postgres>,
     vm_template_id: Uuid,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query("DELETE FROM sandbox_pools WHERE vm_template_id = $1")
-        .bind(vm_template_id)
-        .execute(tx.as_mut())
-        .await?;
+    sqlx::query!(
+        "DELETE FROM sandbox_pools WHERE vm_template_id = $1",
+        vm_template_id
+    )
+    .execute(tx.as_mut())
+    .await?;
     Ok(())
 }

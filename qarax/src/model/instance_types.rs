@@ -29,7 +29,6 @@ pub struct InstanceType {
     pub numa_config: Option<serde_json::Value>,
 }
 
-#[derive(sqlx::FromRow)]
 struct InstanceTypeRow {
     pub id: Uuid,
     pub name: String,
@@ -102,7 +101,8 @@ pub async fn list(
     pool: &PgPool,
     name_filter: Option<&str>,
 ) -> Result<Vec<InstanceType>, sqlx::Error> {
-    let rows = sqlx::query_as::<_, InstanceTypeRow>(
+    let rows = sqlx::query_as!(
+        InstanceTypeRow,
         r#"
 SELECT id,
        name,
@@ -110,7 +110,7 @@ SELECT id,
        architecture,
        boot_vcpus,
        max_vcpus,
-       cpu_topology,
+       cpu_topology AS "cpu_topology: _",
        kvm_hyperv,
        memory_size,
        memory_hotplug_size,
@@ -120,14 +120,14 @@ SELECT id,
        memory_hugepage_size,
        memory_prefault,
        memory_thp,
-       accelerator_config,
-       numa_config
+       accelerator_config AS "accelerator_config: _",
+       numa_config AS "numa_config: _"
 FROM instance_types
 WHERE ($1::text IS NULL OR name = $1)
 ORDER BY name
         "#,
+        name_filter
     )
-    .bind(name_filter)
     .fetch_all(pool)
     .await?;
 
@@ -135,7 +135,8 @@ ORDER BY name
 }
 
 pub async fn get(pool: &PgPool, instance_type_id: Uuid) -> Result<InstanceType, sqlx::Error> {
-    let row = sqlx::query_as::<_, InstanceTypeRow>(
+    let row = sqlx::query_as!(
+        InstanceTypeRow,
         r#"
 SELECT id,
        name,
@@ -143,7 +144,7 @@ SELECT id,
        architecture,
        boot_vcpus,
        max_vcpus,
-       cpu_topology,
+       cpu_topology AS "cpu_topology: _",
        kvm_hyperv,
        memory_size,
        memory_hotplug_size,
@@ -153,13 +154,13 @@ SELECT id,
        memory_hugepage_size,
        memory_prefault,
        memory_thp,
-       accelerator_config,
-       numa_config
+       accelerator_config AS "accelerator_config: _",
+       numa_config AS "numa_config: _"
 FROM instance_types
 WHERE id = $1
         "#,
+        instance_type_id
     )
-    .bind(instance_type_id)
     .fetch_one(pool)
     .await?;
 
@@ -171,15 +172,12 @@ pub async fn create(
     new_instance_type: NewInstanceType,
 ) -> Result<Uuid, sqlx::Error> {
     let id = Uuid::new_v4();
-    let cpu_topology = new_instance_type.cpu_topology.map(Json);
-    let accelerator_config = Json(new_instance_type.accelerator_config);
-    let numa_config = new_instance_type.numa_config.map(Json);
     let architecture = new_instance_type
         .architecture
         .as_deref()
         .and_then(common::architecture::normalize_architecture);
 
-    sqlx::query(
+    sqlx::query!(
         r#"
 INSERT INTO instance_types (
     id,
@@ -206,25 +204,25 @@ VALUES (
     $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
 )
         "#,
+        id,
+        new_instance_type.name,
+        new_instance_type.description,
+        architecture,
+        new_instance_type.boot_vcpus,
+        new_instance_type.max_vcpus,
+        new_instance_type.cpu_topology,
+        new_instance_type.kvm_hyperv,
+        new_instance_type.memory_size,
+        new_instance_type.memory_hotplug_size,
+        new_instance_type.memory_mergeable,
+        new_instance_type.memory_shared,
+        new_instance_type.memory_hugepages,
+        new_instance_type.memory_hugepage_size,
+        new_instance_type.memory_prefault,
+        new_instance_type.memory_thp,
+        new_instance_type.accelerator_config,
+        new_instance_type.numa_config
     )
-    .bind(id)
-    .bind(new_instance_type.name)
-    .bind(new_instance_type.description)
-    .bind(architecture)
-    .bind(new_instance_type.boot_vcpus)
-    .bind(new_instance_type.max_vcpus)
-    .bind(cpu_topology)
-    .bind(new_instance_type.kvm_hyperv)
-    .bind(new_instance_type.memory_size)
-    .bind(new_instance_type.memory_hotplug_size)
-    .bind(new_instance_type.memory_mergeable)
-    .bind(new_instance_type.memory_shared)
-    .bind(new_instance_type.memory_hugepages)
-    .bind(new_instance_type.memory_hugepage_size)
-    .bind(new_instance_type.memory_prefault)
-    .bind(new_instance_type.memory_thp)
-    .bind(accelerator_config)
-    .bind(numa_config)
     .execute(pool)
     .await?;
 
@@ -232,13 +230,13 @@ VALUES (
 }
 
 pub async fn delete(pool: &PgPool, instance_type_id: Uuid) -> Result<(), sqlx::Error> {
-    sqlx::query(
+    sqlx::query!(
         r#"
 DELETE FROM instance_types
 WHERE id = $1
         "#,
+        instance_type_id
     )
-    .bind(instance_type_id)
     .execute(pool)
     .await?;
 

@@ -1,0 +1,31 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nINSERT INTO sandboxes (id, vm_id, vm_template_id, name, status, idle_timeout_secs)\nVALUES ($1, $2, $3, $4, $5, $6)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text",
+        {
+          "Custom": {
+            "name": "sandbox_status",
+            "kind": {
+              "Enum": [
+                "PROVISIONING",
+                "READY",
+                "ERROR",
+                "DESTROYING"
+              ]
+            }
+          }
+        },
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "95cc79f87a704708ef97479380bdc985621560ceb5595eac48dcc0de347e52fd"
+}

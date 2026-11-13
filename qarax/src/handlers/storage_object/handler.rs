@@ -101,9 +101,12 @@ pub async fn delete(
     Extension(env): Extension<App>,
     Path(object_id): Path<Uuid>,
 ) -> Result<StatusCode> {
-    let creating: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM jobs WHERE resource_id = $1 AND status IN ('PENDING', 'RUNNING'))",
-    ).bind(object_id).fetch_one(env.pool()).await?;
+    let creating: bool = sqlx::query_scalar!(
+        r#"SELECT EXISTS(SELECT 1 FROM jobs WHERE resource_id = $1 AND status IN ('PENDING', 'RUNNING')) AS "exists!""#,
+        object_id,
+    )
+    .fetch_one(env.pool())
+    .await?;
     if creating {
         return Err(crate::errors::Error::Conflict(
             "Storage object is still being created".into(),

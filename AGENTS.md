@@ -127,7 +127,11 @@ Models in `qarax/src/model/` use three struct tiers:
 - **Row type** (e.g., `VmRow`): `#[sqlx::FromRow]` for DB results, with `From<Row> for Model` conversions
 - **Request type** (e.g., `NewVm`): for POST/PATCH bodies
 
-Queries use `sqlx::query_as!()` with compile-time checking. Column casts are explicit: `status as "status: _"`, `host_id as "host_id?"`.
+Every query with fixed SQL uses the checked macros (`query!`, `query_as!`, `query_scalar!`). Runtime `sqlx::query*` and `#[derive(sqlx::FromRow)]` are only for SQL assembled with `QueryBuilder` (scheduler `pick_host_tx`, audit log filters). Overrides the macros need:
+- Enum and JSON columns: `status as "status: _"`, `config as "config: _"` (`query!` names the type: `"status: VmStatus"`).
+- Nullable columns, expressions and casts read into a non-`Option` field: `count as "count!"`, `subnet::text AS "subnet!"`.
+- Enum params: an identity cast of the argument's type, e.g. `status as VmStatus`, `&req.scope as &HookScope`, `filter as Option<BackupType>`.
+- `Option<String>` params: pass `x.as_deref()`, not `&x`. CIDR/INET/MACADDR params arrive as text: `$1::text::inet`.
 
 Database enums use `#[sqlx(type_name = "vm_status")]` with `#[serde(rename_all = "snake_case")]`.
 

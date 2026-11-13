@@ -56,7 +56,6 @@ pub struct NetworkInterface {
     pub iommu: bool,
 }
 
-#[derive(sqlx::FromRow)]
 pub struct NetworkInterfaceRow {
     pub id: Uuid,
     pub vm_id: Uuid,
@@ -229,7 +228,8 @@ pub async fn create(
         .as_ref()
         .map(|r| serde_json::to_value(r).unwrap_or(serde_json::Value::Null));
 
-    sqlx::query(
+    // network_id is set when using managed networking.
+    sqlx::query!(
         r#"
 INSERT INTO network_interfaces (
     id, vm_id, network_id, device_id,
@@ -240,35 +240,35 @@ INSERT INTO network_interfaces (
     pci_segment, iommu
 ) VALUES (
     $1, $2, $3, $4,
-    $5, $6::macaddr, $7::macaddr, $8::inet, $9,
+    $5, $6::text::macaddr, $7::text::macaddr, $8::text::inet, $9,
     $10, $11, $12, $13,
     $14, $15, $16,
     $17, $18, $19,
     $20, $21
 )
         "#,
+        id,
+        vm_id,
+        n.network_id,
+        &n.id,
+        n.tap.as_deref(),
+        n.mac.as_deref(),
+        n.host_mac.as_deref(),
+        n.ip.as_deref(),
+        n.mtu.unwrap_or(1500),
+        interface_type as InterfaceType,
+        n.vhost_user.unwrap_or(false),
+        n.vhost_socket.as_deref(),
+        vhost_mode,
+        n.num_queues.unwrap_or(1),
+        n.queue_size.unwrap_or(256),
+        rate_limiter,
+        n.offload_tso.unwrap_or(true),
+        n.offload_ufo.unwrap_or(true),
+        n.offload_csum.unwrap_or(true),
+        n.pci_segment.unwrap_or(0),
+        n.iommu.unwrap_or(false)
     )
-    .bind(id)
-    .bind(vm_id)
-    .bind(n.network_id) // network_id: set when using managed networking
-    .bind(&n.id)
-    .bind(&n.tap)
-    .bind(&n.mac)
-    .bind(&n.host_mac)
-    .bind(&n.ip)
-    .bind(n.mtu.unwrap_or(1500))
-    .bind(interface_type)
-    .bind(n.vhost_user.unwrap_or(false))
-    .bind(&n.vhost_socket)
-    .bind(vhost_mode)
-    .bind(n.num_queues.unwrap_or(1))
-    .bind(n.queue_size.unwrap_or(256))
-    .bind(rate_limiter)
-    .bind(n.offload_tso.unwrap_or(true))
-    .bind(n.offload_ufo.unwrap_or(true))
-    .bind(n.offload_csum.unwrap_or(true))
-    .bind(n.pci_segment.unwrap_or(0))
-    .bind(n.iommu.unwrap_or(false))
     .execute(tx.as_mut())
     .await?;
 
@@ -276,16 +276,14 @@ INSERT INTO network_interfaces (
 }
 
 pub async fn delete(pool: &PgPool, interface_id: Uuid) -> Result<(), sqlx::Error> {
-    sqlx::query("DELETE FROM network_interfaces WHERE id = $1")
-        .bind(interface_id)
+    sqlx::query!("DELETE FROM network_interfaces WHERE id = $1", interface_id)
         .execute(pool)
         .await?;
     Ok(())
 }
 
 pub async fn delete_tx(tx: &mut PgTransaction<'_>, interface_id: Uuid) -> Result<(), sqlx::Error> {
-    sqlx::query("DELETE FROM network_interfaces WHERE id = $1")
-        .bind(interface_id)
+    sqlx::query!("DELETE FROM network_interfaces WHERE id = $1", interface_id)
         .execute(tx.as_mut())
         .await?;
     Ok(())

@@ -140,16 +140,16 @@ async fn terminate_database_sessions(env: &App) -> Result<()> {
         .await
         .map_err(crate::errors::Error::Sqlx)?;
 
-    sqlx::query(
+    sqlx::query!(
         r#"
 SELECT pg_terminate_backend(pid)
 FROM pg_stat_activity
 WHERE datname = $1
   AND pid <> pg_backend_pid()
         "#,
+        &env.database().name
     )
-    .bind(&env.database().name)
-    .execute(&mut connection)
+    .fetch_all(&mut connection)
     .await
     .map_err(crate::errors::Error::Sqlx)?;
 

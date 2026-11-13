@@ -1,0 +1,70 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nSELECT h.id AS host_id,\n       h.architecture,\n       h.total_cpus,\n       COALESCE(alloc.allocated_vcpus, 0)::bigint AS \"allocated_vcpus!\",\n       h.total_memory_bytes,\n       COALESCE(alloc.allocated_memory_bytes, 0)::bigint AS \"allocated_memory_bytes!\",\n       h.available_memory_bytes,\n       h.disk_total_bytes,\n       h.disk_available_bytes\nFROM hosts h\nLEFT JOIN (\n    SELECT host_id,\n           SUM(memory_size)::bigint AS allocated_memory_bytes,\n           SUM(boot_vcpus)::bigint AS allocated_vcpus\n    FROM vms\n    WHERE status NOT IN ('SHUTDOWN', 'UNKNOWN')\n      AND host_id IS NOT NULL\n    GROUP BY host_id\n) alloc ON alloc.host_id = h.id\nWHERE h.id = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "host_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "architecture",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "total_cpus",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "allocated_vcpus!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 4,
+        "name": "total_memory_bytes",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 5,
+        "name": "allocated_memory_bytes!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 6,
+        "name": "available_memory_bytes",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 7,
+        "name": "disk_total_bytes",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 8,
+        "name": "disk_available_bytes",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      null,
+      true,
+      null,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "2c5578a3d6a80e92825256318c6b107def29a9c42b2e2411e0e68a87cd6e3cfd"
+}

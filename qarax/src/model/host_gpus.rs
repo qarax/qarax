@@ -3,7 +3,7 @@ use sqlx::{PgPool, Postgres, QueryBuilder, Transaction};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-#[derive(Serialize, Deserialize, Debug, Clone, ToSchema, sqlx::FromRow)]
+#[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
 pub struct HostGpu {
     pub id: Uuid,
     pub host_id: Uuid,
@@ -75,20 +75,22 @@ impl AcceleratorConfig {
 
 /// List all GPUs on a host.
 pub async fn list_by_host(pool: &PgPool, host_id: Uuid) -> Result<Vec<HostGpu>, sqlx::Error> {
-    sqlx::query_as::<_, HostGpu>(
+    sqlx::query_as!(
+        HostGpu,
         "SELECT id, host_id, pci_address, model, vendor, vram_bytes, iommu_group, numa_node, vm_id, discovered_at, updated_at FROM host_gpus WHERE host_id = $1 ORDER BY pci_address",
+        host_id,
     )
-    .bind(host_id)
     .fetch_all(pool)
     .await
 }
 
 /// List all GPUs allocated to a VM.
 pub async fn list_by_vm(pool: &PgPool, vm_id: Uuid) -> Result<Vec<HostGpu>, sqlx::Error> {
-    sqlx::query_as::<_, HostGpu>(
+    sqlx::query_as!(
+        HostGpu,
         "SELECT id, host_id, pci_address, model, vendor, vram_bytes, iommu_group, numa_node, vm_id, discovered_at, updated_at FROM host_gpus WHERE vm_id = $1 ORDER BY pci_address",
+        vm_id,
     )
-    .bind(vm_id)
     .fetch_all(pool)
     .await
 }
@@ -129,17 +131,18 @@ pub async fn sync_gpus(
 
     // Remove GPUs that are no longer present on the host (stale entries)
     if gpus.is_empty() {
-        sqlx::query("DELETE FROM host_gpus WHERE host_id = $1")
-            .bind(host_id)
+        sqlx::query!("DELETE FROM host_gpus WHERE host_id = $1", host_id)
             .execute(tx.as_mut())
             .await?;
     } else {
-        let pci_addresses: Vec<&str> = gpus.iter().map(|g| g.pci_address.as_str()).collect();
-        sqlx::query("DELETE FROM host_gpus WHERE host_id = $1 AND pci_address != ALL($2)")
-            .bind(host_id)
-            .bind(&pci_addresses)
-            .execute(tx.as_mut())
-            .await?;
+        let pci_addresses: Vec<String> = gpus.iter().map(|g| g.pci_address.clone()).collect();
+        sqlx::query!(
+            "DELETE FROM host_gpus WHERE host_id = $1 AND pci_address != ALL($2)",
+            host_id,
+            &pci_addresses
+        )
+        .execute(tx.as_mut())
+        .await?;
     }
 
     tx.commit().await?;
@@ -157,7 +160,8 @@ pub async fn allocate_gpus(
     model: Option<&str>,
     min_vram_bytes: Option<i64>,
 ) -> Result<Vec<HostGpu>, sqlx::Error> {
-    let gpus = sqlx::query_as::<_, HostGpu>(
+    let gpus = sqlx::query_as!(
+        HostGpu,
         r#"
 UPDATE host_gpus
 SET vm_id = $1, updated_at = NOW()
@@ -174,13 +178,13 @@ WHERE id IN (
 )
 RETURNING id, host_id, pci_address, model, vendor, vram_bytes, iommu_group, numa_node, vm_id, discovered_at, updated_at
         "#,
+        vm_id,
+        host_id,
+        vendor,
+        model,
+        min_vram_bytes,
+        i64::from(count),
     )
-    .bind(vm_id)
-    .bind(host_id)
-    .bind(vendor)
-    .bind(model)
-    .bind(min_vram_bytes)
-    .bind(count)
     .fetch_all(tx.as_mut())
     .await?;
 
@@ -189,11 +193,12 @@ RETURNING id, host_id, pci_address, model, vendor, vram_bytes, iommu_group, numa
 
 /// Release all GPUs allocated to a VM.
 pub async fn deallocate_by_vm(pool: &PgPool, vm_id: Uuid) -> Result<u64, sqlx::Error> {
-    let result =
-        sqlx::query("UPDATE host_gpus SET vm_id = NULL, updated_at = NOW() WHERE vm_id = $1")
-            .bind(vm_id)
-            .execute(pool)
-            .await?;
+    let result = sqlx::query!(
+        "UPDATE host_gpus SET vm_id = NULL, updated_at = NOW() WHERE vm_id = $1",
+        vm_id
+    )
+    .execute(pool)
+    .await?;
     Ok(result.rows_affected())
 }
 
@@ -202,10 +207,11 @@ pub async fn deallocate_by_vm_tx(
     tx: &mut Transaction<'_, Postgres>,
     vm_id: Uuid,
 ) -> Result<u64, sqlx::Error> {
-    let result =
-        sqlx::query("UPDATE host_gpus SET vm_id = NULL, updated_at = NOW() WHERE vm_id = $1")
-            .bind(vm_id)
-            .execute(tx.as_mut())
-            .await?;
+    let result = sqlx::query!(
+        "UPDATE host_gpus SET vm_id = NULL, updated_at = NOW() WHERE vm_id = $1",
+        vm_id
+    )
+    .execute(tx.as_mut())
+    .await?;
     Ok(result.rows_affected())
 }

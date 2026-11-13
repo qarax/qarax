@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use sqlx::{
-    PgPool, Postgres, QueryBuilder, Row, Transaction, Type,
+    PgPool, Postgres, QueryBuilder, Transaction, Type,
     types::{Json, Uuid},
 };
 use strum_macros::{Display, EnumString};
@@ -14,40 +14,64 @@ use crate::errors;
 /// The version of the control-plane binary, used to detect out-of-date nodes.
 pub const CONTROL_PLANE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-const HOST_COLUMNS: &str = "id, name, address, port, host_user, credential_ref, status, cloud_hypervisor_version, firecracker_version, kernel_version, node_version, last_deployed_image, reservation_class, placement_labels, architecture, total_cpus, total_memory_bytes, available_memory_bytes, load_average, disk_total_bytes, disk_available_bytes, resources_updated_at";
+/// A `hosts` row as stored. `Host` adds the derived `update_available`.
+#[derive(sqlx::FromRow)]
+struct HostRow {
+    id: Uuid,
+    name: String,
+    address: String,
+    port: i32,
+    host_user: String,
+    credential_ref: Option<String>,
+    status: HostStatus,
+    cloud_hypervisor_version: Option<String>,
+    firecracker_version: Option<String>,
+    kernel_version: Option<String>,
+    node_version: Option<String>,
+    last_deployed_image: Option<String>,
+    reservation_class: Option<String>,
+    placement_labels: Json<BTreeMap<String, String>>,
+    architecture: Option<String>,
+    total_cpus: Option<i32>,
+    total_memory_bytes: Option<i64>,
+    available_memory_bytes: Option<i64>,
+    load_average: Option<f64>,
+    disk_total_bytes: Option<i64>,
+    disk_available_bytes: Option<i64>,
+    resources_updated_at: Option<chrono::DateTime<chrono::Utc>>,
+}
 
-/// Build a Host from a sqlx Row containing all host columns.
-fn host_from_row(r: &sqlx::postgres::PgRow) -> Host {
-    let node_version: Option<String> = r.get("node_version");
-    let update_available = node_version
-        .as_deref()
-        .is_some_and(|v| v != CONTROL_PLANE_VERSION);
-    Host {
-        id: r.get("id"),
-        name: r.get("name"),
-        address: r.get("address"),
-        port: r.get("port"),
-        host_user: r.get("host_user"),
-        credential_ref: r.get("credential_ref"),
-        status: r.get("status"),
-        cloud_hypervisor_version: r.get("cloud_hypervisor_version"),
-        firecracker_version: r.get("firecracker_version"),
-        kernel_version: r.get("kernel_version"),
-        node_version,
-        last_deployed_image: r.get("last_deployed_image"),
-        update_available,
-        reservation_class: r.get("reservation_class"),
-        placement_labels: r
-            .get::<Json<BTreeMap<String, String>>, _>("placement_labels")
-            .0,
-        architecture: r.get("architecture"),
-        total_cpus: r.get("total_cpus"),
-        total_memory_bytes: r.get("total_memory_bytes"),
-        available_memory_bytes: r.get("available_memory_bytes"),
-        load_average: r.get("load_average"),
-        disk_total_bytes: r.get("disk_total_bytes"),
-        disk_available_bytes: r.get("disk_available_bytes"),
-        resources_updated_at: r.get("resources_updated_at"),
+impl From<HostRow> for Host {
+    fn from(r: HostRow) -> Self {
+        let update_available = r
+            .node_version
+            .as_deref()
+            .is_some_and(|v| v != CONTROL_PLANE_VERSION);
+        Host {
+            id: r.id,
+            name: r.name,
+            address: r.address,
+            port: r.port,
+            host_user: r.host_user,
+            credential_ref: r.credential_ref,
+            status: r.status,
+            cloud_hypervisor_version: r.cloud_hypervisor_version,
+            firecracker_version: r.firecracker_version,
+            kernel_version: r.kernel_version,
+            node_version: r.node_version,
+            last_deployed_image: r.last_deployed_image,
+            update_available,
+            reservation_class: r.reservation_class,
+            placement_labels: r.placement_labels.0,
+            architecture: r.architecture,
+            total_cpus: r.total_cpus,
+            total_memory_bytes: r.total_memory_bytes,
+            available_memory_bytes: r.available_memory_bytes,
+            load_average: r.load_average,
+            disk_total_bytes: r.disk_total_bytes,
+            disk_available_bytes: r.disk_available_bytes,
+            resources_updated_at: r.resources_updated_at,
+        }
     }
 }
 
@@ -353,20 +377,29 @@ pub async fn list(
     name_filter: Option<&str>,
     architecture_filter: Option<&str>,
 ) -> Result<Vec<Host>, sqlx::Error> {
-    let rows = sqlx::query(&format!(
-        "SELECT {HOST_COLUMNS} FROM hosts WHERE ($1::text IS NULL OR name = $1) AND ($2::text IS NULL OR architecture = $2)"
-    ))
-    .bind(name_filter)
-    .bind(architecture_filter)
+    let rows = sqlx::query_as!(
+        HostRow,
+        r#"
+SELECT id, name, address, port, host_user, credential_ref, status AS "status: _",
+       cloud_hypervisor_version, firecracker_version, kernel_version, node_version,
+       last_deployed_image, reservation_class, placement_labels AS "placement_labels: _",
+       architecture, total_cpus, total_memory_bytes, available_memory_bytes, load_average,
+       disk_total_bytes, disk_available_bytes, resources_updated_at
+FROM hosts
+WHERE ($1::text IS NULL OR name = $1) AND ($2::text IS NULL OR architecture = $2)
+        "#,
+        name_filter,
+        architecture_filter,
+    )
     .fetch_all(pool)
     .await?;
 
-    Ok(rows.iter().map(host_from_row).collect())
+    Ok(rows.into_iter().map(Host::from).collect())
 }
 
 // add adds a new host and returns its generated id
 pub async fn add(pool: &PgPool, host: &NewHost) -> Result<Uuid, sqlx::Error> {
-    let row = sqlx::query(
+    let row = sqlx::query!(
         r#"
         INSERT INTO hosts (
             name,
@@ -381,15 +414,15 @@ pub async fn add(pool: &PgPool, host: &NewHost) -> Result<Uuid, sqlx::Error> {
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         RETURNING id
         "#,
+        &host.name,
+        &host.address,
+        host.port,
+        &host.host_user,
+        host.credential_ref.as_deref(),
+        HostStatus::Down as HostStatus,
+        host.reservation_class.as_deref(),
+        Json(&host.placement_labels) as _
     )
-    .bind(&host.name)
-    .bind(&host.address)
-    .bind(host.port)
-    .bind(&host.host_user)
-    .bind(host.credential_ref.as_deref())
-    .bind(HostStatus::Down)
-    .bind(host.reservation_class.as_deref())
-    .bind(Json(&host.placement_labels))
     .fetch_one(pool)
     .await
     .map_err(|e| {
@@ -397,15 +430,17 @@ pub async fn add(pool: &PgPool, host: &NewHost) -> Result<Uuid, sqlx::Error> {
         e
     })?;
 
-    Ok(row.get("id"))
+    Ok(row.id)
 }
 
 pub async fn update_status(pool: &PgPool, id: Uuid, status: HostStatus) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE hosts SET status = $1 WHERE id = $2")
-        .bind(status)
-        .bind(id)
-        .execute(pool)
-        .await?;
+    sqlx::query!(
+        "UPDATE hosts SET status = $1 WHERE id = $2",
+        status as HostStatus,
+        id
+    )
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -414,12 +449,14 @@ pub async fn update_placement(
     id: Uuid,
     request: &UpdateHostPlacementRequest,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE hosts SET reservation_class = $1, placement_labels = $2 WHERE id = $3")
-        .bind(request.reservation_class.as_deref())
-        .bind(Json(&request.placement_labels))
-        .bind(id)
-        .execute(pool)
-        .await?;
+    sqlx::query!(
+        "UPDATE hosts SET reservation_class = $1, placement_labels = $2 WHERE id = $3",
+        request.reservation_class.as_deref(),
+        Json(&request.placement_labels) as _,
+        id
+    )
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -432,12 +469,23 @@ pub async fn require_by_id(pool: &PgPool, id: Uuid) -> Result<Host, crate::error
 
 /// Returns a host by id, if it exists.
 pub async fn get_by_id(pool: &PgPool, host_id: Uuid) -> Result<Option<Host>, sqlx::Error> {
-    let row = sqlx::query(&format!("SELECT {HOST_COLUMNS} FROM hosts WHERE id = $1"))
-        .bind(host_id)
-        .fetch_optional(pool)
-        .await?;
+    let row = sqlx::query_as!(
+        HostRow,
+        r#"
+SELECT id, name, address, port, host_user, credential_ref, status AS "status: _",
+       cloud_hypervisor_version, firecracker_version, kernel_version, node_version,
+       last_deployed_image, reservation_class, placement_labels AS "placement_labels: _",
+       architecture, total_cpus, total_memory_bytes, available_memory_bytes, load_average,
+       disk_total_bytes, disk_available_bytes, resources_updated_at
+FROM hosts
+WHERE id = $1
+        "#,
+        host_id,
+    )
+    .fetch_optional(pool)
+    .await?;
 
-    Ok(row.map(|r| host_from_row(&r)))
+    Ok(row.map(Host::from))
 }
 
 pub async fn pick_host_tx(
@@ -604,41 +652,71 @@ LEFT JOIN (
 
     qb.push("h.load_average ASC NULLS LAST, h.name ASC LIMIT 1 FOR UPDATE OF h SKIP LOCKED");
 
-    let row = qb.build().fetch_optional(tx.as_mut()).await?;
-    Ok(row.map(|r| host_from_row(&r)))
+    let row = qb
+        .build_query_as::<HostRow>()
+        .fetch_optional(tx.as_mut())
+        .await?;
+    Ok(row.map(Host::from))
 }
 
 /// Return all UP hosts.
 pub async fn list_up(pool: &PgPool) -> Result<Vec<Host>, sqlx::Error> {
-    let rows = sqlx::query(&format!(
-        "SELECT {HOST_COLUMNS} FROM hosts WHERE status = 'UP'"
-    ))
+    let rows = sqlx::query_as!(
+        HostRow,
+        r#"
+SELECT id, name, address, port, host_user, credential_ref, status AS "status: _",
+       cloud_hypervisor_version, firecracker_version, kernel_version, node_version,
+       last_deployed_image, reservation_class, placement_labels AS "placement_labels: _",
+       architecture, total_cpus, total_memory_bytes, available_memory_bytes, load_average,
+       disk_total_bytes, disk_available_bytes, resources_updated_at
+FROM hosts
+WHERE status = 'UP'
+        "#,
+    )
     .fetch_all(pool)
     .await?;
 
-    Ok(rows.into_iter().map(|r| host_from_row(&r)).collect())
+    Ok(rows.into_iter().map(Host::from).collect())
 }
 
 /// Return all DOWN hosts (candidates for HA failover).
 pub async fn list_down(pool: &PgPool) -> Result<Vec<Host>, sqlx::Error> {
-    let rows = sqlx::query(&format!(
-        "SELECT {HOST_COLUMNS} FROM hosts WHERE status = 'DOWN'"
-    ))
+    let rows = sqlx::query_as!(
+        HostRow,
+        r#"
+SELECT id, name, address, port, host_user, credential_ref, status AS "status: _",
+       cloud_hypervisor_version, firecracker_version, kernel_version, node_version,
+       last_deployed_image, reservation_class, placement_labels AS "placement_labels: _",
+       architecture, total_cpus, total_memory_bytes, available_memory_bytes, load_average,
+       disk_total_bytes, disk_available_bytes, resources_updated_at
+FROM hosts
+WHERE status = 'DOWN'
+        "#,
+    )
     .fetch_all(pool)
     .await?;
 
-    Ok(rows.into_iter().map(|r| host_from_row(&r)).collect())
+    Ok(rows.into_iter().map(Host::from).collect())
 }
 
 /// Return hosts that should continue receiving health/resource probes.
 pub async fn list_probeable(pool: &PgPool) -> Result<Vec<Host>, sqlx::Error> {
-    let rows = sqlx::query(&format!(
-        "SELECT {HOST_COLUMNS} FROM hosts WHERE status IN ('UP', 'MAINTENANCE')"
-    ))
+    let rows = sqlx::query_as!(
+        HostRow,
+        r#"
+SELECT id, name, address, port, host_user, credential_ref, status AS "status: _",
+       cloud_hypervisor_version, firecracker_version, kernel_version, node_version,
+       last_deployed_image, reservation_class, placement_labels AS "placement_labels: _",
+       architecture, total_cpus, total_memory_bytes, available_memory_bytes, load_average,
+       disk_total_bytes, disk_available_bytes, resources_updated_at
+FROM hosts
+WHERE status IN ('UP', 'MAINTENANCE')
+        "#,
+    )
     .fetch_all(pool)
     .await?;
 
-    Ok(rows.into_iter().map(|r| host_from_row(&r)).collect())
+    Ok(rows.into_iter().map(Host::from).collect())
 }
 
 /// Update version information for a host (called after GetNodeInfo).
@@ -650,14 +728,14 @@ pub async fn update_versions(
     kernel_version: &str,
     node_version: &str,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(
+    sqlx::query!(
         "UPDATE hosts SET cloud_hypervisor_version = $1, firecracker_version = $2, kernel_version = $3, node_version = $4 WHERE id = $5",
+        ch_version,
+        fc_version,
+        kernel_version,
+        node_version,
+        id,
     )
-    .bind(ch_version)
-    .bind(fc_version)
-    .bind(kernel_version)
-    .bind(node_version)
-    .bind(id)
     .execute(pool)
     .await?;
     Ok(())
@@ -669,11 +747,13 @@ pub async fn set_last_deployed_image(
     id: Uuid,
     image: &str,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE hosts SET last_deployed_image = $1 WHERE id = $2")
-        .bind(image)
-        .bind(id)
-        .execute(pool)
-        .await?;
+    sqlx::query!(
+        "UPDATE hosts SET last_deployed_image = $1 WHERE id = $2",
+        image,
+        id
+    )
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -690,7 +770,7 @@ pub async fn update_resources(
     disk_total_bytes: i64,
     disk_available_bytes: i64,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(
+    sqlx::query!(
         r#"
 UPDATE hosts SET
     architecture = $1,
@@ -703,15 +783,15 @@ UPDATE hosts SET
     resources_updated_at = NOW()
 WHERE id = $8
         "#,
+        architecture,
+        total_cpus,
+        total_memory_bytes,
+        available_memory_bytes,
+        load_average,
+        disk_total_bytes,
+        disk_available_bytes,
+        id
     )
-    .bind(architecture)
-    .bind(total_cpus)
-    .bind(total_memory_bytes)
-    .bind(available_memory_bytes)
-    .bind(load_average)
-    .bind(disk_total_bytes)
-    .bind(disk_available_bytes)
-    .bind(id)
     .execute(pool)
     .await?;
     Ok(())
@@ -719,26 +799,38 @@ WHERE id = $8
 
 // TODO: figure out how to not fetch the entire host. Maybe with SELECT exists()?
 pub async fn by_name(pool: &PgPool, name: &str) -> Result<Option<Host>, sqlx::Error> {
-    let row = sqlx::query(&format!("SELECT {HOST_COLUMNS} FROM hosts WHERE name = $1"))
-        .bind(name)
-        .fetch_optional(pool)
-        .await?;
+    let row = sqlx::query_as!(
+        HostRow,
+        r#"
+SELECT id, name, address, port, host_user, credential_ref, status AS "status: _",
+       cloud_hypervisor_version, firecracker_version, kernel_version, node_version,
+       last_deployed_image, reservation_class, placement_labels AS "placement_labels: _",
+       architecture, total_cpus, total_memory_bytes, available_memory_bytes, load_average,
+       disk_total_bytes, disk_available_bytes, resources_updated_at
+FROM hosts
+WHERE name = $1
+        "#,
+        name,
+    )
+    .fetch_optional(pool)
+    .await?;
 
-    Ok(row.map(|r| host_from_row(&r)))
+    Ok(row.map(Host::from))
 }
 
 pub async fn get_resource_capacity(
     pool: &PgPool,
     host_id: Uuid,
 ) -> Result<Option<HostResourceCapacity>, sqlx::Error> {
-    let row = sqlx::query(
+    sqlx::query_as!(
+        HostResourceCapacity,
         r#"
 SELECT h.id AS host_id,
        h.architecture,
        h.total_cpus,
-       COALESCE(alloc.allocated_vcpus, 0)::bigint AS allocated_vcpus,
+       COALESCE(alloc.allocated_vcpus, 0)::bigint AS "allocated_vcpus!",
        h.total_memory_bytes,
-       COALESCE(alloc.allocated_memory_bytes, 0)::bigint AS allocated_memory_bytes,
+       COALESCE(alloc.allocated_memory_bytes, 0)::bigint AS "allocated_memory_bytes!",
        h.available_memory_bytes,
        h.disk_total_bytes,
        h.disk_available_bytes
@@ -754,22 +846,10 @@ LEFT JOIN (
 ) alloc ON alloc.host_id = h.id
 WHERE h.id = $1
         "#,
+        host_id
     )
-    .bind(host_id)
     .fetch_optional(pool)
-    .await?;
-
-    Ok(row.map(|r| HostResourceCapacity {
-        host_id: r.get("host_id"),
-        architecture: r.get("architecture"),
-        total_cpus: r.get("total_cpus"),
-        allocated_vcpus: r.get::<i64, _>("allocated_vcpus"),
-        total_memory_bytes: r.get("total_memory_bytes"),
-        allocated_memory_bytes: r.get::<i64, _>("allocated_memory_bytes"),
-        available_memory_bytes: r.get("available_memory_bytes"),
-        disk_total_bytes: r.get("disk_total_bytes"),
-        disk_available_bytes: r.get("disk_available_bytes"),
-    }))
+    .await
 }
 
 #[cfg(test)]

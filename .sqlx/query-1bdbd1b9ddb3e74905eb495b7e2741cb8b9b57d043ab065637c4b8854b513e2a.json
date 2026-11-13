@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nUPDATE hook_executions\nSET status     = 'FAILED',\n    last_error = $2,\n    attempt_count = attempt_count + 1\nWHERE id = $1\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1bdbd1b9ddb3e74905eb495b7e2741cb8b9b57d043ab065637c4b8854b513e2a"
+}

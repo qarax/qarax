@@ -1,0 +1,81 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nSELECT id, name, pool_type AS \"pool_type: _\", status AS \"status: _\", config, capacity_bytes, allocated_bytes\nFROM storage_pools\nWHERE id = ANY($1)\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "pool_type: _",
+        "type_info": {
+          "Custom": {
+            "name": "storage_pool_type",
+            "kind": {
+              "Enum": [
+                "LOCAL",
+                "NFS",
+                "OVERLAYBD",
+                "BLOCK"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "status: _",
+        "type_info": {
+          "Custom": {
+            "name": "storage_pool_status",
+            "kind": {
+              "Enum": [
+                "ACTIVE",
+                "INACTIVE",
+                "ERROR"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "config",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 5,
+        "name": "capacity_bytes",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 6,
+        "name": "allocated_bytes",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "UuidArray"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "183862a21badcc0a11d3e7faa9881e413016ce7f1082e77d44b0f768b1118559"
+}

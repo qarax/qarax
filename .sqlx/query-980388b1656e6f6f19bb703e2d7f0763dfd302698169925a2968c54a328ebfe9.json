@@ -1,0 +1,74 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nSELECT id,\n       name,\n       storage_pool_id,\n       object_type AS \"object_type: _\",\n       size_bytes,\n       config,\n       parent_id\nFROM storage_objects\nWHERE id = $1\nFOR UPDATE\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "storage_pool_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "object_type: _",
+        "type_info": {
+          "Custom": {
+            "name": "storage_object_type",
+            "kind": {
+              "Enum": [
+                "DISK",
+                "KERNEL",
+                "INITRD",
+                "ISO",
+                "SNAPSHOT",
+                "OCI_IMAGE",
+                "OVERLAYBD_UPPER",
+                "DATABASE_BACKUP"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "size_bytes",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 5,
+        "name": "config",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 6,
+        "name": "parent_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "980388b1656e6f6f19bb703e2d7f0763dfd302698169925a2968c54a328ebfe9"
+}

@@ -19,7 +19,7 @@ pub enum SandboxPoolMemberStatus {
     Destroying,
 }
 
-#[derive(sqlx::FromRow, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct SandboxPoolMember {
     pub id: Uuid,
     pub sandbox_pool_id: Uuid,
@@ -36,15 +36,15 @@ pub async fn create(
     vm_id: Uuid,
 ) -> Result<SandboxPoolMember, sqlx::Error> {
     let id = Uuid::new_v4();
-    sqlx::query(
+    sqlx::query!(
         r#"
 INSERT INTO sandbox_pool_members (id, sandbox_pool_id, vm_id)
 VALUES ($1, $2, $3)
         "#,
+        id,
+        sandbox_pool_id,
+        vm_id
     )
-    .bind(id)
-    .bind(sandbox_pool_id)
-    .bind(vm_id)
     .execute(pool)
     .await?;
 
@@ -52,14 +52,15 @@ VALUES ($1, $2, $3)
 }
 
 pub async fn get(pool: &PgPool, member_id: Uuid) -> Result<SandboxPoolMember, sqlx::Error> {
-    sqlx::query_as::<_, SandboxPoolMember>(
+    sqlx::query_as!(
+        SandboxPoolMember,
         r#"
-SELECT id, sandbox_pool_id, vm_id, status, error_message, created_at, updated_at
+SELECT id, sandbox_pool_id, vm_id, status AS "status: _", error_message, created_at, updated_at
 FROM sandbox_pool_members
 WHERE id = $1
         "#,
+        member_id
     )
-    .bind(member_id)
     .fetch_one(pool)
     .await
 }
@@ -68,16 +69,17 @@ pub async fn list_ready_by_pool(
     pool: &PgPool,
     sandbox_pool_id: Uuid,
 ) -> Result<Vec<SandboxPoolMember>, sqlx::Error> {
-    sqlx::query_as::<_, SandboxPoolMember>(
+    sqlx::query_as!(
+        SandboxPoolMember,
         r#"
-SELECT id, sandbox_pool_id, vm_id, status, error_message, created_at, updated_at
+SELECT id, sandbox_pool_id, vm_id, status AS "status: _", error_message, created_at, updated_at
 FROM sandbox_pool_members
 WHERE sandbox_pool_id = $1
   AND status = 'READY'
 ORDER BY created_at
         "#,
+        sandbox_pool_id
     )
-    .bind(sandbox_pool_id)
     .fetch_all(pool)
     .await
 }
@@ -86,16 +88,17 @@ pub async fn list_error_by_pool(
     pool: &PgPool,
     sandbox_pool_id: Uuid,
 ) -> Result<Vec<SandboxPoolMember>, sqlx::Error> {
-    sqlx::query_as::<_, SandboxPoolMember>(
+    sqlx::query_as!(
+        SandboxPoolMember,
         r#"
-SELECT id, sandbox_pool_id, vm_id, status, error_message, created_at, updated_at
+SELECT id, sandbox_pool_id, vm_id, status AS "status: _", error_message, created_at, updated_at
 FROM sandbox_pool_members
 WHERE sandbox_pool_id = $1
   AND status = 'ERROR'
 ORDER BY created_at
         "#,
+        sandbox_pool_id
     )
-    .bind(sandbox_pool_id)
     .fetch_all(pool)
     .await
 }
@@ -104,15 +107,16 @@ pub async fn list_by_pool(
     pool: &PgPool,
     sandbox_pool_id: Uuid,
 ) -> Result<Vec<SandboxPoolMember>, sqlx::Error> {
-    sqlx::query_as::<_, SandboxPoolMember>(
+    sqlx::query_as!(
+        SandboxPoolMember,
         r#"
-SELECT id, sandbox_pool_id, vm_id, status, error_message, created_at, updated_at
+SELECT id, sandbox_pool_id, vm_id, status AS "status: _", error_message, created_at, updated_at
 FROM sandbox_pool_members
 WHERE sandbox_pool_id = $1
 ORDER BY created_at
         "#,
+        sandbox_pool_id
     )
-    .bind(sandbox_pool_id)
     .fetch_all(pool)
     .await
 }
@@ -122,16 +126,16 @@ pub async fn count_by_status(
     sandbox_pool_id: Uuid,
     status: SandboxPoolMemberStatus,
 ) -> Result<i64, sqlx::Error> {
-    let row = sqlx::query_scalar::<_, i64>(
+    let row = sqlx::query_scalar!(
         r#"
-SELECT COUNT(*)::bigint
+SELECT COUNT(*)::bigint AS "count!"
 FROM sandbox_pool_members
 WHERE sandbox_pool_id = $1
   AND status = $2
         "#,
+        sandbox_pool_id,
+        status as SandboxPoolMemberStatus
     )
-    .bind(sandbox_pool_id)
-    .bind(status)
     .fetch_one(pool)
     .await?;
     Ok(row)
@@ -143,7 +147,7 @@ pub async fn update_status(
     status: SandboxPoolMemberStatus,
     error_message: Option<String>,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(
+    sqlx::query!(
         r#"
 UPDATE sandbox_pool_members
 SET status = $2,
@@ -151,18 +155,17 @@ SET status = $2,
     updated_at = NOW()
 WHERE id = $1
         "#,
+        member_id,
+        status as SandboxPoolMemberStatus,
+        error_message
     )
-    .bind(member_id)
-    .bind(status)
-    .bind(error_message)
     .execute(pool)
     .await?;
     Ok(())
 }
 
 pub async fn delete(pool: &PgPool, member_id: Uuid) -> Result<(), sqlx::Error> {
-    sqlx::query("DELETE FROM sandbox_pool_members WHERE id = $1")
-        .bind(member_id)
+    sqlx::query!("DELETE FROM sandbox_pool_members WHERE id = $1", member_id)
         .execute(pool)
         .await?;
     Ok(())
@@ -172,8 +175,7 @@ pub async fn delete_tx(
     tx: &mut Transaction<'_, Postgres>,
     member_id: Uuid,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query("DELETE FROM sandbox_pool_members WHERE id = $1")
-        .bind(member_id)
+    sqlx::query!("DELETE FROM sandbox_pool_members WHERE id = $1", member_id)
         .execute(tx.as_mut())
         .await?;
     Ok(())
@@ -183,12 +185,13 @@ pub async fn claim_ready_for_template_tx(
     tx: &mut Transaction<'_, Postgres>,
     vm_template_id: Uuid,
 ) -> Result<Option<SandboxPoolMember>, sqlx::Error> {
-    sqlx::query_as::<_, SandboxPoolMember>(
+    sqlx::query_as!(
+        SandboxPoolMember,
         r#"
 SELECT spm.id,
        spm.sandbox_pool_id,
        spm.vm_id,
-       spm.status,
+       spm.status AS "status: _",
        spm.error_message,
        spm.created_at,
        spm.updated_at
@@ -201,8 +204,8 @@ ORDER BY spm.created_at
 FOR UPDATE OF spm SKIP LOCKED
 LIMIT 1
         "#,
+        vm_template_id
     )
-    .bind(vm_template_id)
     .fetch_optional(tx.as_mut())
     .await
 }

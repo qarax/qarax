@@ -1,0 +1,58 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nSELECT id, host_id, node_id, cpu_list, memory_bytes, distances, updated_at\nFROM host_numa_nodes\nWHERE host_id = $1\nORDER BY node_id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "host_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "node_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "cpu_list",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "memory_bytes",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 5,
+        "name": "distances",
+        "type_info": "Int4Array"
+      },
+      {
+        "ordinal": 6,
+        "name": "updated_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "96c09a03ab0f54f844a667d130b6d6ac597f5faf1b67d8f60a1c212175165996"
+}

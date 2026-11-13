@@ -5,7 +5,7 @@ use strum_macros::{Display, EnumString};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-#[derive(Serialize, Deserialize, Debug, Clone, ToSchema, sqlx::FromRow)]
+#[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
 pub struct Job {
     pub id: Uuid,
     pub job_type: JobType,
@@ -81,17 +81,17 @@ pub async fn create_tx(
 ) -> Result<Job, sqlx::Error> {
     let id = Uuid::new_v4();
 
-    sqlx::query(
+    sqlx::query!(
         r#"
 INSERT INTO jobs (id, job_type, description, resource_id, resource_type)
 VALUES ($1, $2, $3, $4, $5)
         "#,
+        id,
+        &new_job.job_type as &JobType,
+        new_job.description.as_deref(),
+        new_job.resource_id,
+        new_job.resource_type.as_deref()
     )
-    .bind(id)
-    .bind(&new_job.job_type)
-    .bind(&new_job.description)
-    .bind(new_job.resource_id)
-    .bind(&new_job.resource_type)
     .execute(tx.as_mut())
     .await?;
 
@@ -105,7 +105,7 @@ pub async fn create_completed_tx(
 ) -> Result<Job, sqlx::Error> {
     let id = Uuid::new_v4();
 
-    sqlx::query(
+    sqlx::query!(
         r#"
 INSERT INTO jobs (
     id,
@@ -121,13 +121,13 @@ INSERT INTO jobs (
 )
 VALUES ($1, $2, 'COMPLETED', $3, $4, $5, 100, $6, NOW(), NOW())
         "#,
+        id,
+        &new_job.job_type as &JobType,
+        new_job.description.as_deref(),
+        new_job.resource_id,
+        new_job.resource_type.as_deref(),
+        result
     )
-    .bind(id)
-    .bind(&new_job.job_type)
-    .bind(&new_job.description)
-    .bind(new_job.resource_id)
-    .bind(&new_job.resource_type)
-    .bind(result.map(sqlx::types::Json))
     .execute(tx.as_mut())
     .await?;
 
@@ -142,11 +142,12 @@ pub async fn get(pool: &PgPool, job_id: Uuid) -> Result<Job, sqlx::Error> {
 }
 
 async fn get_tx(tx: &mut Transaction<'_, Postgres>, job_id: Uuid) -> Result<Job, sqlx::Error> {
-    let job = sqlx::query_as::<_, Job>(
+    let job = sqlx::query_as!(
+        Job,
         r#"
 SELECT id,
-       job_type,
-       status,
+       job_type AS "job_type: _",
+       status AS "status: _",
        description,
        resource_id,
        resource_type,
@@ -160,8 +161,8 @@ SELECT id,
 FROM jobs
 WHERE id = $1
         "#,
+        job_id
     )
-    .bind(job_id)
     .fetch_one(tx.as_mut())
     .await?;
 
@@ -169,7 +170,7 @@ WHERE id = $1
 }
 
 pub async fn mark_running(pool: &PgPool, job_id: Uuid) -> Result<(), sqlx::Error> {
-    sqlx::query(
+    sqlx::query!(
         r#"
 UPDATE jobs
 SET status = 'RUNNING',
@@ -177,8 +178,8 @@ SET status = 'RUNNING',
     updated_at = NOW()
 WHERE id = $1
         "#,
+        job_id
     )
-    .bind(job_id)
     .execute(pool)
     .await?;
 
@@ -190,7 +191,7 @@ pub async fn mark_completed(
     job_id: Uuid,
     result: Option<serde_json::Value>,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(
+    sqlx::query!(
         r#"
 UPDATE jobs
 SET status = 'COMPLETED',
@@ -200,9 +201,9 @@ SET status = 'COMPLETED',
     updated_at = NOW()
 WHERE id = $1
         "#,
+        job_id,
+        result
     )
-    .bind(job_id)
-    .bind(result.map(sqlx::types::Json))
     .execute(pool)
     .await?;
 
@@ -219,7 +220,7 @@ pub async fn mark_failed_with_result(
     error: &str,
     result: Option<serde_json::Value>,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(
+    sqlx::query!(
         r#"
 UPDATE jobs
 SET status = 'FAILED',
@@ -229,10 +230,10 @@ SET status = 'FAILED',
     updated_at = NOW()
 WHERE id = $1
         "#,
+        job_id,
+        error,
+        result
     )
-    .bind(job_id)
-    .bind(error)
-    .bind(result.map(sqlx::types::Json))
     .execute(pool)
     .await?;
 
@@ -244,16 +245,16 @@ pub async fn update_progress(
     job_id: Uuid,
     progress: i32,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(
+    sqlx::query!(
         r#"
 UPDATE jobs
 SET progress = $2,
     updated_at = NOW()
 WHERE id = $1
         "#,
+        job_id,
+        progress
     )
-    .bind(job_id)
-    .bind(progress)
     .execute(pool)
     .await?;
 

@@ -44,7 +44,6 @@ pub struct Backup {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(sqlx::FromRow)]
 struct BackupRow {
     pub id: Uuid,
     pub name: String,
@@ -85,14 +84,15 @@ pub struct NewBackup {
 }
 
 pub async fn create(pool: &PgPool, new_backup: &NewBackup) -> Result<Backup, sqlx::Error> {
-    let row = sqlx::query_as::<_, BackupRow>(
+    let row = sqlx::query_as!(
+        BackupRow,
         r#"
 INSERT INTO backups (id, name, backup_type, status, vm_id, snapshot_id, storage_object_id)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
 RETURNING id,
           name,
-          backup_type,
-          status,
+          backup_type AS "backup_type: _",
+          status AS "status: _",
           vm_id,
           snapshot_id,
           storage_object_id,
@@ -100,14 +100,14 @@ RETURNING id,
           created_at,
           updated_at
         "#,
+        Uuid::new_v4(),
+        &new_backup.name,
+        &new_backup.backup_type as &BackupType,
+        &new_backup.status as &BackupStatus,
+        new_backup.vm_id,
+        new_backup.snapshot_id,
+        new_backup.storage_object_id
     )
-    .bind(Uuid::new_v4())
-    .bind(&new_backup.name)
-    .bind(&new_backup.backup_type)
-    .bind(&new_backup.status)
-    .bind(new_backup.vm_id)
-    .bind(new_backup.snapshot_id)
-    .bind(new_backup.storage_object_id)
     .fetch_one(pool)
     .await?;
 
@@ -115,12 +115,13 @@ RETURNING id,
 }
 
 pub async fn get(pool: &PgPool, backup_id: Uuid) -> Result<Backup, sqlx::Error> {
-    let row = sqlx::query_as::<_, BackupRow>(
+    let row = sqlx::query_as!(
+        BackupRow,
         r#"
 SELECT id,
        name,
-       backup_type,
-       status,
+       backup_type AS "backup_type: _",
+       status AS "status: _",
        vm_id,
        snapshot_id,
        storage_object_id,
@@ -130,8 +131,8 @@ SELECT id,
 FROM backups
 WHERE id = $1
         "#,
+        backup_id
     )
-    .bind(backup_id)
     .fetch_one(pool)
     .await?;
 
@@ -143,12 +144,13 @@ pub async fn list(
     name_filter: Option<&str>,
     type_filter: Option<BackupType>,
 ) -> Result<Vec<Backup>, sqlx::Error> {
-    let rows = sqlx::query_as::<_, BackupRow>(
+    let rows = sqlx::query_as!(
+        BackupRow,
         r#"
 SELECT id,
        name,
-       backup_type,
-       status,
+       backup_type AS "backup_type: _",
+       status AS "status: _",
        vm_id,
        snapshot_id,
        storage_object_id,
@@ -160,9 +162,9 @@ WHERE ($1::text IS NULL OR name = $1)
   AND ($2::backup_type IS NULL OR backup_type = $2)
 ORDER BY created_at DESC
         "#,
+        name_filter,
+        type_filter as Option<BackupType>
     )
-    .bind(name_filter)
-    .bind(type_filter)
     .fetch_all(pool)
     .await?;
 
@@ -175,17 +177,17 @@ pub async fn update_status(
     status: BackupStatus,
     error_message: Option<&str>,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(
+    sqlx::query!(
         r#"
 UPDATE backups
 SET status = $2,
     error_message = $3
 WHERE id = $1
         "#,
+        backup_id,
+        status as BackupStatus,
+        error_message
     )
-    .bind(backup_id)
-    .bind(status)
-    .bind(error_message)
     .execute(pool)
     .await?;
 

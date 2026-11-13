@@ -1,0 +1,87 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nSELECT id, name, url, secret, scope AS \"scope: _\", scope_value, events, active,\n       created_at, updated_at\nFROM lifecycle_hooks\nWHERE ($1::text IS NULL OR name = $1)\nORDER BY created_at\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "url",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "secret",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "scope: _",
+        "type_info": {
+          "Custom": {
+            "name": "hook_scope",
+            "kind": {
+              "Enum": [
+                "GLOBAL",
+                "VM",
+                "TAG"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "scope_value",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "events",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 7,
+        "name": "active",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 8,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 9,
+        "name": "updated_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "df15f019bee0164c10a7a9ad24fd1aa8ec6b2886d4b9b1093d78359e232ed834"
+}

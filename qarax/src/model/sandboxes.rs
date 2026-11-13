@@ -24,7 +24,7 @@ pub struct Sandbox {
     pub vm_status: Option<VmStatus>,
 }
 
-#[derive(sqlx::FromRow, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct SandboxRow {
     pub id: Uuid,
     pub vm_id: Uuid,
@@ -131,31 +131,32 @@ pub async fn create_tx_with_status(
     idle_timeout_secs: i32,
     status: SandboxStatus,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(
+    sqlx::query!(
         r#"
 INSERT INTO sandboxes (id, vm_id, vm_template_id, name, status, idle_timeout_secs)
 VALUES ($1, $2, $3, $4, $5, $6)
         "#,
+        id,
+        vm_id,
+        vm_template_id,
+        name,
+        status as SandboxStatus,
+        idle_timeout_secs
     )
-    .bind(id)
-    .bind(vm_id)
-    .bind(vm_template_id)
-    .bind(name)
-    .bind(status)
-    .bind(idle_timeout_secs)
     .execute(tx.as_mut())
     .await?;
     Ok(())
 }
 
 pub async fn get(pool: &PgPool, sandbox_id: Uuid) -> Result<SandboxRow, Error> {
-    let row = sqlx::query_as::<_, SandboxRow>(
+    let row = sqlx::query_as!(
+        SandboxRow,
         r#"
 SELECT id,
        vm_id,
        vm_template_id,
        name,
-       status,
+       status AS "status: _",
        idle_timeout_secs,
        last_activity_at,
        error_message,
@@ -163,8 +164,8 @@ SELECT id,
 FROM sandboxes
 WHERE id = $1
         "#,
+        sandbox_id
     )
-    .bind(sandbox_id)
     .fetch_optional(pool)
     .await
     .map_err(Error::Sqlx)?
@@ -173,13 +174,14 @@ WHERE id = $1
 }
 
 pub async fn get_by_vm(pool: &PgPool, vm_id: Uuid) -> Result<Option<SandboxRow>, sqlx::Error> {
-    sqlx::query_as::<_, SandboxRow>(
+    sqlx::query_as!(
+        SandboxRow,
         r#"
 SELECT id,
        vm_id,
        vm_template_id,
        name,
-       status,
+       status AS "status: _",
        idle_timeout_secs,
        last_activity_at,
        error_message,
@@ -187,13 +189,13 @@ SELECT id,
 FROM sandboxes
 WHERE vm_id = $1
         "#,
+        vm_id
     )
-    .bind(vm_id)
     .fetch_optional(pool)
     .await
 }
 
-#[derive(sqlx::FromRow, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct SandboxWithDetailsRow {
     pub id: Uuid,
     pub vm_id: Uuid,
@@ -226,17 +228,20 @@ impl From<SandboxWithDetailsRow> for Sandbox {
     }
 }
 
-const SANDBOX_DETAILS_SELECT: &str = r#"
+pub async fn list_with_details(pool: &PgPool) -> Result<Vec<SandboxWithDetailsRow>, sqlx::Error> {
+    sqlx::query_as!(
+        SandboxWithDetailsRow,
+        r#"
 SELECT s.id,
        s.vm_id,
        s.vm_template_id,
        s.name,
-       s.status,
+       s.status AS "status: _",
        s.idle_timeout_secs,
        s.last_activity_at,
        s.error_message,
        s.created_at,
-       v.status AS vm_status,
+       v.status AS "vm_status: _",
        ni.ip_address::text AS ip_address
 FROM sandboxes s
 LEFT JOIN vms v ON v.id = s.vm_id
@@ -246,43 +251,65 @@ LEFT JOIN LATERAL (
     WHERE vm_id = s.vm_id AND ip_address IS NOT NULL
     LIMIT 1
 ) ni ON TRUE
-"#;
-
-pub async fn list_with_details(pool: &PgPool) -> Result<Vec<SandboxWithDetailsRow>, sqlx::Error> {
-    let sql = format!("{}\nORDER BY s.created_at DESC", SANDBOX_DETAILS_SELECT);
-    sqlx::query_as::<_, SandboxWithDetailsRow>(&sql)
-        .fetch_all(pool)
-        .await
+ORDER BY s.created_at DESC
+        "#
+    )
+    .fetch_all(pool)
+    .await
 }
 
 pub async fn get_with_details(
     pool: &PgPool,
     sandbox_id: Uuid,
 ) -> Result<SandboxWithDetailsRow, Error> {
-    let sql = format!("{}\nWHERE s.id = $1", SANDBOX_DETAILS_SELECT);
-    sqlx::query_as::<_, SandboxWithDetailsRow>(&sql)
-        .bind(sandbox_id)
-        .fetch_optional(pool)
-        .await
-        .map_err(Error::Sqlx)?
-        .ok_or(Error::NotFound)
+    sqlx::query_as!(
+        SandboxWithDetailsRow,
+        r#"
+SELECT s.id,
+       s.vm_id,
+       s.vm_template_id,
+       s.name,
+       s.status AS "status: _",
+       s.idle_timeout_secs,
+       s.last_activity_at,
+       s.error_message,
+       s.created_at,
+       v.status AS "vm_status: _",
+       ni.ip_address::text AS ip_address
+FROM sandboxes s
+LEFT JOIN vms v ON v.id = s.vm_id
+LEFT JOIN LATERAL (
+    SELECT ip_address
+    FROM network_interfaces
+    WHERE vm_id = s.vm_id AND ip_address IS NOT NULL
+    LIMIT 1
+) ni ON TRUE
+WHERE s.id = $1
+        "#,
+        sandbox_id
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(Error::Sqlx)?
+    .ok_or(Error::NotFound)
 }
 
 pub async fn list(pool: &PgPool) -> Result<Vec<SandboxRow>, sqlx::Error> {
-    sqlx::query_as::<_, SandboxRow>(
+    sqlx::query_as!(
+        SandboxRow,
         r#"
 SELECT id,
        vm_id,
        vm_template_id,
        name,
-       status,
+       status AS "status: _",
        idle_timeout_secs,
        last_activity_at,
        error_message,
        created_at
 FROM sandboxes
 ORDER BY created_at DESC
-        "#,
+        "#
     )
     .fetch_all(pool)
     .await
@@ -294,31 +321,36 @@ pub async fn update_status(
     status: SandboxStatus,
     error_message: Option<String>,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(r#"UPDATE sandboxes SET status = $1, error_message = $2 WHERE id = $3"#)
-        .bind(status)
-        .bind(error_message)
-        .bind(sandbox_id)
-        .execute(pool)
-        .await?;
+    sqlx::query!(
+        r#"UPDATE sandboxes SET status = $1, error_message = $2 WHERE id = $3"#,
+        status as SandboxStatus,
+        error_message,
+        sandbox_id
+    )
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
 pub async fn touch_activity(pool: &PgPool, sandbox_id: Uuid) -> Result<u64, sqlx::Error> {
-    let result = sqlx::query(r#"UPDATE sandboxes SET last_activity_at = NOW() WHERE id = $1"#)
-        .bind(sandbox_id)
-        .execute(pool)
-        .await?;
+    let result = sqlx::query!(
+        r#"UPDATE sandboxes SET last_activity_at = NOW() WHERE id = $1"#,
+        sandbox_id
+    )
+    .execute(pool)
+    .await?;
     Ok(result.rows_affected())
 }
 
 pub async fn list_expired(pool: &PgPool) -> Result<Vec<SandboxRow>, sqlx::Error> {
-    sqlx::query_as::<_, SandboxRow>(
+    sqlx::query_as!(
+        SandboxRow,
         r#"
 SELECT id,
        vm_id,
        vm_template_id,
        name,
-       status,
+       status AS "status: _",
        idle_timeout_secs,
        last_activity_at,
        error_message,
@@ -326,15 +358,14 @@ SELECT id,
 FROM sandboxes
 WHERE status = 'READY'
   AND last_activity_at + (idle_timeout_secs || ' seconds')::interval < NOW()
-        "#,
+        "#
     )
     .fetch_all(pool)
     .await
 }
 
 pub async fn delete(pool: &PgPool, sandbox_id: Uuid) -> Result<(), sqlx::Error> {
-    sqlx::query(r#"DELETE FROM sandboxes WHERE id = $1"#)
-        .bind(sandbox_id)
+    sqlx::query!(r#"DELETE FROM sandboxes WHERE id = $1"#, sandbox_id)
         .execute(pool)
         .await?;
     Ok(())
