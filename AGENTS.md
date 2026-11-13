@@ -4,14 +4,14 @@ This file provides guidance to AI coding agents working with this repository.
 
 ## Project Overview
 
-Qarax is a two-tier VM management platform for Cloud Hypervisor:
+Qarax is a two-tier VM management platform for Cloud Hypervisor and Firecracker:
 - **qarax** (control plane): Axum REST API managing VM/host lifecycle, backed by PostgreSQL
-- **qarax-node** (data plane): gRPC service (tonic) running on hypervisor hosts, managing VMs via Cloud Hypervisor SDK
+- **qarax-node** (data plane): gRPC service (tonic) running on hypervisor hosts, managing VMs through one backend per hypervisor (Cloud Hypervisor or Firecracker SDK)
 - **common**: Shared logging/telemetry helpers
 - **cli**: Command-line client (clap)
 - **qarax-init**: PID 1 init process for OCI-booted VMs
 
-Communication flow: Control plane → gRPC (`proto/node.proto`) → Data plane → Cloud Hypervisor API. VMs are scheduled onto hosts in "up" state; subsequent VM operations route to the scheduled host.
+Communication flow: Control plane → gRPC (`proto/node.proto`) → Data plane → hypervisor API (Cloud Hypervisor or Firecracker, chosen per VM). VMs are scheduled onto hosts in "up" state; subsequent VM operations route to the scheduled host.
 
 ## Build & Development Commands
 
@@ -100,7 +100,9 @@ Do not jump to code investigation when services may not be running or the wrong 
 
 - `qarax-node/src/services/vm/` — VM lifecycle gRPC service (create, start, stop, pause, resume, delete)
 - `qarax-node/src/services/file_transfer/` — File download/copy gRPC service
+- `qarax-node/src/vmm/` — `VmmManager` trait every hypervisor backend implements; the VM service dispatches on the VM's hypervisor type
 - `qarax-node/src/cloud_hypervisor/manager.rs` — Cloud Hypervisor process management
+- `qarax-node/src/firecracker/` — Firecracker backend
 - `qarax-node/src/overlaybd/manager.rs` — OverlayBD TCMU block device management
 - `qarax-node/src/networking/` — Network management (bridge creation, DHCP allocation, nftables rules)
 
@@ -140,7 +142,7 @@ Custom `Error` enum in `qarax/src/errors.rs` using `thiserror`:
 
 gRPC services in `qarax-node/src/services/` implement generated tonic traits:
 - Each service struct wraps `Arc<Manager>` for shared state
-- Domain errors are mapped to `tonic::Status` via `map_manager_error()`
+- Domain errors are mapped to `tonic::Status` at the service boundary (e.g. `map_vmm_error()` in `services/vm/mod.rs`)
 - Use `#[instrument]` and structured tracing throughout
 
 ### App Startup
@@ -168,7 +170,7 @@ CI is driven by Dagger (`ci/main.go`) invoked from GitHub Actions (`.github/work
 
 Three jobs run on every PR and push to master:
 
-- **check** (`dagger call --mod ./ci all --src=.`): runs fmt, lint, test, sqlx-check, audit, openapi-check, and python-sdk-lint in parallel. All steps except `fmt` chain from a shared `prebuilt` container (debug build) so the workspace compiles exactly once per session.
+- **check** (`dagger call --mod ./ci all --src=.`): runs fmt, lint, test, sqlx-check, audit, openapi-check, and python-sdk-lint in parallel. Lint, test, openapi-check and python-sdk-lint (through the generated spec) chain from a shared `prebuilt` container (debug build with the otel features), so the workspace compiles once per session; fmt, sqlx-check and audit run in their own containers.
 - **Caching:** hosted runners start with empty Dagger cache volumes, so Rust compiles start from scratch on every run (per-object caching through the Actions cache, e.g. sccache's GHA backend, gets rate-limited at this repo's ~2,400 compile outputs per run). The e2e images use BuildKit's GitHub Actions cache (`e2e/docker-compose.ci.yml`), whose entries are evicted after 7 days without use.
 - **build** (`dagger call --mod ./ci build --src=.`): release build targeting `x86_64-unknown-linux-musl`; uploads the four binaries as a workflow artifact.
 - **e2e**: downloads the build artifacts, starts a Docker Compose stack with KVM passthrough, runs pytest. Triggered on push to master inside `rust-ci.yml`, or in a dedicated PR E2E workflow when the `run-e2e` label is first added. After that, labeled PR updates run E2E from `rust-ci.yml` on `synchronize`.
@@ -178,8 +180,8 @@ Three jobs run on every PR and push to master:
 | Function | What it does |
 |---|---|
 | `Fmt` | `cargo +nightly fmt --all -- --check` |
-| `Lint` | `cargo clippy --workspace -D warnings` |
-| `Test` | `cargo nextest run --workspace` against a live Postgres 16 service |
+| `Lint` | `cargo clippy --workspace --features qarax/otel,qarax-node/otel -- -D warnings` |
+| `Test` | `cargo nextest run --workspace --features qarax/otel,qarax-node/otel` against a live Postgres 16 service |
 | `SqlxCheck` | `cargo sqlx prepare --workspace --check` after running migrations |
 | `Audit` | `cargo audit` (ignores configured in `.cargo/audit.toml`) |
 | `OpenApiCheck` | Regenerates `openapi.yaml` and diffs against the committed copy |
@@ -214,13 +216,13 @@ E2E tests run automatically on push to master. On PRs, apply the `run-e2e` label
 
 ## Versioning
 
-Key component versions are pinned in `Makefile` (`CLOUD_HYPERVISOR_VERSION`) and `deployments/Containerfile.qarax-vmm` (Cloud Hypervisor, OverlayBD). The Cloud Hypervisor and Firecracker SDKs are pinned via git tags in `qarax-node/Cargo.toml`; their repos (`qarax/cloud-hypervisor-sdk`, `qarax/firecracker-rust-sdk`) regenerate and tag a release automatically when upstream ships one (CH `vX.Y` becomes SDK `vX.Y.0`, Firecracker tags are used as is). Bump `versions/cloud-hypervisor-version` together with the CH SDK tag, since the SDK serializes that release's API. After bumping an SDK tag, always run `cargo build -p qarax-node`: releases can rename/move types (e.g., v54 moved `disk_config::ImageType` to `models::ImageType` and turned the device `iommu` flags into `IommuType`).
+Cloud Hypervisor and Firecracker versions are pinned in `versions/` (the `Makefile` reads them and passes them to `deployments/Containerfile.qarax-vmm` as build args); OverlayBD is pinned in the Containerfile itself. The Cloud Hypervisor and Firecracker SDKs are pinned via git tags in `qarax-node/Cargo.toml`; their repos (`qarax/cloud-hypervisor-sdk`, `qarax/firecracker-rust-sdk`) regenerate and tag a release automatically when upstream ships one (CH `vX.Y` becomes SDK `vX.Y.0`, Firecracker tags are used as is). Bump `versions/cloud-hypervisor-version` together with the CH SDK tag, since the SDK serializes that release's API. After bumping an SDK tag, always run `cargo build -p qarax-node`: releases can rename/move types (e.g., v54 moved `disk_config::ImageType` to `models::ImageType` and turned the device `iommu` flags into `IommuType`).
 
 ## E2E Test Patterns
 
 - **Async fixture clients**: Pytest async fixtures that use `async with Client(...) as c:` must create their own `Client(base_url=QARAX_URL)` — never share the test's `client` fixture. httpx clients cannot be opened as a context manager more than once per instance.
 - **`docker compose` commands**: Must be run from `e2e/` (the compose file lives there). `make run-local` handles this via `cd e2e` internally.
-- **Compose Postgres is internal-only**: the E2E stack no longer binds Postgres to host port 5432, so it can run alongside the standalone test database container.
+- **Compose Postgres is internal-only**: the E2E stack doesn't bind Postgres to a host port, so it can run alongside the standalone test database container.
 
 ## Additional Directories
 
@@ -236,7 +238,6 @@ Key component versions are pinned in `Makefile` (`CLOUD_HYPERVISOR_VERSION`) and
 - **After any SQL query change:** run `cargo sqlx prepare --workspace` to update the offline query cache.
 - **When renaming anything:** search `hack/`, `e2e/`, `demos/`, `.github/`, and all workspace crates for stale references before finishing.
 - **When changing an API request shape, CLI flag, or auth behavior:** grep `demos/` and `hack/` for raw callers (`curl`, python `requests`, CLI invocations). Nothing in CI exercises them, so they break silently. Some request types (e.g. `NewHost`) use `#[serde(deny_unknown_fields)]`, so removing a field from them turns old callers into 422s.
-- **Plan before implementing on non-trivial changes.** List files to modify and describe the approach. Do not create or edit files until the plan is clear.
 - **When making user facing changes** Make sure you have implemented a CLI and added working e2e tests.
 - **Never embed credentials, secrets, or personal data in source code.** Use environment variables or config files excluded from version control.
 - **When the user redirects or interrupts, stop immediately.** Do not continue the previous approach. Ask a clarifying question if the new direction is unclear.
@@ -244,7 +245,7 @@ Key component versions are pinned in `Makefile` (`CLOUD_HYPERVISOR_VERSION`) and
 ## General Guidelines
 
 - Always push to 'upstream' remote, not 'origin', unless explicitly told otherwise.
-- When fixing CI/test failures, carefully check ALL required fields and parameters in a single pass rather than fixing one at a time. Review the full struct/function signature before submitting.
+- When fixing CI/test failures, check every required field and parameter in one pass rather than fixing them one at a time. Review the full struct/function signature before submitting.
 - Read existing codebase conventions (demo structure, file locations, patterns) before creating new files. Do not assume conventions - use Grep/Read to discover them first.
 
 
