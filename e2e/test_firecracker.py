@@ -62,6 +62,7 @@ from helpers import (
     call_api,
     call_api_detailed,
     path_exists_in_any,
+    wait_for_start,
     wait_for_status,
 )
 
@@ -171,8 +172,8 @@ async def test_fc_vm_full_lifecycle(client):
             assert vm.status == VmStatus.SHUTDOWN
 
             # Start again
-            await call_api(start_vm, client=c, vm_id=vm_id)
-            await wait_for_status(c, vm_id, VmStatus.RUNNING)
+            started = await call_api(start_vm, client=c, vm_id=vm_id)
+            await wait_for_start(c, vm_id, started.job_id)
         finally:
             await call_api(delete_vm, client=c, vm_id=vm_id)
 
@@ -194,8 +195,8 @@ async def test_fc_vm_force_stop(client):
             vm = await call_api(get_vm, client=c, vm_id=vm_id)
             assert vm.status == VmStatus.SHUTDOWN
 
-            await call_api(start_vm, client=c, vm_id=vm_id)
-            await wait_for_status(c, vm_id, VmStatus.RUNNING)
+            started = await call_api(start_vm, client=c, vm_id=vm_id)
+            await wait_for_start(c, vm_id, started.job_id)
         finally:
             await call_api(delete_vm, client=c, vm_id=vm_id)
 
@@ -224,8 +225,8 @@ runcmd:
 
         try:
             # Start the VM — it should boot with the cidata seed attached
-            await call_api(start_vm, client=c, vm_id=vm_id)
-            await wait_for_status(c, vm_id, VmStatus.RUNNING)
+            started = await call_api(start_vm, client=c, vm_id=vm_id)
+            await wait_for_start(c, vm_id, started.job_id)
             assert path_exists_in_any(NODE_CONTAINER_PREFIX, seed_path), (
                 f"cloud-init seed image {seed_path} not found on any node"
             )
