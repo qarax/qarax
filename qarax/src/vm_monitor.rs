@@ -108,7 +108,6 @@ pub async fn start_vm_monitor(env: App) {
     }
 }
 
-#[cfg(feature = "otel")]
 /// Write a status this tick derived for `vm`, unless another writer (a lifecycle
 /// handler, a job) changed the VM after `list_active` read it. That newer
 /// status wins; the next tick compares it against the node again.
@@ -126,6 +125,7 @@ async fn record_status(env: &App, vm: &vms::Vm, status: VmStatus, reason: &str) 
     }
 }
 
+#[cfg(feature = "otel")]
 pub fn record_monitor_cycle(monitor: &str, start: std::time::Instant) {
     use opentelemetry::KeyValue;
 
