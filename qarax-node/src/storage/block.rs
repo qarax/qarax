@@ -59,7 +59,7 @@ fn validate_iqn(iqn: &str) -> anyhow::Result<()> {
 async fn run_iscsiadm(args: &[&str]) -> anyhow::Result<String> {
     let output = Command::new("iscsiadm").args(args).output().await?;
     if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+        Ok(String::from_utf8_lossy_owned(output.stdout))
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
         anyhow::bail!("iscsiadm {args:?} failed: {}", stderr.trim());

@@ -8,6 +8,7 @@ use qarax::model::{
 use reqwest::StatusCode;
 use serde_json::json;
 use sqlx::PgPool;
+use std::assert_matches;
 use support::spawn_app;
 use uuid::Uuid;
 
@@ -106,10 +107,10 @@ async fn pool_capacity_tracks_concurrent_creates_resizes_and_deletes() {
         (Ok(id), Err(error)) | (Err(error), Ok(id)) => (id, error),
         other => panic!("exactly one reservation must succeed: {other:?}"),
     };
-    assert!(matches!(
+    assert_matches!(
         qarax::errors::Error::from(error),
         qarax::errors::Error::UnprocessableEntity(_)
-    ));
+    );
     assert_eq!(
         storage_pools::get(&app.pool, pool_id)
             .await

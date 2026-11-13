@@ -8,6 +8,7 @@ use qarax::model::{
 use reqwest::StatusCode;
 use serde_json::json;
 use sqlx::PgPool;
+use std::assert_matches;
 use support::spawn_app;
 use tokio::net::TcpListener;
 use uuid::Uuid;
@@ -82,7 +83,7 @@ async fn deleting_completed_transfer_artifacts_via_api_succeeds() {
     assert_eq!(delete_pool.status(), StatusCode::NO_CONTENT);
 
     let err = transfers::get(&app.pool, transfer.id).await.unwrap_err();
-    assert!(matches!(err, sqlx::Error::RowNotFound));
+    assert_matches!(err, sqlx::Error::RowNotFound);
 }
 
 #[tokio::test]
@@ -312,10 +313,10 @@ async fn managed_disk_cleanup_retries_without_losing_allocation_or_deleting_regi
         client.delete(&url).send().await.unwrap().status(),
         StatusCode::ACCEPTED
     );
-    assert!(matches!(
+    assert_matches!(
         storage_objects::get(&app.pool, disk.id).await,
         Err(sqlx::Error::RowNotFound)
-    ));
+    );
     assert_eq!(
         storage_pools::get(&app.pool, pool_id)
             .await

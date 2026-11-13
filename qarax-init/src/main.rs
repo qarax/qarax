@@ -287,7 +287,7 @@ fn spawn_reader<R: Read + Send + 'static>(mut reader: R) -> Receiver<String> {
     thread::spawn(move || {
         let mut buf = Vec::new();
         let _ = reader.read_to_end(&mut buf);
-        let _ = tx.send(String::from_utf8_lossy(&buf).to_string());
+        let _ = tx.send(String::from_utf8_lossy_owned(buf));
     });
     rx
 }

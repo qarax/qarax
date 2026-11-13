@@ -254,6 +254,7 @@ impl FirecrackerManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::assert_matches;
 
     #[tokio::test]
     async fn exec_vm_rejects_empty_command() {
@@ -264,7 +265,7 @@ mod tests {
             .exec_vm("test-vm", Vec::new(), None)
             .await
             .unwrap_err();
-        assert!(matches!(err, VmmError::ExecInvalid(_)));
+        assert_matches!(err, VmmError::ExecInvalid(_));
     }
 
     #[test]

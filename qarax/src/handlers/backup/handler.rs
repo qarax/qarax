@@ -1,4 +1,4 @@
-use std::{path::Path as StdPath, time::Duration};
+use std::{mem::DropGuard, path::Path as StdPath, time::Duration};
 
 use axum::{Extension, Json, extract::Path};
 use http::StatusCode;
@@ -46,21 +46,6 @@ pub struct RestoreBackupResponse {
     pub backup_type: BackupType,
     pub vm_id: Option<Uuid>,
     pub database_name: Option<String>,
-}
-
-struct MaintenanceModeGuard(App);
-
-impl MaintenanceModeGuard {
-    fn new(env: App) -> Self {
-        env.set_maintenance_mode(true);
-        Self(env)
-    }
-}
-
-impl Drop for MaintenanceModeGuard {
-    fn drop(&mut self) {
-        self.0.set_maintenance_mode(false);
-    }
 }
 
 fn database_backup_name(name: Option<&str>) -> String {
@@ -412,7 +397,8 @@ pub async fn restore(
             let dump_path = storage_objects::get_path_from_config(&storage_object.config)
                 .ok_or(crate::errors::Error::InternalServerError)?;
 
-            let _guard = MaintenanceModeGuard::new(env.clone());
+            env.set_maintenance_mode(true);
+            let _maintenance = DropGuard::new(env.clone(), |env| env.set_maintenance_mode(false));
             sleep(Duration::from_millis(500)).await;
             terminate_database_sessions(&env).await?;
             run_pg_restore(&env, &dump_path).await?;

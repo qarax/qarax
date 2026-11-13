@@ -83,16 +83,12 @@ impl VmServiceImpl {
 
     /// Run a unit-returning VM operation, logging start/success/failure uniformly.
     #[allow(clippy::result_large_err)]
-    async fn run_vm_op<F, Fut>(
+    async fn run_vm_op(
         &self,
         op_name: &str,
         vm_id: String,
-        f: F,
-    ) -> Result<Response<()>, Status>
-    where
-        F: FnOnce() -> Fut,
-        Fut: std::future::Future<Output = Result<(), VmmError>>,
-    {
+        f: impl AsyncFnOnce() -> Result<(), VmmError>,
+    ) -> Result<Response<()>, Status> {
         info!("{} VM: {}", op_name, vm_id);
         match f().await {
             Ok(()) => {

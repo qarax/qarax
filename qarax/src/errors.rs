@@ -47,7 +47,7 @@ fn unique_violation_message(db_err: &dyn sqlx::error::DatabaseError) -> String {
 }
 
 fn to_singular_title(s: &str) -> String {
-    let singular = s.strip_suffix('s').unwrap_or(s);
+    let singular = s.trim_suffix('s');
     let mut c = singular.chars();
     match c.next() {
         None => String::new(),

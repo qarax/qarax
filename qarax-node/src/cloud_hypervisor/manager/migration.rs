@@ -12,7 +12,7 @@ impl VmManager {
         drop(vms);
 
         // Cloud Hypervisor requires the destination to be an existing directory.
-        let dest_path = snapshot_url.strip_prefix("file://").unwrap_or(snapshot_url);
+        let dest_path = snapshot_url.trim_prefix("file://");
         tokio::fs::create_dir_all(dest_path).await.map_err(|e| {
             VmManagerError::ProcessError(format!(
                 "Failed to create snapshot directory {}: {}",

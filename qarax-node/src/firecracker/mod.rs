@@ -627,7 +627,7 @@ impl VmmManager for FirecrackerManager {
             .spawn()
             .map_err(VmmError::SpawnError)?;
 
-        let src = source_url.strip_prefix("file://").unwrap_or(source_url);
+        let src = source_url.trim_prefix("file://");
         let mem_path = format!("{}/mem.snap", src);
         let state_path = format!("{}/vm.snap", src);
 

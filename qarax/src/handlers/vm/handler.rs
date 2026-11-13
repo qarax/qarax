@@ -4480,6 +4480,7 @@ mod tests {
         storage_pools::{StoragePool, StoragePoolStatus, StoragePoolType},
         vm_disks::VmDisk,
     };
+    use std::assert_matches;
     use uuid::Uuid;
 
     fn make_disk(logical_name: &str) -> VmDisk {
@@ -4596,8 +4597,10 @@ mod tests {
 
         let err = resolve_disk_resize_target(&disk, &object, &pool).unwrap_err();
 
-        assert!(
-            matches!(err, crate::errors::Error::UnprocessableEntity(message) if message == "persistent OverlayBD disk resize is not supported yet")
+        assert_matches!(
+            err,
+            crate::errors::Error::UnprocessableEntity(message)
+                if message == "persistent OverlayBD disk resize is not supported yet"
         );
     }
 }

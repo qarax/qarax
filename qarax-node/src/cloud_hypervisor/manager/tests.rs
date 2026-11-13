@@ -1,4 +1,5 @@
 use super::*;
+use std::assert_matches;
 
 use crate::rpc::node::{CpuPinning as ProtoCpuPinning, NumaPlacement as ProtoNumaPlacement};
 use tempfile::TempDir;
@@ -173,7 +174,7 @@ async fn exec_vm_rejects_empty_command() {
         .await
         .unwrap_err();
 
-    assert!(matches!(err, VmManagerError::ExecInvalid(_)));
+    assert_matches!(err, VmManagerError::ExecInvalid(_));
 }
 
 #[test]
@@ -335,10 +336,10 @@ fn pci_segment_must_fit_in_i16() {
         pci_segment: Some(i32::from(i16::MAX) + 1),
         ..Default::default()
     };
-    assert!(matches!(
+    assert_matches!(
         VmManager::proto_disk_to_sdk(&disk),
         Err(VmManagerError::InvalidConfig(_))
-    ));
+    );
 }
 
 #[test]
