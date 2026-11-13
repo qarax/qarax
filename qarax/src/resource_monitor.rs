@@ -163,120 +163,26 @@ pub async fn start_resource_monitor(env: App) {
 #[cfg(test)]
 mod tests {
     use anyhow::anyhow;
-    use sqlx::{Connection, Executor, PgConnection, PgPool};
-    use uuid::Uuid;
 
     use super::handle_probe_result;
     use crate::{
-        App,
-        configuration::{default_control_plane_architecture, get_configuration},
         grpc_client::node::NodeInfo,
-        model::hosts::{self, HostStatus, NewHost},
+        model::hosts::{self, Host, HostStatus},
+        test_support::TestDatabase,
     };
 
-    struct TestDatabase {
-        name: String,
-        pool: PgPool,
-    }
-
-    impl TestDatabase {
-        async fn new() -> Self {
-            let mut configuration = get_configuration().expect("Failed to read configuration");
-            configuration.database.name = Uuid::new_v4().to_string();
-
-            let mut connection =
-                PgConnection::connect(&configuration.database.connection_string_without_db())
-                    .await
-                    .expect("Failed to connect to Postgres");
-            connection
-                .execute(format!(r#"CREATE DATABASE "{}";"#, configuration.database.name).as_str())
-                .await
-                .expect("Failed to create test database");
-
-            let pool = PgPool::connect(&configuration.database.connection_string())
-                .await
-                .expect("Failed to connect to test database");
-            sqlx::migrate!("../migrations")
-                .run(&pool)
-                .await
-                .expect("Failed to run migrations");
-
-            Self {
-                name: configuration.database.name,
-                pool,
-            }
-        }
-
-        async fn insert_up_host(&self) -> hosts::Host {
-            let host_id = hosts::add(
-                &self.pool,
-                &NewHost {
-                    name: "test-host".to_string(),
-                    address: "127.0.0.1".to_string(),
-                    port: 50051,
-                    host_user: "root".to_string(),
-                    credential_ref: None,
-                    reservation_class: None,
-                    placement_labels: std::collections::BTreeMap::new(),
-                },
-            )
+    async fn insert_up_host(db: &TestDatabase) -> Host {
+        let host_id = db.add_host("test-host", HostStatus::Up).await;
+        hosts::get_by_id(&db.pool, host_id)
             .await
-            .expect("Failed to insert host");
-
-            hosts::update_status(&self.pool, host_id, HostStatus::Up)
-                .await
-                .expect("Failed to mark host UP");
-
-            hosts::get_by_id(&self.pool, host_id)
-                .await
-                .expect("Failed to fetch host")
-                .expect("Host not found")
-        }
-
-        fn app(&self) -> App {
-            let mut configuration = get_configuration().expect("Failed to read configuration");
-            configuration.database.name = self.name.clone();
-            App::new(
-                self.pool.clone(),
-                configuration.database,
-                configuration.vm_defaults,
-                configuration.scheduling,
-                configuration.sandbox,
-                configuration.auth,
-                default_control_plane_architecture(),
-            )
-        }
-    }
-
-    impl Drop for TestDatabase {
-        fn drop(&mut self) {
-            let db_name = self.name.clone();
-            let (tx, rx) = std::sync::mpsc::channel();
-
-            std::thread::spawn(move || {
-                let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
-                rt.block_on(async move {
-                    let configuration = get_configuration().expect("Failed to read configuration");
-                    let mut connection =
-                        PgConnection::connect_with(&configuration.database.without_db())
-                            .await
-                            .expect("Failed to connect to Postgres");
-                    connection
-                        .execute(&*format!(r#"DROP DATABASE "{}" WITH (FORCE)"#, db_name))
-                        .await
-                        .expect("Failed to drop test database");
-                    let _ = tx.send(());
-                });
-            });
-
-            let _ = rx.recv();
-        }
+            .expect("Failed to fetch host")
+            .expect("Host not found")
     }
 
     #[tokio::test]
     async fn probe_failure_marks_host_down() {
         let db = TestDatabase::new().await;
-        let host = db.insert_up_host().await;
+        let host = insert_up_host(&db).await;
 
         handle_probe_result(&db.app(), &host, Err(anyhow!("host unreachable"))).await;
 
@@ -290,7 +196,7 @@ mod tests {
     #[tokio::test]
     async fn probe_failure_keeps_maintenance_host_in_maintenance() {
         let db = TestDatabase::new().await;
-        let host = db.insert_up_host().await;
+        let host = insert_up_host(&db).await;
         hosts::update_status(&db.pool, host.id, HostStatus::Maintenance)
             .await
             .expect("mark maintenance");
@@ -311,7 +217,7 @@ mod tests {
     #[tokio::test]
     async fn successful_probe_keeps_host_up_and_updates_resources() {
         let db = TestDatabase::new().await;
-        let host = db.insert_up_host().await;
+        let host = insert_up_host(&db).await;
 
         handle_probe_result(
             &db.app(),

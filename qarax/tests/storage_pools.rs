@@ -117,11 +117,7 @@ async fn pool_capacity_tracks_concurrent_creates_resizes_and_deletes() {
             .allocated_bytes,
         Some(6)
     );
-    assert!(
-        set_size_bytes(&app.pool, id, 11)
-            .await
-            .is_err()
-    );
+    assert!(set_size_bytes(&app.pool, id, 11).await.is_err());
     assert_eq!(
         storage_objects::get(&app.pool, id)
             .await
@@ -129,14 +125,8 @@ async fn pool_capacity_tracks_concurrent_creates_resizes_and_deletes() {
             .size_bytes,
         6
     );
-    set_size_bytes(&app.pool, id, 8)
-        .await
-        .unwrap();
-    assert!(
-        set_size_bytes(&app.pool, id, -1)
-            .await
-            .is_err()
-    );
+    set_size_bytes(&app.pool, id, 8).await.unwrap();
+    assert!(set_size_bytes(&app.pool, id, -1).await.is_err());
     assert_eq!(
         storage_pools::get(&app.pool, pool_id)
             .await

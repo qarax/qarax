@@ -32,10 +32,14 @@ async fn test_host_create_is_recorded_in_audit_log() {
     let host_name = "audit-host";
     let host_id = add_host(&client, &app.address, host_name).await;
     add_up_host(&client, &app.address, "audit-other-host").await;
-    create_vm(&client, &app.address, json!({
-        "name": "audit-vm", "hypervisor": "cloud_hv", "boot_vcpus": 1,
-        "max_vcpus": 1, "memory_size": 268435456, "config": {}
-    }))
+    create_vm(
+        &client,
+        &app.address,
+        json!({
+            "name": "audit-vm", "hypervisor": "cloud_hv", "boot_vcpus": 1,
+            "max_vcpus": 1, "memory_size": 268435456, "config": {}
+        }),
+    )
     .await;
     let list = |query: String| {
         let client = client.clone();
@@ -47,16 +51,26 @@ async fn test_host_create_is_recorded_in_audit_log() {
         }
     };
 
-    let logs = list(format!("resource_type=host&resource_id={host_id}&action=create")).await;
+    let logs = list(format!(
+        "resource_type=host&resource_id={host_id}&action=create"
+    ))
+    .await;
     assert_eq!(logs.len(), 1);
     assert_eq!(logs[0]["resource_id"], host_id.to_string());
     assert_eq!(logs[0]["resource_name"], host_name);
     assert!(logs[0]["created_at"].is_string());
 
     // Each filter narrows the result: two hosts and one VM were created.
-    assert_eq!(list("resource_type=host&action=create".into()).await.len(), 2);
+    assert_eq!(
+        list("resource_type=host&action=create".into()).await.len(),
+        2
+    );
     assert_eq!(list("action=create".into()).await.len(), 3);
-    assert!(list("resource_type=host&action=delete".into()).await.is_empty());
+    assert!(
+        list("resource_type=host&action=delete".into())
+            .await
+            .is_empty()
+    );
     assert_eq!(list("limit=1".into()).await.len(), 1);
 
     let log_id = logs[0]["id"].as_str().unwrap();
@@ -137,10 +151,14 @@ async fn test_rejected_vm_start_is_not_audited() {
     let app = spawn_app().await;
     let client = reqwest::Client::new();
     add_up_host(&client, &app.address, "start-host").await;
-    let vm_id = create_vm(&client, &app.address, json!({
-        "name": "audit-running-vm", "hypervisor": "cloud_hv", "boot_vcpus": 1,
-        "max_vcpus": 1, "memory_size": 268435456, "config": {}
-    }))
+    let vm_id = create_vm(
+        &client,
+        &app.address,
+        json!({
+            "name": "audit-running-vm", "hypervisor": "cloud_hv", "boot_vcpus": 1,
+            "max_vcpus": 1, "memory_size": 268435456, "config": {}
+        }),
+    )
     .await;
     set_vm_status(&app.pool, vm_id, "RUNNING").await;
 

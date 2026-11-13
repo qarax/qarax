@@ -110,7 +110,13 @@ async fn hook_update_can_clear_nullable_fields() {
         json!({"name": "clear-hook", "url": "https://example.com/hook", "scope": "tag", "scope_value": "blue"}),
     )
     .await;
-    update_hook(&client, &app.address, &hook_id, json!({"secret": "top-secret"})).await;
+    update_hook(
+        &client,
+        &app.address,
+        &hook_id,
+        json!({"secret": "top-secret"}),
+    )
+    .await;
 
     // An explicit null clears the field; leaving a field out keeps it.
     let updated = update_hook(

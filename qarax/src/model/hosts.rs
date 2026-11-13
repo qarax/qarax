@@ -776,53 +776,22 @@ WHERE h.id = $1
 mod tests {
     use std::collections::BTreeMap;
 
-    use sqlx::{Connection, Executor, PgConnection, PgPool};
     use uuid::Uuid;
 
     use super::{
-        DeployHostRequest, HostStatus, NewHost, SchedulingRequest, UpdateHostPlacementRequest,
+        DeployHostRequest, GpuRequest, HostStatus, SchedulingRequest, UpdateHostPlacementRequest,
     };
     use crate::{
-        configuration::{SchedulingSettings, get_configuration},
+        configuration::SchedulingSettings,
         model::{
+            host_gpus::{self, GpuDiscovery},
             networks::{self, NewNetwork},
-            vms::{self, Hypervisor, PlacementPolicy, ResolvedNewVm},
+            vms::{self, PlacementPolicy, ResolvedNewVm},
         },
+        test_support::TestDatabase,
     };
 
-    struct TestDatabase {
-        name: String,
-        pool: PgPool,
-    }
-
     impl TestDatabase {
-        async fn new() -> Self {
-            let mut configuration = get_configuration().expect("Failed to read configuration");
-            configuration.database.name = Uuid::new_v4().to_string();
-
-            let mut connection =
-                PgConnection::connect(&configuration.database.connection_string_without_db())
-                    .await
-                    .expect("Failed to connect to Postgres");
-            connection
-                .execute(format!(r#"CREATE DATABASE "{}";"#, configuration.database.name).as_str())
-                .await
-                .expect("Failed to create test database");
-
-            let pool = PgPool::connect(&configuration.database.connection_string())
-                .await
-                .expect("Failed to connect to test database");
-            sqlx::migrate!("../migrations")
-                .run(&pool)
-                .await
-                .expect("Failed to run migrations");
-
-            Self {
-                name: configuration.database.name,
-                pool,
-            }
-        }
-
         async fn insert_up_host(
             &self,
             name: &str,
@@ -832,25 +801,7 @@ mod tests {
             disk_available_bytes: i64,
             load_average: f64,
         ) -> Uuid {
-            let address_suffix = (name.bytes().fold(0u16, |acc, b| acc + u16::from(b)) % 200) + 1;
-            let host_id = super::add(
-                &self.pool,
-                &NewHost {
-                    name: name.to_string(),
-                    address: format!("127.0.0.{address_suffix}"),
-                    port: 50051,
-                    host_user: "root".to_string(),
-                    credential_ref: None,
-                    reservation_class: None,
-                    placement_labels: BTreeMap::new(),
-                },
-            )
-            .await
-            .expect("Failed to insert host");
-
-            super::update_status(&self.pool, host_id, HostStatus::Up)
-                .await
-                .expect("Failed to mark host UP");
+            let host_id = self.add_host(name, HostStatus::Up).await;
             super::update_resources(
                 &self.pool,
                 host_id,
@@ -903,31 +854,6 @@ mod tests {
         }
     }
 
-    impl Drop for TestDatabase {
-        fn drop(&mut self) {
-            let db_name = self.name.clone();
-            let (tx, rx) = std::sync::mpsc::channel();
-
-            std::thread::spawn(move || {
-                let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
-                rt.block_on(async move {
-                    let configuration = get_configuration().expect("Failed to read configuration");
-                    let mut connection =
-                        PgConnection::connect_with(&configuration.database.without_db())
-                            .await
-                            .expect("Failed to connect to Postgres");
-                    connection
-                        .execute(&*format!(r#"DROP DATABASE "{}" WITH (FORCE)"#, db_name))
-                        .await
-                        .expect("Failed to drop test database");
-                    let _ = tx.send(());
-                });
-            });
-
-            let _ = rx.recv();
-        }
-    }
-
     fn scheduling_config() -> SchedulingSettings {
         SchedulingSettings {
             memory_oversubscription_ratio: 1.0,
@@ -939,38 +865,10 @@ mod tests {
 
     fn resolved_vm(name: &str, memory_size: i64, boot_vcpus: i32) -> ResolvedNewVm {
         ResolvedNewVm {
-            name: name.to_string(),
-            tags: vec![],
-            hypervisor: Hypervisor::CloudHv,
-            architecture: None,
             boot_vcpus,
             max_vcpus: boot_vcpus,
-            cpu_topology: None,
-            kvm_hyperv: None,
             memory_size,
-            memory_hotplug_size: None,
-            memory_mergeable: None,
-            memory_shared: None,
-            memory_hugepages: None,
-            memory_hugepage_size: None,
-            memory_prefault: None,
-            memory_thp: None,
-            boot_source_id: None,
-            root_disk_object_id: None,
-            boot_mode: None,
-            description: None,
-            image_ref: None,
-            cloud_init_user_data: None,
-            cloud_init_meta_data: None,
-            cloud_init_network_config: None,
-            network_id: None,
-            networks: None,
-            security_group_ids: None,
-            accelerator_config: None,
-            numa_config: None,
-            persistent_upper_pool_id: None,
-            placement_policy: None,
-            config: serde_json::json!({}),
+            ..crate::test_support::resolved_vm(name)
         }
     }
 
@@ -1499,5 +1397,65 @@ mod tests {
 
         assert_eq!(host.id, empty_host_id);
         assert_ne!(host.id, crowded_host_id);
+    }
+
+    #[tokio::test]
+    async fn pick_host_requires_enough_free_matching_gpus() {
+        let db = TestDatabase::new().await;
+        let gpu_host = db
+            .insert_up_host("gpu-host", Some("x86_64"), 8, 16 * 1024, 10_000, 0.9)
+            .await;
+        db.insert_up_host("cpu-host", Some("x86_64"), 8, 16 * 1024, 10_000, 0.1)
+            .await;
+        host_gpus::sync_gpus(
+            &db.pool,
+            gpu_host,
+            &[GpuDiscovery {
+                pci_address: "0000:01:00.0".to_string(),
+                model: "A100".to_string(),
+                vendor: "nvidia".to_string(),
+                vram_bytes: 80 * 1024 * 1024 * 1024,
+                iommu_group: 1,
+                numa_node: 0,
+            }],
+        )
+        .await
+        .expect("Failed to sync GPUs");
+
+        let pick = |gpu: GpuRequest| {
+            let pool = db.pool.clone();
+            async move {
+                let mut tx = pool.begin().await.expect("begin tx");
+                super::pick_host_tx(
+                    &mut tx,
+                    &SchedulingRequest {
+                        memory_bytes: 1024,
+                        vcpus: 1,
+                        disk_bytes: 100,
+                        architecture: None,
+                        storage_pool_id: None,
+                        required_network_ids: vec![],
+                        gpu: Some(gpu),
+                        placement_policy: None,
+                        excluded_host_ids: vec![],
+                    },
+                    &scheduling_config(),
+                )
+                .await
+                .expect("pick host")
+                .map(|host| host.id)
+            }
+        };
+        let request = |count, vendor: &str| GpuRequest {
+            count,
+            vendor: Some(vendor.to_string()),
+            model: None,
+            min_vram_bytes: None,
+        };
+
+        // The GPU host wins despite its higher load.
+        assert_eq!(pick(request(1, "nvidia")).await, Some(gpu_host));
+        assert_eq!(pick(request(2, "nvidia")).await, None);
+        assert_eq!(pick(request(1, "amd")).await, None);
     }
 }

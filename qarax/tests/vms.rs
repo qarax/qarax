@@ -700,7 +700,8 @@ async fn test_created_vm_disk_and_nic_changes() {
     let client = reqwest::Client::new();
     let host_id = add_up_host(&client, &app.address, "test-host").await;
     let vm_id = create_vm(&client, &app.address, vm_body("vm-created-changes")).await;
-    let pool_id = create_local_pool(&client, &app.address, &app.pool, host_id, "changes-pool").await;
+    let pool_id =
+        create_local_pool(&client, &app.address, &app.pool, host_id, "changes-pool").await;
     let object_id = create_disk_object(&client, &app.address, pool_id, "changes-disk", GIB).await;
     let vm_url = format!("{}/vms/{vm_id}", app.address);
 

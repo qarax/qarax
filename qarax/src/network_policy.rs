@@ -564,7 +564,8 @@ mod tests {
     fn affected_hosts_are_scoped_to_the_changed_vpc() {
         let host_a = Uuid::new_v4();
         let host_b = Uuid::new_v4();
-        let host_c = Uuid::new_v4();
+        let other_vpc_host = Uuid::new_v4();
+        let extra_host = Uuid::new_v4();
 
         let vpc_a_local = make_network("a", "10.10.1.0/24", Some("vpc-a"), Some("isolated"));
         let vpc_a_remote = make_network("b", "10.10.2.0/24", Some("vpc-a"), Some("isolated"));
@@ -572,13 +573,15 @@ mod tests {
         let attached_cluster = vec![
             make_attachment(host_a, &vpc_a_local),
             make_attachment(host_b, &vpc_a_remote),
-            make_attachment(host_c, &vpc_b_remote),
+            make_attachment(other_vpc_host, &vpc_b_remote),
         ];
-        let mut expected = vec![host_a, host_b, host_c];
+        // vpc-a's hosts plus the caller's extra (e.g. a host the network was
+        // just detached from); the host only on vpc-b is left alone.
+        let mut expected = vec![host_a, host_b, extra_host];
         expected.sort_unstable();
 
         assert_eq!(
-            super::affected_host_ids_for_vpc(&attached_cluster, "vpc-a", &[host_c]),
+            super::affected_host_ids_for_vpc(&attached_cluster, "vpc-a", &[extra_host]),
             expected
         );
     }

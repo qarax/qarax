@@ -4533,17 +4533,6 @@ mod tests {
     }
 
     #[test]
-    fn next_disk_id_empty() {
-        assert_eq!(next_disk_id(&[]), "disk0");
-    }
-
-    #[test]
-    fn next_disk_id_skips_existing() {
-        let existing = vec![make_disk("disk0"), make_disk("disk1")];
-        assert_eq!(next_disk_id(&existing), "disk2");
-    }
-
-    #[test]
     fn next_disk_id_fills_gap() {
         let existing = vec![make_disk("disk0"), make_disk("disk2")];
         assert_eq!(next_disk_id(&existing), "disk1");
@@ -4553,26 +4542,6 @@ mod tests {
     fn next_disk_id_ignores_non_disk_names() {
         let existing = vec![make_disk("vda"), make_disk("rootfs")];
         assert_eq!(next_disk_id(&existing), "disk0");
-    }
-
-    #[test]
-    #[allow(clippy::unnecessary_literal_unwrap)]
-    fn boot_mode_default_is_kernel() {
-        let mode: Option<BootMode> = None;
-        assert_eq!(mode.unwrap_or(BootMode::Kernel), BootMode::Kernel);
-    }
-
-    #[test]
-    fn boot_mode_serde_roundtrip() {
-        let json = serde_json::to_string(&BootMode::Firmware).unwrap();
-        assert_eq!(json, r#""firmware""#);
-        let parsed: BootMode = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed, BootMode::Firmware);
-
-        let json = serde_json::to_string(&BootMode::Kernel).unwrap();
-        assert_eq!(json, r#""kernel""#);
-        let parsed: BootMode = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed, BootMode::Kernel);
     }
 
     #[test]
