@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.11"
 
 [[package]]
@@ -406,13 +406,13 @@ dependencies = [
     { name = "protobuf" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
+    { name = "pytest-timeout" },
     { name = "python-dateutil" },
     { name = "qarax-api-client" },
 ]
 
 [package.optional-dependencies]
 dev = [
-    { name = "pytest-timeout" },
     { name = "pytest-xdist" },
 ]
 
@@ -425,7 +425,7 @@ requires-dist = [
     { name = "protobuf", specifier = ">=5.29.3" },
     { name = "pytest", specifier = ">=9.0.3" },
     { name = "pytest-asyncio", specifier = ">=0.25.2" },
-    { name = "pytest-timeout", marker = "extra == 'dev'", specifier = ">=2.2.0" },
+    { name = "pytest-timeout", specifier = ">=2.2.0" },
     { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.5.0" },
     { name = "python-dateutil", specifier = ">=2.9.0" },
     { name = "qarax-api-client", editable = "../python-sdk/qarax-api-client" },

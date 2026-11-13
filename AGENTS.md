@@ -223,6 +223,17 @@ Cloud Hypervisor and Firecracker versions are pinned in `versions/` (the `Makefi
 - **Async fixture clients**: Pytest async fixtures that use `async with Client(...) as c:` must create their own `Client(base_url=QARAX_URL)` — never share the test's `client` fixture. httpx clients cannot be opened as a context manager more than once per instance.
 - **`docker compose` commands**: Must be run from `e2e/` (the compose file lives there). `make run-local` handles this via `cd e2e` internally.
 - **Compose Postgres is internal-only**: the E2E stack doesn't bind Postgres to a host port, so it can run alongside the standalone test database container.
+- **`call_api` raises on any status >= 400**; use `call_api_detailed` when a test expects an error status.
+- **Never `pytest.skip` on a product failure** (a VM that didn't reach RUNNING, a missing route): that turns a regression into a green run. Skip only on environment gates such as "needs two UP hosts".
+
+## Test Ownership
+
+E2E runs only on master and labelled PRs, so a contract that needs no real VM or node belongs in a Rust test that runs on every PR.
+
+- **REST contracts** (status codes, error messages, validation guards, persistence through the API): `qarax/tests/*.rs`, using `qarax/tests/support` (`spawn_app`, `add_up_host`, `create_vm`, `set_vm_status` for states only a node could reach).
+- **SQL and scheduling logic**: `#[cfg(test)]` modules using `crate::test_support::TestDatabase`.
+- **E2E**: behaviour that needs KVM, a hypervisor, guest networking or control plane to node gRPC.
+- Test a shared helper once, in the crate that owns it (e.g. `common::cpu_list`). See `.claude/skills/test-audit/SKILL.md` before adding or changing tests.
 
 ## Additional Directories
 

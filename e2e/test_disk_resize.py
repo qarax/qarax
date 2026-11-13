@@ -1,20 +1,11 @@
 """
 E2E tests for disk resize (PUT /vms/{vm_id}/disks/{disk_id}/resize).
 
-Covers:
-  - Negative: resize disk on a running VM → 422
-  - Negative: new_size_bytes <= current size → 422
-  - Negative: new_size_bytes not a multiple of 1 MiB → 422
-  - Negative: disk_id not found → 404
-  - Positive: resize disk on a Shutdown VM (local pool, real Cloud Hypervisor node)
-
-The positive test requires a qarax-node with KVM passthrough and a pre-existing
-file at /var/lib/qarax/images/test-initramfs.gz (the same file used by hotplug
-tests as a stand-in raw block device).
+Resizes a disk attached to a Shutdown VM on a real Cloud Hypervisor node and
+checks both the API response and the backing file's size on the VM's node.
+The disk is a per-test sparse file, never a shared image.
 """
 
-import os
-import subprocess
 import uuid
 from uuid import UUID
 
@@ -68,19 +59,20 @@ from qarax_api_client.models.disk_resize_request import DiskResizeRequest
 from qarax_api_client.models.new_storage_object import NewStorageObject
 from qarax_api_client.models.storage_object_type import StorageObjectType
 
-from helpers import AUTH_HEADERS, QARAX_URL, wait_for_status
+from helpers import (
+    AUTH_HEADERS,
+    QARAX_URL,
+    call_api,
+    call_api_detailed,
+    compose_container,
+    create_sparse_file_on_nodes,
+    docker,
+    remove_file_from_nodes,
+    wait_for_status,
+)
 from helpers import up_hosts as _up_hosts
 
-VM_OPERATION_TIMEOUT = 30
-
 MIB = 1024 * 1024
-GIB = 1024 * MIB
-
-# Initial size used for disk storage objects in negative tests.
-DISK_SIZE = 2 * GIB
-
-# Pre-existing file on the node used as a stand-in raw block device.
-TEST_FILE_PATH = "/var/lib/qarax/images/test-initramfs.gz"
 
 
 @pytest.fixture
@@ -88,42 +80,9 @@ def client():
     return Client(base_url=QARAX_URL, headers=AUTH_HEADERS)
 
 
-def _node_container_names():
-    result = subprocess.run(
-        ["docker", "ps", "--format", "{{.Names}}"],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return [
-        name for name in result.stdout.splitlines() if name.startswith("e2e-qarax-node")
-    ]
-
-
-def _create_sparse_disk_on_nodes(path, size_bytes):
-    command = f"mkdir -p {os.path.dirname(path)} && truncate -s {size_bytes} {path}"
-    for container in _node_container_names():
-        subprocess.run(
-            ["docker", "exec", container, "sh", "-lc", command],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-
-
-def _remove_disk_from_nodes(path):
-    command = f"rm -f {path}"
-    for container in _node_container_names():
-        subprocess.run(
-            ["docker", "exec", container, "sh", "-lc", command],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-
-
 async def _make_vm(c, test_id):
-    vm_id_raw = await create_vm.asyncio(
+    vm_id_raw = await call_api(
+        create_vm,
         client=c,
         body=NewVm(
             name=f"e2e-drs-vm-{test_id}",
@@ -138,7 +97,8 @@ async def _make_vm(c, test_id):
 
 async def _make_local_pool(c, test_id, hosts):
     """Create a local storage pool attached to all UP hosts, return pool_id."""
-    pool_id_raw = await create_pool.asyncio(
+    pool_id_raw = await call_api(
+        create_pool,
         client=c,
         body=NewStoragePool(
             name=f"e2e-drs-pool-{test_id}",
@@ -148,7 +108,8 @@ async def _make_local_pool(c, test_id, hosts):
     )
     pool_id = UUID(str(pool_id_raw).strip('"'))
     for host in _up_hosts(hosts):
-        await attach_pool_host.asyncio_detailed(
+        await call_api(
+            attach_pool_host,
             client=c,
             pool_id=pool_id,
             body=AttachPoolHostRequest(host_id=host.id),
@@ -156,8 +117,9 @@ async def _make_local_pool(c, test_id, hosts):
     return pool_id
 
 
-async def _make_disk(c, test_id, pool_id, path=TEST_FILE_PATH, size_bytes=DISK_SIZE):
-    disk_id_raw = await create_storage_object.asyncio(
+async def _make_disk(c, test_id, pool_id, path, size_bytes):
+    disk_id_raw = await call_api(
+        create_storage_object,
         client=c,
         body=NewStorageObject(
             name=f"e2e-drs-disk-{test_id}",
@@ -170,170 +132,19 @@ async def _make_disk(c, test_id, pool_id, path=TEST_FILE_PATH, size_bytes=DISK_S
     return UUID(str(disk_id_raw).strip('"'))
 
 
-# Negative tests
-
-
-@pytest.mark.asyncio
-async def test_resize_disk_not_found_returns_404(client):
-    """Requesting a non-existent disk_id returns 404."""
-    test_id = uuid.uuid4().hex[:8]
-    async with client as c:
-        vm_id = None
-        try:
-            vm_id = await _make_vm(c, test_id)
-            resp = await resize_disk.asyncio_detailed(
-                client=c,
-                vm_id=vm_id,
-                disk_id="nonexistent-disk",
-                body=DiskResizeRequest(new_size_bytes=4 * GIB),
-            )
-            assert resp.status_code == 404, (
-                f"Expected 404 for missing disk, got {resp.status_code}"
-            )
-        finally:
-            if vm_id:
-                await delete_vm.asyncio_detailed(client=c, vm_id=vm_id)
-
-
-@pytest.mark.asyncio
-async def test_resize_disk_size_too_small_returns_422(client):
-    """Requesting a new size <= current size returns 422."""
-    test_id = uuid.uuid4().hex[:8]
-    async with client as c:
-        hosts = _up_hosts(await list_hosts.asyncio(client=c))
-        assert hosts, "No UP hosts available"
-        pool_id = disk_id = vm_id = None
-        try:
-            pool_id = await _make_local_pool(c, test_id, hosts)
-            disk_id = await _make_disk(c, test_id, pool_id, size_bytes=2 * GIB)
-            vm_id = await _make_vm(c, test_id)
-            await attach_disk.asyncio_detailed(
-                client=c,
-                vm_id=vm_id,
-                body=AttachDiskRequest(storage_object_id=disk_id),
-            )
-
-            resp = await resize_disk.asyncio_detailed(
-                client=c,
-                vm_id=vm_id,
-                disk_id="disk0",
-                body=DiskResizeRequest(new_size_bytes=1 * GIB),
-            )
-            assert resp.status_code == 422, (
-                f"Expected 422 for size <= current, got {resp.status_code}"
-            )
-        finally:
-            if vm_id:
-                await delete_vm.asyncio_detailed(client=c, vm_id=vm_id)
-            if disk_id:
-                await delete_storage_object.asyncio_detailed(
-                    client=c, object_id=disk_id
-                )
-            if pool_id:
-                await delete_pool.asyncio_detailed(client=c, pool_id=pool_id)
-
-
-@pytest.mark.asyncio
-async def test_resize_disk_not_mib_aligned_returns_422(client):
-    """Requesting a new size not aligned to 1 MiB returns 422."""
-    test_id = uuid.uuid4().hex[:8]
-    async with client as c:
-        hosts = _up_hosts(await list_hosts.asyncio(client=c))
-        assert hosts, "No UP hosts available"
-        pool_id = disk_id = vm_id = None
-        try:
-            pool_id = await _make_local_pool(c, test_id, hosts)
-            disk_id = await _make_disk(c, test_id, pool_id, size_bytes=2 * GIB)
-            vm_id = await _make_vm(c, test_id)
-            await attach_disk.asyncio_detailed(
-                client=c,
-                vm_id=vm_id,
-                body=AttachDiskRequest(storage_object_id=disk_id),
-            )
-
-            resp = await resize_disk.asyncio_detailed(
-                client=c,
-                vm_id=vm_id,
-                disk_id="disk0",
-                body=DiskResizeRequest(new_size_bytes=2 * GIB + 500 * 1024),
-            )
-            assert resp.status_code == 422, (
-                f"Expected 422 for unaligned size, got {resp.status_code}"
-            )
-        finally:
-            if vm_id:
-                await delete_vm.asyncio_detailed(client=c, vm_id=vm_id)
-            if disk_id:
-                await delete_storage_object.asyncio_detailed(
-                    client=c, object_id=disk_id
-                )
-            if pool_id:
-                await delete_pool.asyncio_detailed(client=c, pool_id=pool_id)
-
-
-@pytest.mark.asyncio
-async def test_resize_disk_running_vm_returns_422(client):
-    """Resizing a disk while the VM is Running returns 422."""
-    test_id = uuid.uuid4().hex[:8]
-    async with client as c:
-        hosts = _up_hosts(await list_hosts.asyncio(client=c))
-        assert hosts, "No UP hosts available"
-        pool_id = disk_id = vm_id = None
-        try:
-            pool_id = await _make_local_pool(c, test_id, hosts)
-            disk_id = await _make_disk(
-                c, test_id, pool_id, path=TEST_FILE_PATH, size_bytes=1
-            )
-            vm_id = await _make_vm(c, test_id)
-            await attach_disk.asyncio_detailed(
-                client=c,
-                vm_id=vm_id,
-                body=AttachDiskRequest(storage_object_id=disk_id),
-            )
-            await start_vm.asyncio_detailed(client=c, vm_id=vm_id)
-            await wait_for_status(c, vm_id, VmStatus.RUNNING)
-
-            resp = await resize_disk.asyncio_detailed(
-                client=c,
-                vm_id=vm_id,
-                disk_id="disk0",
-                body=DiskResizeRequest(new_size_bytes=4 * GIB),
-            )
-            assert resp.status_code == 422, (
-                f"Expected 422 for running VM, got {resp.status_code}"
-            )
-        finally:
-            if vm_id:
-                await stop_vm.asyncio_detailed(client=c, vm_id=vm_id)
-                try:
-                    await wait_for_status(c, vm_id, VmStatus.SHUTDOWN)
-                except TimeoutError:
-                    pass
-                await delete_vm.asyncio_detailed(client=c, vm_id=vm_id)
-            if disk_id:
-                await delete_storage_object.asyncio_detailed(
-                    client=c, object_id=disk_id
-                )
-            if pool_id:
-                await delete_pool.asyncio_detailed(client=c, pool_id=pool_id)
-
-
-# Positive test
-
-
 @pytest.mark.asyncio
 async def test_resize_disk_shutdown_vm(client):
     """
     Resize a disk attached to a Shutdown VM.
 
     Creates a local pool, attaches a disk pointing to an isolated sparse file,
-    starts and stops the VM to reach Shutdown state,
-    then resizes the disk from its recorded size to double that size.
-    Verifies the returned StorageObject reflects the new size.
+    starts and stops the VM to reach Shutdown state, then resizes the disk
+    from its recorded size to double that size. Verifies the returned
+    StorageObject and the backing file on the VM's node both have the new size.
     """
     test_id = uuid.uuid4().hex[:8]
     async with client as c:
-        hosts = _up_hosts(await list_hosts.asyncio(client=c))
+        hosts = _up_hosts(await call_api(list_hosts, client=c))
         assert hosts, "No UP hosts available"
         pool_id = disk_id = vm_id = None
         disk_path = f"/var/lib/qarax/e2e-drs-{test_id}/resize-disk.raw"
@@ -342,7 +153,7 @@ async def test_resize_disk_shutdown_vm(client):
 
             initial_size = 256 * MIB
             new_size = initial_size * 2
-            _create_sparse_disk_on_nodes(disk_path, initial_size)
+            create_sparse_file_on_nodes(disk_path, initial_size)
 
             disk_id = await _make_disk(
                 c,
@@ -352,23 +163,22 @@ async def test_resize_disk_shutdown_vm(client):
                 size_bytes=initial_size,
             )
             vm_id = await _make_vm(c, test_id)
-            attach_resp = await attach_disk.asyncio_detailed(
+            attached = await call_api(
+                attach_disk,
                 client=c,
                 vm_id=vm_id,
                 body=AttachDiskRequest(storage_object_id=disk_id),
             )
-            assert attach_resp.status_code == 201, (
-                f"Failed to attach disk: {attach_resp.status_code}"
-            )
-            logical_name = attach_resp.parsed.logical_name
+            logical_name = attached.logical_name
 
             # Boot and stop to get the VM into Shutdown state (assigns a host).
-            await start_vm.asyncio_detailed(client=c, vm_id=vm_id)
+            await call_api(start_vm, client=c, vm_id=vm_id)
             await wait_for_status(c, vm_id, VmStatus.RUNNING)
-            await stop_vm.asyncio_detailed(client=c, vm_id=vm_id)
+            await call_api(stop_vm, client=c, vm_id=vm_id)
             await wait_for_status(c, vm_id, VmStatus.SHUTDOWN)
 
-            resp = await resize_disk.asyncio_detailed(
+            resp = await call_api_detailed(
+                resize_disk,
                 client=c,
                 vm_id=vm_id,
                 disk_id=logical_name,
@@ -383,28 +193,25 @@ async def test_resize_disk_shutdown_vm(client):
             )
 
             # VM should still be Shutdown after resize.
-            vm = await get_vm.asyncio(client=c, vm_id=vm_id)
+            vm = await call_api(get_vm, client=c, vm_id=vm_id)
             assert vm.status == VmStatus.SHUTDOWN, (
                 f"VM should remain Shutdown after disk resize, got {vm.status}"
             )
+
+            # The node grew the backing file, not just the database record.
+            vm_host = next(h for h in hosts if h.id == vm.host_id)
+            stat = docker(
+                "exec", compose_container(vm_host.address), "stat", "-c", "%s", disk_path
+            )
+            assert int(stat.stdout) == new_size, (
+                f"Expected {disk_path} on {vm_host.address} to be {new_size} bytes, "
+                f"got {stat.stdout.strip()}"
+            )
         finally:
             if vm_id:
-                try:
-                    await stop_vm.asyncio_detailed(client=c, vm_id=vm_id)
-                    await wait_for_status(c, vm_id, VmStatus.SHUTDOWN, timeout=10)
-                except Exception:
-                    pass
-                await delete_vm.asyncio_detailed(client=c, vm_id=vm_id)
+                await call_api(delete_vm, client=c, vm_id=vm_id)
             if disk_id:
-                try:
-                    await delete_storage_object.asyncio_detailed(
-                        client=c, object_id=disk_id
-                    )
-                except Exception as e:
-                    print(f"Ignoring error during disk cleanup: {e}")
+                await call_api(delete_storage_object, client=c, object_id=disk_id)
             if pool_id:
-                try:
-                    await delete_pool.asyncio_detailed(client=c, pool_id=pool_id)
-                except Exception as e:
-                    print(f"Ignoring error during pool cleanup: {e}")
-            _remove_disk_from_nodes(disk_path)
+                await call_api(delete_pool, client=c, pool_id=pool_id)
+            remove_file_from_nodes(disk_path)

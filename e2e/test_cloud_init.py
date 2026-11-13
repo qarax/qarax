@@ -1,27 +1,39 @@
 """
 E2E tests for cloud-init NoCloud seed disk support.
 
-These tests verify:
-- A VM created with cloud_init_user_data stores the data and reaches RUNNING
-- The cloud_init fields are returned correctly on GET
-- A VM created without cloud_init fields is unaffected (regression)
-- The seed disk is cleaned up after VM deletion (indirectly — delete succeeds)
+A VM created with cloud-init data boots with a NoCloud seed image that the
+node writes next to the VM's runtime files, and the seed image is removed
+when the VM is deleted.
 """
 
 import pytest
 from qarax_api_client import Client
 from qarax_api_client.api.vms import (
     create as create_vm,
+)
+from qarax_api_client.api.vms import (
     delete as delete_vm,
+)
+from qarax_api_client.api.vms import (
     get as get_vm,
+)
+from qarax_api_client.api.vms import (
     start as start_vm,
+)
+from qarax_api_client.api.vms import (
     stop as stop_vm,
 )
 from qarax_api_client.models import Hypervisor, NewVm, VmStatus
 
-from helpers import AUTH_HEADERS, QARAX_URL, wait_for_status
-
-VM_OPERATION_TIMEOUT = 30
+from helpers import (
+    AUTH_HEADERS,
+    NODE_CONTAINER_PREFIX,
+    NODE_RUNTIME_DIR,
+    QARAX_URL,
+    call_api,
+    path_exists_in_any,
+    wait_for_status,
+)
 
 MINIMAL_USER_DATA = """\
 #cloud-config
@@ -37,15 +49,6 @@ instance-id: e2e-cloud-init-test
 local-hostname: e2e-cloud-init-vm
 """
 
-MINIMAL_NETWORK_CONFIG = """\
-version: 1
-config:
-  - type: physical
-    name: eth0
-    subnets:
-      - type: dhcp
-"""
-
 
 @pytest.fixture
 def client():
@@ -53,60 +56,8 @@ def client():
 
 
 @pytest.mark.asyncio
-async def test_cloud_init_fields_stored_and_returned(client):
-    """VM created with cloud-init data should return the fields on GET."""
-    async with client as c:
-        new_vm = NewVm(
-            name="e2e-cloud-init-fields",
-            hypervisor=Hypervisor.CLOUD_HV,
-            boot_vcpus=1,
-            max_vcpus=1,
-            memory_size=256 * 1024 * 1024,
-            cloud_init_user_data=MINIMAL_USER_DATA,
-            cloud_init_meta_data=MINIMAL_META_DATA,
-        )
-        vm_id = await create_vm.asyncio(client=c, body=new_vm)
-        assert vm_id is not None
-        vm_id_str = str(vm_id).strip('"')
-
-        try:
-            vm = await get_vm.asyncio(client=c, vm_id=vm_id_str)
-            assert vm is not None
-            assert vm.cloud_init_user_data == MINIMAL_USER_DATA
-            assert vm.cloud_init_meta_data == MINIMAL_META_DATA
-            assert vm.cloud_init_network_config is None
-        finally:
-            await delete_vm.asyncio_detailed(client=c, vm_id=vm_id_str)
-
-
-@pytest.mark.asyncio
-async def test_cloud_init_with_network_config(client):
-    """VM with cloud_init_network_config stores and returns all three fields."""
-    async with client as c:
-        new_vm = NewVm(
-            name="e2e-cloud-init-netcfg",
-            hypervisor=Hypervisor.CLOUD_HV,
-            boot_vcpus=1,
-            max_vcpus=1,
-            memory_size=256 * 1024 * 1024,
-            cloud_init_user_data=MINIMAL_USER_DATA,
-            cloud_init_network_config=MINIMAL_NETWORK_CONFIG,
-        )
-        vm_id = await create_vm.asyncio(client=c, body=new_vm)
-        assert vm_id is not None
-        vm_id_str = str(vm_id).strip('"')
-
-        try:
-            vm = await get_vm.asyncio(client=c, vm_id=vm_id_str)
-            assert vm.cloud_init_user_data == MINIMAL_USER_DATA
-            assert vm.cloud_init_network_config == MINIMAL_NETWORK_CONFIG
-        finally:
-            await delete_vm.asyncio_detailed(client=c, vm_id=vm_id_str)
-
-
-@pytest.mark.asyncio
 async def test_cloud_init_vm_boots(client):
-    """VM with cloud-init data should start and reach RUNNING status."""
+    """VM with cloud-init data boots with a seed image that is removed with the VM."""
     async with client as c:
         new_vm = NewVm(
             name="e2e-cloud-init-boot",
@@ -117,40 +68,25 @@ async def test_cloud_init_vm_boots(client):
             cloud_init_user_data=MINIMAL_USER_DATA,
             cloud_init_meta_data=MINIMAL_META_DATA,
         )
-        vm_id = await create_vm.asyncio(client=c, body=new_vm)
+        vm_id = await call_api(create_vm, client=c, body=new_vm)
         assert vm_id is not None
         vm_id_str = str(vm_id).strip('"')
+        # qarax-node/src/cloud_hypervisor/manager/helpers.rs: cloud_init_seed_path
+        seed_path = f"{NODE_RUNTIME_DIR}/{vm_id_str}-cidata.img"
 
         try:
-            await start_vm.asyncio_detailed(client=c, vm_id=vm_id_str)
+            await call_api(start_vm, client=c, vm_id=vm_id_str)
             await wait_for_status(c, vm_id_str, VmStatus.RUNNING)
+            assert path_exists_in_any(NODE_CONTAINER_PREFIX, seed_path), (
+                f"cloud-init seed image {seed_path} not found on any node"
+            )
 
-            await stop_vm.asyncio_detailed(client=c, vm_id=vm_id_str)
-            vm = await get_vm.asyncio(client=c, vm_id=vm_id_str)
+            await call_api(stop_vm, client=c, vm_id=vm_id_str)
+            vm = await call_api(get_vm, client=c, vm_id=vm_id_str)
             assert vm.status == VmStatus.SHUTDOWN
         finally:
-            await delete_vm.asyncio_detailed(client=c, vm_id=vm_id_str)
+            await call_api(delete_vm, client=c, vm_id=vm_id_str)
 
-
-@pytest.mark.asyncio
-async def test_no_cloud_init_unaffected(client):
-    """VM created without cloud-init data should have null fields (regression)."""
-    async with client as c:
-        new_vm = NewVm(
-            name="e2e-cloud-init-none",
-            hypervisor=Hypervisor.CLOUD_HV,
-            boot_vcpus=1,
-            max_vcpus=1,
-            memory_size=256 * 1024 * 1024,
+        assert not path_exists_in_any(NODE_CONTAINER_PREFIX, seed_path), (
+            f"cloud-init seed image {seed_path} should be removed with the VM"
         )
-        vm_id = await create_vm.asyncio(client=c, body=new_vm)
-        assert vm_id is not None
-        vm_id_str = str(vm_id).strip('"')
-
-        try:
-            vm = await get_vm.asyncio(client=c, vm_id=vm_id_str)
-            assert vm.cloud_init_user_data is None
-            assert vm.cloud_init_meta_data is None
-            assert vm.cloud_init_network_config is None
-        finally:
-            await delete_vm.asyncio_detailed(client=c, vm_id=vm_id_str)

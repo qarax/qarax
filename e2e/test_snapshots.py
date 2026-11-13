@@ -5,7 +5,7 @@ These tests verify snapshot lifecycle against a real Cloud Hypervisor VM:
 - Creating a snapshot of a running VM (pause → snapshot → resume)
 - Listing snapshots for a VM
 - Snapshot record persists with status 'ready' after success
-- Listing snapshots for an unknown VM returns 404
+- Restoring a stopped VM from a snapshot
 """
 
 import uuid
@@ -36,7 +36,14 @@ from qarax_api_client.api.vms import (
 from qarax_api_client.api.vms import (
     stop as stop_vm,
 )
-from qarax_api_client.models import HostStatus, Hypervisor, NewStoragePool, NewVm, StoragePoolType, VmStatus
+from qarax_api_client.models import (
+    HostStatus,
+    Hypervisor,
+    NewStoragePool,
+    NewVm,
+    StoragePoolType,
+    VmStatus,
+)
 from qarax_api_client.models.attach_pool_host_request import AttachPoolHostRequest
 from qarax_api_client.models.create_snapshot_request import CreateSnapshotRequest
 from qarax_api_client.models.restore_request import RestoreRequest
@@ -81,45 +88,6 @@ def snapshot_storage_pool():
         yield pool_id
 
         delete_pool.sync_detailed(client=c, pool_id=pool_id)
-
-
-@pytest.mark.asyncio
-async def test_snapshot_list_empty_for_new_vm(client):
-    """A freshly created VM should have no snapshots."""
-    async with client as c:
-        new_vm = NewVm(
-            name="e2e-snap-list-empty",
-            hypervisor=Hypervisor.CLOUD_HV,
-            boot_vcpus=1,
-            max_vcpus=1,
-            memory_size=256 * 1024 * 1024,
-        )
-        result = await create_vm.asyncio(client=c, body=new_vm)
-        vm_id = uuid.UUID(str(result).strip('"'))
-
-        try:
-            snapshots = await list_snapshots.asyncio(client=c, vm_id=vm_id)
-            assert snapshots == [], f"Expected empty list, got: {snapshots}"
-        finally:
-            await delete_vm.asyncio_detailed(client=c, vm_id=vm_id)
-
-
-@pytest.mark.asyncio
-async def test_snapshot_list_unknown_vm_returns_404(client):
-    """Listing snapshots for an unknown VM returns 404."""
-    async with client as c:
-        unknown_id = uuid.uuid4()
-        resp = await list_snapshots.asyncio_detailed(client=c, vm_id=unknown_id)
-        assert resp.status_code == 404, f"Expected 404, got {resp.status_code}"
-
-
-@pytest.mark.asyncio
-async def test_create_snapshot_unknown_vm_returns_404(client):
-    """Creating a snapshot for an unknown VM returns 404."""
-    async with client as c:
-        unknown_id = uuid.uuid4()
-        resp = await create_snapshot.asyncio_detailed(client=c, vm_id=unknown_id, body=CreateSnapshotRequest())
-        assert resp.status_code == 404, f"Expected 404, got {resp.status_code}"
 
 
 @pytest.mark.asyncio

@@ -1,36 +1,74 @@
 import asyncio
-import httpx
 import subprocess
 
+import httpx
 import pytest
 from qarax_api_client import Client
+from qarax_api_client.api.hosts import list_ as list_hosts
 from qarax_api_client.api.networks import (
-    list_ as list_networks,
-    create as create_network,
-    get as get_network,
-    delete as delete_network,
-    list_ips as list_network_ips,
     attach_host,
     detach_host,
 )
-from qarax_api_client.models.attach_host_request import AttachHostRequest
-from qarax_api_client.api.hosts import list_ as list_hosts
+from qarax_api_client.api.networks import (
+    create as create_network,
+)
+from qarax_api_client.api.networks import (
+    delete as delete_network,
+)
+from qarax_api_client.api.networks import (
+    get as get_network,
+)
+from qarax_api_client.api.networks import (
+    list_ as list_networks,
+)
+from qarax_api_client.api.networks import (
+    list_ips as list_network_ips,
+)
+from qarax_api_client.api.vms import (
+    console_log,
+)
 from qarax_api_client.api.vms import (
     create as create_vm,
-    get as get_vm,
-    start as start_vm,
-    stop as stop_vm,
+)
+from qarax_api_client.api.vms import (
     delete as delete_vm,
 )
+from qarax_api_client.api.vms import (
+    get as get_vm,
+)
+from qarax_api_client.api.vms import (
+    start as start_vm,
+)
 from qarax_api_client.models import (
+    Hypervisor,
     NewNetwork,
     NewVm,
-    Hypervisor,
     VmStatus,
 )
+from qarax_api_client.models.attach_host_request import AttachHostRequest
+
+from helpers import (
+    AUTH_HEADERS,
+    QARAX_URL,
+    call_api,
+    call_api_detailed,
+    compose_container,
+    docker,
+    wait_for_status,
+)
+from helpers import up_hosts as _up_hosts
 
 
-from helpers import AUTH_HEADERS, QARAX_URL, call_api, up_hosts as _up_hosts, wait_for_status
+async def _attempt(label, step):
+    """Await one cleanup step and return its failure instead of raising.
+
+    Later steps still run; the test asserts on the collected failures.
+    """
+    try:
+        await step
+    except (AssertionError, httpx.HTTPError) as exc:
+        return [f"{label}: {exc}"]
+    return []
 
 
 @pytest.fixture
@@ -70,9 +108,10 @@ async def test_network_crud(client):
             await call_api(delete_network, client=c, network_id=str(net_id))
             
         # Verify network is deleted
-        nets = await call_api(list_networks, client=c)
-        if nets:
-            assert not any(str(n.id) == str(net_id) for n in nets)
+        resp = await call_api_detailed(get_network, client=c, network_id=str(net_id))
+        assert resp.status_code == 404, (
+            f"Expected deleted network to return 404, got {resp.status_code}: {resp.content}"
+        )
 
 
 @pytest.mark.asyncio
@@ -102,24 +141,18 @@ async def test_vm_with_network(client):
         host_by_id = {str(primary_host.id): primary_host}
         attached_host_ids = []
         bridge_name = f"br99{test_id[:6]}"  # Linux iface names must be <= 15 chars
-        for host in [primary_host]:
-            host_id = str(host.id)
-            attach_req = AttachHostRequest(
-                host_id=host.id,
-                bridge_name=bridge_name,
-            )
-            print(f"Attaching host {host_id} to network {net_id_str}...")
-            attach_resp = await attach_host.asyncio_detailed(
-                client=c, network_id=net_id_str, body=attach_req
-            )
-            assert attach_resp.status_code.value in (200, 204), (
-                f"attach_host failed for host {host_id}: "
-                f"{attach_resp.status_code} — {attach_resp.content.decode()}"
-            )
-            attached_host_ids.append(host_id)
-
         vm_id_str = None
         try:
+            for host in [primary_host]:
+                host_id = str(host.id)
+                attach_req = AttachHostRequest(
+                    host_id=host.id,
+                    bridge_name=bridge_name,
+                )
+                print(f"Attaching host {host_id} to network {net_id_str}...")
+                await call_api(attach_host, client=c, network_id=net_id_str, body=attach_req)
+                attached_host_ids.append(host_id)
+
             # 2. Create VM attached to network
             new_vm = NewVm(
                 name=f"test-vm-{test_id}",
@@ -136,11 +169,8 @@ async def test_vm_with_network(client):
 
             # 3. Start VM and wait for RUNNING status
             await call_api(start_vm, client=c, vm_id=vm_id_str)
-            try:
-                await wait_for_status(c, vm_id_str, VmStatus.RUNNING)
-            except TimeoutError:
-                pytest.skip("VM did not reach RUNNING with isolated network in current e2e environment")
-            
+            await wait_for_status(c, vm_id_str, VmStatus.RUNNING)
+
             # 4. Get VM IP address from API
             ips = await call_api(list_network_ips, client=c, network_id=net_id_str)
             vm_ip = None
@@ -155,13 +185,7 @@ async def test_vm_with_network(client):
             vm = await call_api(get_vm, client=c, vm_id=vm_id_str)
             vm_host_id = str(vm.host_id)
             vm_host = host_by_id[vm_host_id]
-            ssh_container = {
-                "qarax-node": "e2e-qarax-node-1",
-                "qarax-node-2": "e2e-qarax-node-2-1",
-            }.get(vm_host.address)
-            assert ssh_container is not None, (
-                f"Unsupported host address for SSH routing: {vm_host.address}"
-            )
+            ssh_container = compose_container(vm_host.address)
 
             print(
                 f"\nVM {vm_id_str} running on host {vm_host_id} "
@@ -175,13 +199,11 @@ async def test_vm_with_network(client):
             print(f"Connecting to VM via SSH from {ssh_container}...")
             success = False
             last_err = ""
-            import subprocess
             # Clear any stale known_hosts entry for this IP to avoid key mismatch errors.
             # ssh-keygen is not available in the container (only dropbear), so use sed.
-            subprocess.run(
-                ["docker", "exec", ssh_container,
-                 "sh", "-c", f"sed -i '/{vm_ip}/d' /root/.ssh/known_hosts 2>/dev/null || true"],
-                capture_output=True,
+            docker(
+                "exec", ssh_container,
+                "sh", "-c", f"sed -i '/{vm_ip}/d' /root/.ssh/known_hosts 2>/dev/null || true",
             )
             for attempt in range(20):
                 cmd = [
@@ -191,7 +213,14 @@ async def test_vm_with_network(client):
                 ]
                 
                 try:
-                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+                    result = await asyncio.to_thread(
+                        subprocess.run,
+                        cmd,
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
+                        check=False,
+                    )
                     if result.returncode == 0 and "0% packet loss" in result.stdout:
                         print(f"Ping output:\n{result.stdout}")
                         success = True
@@ -207,37 +236,34 @@ async def test_vm_with_network(client):
                     await asyncio.sleep(2)
             
             if not success:
-                from qarax_api_client.api.vms import console_log
-                log_response = await call_api(console_log, client=c, vm_id=vm_id_str)
-                print(f"--- VM CONSOLE LOG ---\n{log_response}\n----------------------")
-            
-            if not success and "No route to host" in last_err:
-                pytest.skip("VM network route unavailable in current e2e environment")
-            assert success, "Failed to establish SSH connection and ping gateway"
+                log_response = await call_api_detailed(
+                    console_log, client=c, vm_id=vm_id_str
+                )
+                print(
+                    f"--- VM CONSOLE LOG (HTTP {log_response.status_code.value}) ---\n"
+                    f"{log_response.content.decode(errors='replace')}\n"
+                    "----------------------"
+                )
+            assert success, f"Failed to establish SSH connection and ping gateway: {last_err}"
 
         finally:
-            # Cleanup
+            cleanup_errors = []
             if vm_id_str:
-                try:
-                    await call_api(stop_vm, client=c, vm_id=vm_id_str)
-                    await wait_for_status(c, vm_id_str, VmStatus.SHUTDOWN)
-                    await call_api(delete_vm, client=c, vm_id=vm_id_str)
-                except Exception as e:
-                    print(f"Cleanup of VM {vm_id_str} failed: {e}")
-                    
+                cleanup_errors += await _attempt(
+                    f"delete VM {vm_id_str}",
+                    call_api(delete_vm, client=c, vm_id=vm_id_str),
+                )
             for host_id in attached_host_ids:
-                print(f"Detaching host {host_id} from network {net_id_str}...")
-                try:
-                    await call_api(detach_host, client=c, network_id=net_id_str, host_id=host_id)
-                except Exception as e:
-                    print(f"Failed to detach host {host_id} from network {net_id_str}: {e}")
-                
+                cleanup_errors += await _attempt(
+                    f"detach host {host_id} from network {net_id_str}",
+                    call_api(detach_host, client=c, network_id=net_id_str, host_id=host_id),
+                )
             if net_id_str:
-                print(f"Deleting network {net_id_str}...")
-                try:
-                    await call_api(delete_network, client=c, network_id=net_id_str)
-                except Exception as e:
-                    print(f"Cleanup of network {net_id_str} failed: {e}")
+                cleanup_errors += await _attempt(
+                    f"delete network {net_id_str}",
+                    call_api(delete_network, client=c, network_id=net_id_str),
+                )
+            assert not cleanup_errors, f"Cleanup failed: {cleanup_errors}"
 
 
 @pytest.mark.asyncio
@@ -267,6 +293,7 @@ async def test_vpc_routing_and_security_group_updates(client):
         sg_id = None
         net_a_id = None
         net_b_id = None
+        attached = []
 
         async with httpx.AsyncClient(base_url=QARAX_URL, timeout=30.0, headers=AUTH_HEADERS) as raw:
             try:
@@ -305,7 +332,9 @@ async def test_vpc_routing_and_security_group_updates(client):
                     bridge_name=f"qvpb{test_id[:6]}",
                 )
                 await call_api(attach_host, client=c, network_id=net_a_id, body=attach_a)
+                attached.append((net_a_id, primary_host.id))
                 await call_api(attach_host, client=c, network_id=net_b_id, body=attach_b)
+                attached.append((net_b_id, secondary_host.id))
 
                 vm1_resp = await raw.post(
                     "/vms",
@@ -339,22 +368,15 @@ async def test_vpc_routing_and_security_group_updates(client):
 
                 await call_api(start_vm, client=c, vm_id=vm1_id)
                 await call_api(start_vm, client=c, vm_id=vm2_id)
-                try:
-                    await wait_for_status(c, vm1_id, VmStatus.RUNNING)
-                    await wait_for_status(c, vm2_id, VmStatus.RUNNING)
-                except TimeoutError:
-                    pytest.skip("VMs did not reach RUNNING in the current e2e environment")
+                await wait_for_status(c, vm1_id, VmStatus.RUNNING)
+                await wait_for_status(c, vm2_id, VmStatus.RUNNING)
 
                 vm1 = await call_api(get_vm, client=c, vm_id=vm1_id)
                 vm2 = await call_api(get_vm, client=c, vm_id=vm2_id)
                 assert str(vm1.host_id) == str(primary_host.id)
                 assert str(vm2.host_id) == str(secondary_host.id)
 
-                ssh_container = {
-                    "qarax-node": "e2e-qarax-node-1",
-                    "qarax-node-2": "e2e-qarax-node-2-1",
-                }.get(primary_host.address)
-                assert ssh_container is not None, "Unsupported host address for SSH routing"
+                ssh_container = compose_container(primary_host.address)
 
                 ips_a = await call_api(list_network_ips, client=c, network_id=net_a_id)
                 ips_b = await call_api(list_network_ips, client=c, network_id=net_b_id)
@@ -369,16 +391,12 @@ async def test_vpc_routing_and_security_group_updates(client):
                     if str(alloc.vm_id) == vm2_id
                 )
 
-                subprocess.run(
-                    [
-                        "docker",
-                        "exec",
-                        ssh_container,
-                        "sh",
-                        "-c",
-                        f"sed -i '/{vm1_ip}/d' /root/.ssh/known_hosts 2>/dev/null || true",
-                    ],
-                    capture_output=True,
+                docker(
+                    "exec",
+                    ssh_container,
+                    "sh",
+                    "-c",
+                    f"sed -i '/{vm1_ip}/d' /root/.ssh/known_hosts 2>/dev/null || true",
                 )
 
                 def ping_from_vm1():
@@ -396,19 +414,23 @@ async def test_vpc_routing_and_security_group_updates(client):
                         "3",
                         vm2_ip,
                     ]
+                    # busybox ping waits 10s for a reply after its last probe,
+                    # so an unanswered ping needs ~12s to print its statistics.
                     try:
                         return subprocess.run(
                             cmd,
                             capture_output=True,
                             text=True,
-                            timeout=10,
+                            timeout=20,
+                            check=False,
                         )
                     except subprocess.TimeoutExpired as exc:
+                        # TimeoutExpired carries raw bytes even with text=True.
                         return subprocess.CompletedProcess(
                             cmd,
                             returncode=124,
-                            stdout=exc.stdout or "",
-                            stderr=exc.stderr or "ping timed out",
+                            stdout=(exc.stdout or b"").decode(errors="replace"),
+                            stderr=(exc.stderr or b"ping timed out").decode(errors="replace"),
                         )
 
                 initial_success = False
@@ -418,8 +440,11 @@ async def test_vpc_routing_and_security_group_updates(client):
                         initial_success = True
                         break
                     await asyncio.sleep(2)
-                if not initial_success:
-                    pytest.skip("Cross-host VPC routing unavailable in the current e2e environment")
+                assert initial_success, (
+                    "Expected cross-host VPC routing from vm1 to vm2 before any security "
+                    f"group: rc={result.returncode} stdout={result.stdout!r} "
+                    f"stderr={result.stderr!r}"
+                )
 
                 sg_resp = await raw.post(
                     "/security-groups",
@@ -437,14 +462,19 @@ async def test_vpc_routing_and_security_group_updates(client):
                 )
                 assert attach_resp.status_code == 204, attach_resp.text
 
+                # Blocked means the SSH session to vm1 worked and ping itself
+                # reported every probe lost, not that anything exited non-zero.
                 blocked = False
                 for _ in range(10):
                     result = ping_from_vm1()
-                    if result.returncode != 0:
+                    if "100% packet loss" in result.stdout:
                         blocked = True
                         break
                     await asyncio.sleep(1)
-                assert blocked, "Expected the attached security group to block ingress"
+                assert blocked, (
+                    "Expected the attached security group to block ingress: "
+                    f"rc={result.returncode} stdout={result.stdout!r} stderr={result.stderr!r}"
+                )
 
                 rule_resp = await raw.post(
                     f"/security-groups/{sg_id}/rules",
@@ -465,38 +495,27 @@ async def test_vpc_routing_and_security_group_updates(client):
                     await asyncio.sleep(2)
                 assert allowed, "Expected the ICMP ingress rule to restore connectivity"
             finally:
-                if vm1_id:
-                    try:
-                        await call_api(stop_vm, client=c, vm_id=vm1_id)
-                        await wait_for_status(c, vm1_id, VmStatus.SHUTDOWN)
-                        await call_api(delete_vm, client=c, vm_id=vm1_id)
-                    except Exception as e:
-                        print(f"Cleanup of VM {vm1_id} failed: {e}")
-                if vm2_id:
-                    try:
-                        await call_api(stop_vm, client=c, vm_id=vm2_id)
-                        await wait_for_status(c, vm2_id, VmStatus.SHUTDOWN)
-                        await call_api(delete_vm, client=c, vm_id=vm2_id)
-                    except Exception as e:
-                        print(f"Cleanup of VM {vm2_id} failed: {e}")
-                if net_a_id:
-                    try:
-                        await call_api(
-                            detach_host, client=c, network_id=net_a_id, host_id=str(primary_host.id)
+                cleanup_errors = []
+                for vm_id in (vm1_id, vm2_id):
+                    if vm_id:
+                        cleanup_errors += await _attempt(
+                            f"delete VM {vm_id}", call_api(delete_vm, client=c, vm_id=vm_id)
                         )
-                        await call_api(delete_network, client=c, network_id=net_a_id)
-                    except Exception as e:
-                        print(f"Cleanup of network {net_a_id} failed: {e}")
-                if net_b_id:
-                    try:
-                        await call_api(
-                            detach_host, client=c, network_id=net_b_id, host_id=str(secondary_host.id)
+                for net_id, host_id in attached:
+                    cleanup_errors += await _attempt(
+                        f"detach host {host_id} from network {net_id}",
+                        call_api(detach_host, client=c, network_id=net_id, host_id=str(host_id)),
+                    )
+                for net_id in (net_a_id, net_b_id):
+                    if net_id:
+                        cleanup_errors += await _attempt(
+                            f"delete network {net_id}",
+                            call_api(delete_network, client=c, network_id=net_id),
                         )
-                        await call_api(delete_network, client=c, network_id=net_b_id)
-                    except Exception as e:
-                        print(f"Cleanup of network {net_b_id} failed: {e}")
                 if sg_id:
-                    try:
-                        await raw.delete(f"/security-groups/{sg_id}")
-                    except Exception as e:
-                        print(f"Cleanup of security group {sg_id} failed: {e}")
+                    resp = await raw.delete(f"/security-groups/{sg_id}")
+                    if resp.status_code != 204:
+                        cleanup_errors.append(
+                            f"delete security group {sg_id}: HTTP {resp.status_code} {resp.text}"
+                        )
+                assert not cleanup_errors, f"Cleanup failed: {cleanup_errors}"

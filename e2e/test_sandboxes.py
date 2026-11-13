@@ -6,35 +6,49 @@ import time
 import uuid
 
 import pytest
+import pytest_asyncio
 from qarax_api_client import Client
-from helpers import AUTH_HEADERS
 from qarax_api_client.api.boot_sources import (
     create as create_boot_source,
+)
+from qarax_api_client.api.boot_sources import (
     delete as delete_boot_source,
 )
 from qarax_api_client.api.hosts import list_ as list_hosts
 from qarax_api_client.api.sandboxes import (
     create as create_sandbox,
+)
+from qarax_api_client.api.sandboxes import (
     delete as delete_sandbox,
+)
+from qarax_api_client.api.sandboxes import (
     exec_ as exec_sandbox,
 )
 from qarax_api_client.api.sandboxes import get as get_sandbox
 from qarax_api_client.api.sandboxes import list_ as list_sandboxes
+from qarax_api_client.api.storage_objects import delete as delete_storage_object
+from qarax_api_client.api.storage_objects import list_ as list_storage_objects
 from qarax_api_client.api.storage_pools import (
     attach_host as attach_pool_host,
+)
+from qarax_api_client.api.storage_pools import (
     create as create_storage_pool,
+)
+from qarax_api_client.api.storage_pools import (
     delete as delete_storage_pool,
 )
-from qarax_api_client.api.storage_objects import list_ as list_storage_objects
-from qarax_api_client.api.storage_objects import delete as delete_storage_object
 from qarax_api_client.api.transfers import create as create_transfer
 from qarax_api_client.api.transfers import get as get_transfer
 from qarax_api_client.api.vm_templates import (
     create as create_template,
+)
+from qarax_api_client.api.vm_templates import (
     delete as delete_template,
 )
+from qarax_api_client.api.vms import get as get_vm
 from qarax_api_client.models import (
     ExecSandboxRequest,
+    Hypervisor,
     NewBootSource,
     NewStoragePool,
     NewTransfer,
@@ -42,16 +56,20 @@ from qarax_api_client.models import (
     StorageObjectType,
     StoragePoolType,
     TransferStatus,
+    VmStatus,
 )
 from qarax_api_client.models.attach_pool_host_request import AttachPoolHostRequest
-from qarax_api_client.models.host_status import HostStatus
 from qarax_api_client.models.new_sandbox import NewSandbox
 from qarax_api_client.models.sandbox_status import SandboxStatus
+
+from helpers import AUTH_HEADERS, call_api, call_api_detailed, up_hosts
 
 QARAX_URL = os.getenv("QARAX_URL", "http://localhost:8000")
 NFS_SERVER_HOST = os.getenv("NFS_SERVER_HOST", "nfs-server")
 NFS_EXPORT_PATH = os.getenv("NFS_EXPORT_PATH", "/nfs-export")
 SANDBOX_READY_TIMEOUT = int(os.getenv("SANDBOX_READY_TIMEOUT", "120"))
+# Idle timeout + reaper interval (10s) + slack for the VM teardown.
+REAPER_GRACE_SECS = 60
 TRANSFER_TIMEOUT = 30
 
 
@@ -65,10 +83,8 @@ async def create_bootable_sandbox_template(
 ):
     """Create a bootable sandbox template and return (template_id, cleanup_resources)."""
     test_id = uuid.uuid4().hex[:8]
-    hosts = await list_hosts.asyncio(client=client)
-    assert hosts, "Expected at least one registered host"
-
-    host = next((h for h in hosts if h.status == HostStatus.UP), hosts[0])
+    hosts = up_hosts(await call_api(list_hosts, client=client))
+    assert hosts, "Expected at least one UP host"
 
     pool_name = f"e2e-sandbox-pool-{test_id}"
     pool_type = StoragePoolType.NFS if shared_pool else StoragePoolType.LOCAL
@@ -88,17 +104,10 @@ async def create_bootable_sandbox_template(
     assert pool_id_raw is not None
     pool_id = uuid.UUID(str(pool_id_raw).strip('"'))
 
-    if shared_pool:
-        up_hosts = [candidate for candidate in hosts if candidate.status == HostStatus.UP]
-        assert up_hosts, "Expected at least one UP host"
-        for up_host in up_hosts:
-            await attach_pool_host.asyncio_detailed(
-                client=client,
-                pool_id=pool_id,
-                body=AttachPoolHostRequest(host_id=up_host.id),
-            )
-    else:
-        await attach_pool_host.asyncio_detailed(
+    # A local pool lives on one host; a shared pool is reachable from all of them.
+    for host in hosts if shared_pool else hosts[:1]:
+        await call_api(
+            attach_pool_host,
             client=client,
             pool_id=pool_id,
             body=AttachPoolHostRequest(host_id=host.id),
@@ -199,40 +208,40 @@ async def create_bootable_sandbox_template(
     }
 
 
+async def _delete_tolerating_404(endpoint_module, **kwargs):
+    """Delete a resource; a 404 means a test already removed it, anything else fails."""
+    response = await call_api_detailed(endpoint_module, **kwargs)
+    assert response.status_code in (204, 404), (
+        f"{endpoint_module.__name__} failed with HTTP {response.status_code.value}: "
+        f"{response.content.decode(errors='replace')}"
+    )
+
+
 async def cleanup_bootable_sandbox_template(client, resources):
-    try:
-        await delete_template.asyncio_detailed(
-            client=client, vm_template_id=resources["template_id"]
-        )
-    except Exception:
-        pass
-    try:
-        await delete_boot_source.asyncio_detailed(
-            client=client, boot_source_id=resources["boot_source_id"]
-        )
-    except Exception:
-        pass
-    try:
-        await delete_storage_object.asyncio_detailed(
-            client=client, object_id=str(resources["kernel_object_id"])
-        )
-    except Exception:
-        pass
-    try:
-        await delete_storage_object.asyncio_detailed(
-            client=client, object_id=str(resources["initrd_object_id"])
-        )
-    except Exception:
-        pass
-    try:
-        await delete_storage_pool.asyncio_detailed(client=client, pool_id=resources["pool_id"])
-    except Exception:
-        pass
+    await _delete_tolerating_404(
+        delete_template, client=client, vm_template_id=resources["template_id"]
+    )
+    await _delete_tolerating_404(
+        delete_boot_source, client=client, boot_source_id=resources["boot_source_id"]
+    )
+    await _delete_tolerating_404(
+        delete_storage_object, client=client, object_id=str(resources["kernel_object_id"])
+    )
+    await _delete_tolerating_404(
+        delete_storage_object, client=client, object_id=str(resources["initrd_object_id"])
+    )
+    await _delete_tolerating_404(
+        delete_storage_pool, client=client, pool_id=resources["pool_id"]
+    )
 
 
-@pytest.fixture
+@pytest_asyncio.fixture(scope="module", loop_scope="module")
 async def sandbox_template():
-    """Create an explicitly bootable Cloud Hypervisor template for sandbox tests."""
+    """Create an explicitly bootable Cloud Hypervisor template for sandbox tests.
+
+    Shared by the module: tests only create sandboxes from it, and the pool
+    test removes the sandbox pool it configures.
+    """
     async with Client(base_url=QARAX_URL, headers=AUTH_HEADERS) as c:
         template_id, resources = await create_bootable_sandbox_template(c, "cloud_hv")
         yield template_id
@@ -284,135 +293,61 @@ async def wait_for_sandbox_pool_ready(client, vm_template_id, min_ready=1, timeo
 
 
 @pytest.mark.asyncio
-async def test_sandbox_create_returns_202(client, sandbox_template):
-    """POST /sandboxes returns 202 with id, vm_id, job_id."""
-    async with client as c:
-        req = NewSandbox(
-            name=f"e2e-sandbox-{uuid.uuid4().hex[:8]}",
-            vm_template_id=sandbox_template,
-        )
-        resp = await create_sandbox.asyncio(client=c, body=req)
-        assert resp is not None, "Expected CreateSandboxResponse, got None"
-        assert resp.id is not None
-        assert resp.vm_id is not None
-        assert resp.job_id is not None
-
-        # Cleanup
-        try:
-            await delete_sandbox.asyncio_detailed(client=c, sandbox_id=resp.id)
-        except Exception:
-            pass
-
-
-@pytest.mark.asyncio
-async def test_sandbox_appears_in_list(client, sandbox_template):
-    """Created sandbox appears in GET /sandboxes."""
-    async with client as c:
-        req = NewSandbox(
-            name=f"e2e-sandbox-list-{uuid.uuid4().hex[:8]}",
-            vm_template_id=sandbox_template,
-        )
-        resp = await create_sandbox.asyncio(client=c, body=req)
-        assert resp is not None
-        sandbox_id = resp.id
-
-        try:
-            sandboxes = await list_sandboxes.asyncio(client=c)
-            assert sandboxes is not None
-            ids = [s.id for s in sandboxes]
-            assert sandbox_id in ids, f"Sandbox {sandbox_id} not found in list: {ids}"
-        finally:
-            await delete_sandbox.asyncio_detailed(client=c, sandbox_id=sandbox_id)
-
-
-@pytest.mark.asyncio
 async def test_sandbox_get_returns_details(client, sandbox_template):
-    """GET /sandboxes/{id} returns sandbox with vm_id and template_id."""
+    """POST /sandboxes returns ids and a job; GET and list return the new sandbox."""
     async with client as c:
         req = NewSandbox(
             name=f"e2e-sandbox-get-{uuid.uuid4().hex[:8]}",
             vm_template_id=sandbox_template,
             idle_timeout_secs=600,
         )
-        resp = await create_sandbox.asyncio(client=c, body=req)
-        assert resp is not None
+        resp = await call_api(create_sandbox, client=c, body=req)
+        assert resp.job_id is not None
 
         try:
-            sandbox = await get_sandbox.asyncio(client=c, sandbox_id=resp.id)
-            assert sandbox is not None
+            sandbox = await call_api(get_sandbox, client=c, sandbox_id=resp.id)
             assert sandbox.id == resp.id
             assert sandbox.vm_id == resp.vm_id
             assert sandbox.vm_template_id == sandbox_template
             assert sandbox.idle_timeout_secs == 600
             assert sandbox.status in (SandboxStatus.PROVISIONING, SandboxStatus.READY)
+
+            sandboxes = await call_api(list_sandboxes, client=c)
+            ids = [s.id for s in sandboxes]
+            assert resp.id in ids, f"Sandbox {resp.id} not found in list: {ids}"
         finally:
-            await delete_sandbox.asyncio_detailed(client=c, sandbox_id=resp.id)
+            await call_api(delete_sandbox, client=c, sandbox_id=resp.id)
 
 
 @pytest.mark.asyncio
 async def test_sandbox_delete_removes_vm(client, sandbox_template):
     """DELETE /sandboxes/{id} removes the sandbox and its underlying VM."""
-    from qarax_api_client.api.vms import get as get_vm
-
     async with client as c:
         req = NewSandbox(
             name=f"e2e-sandbox-del-{uuid.uuid4().hex[:8]}",
             vm_template_id=sandbox_template,
         )
-        resp = await create_sandbox.asyncio(client=c, body=req)
-        assert resp is not None
+        resp = await call_api(create_sandbox, client=c, body=req)
         sandbox_id = resp.id
         vm_id = resp.vm_id
 
-        await delete_sandbox.asyncio_detailed(client=c, sandbox_id=sandbox_id)
+        await call_api(delete_sandbox, client=c, sandbox_id=sandbox_id)
 
-        # Sandbox should no longer appear in list
-        sandboxes = await list_sandboxes.asyncio(client=c)
-        if sandboxes:
-            assert sandbox_id not in [s.id for s in sandboxes]
+        sandbox_resp = await call_api_detailed(get_sandbox, client=c, sandbox_id=sandbox_id)
+        assert sandbox_resp.status_code == 404, (
+            f"Expected sandbox {sandbox_id} to be deleted, got HTTP {sandbox_resp.status_code}"
+        )
 
         # Underlying VM should be gone too
-        vm_resp = await get_vm.asyncio_detailed(client=c, vm_id=vm_id)
-        assert vm_resp.status_code.value == 404, (
+        vm_resp = await call_api_detailed(get_vm, client=c, vm_id=vm_id)
+        assert vm_resp.status_code == 404, (
             f"Expected VM {vm_id} to be deleted, got HTTP {vm_resp.status_code}"
         )
 
 
 @pytest.mark.asyncio
-async def test_sandbox_full_lifecycle(client, sandbox_template):
-    """Create sandbox, wait for READY, then delete it."""
-    async with client as c:
-        req = NewSandbox(
-            name=f"e2e-sandbox-lifecycle-{uuid.uuid4().hex[:8]}",
-            vm_template_id=sandbox_template,
-        )
-        resp = await create_sandbox.asyncio(client=c, body=req)
-        assert resp is not None
-        sandbox_id = resp.id
-
-        try:
-            # Wait for sandbox to reach READY (VM running)
-            sandbox = await wait_for_sandbox_status(c, sandbox_id, SandboxStatus.READY)
-            vm_status = getattr(sandbox, "vm_status", None)
-
-            assert vm_status is not None
-            assert str(vm_status) == "running"
-
-            # GET while READY should return ip_address and vm_status
-            fetched = await get_sandbox.asyncio(client=c, sandbox_id=sandbox_id)
-            assert fetched is not None
-            assert fetched.status == SandboxStatus.READY
-
-        finally:
-            await delete_sandbox.asyncio_detailed(client=c, sandbox_id=sandbox_id)
-
-
-@pytest.mark.asyncio
 async def test_sandbox_defaults_to_firecracker_when_template_omits_hypervisor(client):
     """Sandbox VMs default to Firecracker when the template leaves hypervisor unset."""
-    from qarax_api_client.api.vms import get as get_vm
-    from qarax_api_client.models import Hypervisor
-
     async with client as c:
         template_id, resources = await create_bootable_sandbox_template(c, None)
         sandbox_id = None
@@ -463,11 +398,12 @@ async def test_sandbox_exec_runs_command(client, sandbox_template):
             vm_template_id=sandbox_template,
             idle_timeout_secs=120,
         )
-        resp = await create_sandbox.asyncio(client=c, body=req)
-        assert resp is not None
+        resp = await call_api(create_sandbox, client=c, body=req)
 
         try:
-            await wait_for_sandbox_status(c, resp.id, SandboxStatus.READY)
+            sandbox = await wait_for_sandbox_status(c, resp.id, SandboxStatus.READY)
+            # READY means the sandbox VM is running.
+            assert sandbox.vm_status == VmStatus.RUNNING, sandbox.vm_status
 
             result = await exec_sandbox.asyncio(
                 client=c,
@@ -484,7 +420,7 @@ async def test_sandbox_exec_runs_command(client, sandbox_template):
             assert "Linux" in result.stdout
             assert result.stderr == ""
         finally:
-            await delete_sandbox.asyncio_detailed(client=c, sandbox_id=resp.id)
+            await call_api(delete_sandbox, client=c, sandbox_id=resp.id)
 
 
 @pytest.mark.asyncio
@@ -533,36 +469,11 @@ async def test_sandbox_pool_claim_returns_completed_claim_job(client, sandbox_te
             if created is not None:
                 await delete_sandbox.asyncio_detailed(client=c, sandbox_id=created.id)
             if configured is not None:
-                await httpx_client.delete(
+                # The template is shared by the module: leave it without a pool.
+                response = await httpx_client.delete(
                     f"{QARAX_URL}/vm-templates/{sandbox_template}/sandbox-pool"
                 )
-
-
-@pytest.mark.asyncio
-async def test_vm_template_delete_conflicts_while_sandbox_pool_exists(client, sandbox_template):
-    """Deleting a template that still has a sandbox pool returns 409, not a 500."""
-    async with client as c:
-        httpx_client = c.get_async_httpx_client()
-        pool_url = f"{QARAX_URL}/vm-templates/{sandbox_template}/sandbox-pool"
-        # min_ready=0 creates the pool row without booting any prewarmed VMs.
-        response = await httpx_client.put(pool_url, json={"min_ready": 0})
-        assert response.status_code == 200, response.text
-        try:
-            response = await httpx_client.delete(
-                f"{QARAX_URL}/vm-templates/{sandbox_template}"
-            )
-            assert response.status_code == 409, (
-                f"Expected 409 while a sandbox pool exists, got {response.status_code}: "
-                f"{response.text}"
-            )
-            assert "sandbox pool" in response.text
-        finally:
-            await httpx_client.delete(pool_url)
-
-        # Once the pool is gone the template is deletable again (the fixture's
-        # cleanup performs the actual delete).
-        response = await httpx_client.get(pool_url)
-        assert response.status_code == 404, response.text
+                assert response.status_code == 204, response.text
 
 
 @pytest.mark.asyncio
@@ -574,26 +485,34 @@ async def test_sandbox_idle_timeout_reaping(client, sandbox_template):
             vm_template_id=sandbox_template,
             idle_timeout_secs=1,
         )
-        resp = await create_sandbox.asyncio(client=c, body=req)
-        assert resp is not None
+        resp = await call_api(create_sandbox, client=c, body=req)
         sandbox_id = resp.id
 
-        # Wait for READY first so the idle clock starts
-        try:
-            await wait_for_sandbox_status(c, sandbox_id, SandboxStatus.READY)
-        except (AssertionError, TimeoutError):
-            # If VM never started, clean up and skip
-            await delete_sandbox.asyncio_detailed(client=c, sandbox_id=sandbox_id)
-            pytest.skip("VM did not reach READY in time; skipping reaper test")
+        # The reaper (every 10s) deletes READY sandboxes past their idle time,
+        # so the sandbox can vanish before a poll ever sees READY. Wait for it
+        # to be gone; only ERROR or a timeout fails.
+        deadline = time.time() + SANDBOX_READY_TIMEOUT + REAPER_GRACE_SECS
+        while True:
+            response = await call_api_detailed(get_sandbox, client=c, sandbox_id=sandbox_id)
+            if response.status_code == 404:
+                break
+            assert response.status_code == 200, (
+                f"GET sandbox {sandbox_id}: HTTP {response.status_code} {response.content}"
+            )
+            sandbox = response.parsed
+            assert sandbox.status != SandboxStatus.ERROR, (
+                f"Sandbox {sandbox_id} entered ERROR: {sandbox.error_message}"
+            )
+            if time.time() >= deadline:
+                await _delete_tolerating_404(delete_sandbox, client=c, sandbox_id=sandbox_id)
+                raise AssertionError(
+                    f"Sandbox {sandbox_id} was not reaped within "
+                    f"{SANDBOX_READY_TIMEOUT + REAPER_GRACE_SECS}s; last status {sandbox.status}"
+                )
+            await asyncio.sleep(1)
 
-        # The reaper runs every 15s; wait up to 60s for the sandbox to disappear
-        deadline = time.time() + 60
-        while time.time() < deadline:
-            await asyncio.sleep(2)
-            sandboxes = await list_sandboxes.asyncio(client=c)
-            if sandboxes is None or sandbox_id not in [s.id for s in sandboxes]:
-                return  # Reaper cleaned it up
-
-        pytest.fail(
-            f"Sandbox {sandbox_id} was not reaped within 60s despite 1-second idle timeout"
+        vm_resp = await call_api_detailed(get_vm, client=c, vm_id=resp.vm_id)
+        assert vm_resp.status_code == 404, (
+            f"Expected reaped sandbox VM {resp.vm_id} to be deleted, got HTTP "
+            f"{vm_resp.status_code}"
         )

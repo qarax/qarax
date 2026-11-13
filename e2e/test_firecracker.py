@@ -2,12 +2,12 @@
 E2E tests for Firecracker VMM backend.
 
 These tests verify:
-- Creating a Firecracker VM and listing it
+- Hosts report their Firecracker and node versions
 - Full FC lifecycle: create → start → pause → resume → stop → delete
 - Force-stopping a running FC VM
-- Cloud-init seed disk attachment for FC VMs
+- Cloud-init seed disk generation and cleanup for FC VMs
 - Snapshot/restore for FC VMs
-- Hot-attach operations return 501 UNIMPLEMENTED for FC VMs
+- Hot-attaching a disk to a running FC VM fails without leaving a disk behind
 
 Prerequisites:
 - The Firecracker binary must be present at /usr/local/bin/firecracker on the
@@ -16,30 +16,34 @@ Prerequisites:
 """
 
 import uuid
+from uuid import UUID
 
 import pytest
 from qarax_api_client import Client
 from qarax_api_client.api.hosts import list_ as list_hosts
+from qarax_api_client.api.storage_objects import delete as delete_storage_object
 from qarax_api_client.api.storage_pools import attach_host as attach_pool_host
 from qarax_api_client.api.storage_pools import create as create_pool
+from qarax_api_client.api.storage_pools import create_disk
 from qarax_api_client.api.storage_pools import delete as delete_pool
 from qarax_api_client.api.vms import (
-    list_ as list_vms,
-    create as create_vm,
-    get as get_vm,
-    start as start_vm,
-    stop as stop_vm,
-    force_stop as force_stop_vm,
-    pause as pause_vm,
-    resume as resume_vm,
-    delete as delete_vm,
-    create_snapshot,
-    restore,
     attach_disk,
+    create_snapshot,
+    remove_disk,
+    restore,
 )
+from qarax_api_client.api.vms import create as create_vm
+from qarax_api_client.api.vms import delete as delete_vm
+from qarax_api_client.api.vms import force_stop as force_stop_vm
+from qarax_api_client.api.vms import get as get_vm
+from qarax_api_client.api.vms import pause as pause_vm
+from qarax_api_client.api.vms import resume as resume_vm
+from qarax_api_client.api.vms import start as start_vm
+from qarax_api_client.api.vms import stop as stop_vm
 from qarax_api_client.models import (
     AttachDiskRequest,
     AttachPoolHostRequest,
+    CreateDiskRequest,
     CreateSnapshotRequest,
     HostStatus,
     Hypervisor,
@@ -50,7 +54,16 @@ from qarax_api_client.models import (
     VmStatus,
 )
 
-from helpers import AUTH_HEADERS, QARAX_URL, call_api, call_api_detailed, wait_for_status
+from helpers import (
+    AUTH_HEADERS,
+    NODE_CONTAINER_PREFIX,
+    NODE_RUNTIME_DIR,
+    QARAX_URL,
+    call_api,
+    call_api_detailed,
+    path_exists_in_any,
+    wait_for_status,
+)
 
 
 @pytest.fixture
@@ -102,38 +115,23 @@ def new_fc_vm(name: str, **kwargs) -> NewVm:
 
 
 @pytest.mark.asyncio
-async def test_host_reports_firecracker_version(client):
-    """Initialized hosts should report the Firecracker version through the REST API."""
+async def test_host_reports_firecracker_version(client, two_hosts):
+    """Initialized e2e hosts report their Firecracker and node versions through the REST API."""
     async with client as c:
-        hosts = [h for h in (await call_api(list_hosts, client=c) or []) if h.status == HostStatus.UP]
-        assert hosts, "No UP hosts registered"
-        assert any(h.firecracker_version for h in hosts), (
-            "Expected at least one initialized host to report a Firecracker version"
-        )
-
-
-@pytest.mark.asyncio
-async def test_fc_vm_create_and_delete(client):
-    """Create a Firecracker VM and verify it appears in the list, then delete it."""
-    async with client as c:
-        new_vm = new_fc_vm("e2e-fc-create")
-        vm_id_raw = await call_api(create_vm, client=c, body=new_vm)
-        assert vm_id_raw is not None
-        vm_id = str(vm_id_raw).strip('"')
-
-        try:
-            # Verify the VM exists and has the right hypervisor
-            vm = await call_api(get_vm, client=c, vm_id=vm_id)
-            assert vm is not None
-            assert vm.hypervisor == Hypervisor.FIRECRACKER
-            assert vm.status == VmStatus.CREATED
-
-            # Verify it appears in the list
-            vms = await call_api(list_vms, client=c)
-            vm_ids = [str(v.id) for v in (vms or [])]
-            assert vm_id in vm_ids, f"FC VM {vm_id} not found in list"
-        finally:
-            await call_api_detailed(delete_vm, client=c, vm_id=vm_id)
+        hosts = {h.id: h for h in await call_api(list_hosts, client=c)}
+        for host_id in two_hosts:
+            host = hosts[host_id]
+            assert host.firecracker_version, (
+                f"Host {host.name} should report a Firecracker version"
+            )
+            assert host.node_version, (
+                f"Host {host.name} should report node_version after init"
+            )
+            # The e2e nodes are built from the same tree as the control plane.
+            assert host.update_available is False, (
+                f"Host {host.name} runs node {host.node_version}, which the control "
+                "plane considers out of date"
+            )
 
 
 @pytest.mark.asyncio
@@ -146,8 +144,12 @@ async def test_fc_vm_full_lifecycle(client):
         vm_id = str(vm_id_raw).strip('"')
 
         try:
+            vm = await call_api(get_vm, client=c, vm_id=vm_id)
+            assert vm.hypervisor == Hypervisor.FIRECRACKER
+            assert vm.status == VmStatus.CREATED
+
             # Start
-            await call_api_detailed(start_vm, client=c, vm_id=vm_id)
+            await call_api(start_vm, client=c, vm_id=vm_id)
             await wait_for_status(c, vm_id, VmStatus.RUNNING)
 
             # Pause
@@ -161,11 +163,11 @@ async def test_fc_vm_full_lifecycle(client):
             await wait_for_status(c, vm_id, VmStatus.RUNNING)
 
             # Stop (soft)
-            await call_api_detailed(stop_vm, client=c, vm_id=vm_id)
+            await call_api(stop_vm, client=c, vm_id=vm_id)
             vm = await call_api(get_vm, client=c, vm_id=vm_id)
             assert vm.status == VmStatus.SHUTDOWN
         finally:
-            await call_api_detailed(delete_vm, client=c, vm_id=vm_id)
+            await call_api(delete_vm, client=c, vm_id=vm_id)
 
 
 @pytest.mark.asyncio
@@ -178,19 +180,19 @@ async def test_fc_vm_force_stop(client):
         vm_id = str(vm_id_raw).strip('"')
 
         try:
-            await call_api_detailed(start_vm, client=c, vm_id=vm_id)
+            await call_api(start_vm, client=c, vm_id=vm_id)
             await wait_for_status(c, vm_id, VmStatus.RUNNING)
 
-            await call_api_detailed(force_stop_vm, client=c, vm_id=vm_id)
+            await call_api(force_stop_vm, client=c, vm_id=vm_id)
             vm = await call_api(get_vm, client=c, vm_id=vm_id)
             assert vm.status == VmStatus.SHUTDOWN
         finally:
-            await call_api_detailed(delete_vm, client=c, vm_id=vm_id)
+            await call_api(delete_vm, client=c, vm_id=vm_id)
 
 
 @pytest.mark.asyncio
 async def test_fc_cloud_init(client):
-    """Verify cloud-init seed disk is generated and VM boots with it."""
+    """The node writes a cloud-init seed image for the FC VM and removes it with the VM."""
     user_data = """\
 #cloud-config
 runcmd:
@@ -207,20 +209,22 @@ runcmd:
         vm_id_raw = await call_api(create_vm, client=c, body=new_vm)
         assert vm_id_raw is not None
         vm_id = str(vm_id_raw).strip('"')
+        # qarax-node/src/firecracker/helpers.rs: cloud_init_seed_path
+        seed_path = f"{NODE_RUNTIME_DIR}/{vm_id}-fc-cidata.img"
 
         try:
-            # Verify cloud-init data stored
-            vm = await call_api(get_vm, client=c, vm_id=vm_id)
-            assert vm.cloud_init_user_data == user_data
-            assert vm.cloud_init_meta_data == meta_data
-
             # Start the VM — it should boot with the cidata seed attached
-            await call_api_detailed(start_vm, client=c, vm_id=vm_id)
+            await call_api(start_vm, client=c, vm_id=vm_id)
             await wait_for_status(c, vm_id, VmStatus.RUNNING)
-
-            await call_api_detailed(stop_vm, client=c, vm_id=vm_id)
+            assert path_exists_in_any(NODE_CONTAINER_PREFIX, seed_path), (
+                f"cloud-init seed image {seed_path} not found on any node"
+            )
         finally:
-            await call_api_detailed(delete_vm, client=c, vm_id=vm_id)
+            await call_api(delete_vm, client=c, vm_id=vm_id)
+
+        assert not path_exists_in_any(NODE_CONTAINER_PREFIX, seed_path), (
+            f"cloud-init seed image {seed_path} should be removed with the VM"
+        )
 
 
 @pytest.mark.asyncio
@@ -234,7 +238,7 @@ async def test_fc_vm_snapshot_restore(client, fc_snapshot_storage_pool):
 
         try:
             # Start and pause (FC requires paused state for snapshot)
-            await call_api_detailed(start_vm, client=c, vm_id=vm_id)
+            await call_api(start_vm, client=c, vm_id=vm_id)
             await wait_for_status(c, vm_id, VmStatus.RUNNING)
             resp = await call_api_detailed(pause_vm, client=c, vm_id=vm_id)
             assert resp.status_code == 200, f"pause: HTTP {resp.status_code} {resp.content}"
@@ -250,7 +254,7 @@ async def test_fc_vm_snapshot_restore(client, fc_snapshot_storage_pool):
             assert snapshot is not None
 
             # Stop, then restore from created snapshot
-            await call_api_detailed(stop_vm, client=c, vm_id=vm_id)
+            await call_api(stop_vm, client=c, vm_id=vm_id)
             await wait_for_status(c, vm_id, VmStatus.SHUTDOWN)
 
             restored_vm = await call_api(
@@ -261,36 +265,77 @@ async def test_fc_vm_snapshot_restore(client, fc_snapshot_storage_pool):
             )
             assert restored_vm is not None
             assert restored_vm.status == VmStatus.RUNNING
-
-            await call_api_detailed(stop_vm, client=c, vm_id=vm_id)
         finally:
-            await call_api_detailed(delete_vm, client=c, vm_id=vm_id)
+            await call_api(delete_vm, client=c, vm_id=vm_id)
 
 
 @pytest.mark.asyncio
 async def test_fc_unsupported_hotplug_returns_error(client):
-    """Hot-attach disk operations should return an error for Firecracker VMs."""
+    """Hot-attaching a real disk to a running FC VM fails and leaves no disk behind."""
+    test_id = uuid.uuid4().hex[:8]
     async with client as c:
-        new_vm = new_fc_vm("e2e-fc-no-hotplug")
-        vm_id_raw = await call_api(create_vm, client=c, body=new_vm)
-        assert vm_id_raw is not None
+        vm_id_raw = await call_api(
+            create_vm, client=c, body=new_fc_vm(f"e2e-fc-no-hotplug-{test_id}")
+        )
         vm_id = str(vm_id_raw).strip('"')
+        pool_id = disk_id = None
 
         try:
-            await call_api_detailed(start_vm, client=c, vm_id=vm_id)
-            await wait_for_status(c, vm_id, VmStatus.RUNNING)
+            await call_api(start_vm, client=c, vm_id=vm_id)
+            vm = await wait_for_status(c, vm_id, VmStatus.RUNNING)
 
-            # Attempt hot-attach — expect an error response (501 UNIMPLEMENTED or similar)
+            # A real disk in a local pool on the VM's host, so the request
+            # passes the control plane's checks and reaches the node.
+            pool_id_raw = await call_api(
+                create_pool,
+                client=c,
+                body=NewStoragePool(
+                    name=f"e2e-fc-hotplug-pool-{test_id}",
+                    pool_type=StoragePoolType.LOCAL,
+                    config={"path": f"/var/lib/qarax/e2e-fc-hotplug-{test_id}"},
+                ),
+            )
+            pool_id = UUID(str(pool_id_raw).strip('"'))
+            await call_api(
+                attach_pool_host,
+                client=c,
+                pool_id=pool_id,
+                body=AttachPoolHostRequest(host_id=vm.host_id),
+            )
+            disk = await call_api(
+                create_disk,
+                client=c,
+                pool_id=pool_id,
+                body=CreateDiskRequest(
+                    name=f"e2e-fc-hotplug-disk-{test_id}", size_bytes=1024 * 1024
+                ),
+            )
+            disk_id = disk.storage_object_id
+
             response = await call_api_detailed(
                 attach_disk,
                 client=c,
                 vm_id=vm_id,
-                body=AttachDiskRequest(storage_object_id=uuid.uuid4()),
+                body=AttachDiskRequest(storage_object_id=disk_id),
             )
-            # The server should return a non-2xx status for unsupported operation
-            assert response.status_code not in (200, 201, 204), (
-                f"Expected error for FC hotplug but got {response.status_code}"
+            assert response.status_code >= 400, (
+                f"Expected FC disk hotplug to fail, got {response.status_code}: "
+                f"{response.content}"
             )
+
+            # The failed hotplug must not leave a disk record on the VM.
+            removed = await call_api_detailed(
+                remove_disk, client=c, vm_id=vm_id, device_id="disk0"
+            )
+            assert removed.status_code == 404, (
+                f"Expected no disk0 on the VM after the failed hotplug, got "
+                f"{removed.status_code}: {removed.content}"
+            )
+            vm = await call_api(get_vm, client=c, vm_id=vm_id)
+            assert vm.status == VmStatus.RUNNING
         finally:
-            await call_api_detailed(force_stop_vm, client=c, vm_id=vm_id)
-            await call_api_detailed(delete_vm, client=c, vm_id=vm_id)
+            await call_api(delete_vm, client=c, vm_id=vm_id)
+            if disk_id is not None:
+                await call_api(delete_storage_object, client=c, object_id=disk_id)
+            if pool_id is not None:
+                await call_api(delete_pool, client=c, pool_id=pool_id)

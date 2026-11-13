@@ -2,9 +2,10 @@ import os
 
 import pytest
 from qarax_api_client import Client
-from helpers import AUTH_HEADERS
 from qarax_api_client.api.hosts import init as init_host
 from qarax_api_client.api.hosts import list_ as list_hosts
+
+from helpers import AUTH_HEADERS
 
 QARAX_URL = os.getenv("QARAX_URL", "http://localhost:8000")
 QARAX_NODE_HOST = os.getenv("QARAX_NODE_HOST", "qarax-node")

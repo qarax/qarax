@@ -1,15 +1,15 @@
 """
-E2E tests for storage types: OCI container images and NFS pools.
+E2E tests for OCI image storage (OverlayBD).
 
 These tests verify:
 - Creating VMs with an OCI image_ref (async job path)
-- Polling the job API until completion
-- Creating and attaching an NFS storage pool
+- Image preflight marks the test image bootable
+- Persistent OverlayBD upper layers and their resize/delete guards
+- Committing an OCI-backed VM to a raw disk
 """
 
 import asyncio
 import os
-import subprocess
 import time
 import uuid
 from uuid import UUID
@@ -19,19 +19,30 @@ from qarax_api_client import Client
 from qarax_api_client.api.hosts import list_ as list_hosts
 from qarax_api_client.api.jobs import get as get_job
 from qarax_api_client.api.storage_objects import (
-    create as create_storage_object,
     delete as delete_storage_object,
+)
+from qarax_api_client.api.storage_objects import (
     list_ as list_storage_objects,
 )
 from qarax_api_client.api.storage_pools import (
     attach_host as attach_pool_host,
+)
+from qarax_api_client.api.storage_pools import (
     create as create_pool,
+)
+from qarax_api_client.api.storage_pools import (
     delete as delete_pool,
 )
 from qarax_api_client.api.vms import (
     create as create_vm,
+)
+from qarax_api_client.api.vms import (
     delete as delete_vm,
+)
+from qarax_api_client.api.vms import (
     get as get_vm,
+)
+from qarax_api_client.api.vms import (
     resize_disk,
 )
 from qarax_api_client.models import Hypervisor, NewStoragePool, NewVm, StoragePoolType
@@ -39,7 +50,6 @@ from qarax_api_client.models.attach_pool_host_request import AttachPoolHostReque
 from qarax_api_client.models.create_vm_response import CreateVmResponse
 from qarax_api_client.models.disk_resize_request import DiskResizeRequest
 from qarax_api_client.models.job_status import JobStatus
-from qarax_api_client.models.new_storage_object import NewStorageObject
 from qarax_api_client.models.storage_object_type import StorageObjectType
 
 QARAX_URL = os.getenv("QARAX_URL", "http://localhost:8000")
@@ -47,9 +57,6 @@ QARAX_URL = os.getenv("QARAX_URL", "http://localhost:8000")
 REGISTRY_PUSH_URL = os.getenv("REGISTRY_PUSH_URL", "localhost:5001")
 # Registry URL as seen from inside the docker network
 REGISTRY_INTERNAL_URL = os.getenv("REGISTRY_INTERNAL_URL", "registry:5000")
-# NFS server hostname as seen from inside the docker network
-NFS_SERVER_HOST = os.getenv("NFS_SERVER_HOST", "nfs-server")
-NFS_EXPORT_PATH = os.getenv("NFS_EXPORT_PATH", "/nfs-export")
 
 JOB_TIMEOUT = 120  # OCI image pull can take a while
 
@@ -75,7 +82,8 @@ async def wait_for_job(c, job_id, timeout=JOB_TIMEOUT):
     raise TimeoutError(f"Job {job_id} did not complete within {timeout}s")
 
 
-from helpers import AUTH_HEADERS, up_hosts as _up_hosts
+from helpers import AUTH_HEADERS, call_api, docker
+from helpers import up_hosts as _up_hosts
 
 
 async def _create_pool(c, name, pool_type, config):
@@ -93,18 +101,11 @@ async def _attach_pools_to_hosts(c, hosts, pool_ids):
 
     for host in up_hosts:
         for pool_id in pool_ids:
-            resp = await attach_pool_host.asyncio_detailed(
+            await call_api(
+                attach_pool_host,
                 client=c,
                 pool_id=pool_id,
                 body=AttachPoolHostRequest(host_id=host.id),
-            )
-            if (
-                resp.status_code == 422
-                and "Overlaybd storage backend not configured" in resp.content.decode()
-            ):
-                pytest.skip("OverlayBD backend not configured on this e2e node")
-            assert resp.status_code in (200, 201, 204), (
-                f"Attach pool {pool_id} to host {host.id} failed: HTTP {resp.status_code}"
             )
 
 
@@ -124,13 +125,9 @@ async def _cleanup(c, vm_id, object_name_prefixes, pool_ids):
 def oci_image_ref():
     """Push a minimal image to the local test registry; return its internal ref."""
     tag = f"{REGISTRY_PUSH_URL}/test/busybox:latest"
-    subprocess.run(
-        ["docker", "pull", "busybox:latest"], check=True, capture_output=True
-    )
-    subprocess.run(
-        ["docker", "tag", "busybox:latest", tag], check=True, capture_output=True
-    )
-    subprocess.run(["docker", "push", tag], check=True, capture_output=True)
+    docker("pull", "busybox:latest")
+    docker("tag", "busybox:latest", tag)
+    docker("push", tag)
     return f"{REGISTRY_INTERNAL_URL}/test/busybox:latest"
 
 
@@ -217,17 +214,14 @@ async def test_preflight_oci_image(client, oci_image_ref):
             assert body["architecture"]
             assert body["checks"], "expected preflight checks"
 
-            if any(
-                check["name"] == "overlaybd_import" and not check["ok"]
+            failing_checks = [
+                f"{check['name']}: {check['detail']}"
                 for check in body["checks"]
-            ):
-                pytest.skip("OverlayBD backend not configured on this e2e node")
-
-            if not body.get("bootable", False):
-                failing_checks = [
-                    check["name"] for check in body["checks"] if not check.get("ok", False)
-                ]
-                pytest.skip(f"Image preflight marked non-bootable in this env: {failing_checks}")
+                if not check["ok"]
+            ]
+            assert body["bootable"] is True, (
+                f"Image preflight marked the test image non-bootable: {failing_checks}"
+            )
             assert any(
                 check["name"] == "guest_command" and check["ok"] for check in body["checks"]
             )
@@ -386,12 +380,7 @@ async def test_vm_commit_converts_oci_to_raw_disk(client, oci_image_ref):
             commit_body = commit_resp.json()
             commit_job_id = commit_body["job_id"]
 
-            try:
-                await wait_for_job(c, commit_job_id)
-            except RuntimeError as e:
-                if "Failed to copy OverlayBD to raw disk" in str(e):
-                    pytest.skip("OverlayBD->raw conversion is unavailable in this e2e environment")
-                raise
+            await wait_for_job(c, commit_job_id)
 
             # Verify VM no longer has image_ref
             vm_after = await get_vm.asyncio(client=c, vm_id=vm_id)
@@ -418,118 +407,3 @@ async def test_vm_commit_converts_oci_to_raw_disk(client, oci_image_ref):
                 [f"committed-{vm_id}", f"overlaybd-{vm_id}"] if vm_id else [],
                 [commit_pool_id, overlaybd_pool_id],
             )
-
-
-# NFS storage pool tests
-
-
-@pytest.mark.asyncio
-async def test_block_disk_rejects_second_vm_writer(client):
-    """A registered LUN can have only one VM writer, including before boot."""
-    test_id = uuid.uuid4().hex[:8]
-    async with client as c:
-        http = c.get_async_httpx_client()
-        pool_id = await _create_pool(
-            c, f"e2e-block-exclusive-{test_id}", StoragePoolType.BLOCK,
-            {"portal": "127.0.0.1:1", "iqn": "iqn.2026-10.qarax:exclusive-test"},
-        )
-        vm_ids = []
-        object_id = None
-        try:
-            response = await http.post(f"/storage-pools/{pool_id}/luns", json={
-                "name": "lun0", "lun": 0, "size_bytes": 1024,
-            })
-            assert response.status_code == 201, response.text
-            object_id = response.json()["storage_object_id"]
-            for i in range(2):
-                response = await http.post("/vms", json={
-                    "name": f"block-writer-{test_id}-{i}", "hypervisor": "cloud_hv",
-                    "boot_vcpus": 1, "max_vcpus": 1, "memory_size": 268435456,
-                })
-                assert response.status_code == 201, response.text
-                vm_ids.append(response.json())
-            for vm_id, expected in zip(vm_ids, [201, 409]):
-                response = await http.post(f"/vms/{vm_id}/disks", json={
-                    "storage_object_id": object_id,
-                })
-                assert response.status_code == expected, response.text
-        finally:
-            for vm_id in vm_ids:
-                await http.delete(f"/vms/{vm_id}")
-            if object_id:
-                await http.delete(f"/storage-objects/{object_id}")
-            await http.delete(f"/storage-pools/{pool_id}")
-
-
-@pytest.mark.asyncio
-async def test_nfs_storage_pool_attach(client):
-    """Create an NFS pool, attach it to the host (which mounts the share), then clean up."""
-    async with client as c:
-        hosts = _up_hosts(await list_hosts.asyncio(client=c))
-        assert hosts and len(hosts) > 0, "No UP hosts registered"
-        host = next((h for h in hosts if h.name.startswith("e2e-node")), hosts[0])
-
-        pool_id = await _create_pool(
-            c,
-            "e2e-nfs-pool",
-            StoragePoolType.NFS,
-            {"url": f"{NFS_SERVER_HOST}:{NFS_EXPORT_PATH}"},
-        )
-
-        try:
-            resp = await attach_pool_host.asyncio_detailed(
-                client=c,
-                pool_id=pool_id,
-                body=AttachPoolHostRequest(host_id=host.id),
-            )
-            assert resp.status_code in (200, 201, 204), (
-                f"Attach host failed: HTTP {resp.status_code} — {resp.content}"
-            )
-        finally:
-            try:
-                await delete_pool.asyncio_detailed(client=c, pool_id=pool_id)
-            except Exception:
-                pass
-
-
-@pytest.mark.asyncio
-async def test_nfs_storage_object_create(client):
-    """Create an NFS pool, attach it, create a storage object on the mount, then clean up."""
-    async with client as c:
-        hosts = _up_hosts(await list_hosts.asyncio(client=c))
-        assert hosts and len(hosts) > 0, "No UP hosts registered"
-        host = next((h for h in hosts if h.name.startswith("e2e-node")), hosts[0])
-
-        pool_id = await _create_pool(
-            c,
-            "e2e-nfs-obj-pool",
-            StoragePoolType.NFS,
-            {"url": f"{NFS_SERVER_HOST}:{NFS_EXPORT_PATH}"},
-        )
-
-        try:
-            attach_resp = await attach_pool_host.asyncio_detailed(
-                client=c,
-                pool_id=pool_id,
-                body=AttachPoolHostRequest(host_id=host.id),
-            )
-            assert attach_resp.status_code in (200, 201, 204), (
-                f"Attach host failed: HTTP {attach_resp.status_code}"
-            )
-
-            obj = NewStorageObject(
-                name="e2e-nfs-disk",
-                storage_pool_id=str(pool_id),
-                object_type=StorageObjectType.DISK,
-                size_bytes=1073741824,
-            )
-            obj_id_raw = await create_storage_object.asyncio(client=c, body=obj)
-            assert obj_id_raw is not None
-            obj_id = UUID(str(obj_id_raw).strip('"'))
-
-            await delete_storage_object.asyncio_detailed(client=c, object_id=obj_id)
-        finally:
-            try:
-                await delete_pool.asyncio_detailed(client=c, pool_id=pool_id)
-            except Exception:
-                pass
