@@ -11,7 +11,9 @@ persistence round trips belong in `qarax/tests/*.rs`, which run on every PR.
 ## Stack
 
 `run_e2e_tests.sh` starts these compose services and registers both nodes as
-UP hosts (`setup_host.sh`) before pytest runs:
+UP hosts (`setup_host.sh`) before pytest runs. `nfs-server`, `qarax-node-2` and
+`bootc-vm` sit behind compose profiles, so `make run-local` (same compose
+project) leaves them out; the runner names them, which enables them:
 
 - **qarax**: control plane on `:8000`, with API token auth enabled
 - **qarax-node** and **qarax-node-2**: data plane nodes with `/dev/kvm`,
@@ -28,7 +30,8 @@ VMs boot the Cloud Hypervisor test kernel with a BusyBox initramfs that runs
 - Docker with Compose v2
 - `/dev/kvm` readable and writable by your user
 - [uv](https://docs.astral.sh/uv/)
-- Rust toolchain (the runner builds release musl binaries if they are missing)
+- Rust toolchain (the runner builds the release musl binaries on every run;
+  cargo is a no-op when they're current)
 
 ## Running
 
@@ -39,14 +42,15 @@ cd e2e
 ./run_e2e_tests.sh -k live_migration     # by expression
 ```
 
-Release binaries are reused when present; rebuild after code changes
-(`REBUILD=1`), or the stack runs stale binaries.
+If a stack is already running on `:8000` (e.g. from `make run-local`), the
+runner reuses the compose project and leaves the stack up afterwards, as with
+`KEEP=1`.
 
 | Variable | Description |
 |----------|-------------|
-| `REBUILD` | Rebuild binaries and images |
+| `REBUILD` | Rebuild the Docker images without cache |
 | `KEEP` | Keep services running after the tests |
-| `SKIP_BUILD` | Skip building binaries |
+| `SKIP_BUILD` | Use the existing release binaries (CI downloads them) |
 | `ENABLE_OTEL` | Build with `otel` and run the telemetry test against a local OTLP receiver |
 | `ENABLE_BOOTC_UPGRADE_E2E` | Build a bootc VM and run `test_node_upgrade.py` |
 
@@ -97,5 +101,5 @@ KEEP=1 ./run_e2e_tests.sh
 docker compose logs qarax-node
 docker compose exec qarax-node sh
 curl -H "Authorization: Bearer e2e-test-token" http://localhost:8000/vms
-docker compose down -v
+docker compose --profile '*' down -v
 ```

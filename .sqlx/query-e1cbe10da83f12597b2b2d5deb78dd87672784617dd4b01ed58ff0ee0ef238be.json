@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\nSELECT n.id,\n       n.name,\n       n.subnet::text AS \"subnet!\",\n       n.gateway::text AS gateway,\n       n.dns::text AS dns,\n       n.vpc_name,\n       n.type AS network_type,\n       n.status AS \"status: NetworkStatus\",\n       hn.bridge_name\nFROM networks n\nJOIN host_networks hn ON hn.network_id = n.id\nWHERE hn.host_id = $1\nORDER BY n.name\n            ",
+  "query": "\nSELECT n.id,\n       n.name,\n       n.subnet::text AS \"subnet!\",\n       n.gateway::text AS gateway,\n       n.dns::text AS dns,\n       n.vpc_name,\n       n.type AS network_type,\n       n.status AS \"status: NetworkStatus\",\n       hn.bridge_name,\n       hn.parent_interface\nFROM networks n\nJOIN host_networks hn ON hn.network_id = n.id\nWHERE hn.host_id = $1\nORDER BY n.name\n            ",
   "describe": {
     "columns": [
       {
@@ -57,6 +57,11 @@
         "ordinal": 8,
         "name": "bridge_name",
         "type_info": "Varchar"
+      },
+      {
+        "ordinal": 9,
+        "name": "parent_interface",
+        "type_info": "Text"
       }
     ],
     "parameters": {
@@ -73,8 +78,9 @@
       true,
       true,
       false,
-      false
+      false,
+      true
     ]
   },
-  "hash": "a69985961baf330f9010f09a3fd62485f45fbc9e06e666fe6c17b3a3b9357f5d"
+  "hash": "e1cbe10da83f12597b2b2d5deb78dd87672784617dd4b01ed58ff0ee0ef238be"
 }

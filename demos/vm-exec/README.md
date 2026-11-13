@@ -1,26 +1,22 @@
 # VM Exec Demo
 
-This demo shows the new regular-VM guest exec flow end-to-end:
+Runs a command inside a VM with `qarax vm exec`:
 
-1. Create a local storage pool
-2. Transfer the built-in demo kernel and guest-agent initramfs
-3. Create a boot source and Cloud Hypervisor VM template
-4. Create a VM from that template with `--guest-agent`
-5. Start the VM
-6. Run `qarax vm exec` inside the guest
+1. Create a VM with `--guest-agent`
+2. Start it and wait for the guest agent to answer
+3. Run `qarax vm exec` inside the guest and check its output
 
-It reuses the same built-in artifacts that already work in the repo's local/e2e stack:
-
-- kernel: `/var/lib/qarax/images/vmlinux`
-- initramfs: `/var/lib/qarax/images/test-initramfs.gz`
-
-The initramfs includes `qarax-init`, so the guest agent is available for `qarax vm exec`.
+No boot source or template is needed. On the local stack a VM created without
+one boots the default kernel (`/var/lib/qarax/images/vmlinux`) and initramfs
+(`/var/lib/qarax/images/test-initramfs.gz`). The initramfs runs `qarax-init`
+as PID 1, which serves guest exec on vsock port 7000; `--guest-agent` gives
+the VM the vsock device qarax-node connects through.
 
 ## Prerequisites
 
-- qarax stack running: `./hack/run-local.sh` (the script starts it if it is not up)
+- qarax stack running: `make run-local` (the script starts it via `./hack/run-local.sh` if it is not up)
 - `jq`
-- `qarax` CLI built with guest exec support (built automatically if missing)
+- `qarax` CLI: built from this checkout when cargo is available, else taken from `PATH`
 
 If your server uses a token other than the local default, export `QARAX_TOKEN`.
 
@@ -28,13 +24,19 @@ If your server uses a token other than the local default, export `QARAX_TOKEN`.
 
 ```bash
 ./demos/vm-exec/run.sh
+
+# Custom API endpoint
+./demos/vm-exec/run.sh --server http://localhost:8000
+
+# Leave the VM (demo-vm-exec-vm) running to try `qarax vm exec` yourself
+KEEP=1 ./demos/vm-exec/run.sh
+
+# Remove what an earlier run left behind
+./demos/vm-exec/run.sh --cleanup
 ```
 
-Optional flags:
-
-- `--server URL` — override the API endpoint
-- `--host NAME` — attach the demo pool to a specific host
-- `--keep` — keep the VM/template/pool for inspection instead of cleaning up
+Each run first deletes VMs left by an earlier run (names start with
+`demo-vm-exec-`).
 
 ## What success looks like
 
@@ -45,3 +47,6 @@ directly by the kernel name:
 ```text
 vm-execLinux
 ```
+
+The demo fails if the guest agent doesn't answer within 60 seconds or the
+output differs.

@@ -4,6 +4,7 @@ use serde::{Serialize, de::DeserializeOwned};
 pub struct Client {
     inner: reqwest::Client,
     base_url: String,
+    token: Option<String>,
 }
 
 impl Client {
@@ -20,11 +21,18 @@ impl Client {
         Self {
             inner: builder.build().expect("failed to build HTTP client"),
             base_url: base_url.trim_end_matches('/').to_string(),
+            token: token.map(str::to_owned),
         }
     }
 
     pub fn base_url(&self) -> &str {
         &self.base_url
+    }
+
+    /// The API token, for connections made outside this HTTP client (the
+    /// console WebSocket).
+    pub fn token(&self) -> Option<&str> {
+        self.token.as_deref()
     }
 
     fn url(&self, path: &str) -> String {

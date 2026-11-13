@@ -4,8 +4,8 @@ use crate::client::Client;
 
 use super::models::{
     AttachHostToPoolRequest, CreateDiskRequest, CreateDiskResponse, ImportToPoolRequest,
-    ImportToPoolResponse, NewStorageObject, NewStoragePool, RegisterLunRequest, StorageObject,
-    StoragePool,
+    ImportToPoolResponse, NewStorageObject, NewStoragePool, PoolHost, RegisterLunRequest,
+    StorageObject, StoragePool,
 };
 
 // Storage pools
@@ -29,6 +29,10 @@ pub async fn create_pool(client: &Client, pool: &NewStoragePool) -> anyhow::Resu
 
 pub async fn delete_pool(client: &Client, pool_id: Uuid) -> anyhow::Result<()> {
     client.delete(&format!("/storage-pools/{pool_id}")).await
+}
+
+pub async fn list_pool_hosts(client: &Client, pool_id: Uuid) -> anyhow::Result<Vec<PoolHost>> {
+    client.get(&format!("/storage-pools/{pool_id}/hosts")).await
 }
 
 pub async fn attach_host_to_pool(

@@ -1,0 +1,3 @@
+# Follow `source` directives: scripts that source demos/lib.sh name it with a
+# `# shellcheck source=demos/lib.sh` comment, resolved from the repo root.
+external-sources=true

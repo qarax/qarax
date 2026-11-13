@@ -7,7 +7,7 @@ use qarax::model::{
 use reqwest::StatusCode;
 use serde_json::{Value, json};
 use sqlx::PgPool;
-use support::{add_up_host, create_vm, set_vm_status, spawn_app};
+use support::{add_host, add_up_host, create_vm, set_vm_status, spawn_app};
 use uuid::Uuid;
 
 const MIB: i64 = 1024 * 1024;
@@ -156,7 +156,7 @@ async fn create_network(
 }
 
 async fn attach_network_to_host(pool: &PgPool, network_id: Uuid, host_id: Uuid, bridge: &str) {
-    network_model::attach_host(pool, network_id, host_id, bridge)
+    network_model::attach_host(pool, network_id, host_id, bridge, None)
         .await
         .unwrap();
 }
@@ -692,6 +692,48 @@ async fn test_start_with_conflicting_disk_keeps_vm_created() {
     assert_eq!(vm["status"], "created");
 }
 
+#[tokio::test]
+async fn test_start_refuses_a_disk_whose_pool_is_not_on_the_vm_host() {
+    let app = spawn_app().await;
+    let client = reqwest::Client::new();
+    let vm_host = add_up_host(&client, &app.address, "vm-host").await;
+    let vm_id = create_vm(&client, &app.address, vm_body("vm-pool-elsewhere")).await;
+    // The pool lives on a host the VM wasn't placed on.
+    let other_host = add_host(&client, &app.address, "pool-host").await;
+    let pool_id = create_local_pool(
+        &client,
+        &app.address,
+        &app.pool,
+        other_host,
+        "elsewhere-pool",
+    )
+    .await;
+    let object_id = create_disk_object(&client, &app.address, pool_id, "elsewhere-disk", GIB).await;
+    let res = attach_disk(
+        &client,
+        &app.address,
+        vm_id,
+        json!({"storage_object_id": object_id}),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let vm = get_json(&client, format!("{}/vms/{vm_id}", app.address)).await;
+    assert_eq!(vm["host_id"], vm_host.to_string());
+
+    let res = client
+        .post(format!("{}/vms/{vm_id}/start", &app.address))
+        .send()
+        .await
+        .unwrap();
+    assert_unprocessable(
+        res,
+        "storage pool elsewhere-pool, which the VM's host isn't attached to",
+    )
+    .await;
+    let vm = get_json(&client, format!("{}/vms/{vm_id}", app.address)).await;
+    assert_eq!(vm["status"], "created");
+}
+
 /// On a VM that was never started, disk and NIC changes only touch the
 /// database; no node call is made.
 #[tokio::test]
@@ -793,6 +835,159 @@ async fn test_remove_nic_releases_ip_allocation() {
     assert_eq!(res.status(), StatusCode::NO_CONTENT);
 
     assert_eq!(count_for_vm(&app.pool, "ip_allocations", vm_id).await, 0);
+    assert_eq!(
+        count_for_vm(&app.pool, "network_interfaces", vm_id).await,
+        0
+    );
+}
+
+#[tokio::test]
+async fn test_delete_network_refuses_while_a_vm_uses_it() {
+    let app = spawn_app().await;
+    let client = reqwest::Client::new();
+    let host_id = add_up_host(&client, &app.address, "net-in-use-host").await;
+    let network_id = create_network(
+        &client,
+        &app.address,
+        "in-use-net",
+        "10.94.0.0/24",
+        "10.94.0.1",
+    )
+    .await;
+    attach_network_to_host(&app.pool, network_id, host_id, "testbr94").await;
+    let vm_id = create_vm(
+        &client,
+        &app.address,
+        with(vm_body("vm-on-net"), json!({"network_id": network_id})),
+    )
+    .await;
+    // Detach the host so the only thing standing in the way is the VM.
+    network_model::detach_host(&app.pool, network_id, host_id)
+        .await
+        .unwrap();
+
+    let res = client
+        .delete(format!("{}/networks/{network_id}", &app.address))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    let body: Value = res.json().await.unwrap();
+    assert!(
+        body["message"].as_str().unwrap().contains("vm vm-on-net"),
+        "{body}"
+    );
+
+    let res = client
+        .delete(format!("{}/vms/{vm_id}", &app.address))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let res = client
+        .delete(format!("{}/networks/{network_id}", &app.address))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn test_delete_network_detaches_it_from_up_hosts_first() {
+    let app = spawn_app().await;
+    let client = reqwest::Client::new();
+    // Test hosts point at a closed port, so the node teardown fails.
+    let up_host = add_up_host(&client, &app.address, "teardown-up-host").await;
+    let down_host = add_host(&client, &app.address, "teardown-down-host").await;
+    let network_id = create_network(
+        &client,
+        &app.address,
+        "teardown-net",
+        "10.95.0.0/24",
+        "10.95.0.1",
+    )
+    .await;
+    attach_network_to_host(&app.pool, network_id, up_host, "testbr95").await;
+    attach_network_to_host(&app.pool, network_id, down_host, "testbr96").await;
+
+    let hosts = get_json(
+        &client,
+        format!("{}/networks/{network_id}/hosts", &app.address),
+    )
+    .await;
+    let mut bridges: Vec<&str> = hosts
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| h["bridge_name"].as_str().unwrap())
+        .collect();
+    bridges.sort_unstable();
+    assert_eq!(bridges, ["testbr95", "testbr96"]);
+
+    let res = client
+        .delete(format!("{}/networks/{network_id}", &app.address))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    get_json(&client, format!("{}/networks/{network_id}", &app.address)).await;
+
+    // A host that isn't up can't be reached, so only its record is dropped.
+    let res = client
+        .patch(format!("{}/hosts/{up_host}", &app.address))
+        .json(&json!({"status": "down"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let res = client
+        .delete(format!("{}/networks/{network_id}", &app.address))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let res = client
+        .get(format!("{}/networks/{network_id}", &app.address))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_malformed_static_ip_is_rejected() {
+    let app = spawn_app().await;
+    let client = reqwest::Client::new();
+    let host_id = add_up_host(&client, &app.address, "bad-ip-host").await;
+    let network_id = create_network(
+        &client,
+        &app.address,
+        "bad-ip-net",
+        "10.93.0.0/24",
+        "10.93.0.1",
+    )
+    .await;
+    attach_network_to_host(&app.pool, network_id, host_id, "testbr93").await;
+
+    let res = client
+        .post(format!("{}/vms", &app.address))
+        .json(&with(
+            vm_body("vm-bad-ip"),
+            json!({"networks": [{"id": "net0", "network_id": network_id, "ip": ""}]}),
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_unprocessable(res, "Invalid IP address \"\"").await;
+
+    let vm_id = create_vm(&client, &app.address, vm_body("vm-bad-nic-ip")).await;
+    let res = client
+        .post(format!("{}/vms/{vm_id}/nics", &app.address))
+        .json(&json!({"id": "net0", "network_id": network_id, "ip": "10.93.0.300"}))
+        .send()
+        .await
+        .unwrap();
+    assert_unprocessable(res, "Invalid IP address \"10.93.0.300\"").await;
     assert_eq!(
         count_for_vm(&app.pool, "network_interfaces", vm_id).await,
         0

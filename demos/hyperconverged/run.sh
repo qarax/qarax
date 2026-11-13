@@ -3,16 +3,15 @@
 # Hyperconverged qarax demo — "hosted engine" pattern
 #
 # Runs the qarax control plane AND qarax-node inside a single Cloud Hypervisor
-# VM on bare metal. The host only provides a bootstrap qarax-node to launch the
-# CP VM; once the VM is up, its internal qarax-node (with Cloud Hypervisor,
-# overlaybd, etc.) handles all workload VMs via nested KVM.
+# VM on bare metal. The host only runs Cloud Hypervisor, passt and a local OCI
+# registry; once the VM is up, its own qarax-node (with Cloud Hypervisor,
+# overlaybd, etc.) runs all workload VMs via nested KVM.
 #
 # Network topology:
 #   Host (bare metal)
 #   ├── passt (vhost-user backend, user-space networking)
-#   │   ├── UNIX socket /tmp/qarax-cp-passt.sock
 #   │   └── Port forwarding: 3000→VM:3000, 8000→VM:8000, 2222→VM:22
-#   ├── Local OCI registry (port 5000)
+#   ├── Local OCI registry (port 5000; the VM reaches it at 192.168.100.1)
 #   └── Cloud Hypervisor VM: control-plane
 #       ├── eth0 (DHCP via passt, IP 192.168.100.10)
 #       ├── qarax API (port 8000 → host port 8000)
@@ -21,35 +20,39 @@
 #       ├── overlaybd-tcmu
 #       └── PostgreSQL (port 5432, local only)
 #
+# Every run boots a fresh control plane (empty database, no VMs) from a cached
+# root disk, so a re-run needs no --cleanup first. The disk is rebuilt only
+# when the control-plane image changes.
+#
 # Prerequisites:
-#   - Linux host with KVM + nested KVM (kvm_intel.nested=Y)
-#   - Rust toolchain (cargo)
-#   - podman
-#   - passt (https://passt.top) — user-space networking via vhost-user
-#   - guestfish (libguestfs-tools), python3
-#   - cloud-hypervisor binary on PATH (auto-downloaded if missing)
-#   - Read/write access to /dev/kvm (for nested virtualization)
+#   - Linux host with KVM + nested KVM (kvm_intel.nested=Y), read/write /dev/kvm
+#   - Rust toolchain with the x86_64-unknown-linux-musl target
+#   - podman, passt (https://passt.top), guestfish (libguestfs-tools), qemu-img,
+#     curl, jq, python3 (for e2e/setup_host.sh)
 #
 # The control plane runs with APP_ENVIRONMENT=production, which enables API
 # token auth. The token is taken from QARAX_TOKEN (see demos/lib.sh) and
-# injected into the VM as AUTH_TOKENS.
+# handed to the VM on a small second disk as AUTH_TOKENS.
 #
 # Usage:
-#   ./demos/hyperconverged/run.sh             # Full build + run
-#   SKIP_BUILD=1 ./demos/hyperconverged/run.sh # Skip cargo build
-#   ./demos/hyperconverged/run.sh --cleanup    # Tear down everything
+#   ./demos/hyperconverged/run.sh              # Build (cached) + boot + workloads
+#   SKIP_BUILD=1 ./demos/hyperconverged/run.sh # Use existing release binaries
+#   KEEP=1 ./demos/hyperconverged/run.sh       # On failure, leave the VM running
+#   ./demos/hyperconverged/run.sh --cleanup    # Stop the VM and the registry
 #   ./demos/hyperconverged/run.sh --with-local # Also create a local storage pool
 #   ./demos/hyperconverged/run.sh --with-nfs --nfs-url server:/export  # Also create an NFS pool
 #   ./demos/hyperconverged/run.sh --with-local-vm  # Also boot a firmware VM with cloud image
 #   ./demos/hyperconverged/run.sh --with-db-vm    # Also boot an OCI PostgreSQL VM
 #   ./demos/hyperconverged/run.sh --network-backend bridge # Use bridged VM networking instead of default passt
 #   Further options: --db-image IMAGE, --local-pool-path PATH, --cloud-image-url URL
+#   Environment: CP_VM_CPUS (default 2), API_HOST_PORT, GRAFANA_HOST_PORT,
+#   CP_SSH_PORT, REGISTRY_PORT, DEMO_IMAGE, DB_IMAGE, CLOUD_IMAGE_URL
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-DEMO_DIR="$(cd "$(dirname "$0")" && pwd)"
-CH_VERSION_FILE="${REPO_ROOT}/versions/cloud-hypervisor-version"
+DEMO_DIR="${REPO_ROOT}/demos/hyperconverged"
+# shellcheck source=demos/lib.sh
 source "${REPO_ROOT}/demos/lib.sh"
 
 cd "$REPO_ROOT"
@@ -62,88 +65,262 @@ if [[ -n "${SUDO_USER:-}" ]]; then
 	export CARGO_HOME="${CARGO_HOME:-${SUDO_HOME}/.cargo}"
 fi
 
-# Configuration
-CP_VM_CPUS="${CP_VM_CPUS:-4}"
+# Control-plane VM. If Cloud Hypervisor panics with passt vhost-user
+# networking and 2+ vCPUs (seen with v51), set CP_VM_CPUS=1.
+CP_VM_CPUS="${CP_VM_CPUS:-2}"
 CP_VM_MEMORY=$((4 * 1024 * 1024 * 1024)) # 4 GiB in bytes
 CP_VM_IP="192.168.100.10"
+# passt maps the gateway address to the host's loopback, so the VM also
+# reaches the host's registry there.
 CP_GW_IP="192.168.100.1"
 CP_MAC="52:54:00:aa:bb:01"
-TMP_PREFIX="/tmp/qarax-cp-${UID}"
-PASST_SOCKET="${TMP_PREFIX}-passt.sock"
-PASST_PID_FILE="${TMP_PREFIX}-passt.pid"
-PASST_LOG="${TMP_PREFIX}-passt.log"
-CH_PID_FILE="${TMP_PREFIX}-ch.pid"
-QARAX_ENV_FILE="${TMP_PREFIX}-qarax.env"
+CP_ROOTFS_SIZE=8G
+CP_IMAGE="qarax-control-plane"
 CP_SSH_PORT="${CP_SSH_PORT:-2222}"
 GRAFANA_HOST_PORT="${GRAFANA_HOST_PORT:-3000}"
 API_HOST_PORT="${API_HOST_PORT:-8000}"
-CP_API_SOCKET="${TMP_PREFIX}.sock"
-CP_CONSOLE_LOG="${TMP_PREFIX}-console.log"
-CP_ROOTFS="${TMP_PREFIX}-rootfs.img"
-CP_KERNEL="${TMP_PREFIX}-vmlinuz"
-CH_FIRMWARE="${TMP_PREFIX}-hypervisor-fw"
-CP_ROOTFS_SIZE_MB=8192
-CLOUD_HYPERVISOR_VERSION="${CLOUD_HYPERVISOR_VERSION:-$(tr -d '\n' <"$CH_VERSION_FILE")}"
-CH_BINARY="${CH_BINARY:-$(command -v cloud-hypervisor 2>/dev/null || echo /usr/local/bin/cloud-hypervisor)}"
-CH_STABLE_BINARY="${REPO_ROOT}/.cache/cloud-hypervisor-${CLOUD_HYPERVISOR_VERSION}-static"
-RUST_HYPERVISOR_FIRMWARE_VERSION="${RUST_HYPERVISOR_FIRMWARE_VERSION:-0.5.0}"
 QARAX_NODE_PORT=50051
+RUST_HYPERVISOR_FIRMWARE_VERSION="${RUST_HYPERVISOR_FIRMWARE_VERSION:-0.5.0}"
 REGISTRY_PORT="${REGISTRY_PORT:-5000}"
 REGISTRY_CONTAINER_NAME="qarax-demo-registry-${UID}"
-OTEL_LGTM_CONTAINER_NAME="otel-lgtm"
+REGISTRY_VOLUME="qarax-demo-registry"
+OTEL_LGTM_IMAGE="grafana/otel-lgtm:0.39.0"
+
+# Downloads, the cached root disk, and per-run state (disk overlay, sockets,
+# logs). Root (e.g. via sudo) uses /var/cache, so nothing root-owned lands in
+# a user's home; other users get their XDG cache dir. Never /tmp: it is often
+# tmpfs, and the disk and its overlay take gigabytes.
+if ((EUID == 0)); then
+	CACHE_DIR="/var/cache/qarax/hyperconverged"
+else
+	CACHE_DIR="${XDG_CACHE_HOME:-${HOME}/.cache}/qarax/hyperconverged"
+fi
+RUN_DIR="${CACHE_DIR}/run"
+CH_BINARY="${CACHE_DIR}/cloud-hypervisor-${CLOUD_HYPERVISOR_VERSION}"
+CH_FIRMWARE="${CACHE_DIR}/hypervisor-fw-${RUST_HYPERVISOR_FIRMWARE_VERSION}"
+CP_DISK="${RUN_DIR}/disk.qcow2"
+TOKEN_DISK="${RUN_DIR}/token.img"
+CP_API_SOCKET="${RUN_DIR}/ch.sock"
+CH_PID_FILE="${RUN_DIR}/ch.pid"
+CH_LOG="${RUN_DIR}/cloud-hypervisor.log"
+CP_CONSOLE_LOG="${RUN_DIR}/console.log"
+PASST_SOCKET="${RUN_DIR}/passt.sock"
+PASST_LOG="${RUN_DIR}/passt.log"
+PASST_PID_FILE="${RUN_DIR}/passt.pid"
+REGISTRY_LOG="${RUN_DIR}/registry.log"
+
+# The control plane and Grafana inside the VM, through passt's port forwards.
+SERVER="http://127.0.0.1:${API_HOST_PORT}"
+GRAFANA_URL="http://127.0.0.1:${GRAFANA_HOST_PORT}"
+
+# Partition layout and boot entry of the root disk: a FAT ESP holding the
+# image's kernel and a BLS entry for hypervisor-fw, and an ext4 root filled
+# from the image. Part of the disk's cache key, so editing it rebuilds the disk.
+ESP_START=2048
+ESP_END=$((ESP_START + 256 * 1024 * 1024 / 512 - 1))
+DISK_RECIPE=$(
+	cat <<EOF
+run
+part-init /dev/sda gpt
+part-add /dev/sda p ${ESP_START} ${ESP_END}
+part-add /dev/sda p $((ESP_END + 1)) -34
+part-set-gpt-type /dev/sda 1 c12a7328-f81f-11d2-ba4b-00a0c93ec93b
+mkfs vfat /dev/sda1
+mkfs ext4 /dev/sda2
+mount /dev/sda2 /
+tar-in - /
+mount /dev/sda1 /boot
+mkdir-p /boot/loader/entries
+glob cp /usr/lib/modules/*/vmlinuz /boot/vmlinuz
+write /boot/loader/loader.conf "default qarax\ntimeout 0\n"
+write /boot/loader/entries/qarax.conf "title qarax\nlinux /vmlinuz\noptions root=/dev/vda2 rw console=ttyS0 systemd.unified_cgroup_hierarchy=1 net.ifnames=0 biosdevname=0\n"
+EOF
+)
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+# stop_pid_file FILE MARKER: SIGTERM the process recorded in FILE and wait for
+# it to exit, if it is still the one this demo started: its command line holds
+# MARKER (one of our socket paths). The cache dir survives reboots, so the PID
+# may since belong to an unrelated process.
+stop_pid_file() {
+	local pid_file="$1" marker="$2" pid
+	[[ -f "$pid_file" ]] || return 0
+	pid=$(<"$pid_file")
+	if [[ -r "/proc/${pid}/cmdline" ]] && grep -qzxF -- "$marker" "/proc/${pid}/cmdline"; then
+		kill "$pid"
+		wait_until 15 test ! -d "/proc/${pid}" || die "process ${pid} (${marker}) did not exit"
+	fi
+	rm -f "$pid_file"
+}
+
+# Stop the control-plane VM and its passt backend (from an earlier run, or
+# this one on failure).
+stop_control_plane() {
+	stop_pid_file "$CH_PID_FILE" "$CP_API_SOCKET"
+	stop_pid_file "$PASST_PID_FILE" "$PASST_SOCKET"
+}
 
 cleanup() {
-	echo -e "${YELLOW}Cleaning up hyperconverged demo...${NC}"
-
-	if [[ -S "$CP_API_SOCKET" ]]; then
-		echo "Stopping control plane VM..."
-		"$CH_BINARY" --api-socket "$CP_API_SOCKET" api vm.shutdown 2>/dev/null || true
-		sleep 1
-		"$CH_BINARY" --api-socket "$CP_API_SOCKET" api vmm.shutdown 2>/dev/null || true
-		sleep 1
+	step "Stopping the hyperconverged demo"
+	stop_control_plane
+	if podman container exists "$REGISTRY_CONTAINER_NAME"; then
+		podman rm -f "$REGISTRY_CONTAINER_NAME" >/dev/null
 	fi
-
-	if [[ -f "$CH_PID_FILE" ]]; then
-		kill "$(cat "$CH_PID_FILE")" 2>/dev/null || true
-		rm -f "$CH_PID_FILE"
-	fi
-
-	if podman container exists "$REGISTRY_CONTAINER_NAME" 2>/dev/null; then
-		echo "Stopping local registry..."
-		podman rm -f "$REGISTRY_CONTAINER_NAME" 2>/dev/null || true
-	fi
-
-	echo "Stopping passt/Cloud Hypervisor..."
-	if [[ -f "$PASST_PID_FILE" ]]; then
-		kill "$(cat "$PASST_PID_FILE")" 2>/dev/null || true
-		rm -f "$PASST_PID_FILE"
-	fi
-	pkill -f "passt.*qarax-cp" 2>/dev/null || true
-	rm -f "${PASST_SOCKET}" "${PASST_SOCKET}.repair"
-
-	rm -f "$CP_API_SOCKET" "$CP_CONSOLE_LOG" "$CP_ROOTFS" "$CP_KERNEL" "$CH_FIRMWARE" "$PASST_LOG" \
-		"${TMP_PREFIX}-loader.conf" "${TMP_PREFIX}-qarax.conf" "$QARAX_ENV_FILE" \
-		"${TMP_PREFIX}-rootfs.tar" "${TMP_PREFIX}-Containerfile.postgres"
-
-	echo -e "${GREEN}Cleanup complete.${NC}"
+	rm -rf "$RUN_DIR"
+	ok "Stopped the control-plane VM, passt and the registry"
+	info "Kept: downloads and the root disk in ${CACHE_DIR}, registry images in podman volume ${REGISTRY_VOLUME}"
 }
+
+# On failure, stop the half-started VM so it doesn't hold the ports; its logs
+# stay in RUN_DIR until the next run. KEEP=1 leaves it running for debugging.
+on_exit() {
+	local rc=$?
+	((rc != 0)) || return 0
+	warn "Logs: ${RUN_DIR}"
+	if [[ "$KEEP" == 1 ]]; then
+		warn "KEEP=1: leaving the control-plane VM running (stop it with $0 --cleanup)"
+		return 0
+	fi
+	stop_control_plane
+}
+
+# fetch_once URL DEST: download URL into the cache unless it's already there.
+# The download lands under a temporary name, so an interrupted one is retried
+# instead of being mistaken for a complete file.
+fetch_once() {
+	[[ -f "$2" ]] && return 0
+	info "Downloading $1"
+	curl -fsSL "$1" -o "${2}.part"
+	mv "${2}.part" "$2"
+}
+
+port_in_use() {
+	[[ -n "$(ss -tlnH "sport = :$1")" ]]
+}
+
+registry_up() {
+	curl -sf -o /dev/null --max-time 2 "http://127.0.0.1:${REGISTRY_PORT}/v2/"
+}
+
+# registry_has NAME:TAG: whether the demo registry already holds the image.
+registry_has() {
+	curl -sf -o /dev/null --max-time 5 -I \
+		-H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json" \
+		"http://127.0.0.1:${REGISTRY_PORT}/v2/${1%:*}/manifests/${1##*:}"
+}
+
+# Start (or reuse) the demo's OCI registry and seed it with the otel-lgtm
+# image the VM pulls at boot. The registry stores images in a named volume, so
+# the seed survives --cleanup and is pushed once, not on every run. Runs in
+# the background while the control-plane image builds.
+prepare_registry() {
+	local state
+	if podman container exists "$REGISTRY_CONTAINER_NAME"; then
+		state=$(podman inspect -f '{{.State.Status}}' "$REGISTRY_CONTAINER_NAME")
+		[[ "$state" == running ]] || podman start "$REGISTRY_CONTAINER_NAME"
+	else
+		podman run -d --name "$REGISTRY_CONTAINER_NAME" -p "${REGISTRY_PORT}:5000" \
+			-v "${REGISTRY_VOLUME}:/var/lib/registry" docker.io/library/registry:2
+	fi
+	wait_until 30 registry_up || die "registry did not answer on port ${REGISTRY_PORT}"
+	if registry_has "$OTEL_LGTM_IMAGE"; then
+		echo "${OTEL_LGTM_IMAGE} is already in the registry"
+		return 0
+	fi
+	podman pull "docker.io/${OTEL_LGTM_IMAGE}"
+	podman tag "docker.io/${OTEL_LGTM_IMAGE}" "localhost:${REGISTRY_PORT}/${OTEL_LGTM_IMAGE}"
+	podman push --tls-verify=false "localhost:${REGISTRY_PORT}/${OTEL_LGTM_IMAGE}"
+}
+
+# build_base_disk PATH: stream the image's filesystem straight into a fresh
+# raw disk (no intermediate tarball). It's built under a temporary name, so an
+# interrupted build is never reused.
+build_base_disk() {
+	local disk="$1" cid
+	rm -f "${CACHE_DIR}"/base-*.raw "${CACHE_DIR}"/base-*.raw.part # earlier images' disks
+	truncate -s "$CP_ROOTFS_SIZE" "${disk}.part"
+	cid=$(podman create --replace --name qarax-cp-export "$CP_IMAGE" /bin/true)
+	podman export "$cid" |
+		LIBGUESTFS_BACKEND=direct guestfish --rw --format=raw -a "${disk}.part" \
+			-f <(printf '%s\n' "$DISK_RECIPE")
+	podman rm "$cid" >/dev/null
+	mv "${disk}.part" "$disk"
+}
+
+show_cp_logs() {
+	local f
+	for f in "$CH_LOG" "$PASST_LOG" "$CP_CONSOLE_LOG"; do
+		[[ -s "$f" ]] || continue
+		echo "--- ${f} (last 30 lines) ---"
+		tail -n 30 "$f"
+	done >&2
+}
+
+# Fail fast, with the VM's logs, if Cloud Hypervisor exited while we wait on
+# something inside the VM.
+cp_alive() {
+	[[ -d "/proc/${CH_PID}" ]] && return 0
+	show_cp_logs
+	die "the control-plane VM (Cloud Hypervisor) exited"
+}
+
+# cp_url_up URL: the VM is alive and URL answers.
+cp_url_up() {
+	cp_alive && curl -sf -o /dev/null --max-time 2 "$1"
+}
+
+grafana_api() {
+	curl -fsS -u admin:admin -H 'Content-Type: application/json' "$@"
+}
+
+# Import the demo dashboards, pointed at Grafana's Prometheus datasource.
+import_dashboards() {
+	local prom_uid dashboard
+	prom_uid=$(grafana_api "${GRAFANA_URL}/api/datasources" |
+		jq -r '[.[] | select(.type == "prometheus")][0].uid // empty')
+	if [[ -z "$prom_uid" ]]; then
+		warn "Grafana has no Prometheus datasource; skipping the dashboard import"
+		return 0
+	fi
+	grafana_api -d '{"uid": "qarax-demo", "title": "Qarax Demo"}' "${GRAFANA_URL}/api/folders" >/dev/null
+	for dashboard in "${DEMO_DIR}"/grafana/*.json; do
+		jq --arg uid "$prom_uid" \
+			'{dashboard: walk(if . == "__PROM_UID__" then $uid else . end), folderUid: "qarax-demo", overwrite: true}' \
+			"$dashboard" | grafana_api -d @- "${GRAFANA_URL}/api/dashboards/db" >/dev/null
+		ok "Imported dashboard: $(jq -r .title "$dashboard")"
+	done
+}
+
+assert_running() {
+	local status
+	status=$(vm_status "$1")
+	[[ "$status" == running ]] || die "VM $1 is '${status}', expected running"
+	ok "$1 is running"
+}
+
+# ── Arguments ────────────────────────────────────────────────────────────────
 
 WITH_LOCAL=0
 WITH_NFS=0
 NFS_URL=""
 WITH_LOCAL_VM=0
 WITH_DB_VM=0
-NETWORK_BACKEND=""
+NETWORK_BACKEND="passt"
 LOCAL_POOL_PATH="/var/lib/qarax/images"
 # Transfers are stored verbatim (no decompression), so this must be a raw or
 # qcow2 image, not .xz.
 CLOUD_IMAGE_URL="${CLOUD_IMAGE_URL:-https://download.fedoraproject.org/pub/fedora/linux/releases/43/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-43-1.6.x86_64.qcow2}"
 DEFAULT_DB_IMAGE="docker.io/library/postgres:17-alpine"
 DB_IMAGE="${DB_IMAGE:-${DEFAULT_DB_IMAGE}}"
+DEMO_IMAGE="${DEMO_IMAGE:-public.ecr.aws/docker/library/alpine:latest}"
+DEMO_VM_NAME="alpine-vm"
 
 usage() {
 	echo "Usage: $0 [--cleanup] [--with-local] [--with-nfs --nfs-url HOST:/PATH] [--with-local-vm] [--with-db-vm]"
 	echo "          [--network-backend passt|bridge] [--db-image IMAGE] [--local-pool-path PATH] [--cloud-image-url URL]"
+	echo "Environment: KEEP=1 (on failure, leave the VM running), SKIP_BUILD=1, CP_VM_CPUS (default 2),"
+	echo "             API_HOST_PORT, GRAFANA_HOST_PORT, CP_SSH_PORT, REGISTRY_PORT"
 }
 
 # Options that take a value: fail clearly instead of tripping `set -u`.
@@ -213,649 +390,238 @@ while [[ $# -gt 0 ]]; do
 	esac
 done
 
-if [[ "$WITH_NFS" -eq 1 && -z "$NFS_URL" ]]; then
-	echo -e "${RED}--with-nfs requires --nfs-url <server:/export/path>${NC}"
-	exit 1
-fi
+[[ "$WITH_NFS" -eq 0 || -n "$NFS_URL" ]] || die "--with-nfs requires --nfs-url <server:/export/path>"
+[[ "$NETWORK_BACKEND" == "bridge" || "$NETWORK_BACKEND" == "passt" ]] ||
+	die "--network-backend must be 'bridge' or 'passt'"
 
-NETWORK_BACKEND="${NETWORK_BACKEND:-passt}"
-
-if [[ "$NETWORK_BACKEND" != "bridge" && "$NETWORK_BACKEND" != "passt" ]]; then
-	echo -e "${RED}--network-backend must be 'bridge' or 'passt'${NC}"
-	exit 1
-fi
-
-CP_LAUNCH_CPUS="$CP_VM_CPUS"
-if [[ "$NETWORK_BACKEND" == "passt" && "$CP_VM_CPUS" -gt 1 ]]; then
-	echo -e "${YELLOW}Cloud Hypervisor v51 currently panics with passt vhost-user networking, serial logging, and 2+ vCPUs; launching the control-plane VM with 1 vCPU in passt mode. Use --network-backend bridge to keep ${CP_VM_CPUS} vCPUs.${NC}"
-	CP_LAUNCH_CPUS=1
-fi
-
-echo "=== qarax Hyperconverged Demo ==="
-echo ""
+banner "qarax Hyperconverged Demo"
 
 [[ -e /dev/kvm ]] || die "/dev/kvm not found. KVM is required."
 [[ -r /dev/kvm && -w /dev/kvm ]] || die "Need read/write access to /dev/kvm (add your user to the kvm group or run via sudo)."
-command -v podman &>/dev/null || die "podman is required. Install it and try again."
-command -v passt &>/dev/null || die "passt is required. Install it (e.g. dnf install passt / apt install passt) and try again."
-command -v guestfish &>/dev/null || die "guestfish is required. Install libguestfs-tools and try again."
-command -v python3 &>/dev/null || die "python3 is required."
+for cmd in podman passt guestfish qemu-img curl jq python3; do
+	command -v "$cmd" >/dev/null || die "${cmd} is required (see ${DEMO_DIR}/README.md)"
+done
 # The token becomes AUTH_TOKENS (comma-separated) in a systemd EnvironmentFile.
 [[ "$QARAX_TOKEN" =~ ^[A-Za-z0-9._~+/=-]+$ ]] ||
 	die "QARAX_TOKEN must be non-empty and contain no whitespace or commas."
 
-for _port in "$REGISTRY_PORT" "$GRAFANA_HOST_PORT" "$API_HOST_PORT" "$CP_SSH_PORT"; do
-	if ss -tlnH "sport = :${_port}" 2>/dev/null | grep -q .; then
-		die "Port ${_port} is already in use on the host. If a previous demo run is still active, run '$0 --cleanup'; otherwise stop the conflicting service or override the *_PORT env vars."
+trap on_exit EXIT
+
+# ── Phase 1: clear the previous run, fetch, build ───────────────────────────
+
+step "Clearing any previous run"
+stop_control_plane
+rm -rf "$RUN_DIR"
+mkdir -p "$RUN_DIR"
+
+ports=("$API_HOST_PORT" "$GRAFANA_HOST_PORT" "$CP_SSH_PORT")
+# An existing demo registry holds REGISTRY_PORT itself and gets reused.
+podman container exists "$REGISTRY_CONTAINER_NAME" || ports+=("$REGISTRY_PORT")
+for port in "${ports[@]}"; do
+	if port_in_use "$port"; then
+		die "Port ${port} is already in use on the host. Stop the service holding it, or override API_HOST_PORT / GRAFANA_HOST_PORT / CP_SSH_PORT / REGISTRY_PORT."
 	fi
 done
+ok "Ports ${ports[*]} are free"
 
-if [[ ! -x "$CH_BINARY" ]]; then
-	echo -e "${YELLOW}cloud-hypervisor not found, downloading ${CLOUD_HYPERVISOR_VERSION}...${NC}"
-	CH_BINARY="${CH_STABLE_BINARY}"
-	mkdir -p "$(dirname "$CH_BINARY")"
-	curl -fSL \
-		"https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/${CLOUD_HYPERVISOR_VERSION}/cloud-hypervisor-static" \
-		-o "$CH_BINARY"
-	chmod +x "$CH_BINARY"
-	echo -e "${GREEN}Downloaded cloud-hypervisor ${CLOUD_HYPERVISOR_VERSION} to ${CH_BINARY}${NC}"
-fi
+step "Fetching Cloud Hypervisor ${CLOUD_HYPERVISOR_VERSION} and hypervisor-fw ${RUST_HYPERVISOR_FIRMWARE_VERSION}"
+fetch_once "https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/${CLOUD_HYPERVISOR_VERSION}/cloud-hypervisor-static" "$CH_BINARY"
+chmod +x "$CH_BINARY"
+fetch_once "https://github.com/cloud-hypervisor/rust-hypervisor-firmware/releases/download/${RUST_HYPERVISOR_FIRMWARE_VERSION}/hypervisor-fw" "$CH_FIRMWARE"
+ok "Cached in ${CACHE_DIR}"
 
-if [[ ! -f "$CH_FIRMWARE" ]]; then
-	echo -e "${YELLOW}Downloading rust-hypervisor-firmware ${RUST_HYPERVISOR_FIRMWARE_VERSION}...${NC}"
-	curl -fSL \
-		"https://github.com/cloud-hypervisor/rust-hypervisor-firmware/releases/download/${RUST_HYPERVISOR_FIRMWARE_VERSION}/hypervisor-fw" \
-		-o "$CH_FIRMWARE"
-	chmod 644 "$CH_FIRMWARE"
-fi
+step "Starting the local OCI registry in the background (log: ${REGISTRY_LOG})"
+prepare_registry >"$REGISTRY_LOG" 2>&1 &
+REGISTRY_JOB=$!
 
-probe_api_socket="${TMP_PREFIX}-probe.sock"
-probe_cloud_hypervisor_firmware() {
-	local ch_bin="$1"
-	rm -f "$probe_api_socket"
-	set +e
-	"$ch_bin" \
-		--api-socket "$probe_api_socket" \
-		--cpus boot=1 \
-		--memory size=$((512 * 1024 * 1024)) \
-		--firmware "$CH_FIRMWARE" \
-		>/dev/null 2>&1 &
-	local probe_pid=$!
-	sleep 2
-	local probe_rc=0
-	if kill -0 "$probe_pid" 2>/dev/null; then
-		kill "$probe_pid" 2>/dev/null || true
-		wait "$probe_pid" 2>/dev/null || true
-	else
-		wait "$probe_pid"
-		probe_rc=$?
-	fi
-	set -e
-	rm -f "$probe_api_socket"
-	[[ "$probe_rc" -ne 139 ]]
-}
-
-if ! probe_cloud_hypervisor_firmware "$CH_BINARY"; then
-	echo -e "${YELLOW}Selected cloud-hypervisor binary crashes in firmware boot mode; falling back to stable ${CLOUD_HYPERVISOR_VERSION}.${NC}"
-	if [[ ! -x "$CH_STABLE_BINARY" ]]; then
-		mkdir -p "$(dirname "$CH_STABLE_BINARY")"
-		curl -fSL \
-			"https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/${CLOUD_HYPERVISOR_VERSION}/cloud-hypervisor-static" \
-			-o "$CH_STABLE_BINARY"
-		chmod +x "$CH_STABLE_BINARY"
-	fi
-	probe_cloud_hypervisor_firmware "$CH_STABLE_BINARY" || die "Stable cloud-hypervisor ${CLOUD_HYPERVISOR_VERSION} also failed firmware probe."
-	CH_BINARY="$CH_STABLE_BINARY"
-fi
-
-echo -e "${YELLOW}Phase 1: Build${NC}"
-
+step "Building qarax, qarax-node and qarax-init (release, musl)"
 if [[ -z "${SKIP_BUILD:-}" ]]; then
-	if ! rustup target list --installed 2>/dev/null | grep -q "$MUSL_TARGET"; then
-		echo "Adding Rust target ${MUSL_TARGET}..."
-		rustup target add "$MUSL_TARGET"
-	fi
-	echo "Building qarax, qarax-node, and qarax-init..."
+	[[ "$(rustup target list --installed)" == *"$MUSL_TARGET"* ]] || rustup target add "$MUSL_TARGET"
 	cargo build --release -p qarax -p qarax-node -p qarax-init \
 		--features "qarax/otel qarax-node/otel"
 else
-	echo "Skipping build (SKIP_BUILD=1)"
+	info "SKIP_BUILD=1: using existing release binaries"
 fi
-
 for bin in qarax-server qarax-node qarax-init; do
 	[[ -f "${REPO_ROOT}/target/${MUSL_TARGET}/release/${bin}" ]] ||
 		die "Binary not found: target/${MUSL_TARGET}/release/${bin} — run without SKIP_BUILD to build first."
 done
+require_cli
 
-echo "Building control plane OCI image..."
+step "Building the control-plane image"
+node_artifacts_sha=$(sha256sum versions/node-artifacts.env | cut -d' ' -f1)
 podman build \
 	--build-arg "CLOUD_HYPERVISOR_VERSION=${CLOUD_HYPERVISOR_VERSION}" \
+	--build-arg "NODE_ARTIFACTS_SHA=${node_artifacts_sha}" \
 	--build-arg "REGISTRY_PORT=${REGISTRY_PORT}" \
+	--build-arg "OTEL_LGTM_IMAGE=${OTEL_LGTM_IMAGE}" \
 	-f "${DEMO_DIR}/Containerfile.control-plane" \
-	-t qarax-control-plane .
+	-t "$CP_IMAGE" .
 
-echo "Exporting rootfs tarball..."
-CONTAINER_ID=$(podman create qarax-control-plane /bin/true | tail -1)
-ROOTFS_TAR="${TMP_PREFIX}-rootfs.tar"
-rm -f "$ROOTFS_TAR" "$CP_ROOTFS" "$CP_KERNEL"
-podman export "$CONTAINER_ID" -o "$ROOTFS_TAR"
-podman rm "$CONTAINER_ID"
-
-echo "Building root filesystem disk image..."
-mapfile -t KERNEL_INFO < <(
-	python3 - "$ROOTFS_TAR" "$CP_KERNEL" <<'PY2'
-import re
-import shutil
-import sys
-import tarfile
-
-tar_path, kernel_out = sys.argv[1], sys.argv[2]
-
-with tarfile.open(tar_path) as tf:
-    members = {member.name.lstrip("./"): member for member in tf.getmembers() if member.isfile()}
-    candidates = [
-        *sorted((path for path in members if re.fullmatch(r"boot/vmlinuz-.+", path)), reverse=True),
-        *sorted((path for path in members if re.fullmatch(r"lib/modules/.+/vmlinuz", path)), reverse=True),
-        *sorted((path for path in members if re.fullmatch(r"usr/lib/modules/.+/vmlinuz", path)), reverse=True),
-    ]
-    for candidate in candidates:
-        member = members.get(candidate)
-        if member is None:
-            continue
-        with tf.extractfile(member) as src, open(kernel_out, "wb") as dst:
-            shutil.copyfileobj(src, dst)
-        print(candidate)
-        break
-    else:
-        raise SystemExit("Could not find a bootable kernel in rootfs tarball")
-PY2
-)
-[[ "${#KERNEL_INFO[@]}" -gt 0 ]] || die "Could not find a bootable kernel in rootfs tarball."
-VMLINUX_PATH_IN_TAR="${KERNEL_INFO[0]}"
-echo "Using kernel from: ${VMLINUX_PATH_IN_TAR}"
-
-truncate -s "${CP_ROOTFS_SIZE_MB}M" "$CP_ROOTFS"
-ESP_START=2048
-ESP_SIZE_SECTORS=$((256 * 1024 * 1024 / 512))
-ESP_END=$((ESP_START + ESP_SIZE_SECTORS - 1))
-ROOT_START=$((ESP_END + 1))
-ROOT_END=-34
-LOADER_CONF="${TMP_PREFIX}-loader.conf"
-BLS_ENTRY="${TMP_PREFIX}-qarax.conf"
-cat >"$LOADER_CONF" <<EOF
-default qarax
-timeout 0
-EOF
-cat >"$BLS_ENTRY" <<EOF
-title qarax
-linux /$(basename "$CP_KERNEL")
-options root=/dev/vda2 rw console=ttyS0 systemd.unified_cgroup_hierarchy=1 net.ifnames=0 biosdevname=0
-EOF
-# Injected at disk-build time (not baked into the OCI image) and loaded by
-# qarax.service via EnvironmentFile.
+step "Preparing the root disk"
+image_id=$(podman image inspect -f '{{.Id}}' "$CP_IMAGE")
+disk_key=$(printf '%s\n' "$image_id" "$CP_ROOTFS_SIZE" "$DISK_RECIPE" | sha256sum | cut -c1-16)
+BASE_DISK="${CACHE_DIR}/base-${disk_key}.raw"
+if [[ -f "$BASE_DISK" ]]; then
+	ok "Reusing ${BASE_DISK} (image unchanged)"
+else
+	info "Image changed: streaming it into a new ${CP_ROOTFS_SIZE} disk"
+	build_base_disk "$BASE_DISK"
+	ok "Built ${BASE_DISK}"
+fi
+# Each run boots a copy-on-write overlay of the cached disk, so the control
+# plane starts fresh while the disk is built only once per image.
+qemu-img create -q -f qcow2 -F raw -b "$BASE_DISK" "$CP_DISK"
+# The API token goes on a tiny second disk (the guest's /dev/vdb), which
+# qarax.service reads at start: no rebuild or guestfish run per token.
 (
 	umask 077
-	printf 'AUTH_TOKENS=%s\n' "$QARAX_TOKEN" >"$QARAX_ENV_FILE"
+	printf 'AUTH_TOKENS=%s\n' "$QARAX_TOKEN" >"$TOKEN_DISK"
 )
+truncate -s 4K "$TOKEN_DISK"
 
-LIBGUESTFS_BACKEND=direct guestfish --rw -a "$CP_ROOTFS" <<EOF
-run
-part-init /dev/sda gpt
-part-add /dev/sda p ${ESP_START} ${ESP_END}
-part-add /dev/sda p ${ROOT_START} ${ROOT_END}
-part-set-gpt-type /dev/sda 1 c12a7328-f81f-11d2-ba4b-00a0c93ec93b
-mkfs vfat /dev/sda1
-mkfs ext4 /dev/sda2
-mount /dev/sda2 /
-tar-in "$ROOTFS_TAR" /
-mount /dev/sda1 /boot
-mkdir-p /boot/loader
-mkdir-p /boot/loader/entries
-upload "$CP_KERNEL" /boot/$(basename "$CP_KERNEL")
-upload "$LOADER_CONF" /boot/loader/loader.conf
-upload "$BLS_ENTRY" /boot/loader/entries/qarax.conf
-upload "$QARAX_ENV_FILE" /etc/qarax/qarax.env
-chmod 0600 /etc/qarax/qarax.env
-EOF
-
-rm -f "$ROOTFS_TAR" "$LOADER_CONF" "$BLS_ENTRY" "$QARAX_ENV_FILE"
-
-echo "Building qarax CLI..."
-cargo build --release -p cli
-QARAX_CLI="${REPO_ROOT}/target/${MUSL_TARGET}/release/qarax"
-
-echo -e "${GREEN}Phase 1 complete. Rootfs: ${CP_ROOTFS} ($(du -h "$CP_ROOTFS" | cut -f1)), kernel: ${CP_KERNEL}${NC}"
-echo ""
-
-echo -e "${YELLOW}Phase 2: Start local OCI registry${NC}"
-
-if podman container exists "$REGISTRY_CONTAINER_NAME" 2>/dev/null; then
-	registry_state=$(podman inspect "$REGISTRY_CONTAINER_NAME" --format '{{.State.Status}}' 2>/dev/null || true)
-	if [[ "$registry_state" == "running" ]]; then
-		echo "Registry container already exists, reusing"
-	else
-		echo "Registry container exists but is not running, starting it..."
-		podman start "$REGISTRY_CONTAINER_NAME" >/dev/null
-	fi
-else
-	echo "Starting local registry on port ${REGISTRY_PORT}..."
-	podman run -d --name "$REGISTRY_CONTAINER_NAME" \
-		-p "${REGISTRY_PORT}:5000" \
-		registry:2
+if ! wait "$REGISTRY_JOB"; then
+	cat "$REGISTRY_LOG" >&2
+	die "Preparing the local registry failed (log above)"
 fi
+ok "Registry is up on port ${REGISTRY_PORT} with ${OTEL_LGTM_IMAGE}"
 
-echo -n "Waiting for registry"
-timeout=15
-elapsed=0
-while [[ $elapsed -lt $timeout ]]; do
-	if curl -sf "http://localhost:${REGISTRY_PORT}/v2/" -o /dev/null 2>/dev/null; then
-		echo ""
-		echo -e "${GREEN}Local registry is ready on port ${REGISTRY_PORT}${NC}"
-		break
-	fi
-	echo -n "."
-	sleep 1
-	elapsed=$((elapsed + 1))
-done
+# ── Phase 2: boot the control-plane VM ──────────────────────────────────────
 
-if [[ $elapsed -ge $timeout ]]; then
-	echo ""
-	die "Timeout waiting for local registry"
-fi
-
-echo "Seeding grafana/otel-lgtm into local registry..."
-podman pull docker.io/grafana/otel-lgtm:latest
-podman tag docker.io/grafana/otel-lgtm:latest "localhost:${REGISTRY_PORT}/grafana/otel-lgtm:latest"
-podman push "localhost:${REGISTRY_PORT}/grafana/otel-lgtm:latest" --tls-verify=false
-echo -e "${GREEN}grafana/otel-lgtm seeded into local registry${NC}"
-
-echo ""
-
-echo -e "${YELLOW}Phase 3: Launch control plane VM${NC}"
-
-# Kill any stale passt/CH from a previous failed run
-for _pid_file in "$CH_PID_FILE" "$PASST_PID_FILE"; do
-	if [[ -f "$_pid_file" ]]; then
-		kill "$(cat "$_pid_file")" 2>/dev/null || true
-		rm -f "$_pid_file"
-	fi
-done
-pkill -f "passt.*qarax-cp" 2>/dev/null || true
-rm -f "${PASST_SOCKET}" "${PASST_SOCKET}.repair" "$CP_API_SOCKET"
-sleep 0.2
-
-echo "Launching Cloud Hypervisor VM (via passt vhost-user)..."
+step "Launching the control-plane VM (${CP_VM_CPUS} vCPUs, passt vhost-user networking)"
 # passt provides user-space networking for the VM via vhost-user:
 #  - no TAP device, no iptables/nftables, no root needed for networking
 #  - provides NAT + DHCP for the VM automatically
 #  - forwards host ports to the VM via -t
-
-# Start passt in vhost-user mode (background, foreground keeps our PID)
 passt --vhost-user \
 	-f \
 	--socket "$PASST_SOCKET" \
-	--address "${CP_VM_IP}" \
-	--gateway "${CP_GW_IP}" \
+	--address "$CP_VM_IP" \
+	--gateway "$CP_GW_IP" \
 	-t "${GRAFANA_HOST_PORT}:3000" \
 	-t "${API_HOST_PORT}:8000" \
 	-t "${CP_SSH_PORT}:22" \
-	2>"$PASST_LOG" &
-PASST_PID=$!
-echo "$PASST_PID" >"$PASST_PID_FILE"
+	>"$PASST_LOG" 2>&1 &
+echo "$!" >"$PASST_PID_FILE"
+wait_until 10 test -S "$PASST_SOCKET" || {
+	cat "$PASST_LOG" >&2
+	die "passt did not create ${PASST_SOCKET}"
+}
 
-# Wait for the vhost-user socket to be ready
-echo -n "Waiting for passt socket"
-for i in {1..30}; do
-	[[ -S "$PASST_SOCKET" ]] && break
-	echo -n "."
-	sleep 0.2
-done
-if [[ ! -S "$PASST_SOCKET" ]]; then
-	echo ""
-	echo -e "${RED}passt socket not ready. Log:${NC}"
-	cat "$PASST_LOG" 2>/dev/null || true
-	exit 1
-fi
-echo " ready"
-
-# Determine VM_SEES_HOST from passt log (the address passt NATs to host 127.0.0.1)
-sleep 0.3
-VM_SEES_HOST=$(awk '/NAT to host/ {for(i=1;i<=NF;i++) if($i ~ /[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/ && $i !~ /127\./) last=$i} END{print last}' "$PASST_LOG")
-if [[ -z "$VM_SEES_HOST" ]]; then
-	VM_SEES_HOST="${CP_GW_IP}"
-	echo -e "${YELLOW}Could not parse NAT address from passt log; using ${VM_SEES_HOST}${NC}"
-fi
-echo "VM will reach host registry at ${VM_SEES_HOST}:${REGISTRY_PORT}"
-
-# Start Cloud Hypervisor with vhost-user net (requires shared memory)
+# vhost-user networking requires shared guest memory.
 "$CH_BINARY" \
 	--api-socket "$CP_API_SOCKET" \
-	--cpus boot="${CP_LAUNCH_CPUS}" \
+	--cpus "boot=${CP_VM_CPUS}" \
 	--memory "size=${CP_VM_MEMORY},shared=on" \
 	--firmware "$CH_FIRMWARE" \
-	--disk "path=$CP_ROOTFS,image_type=raw" \
+	--disk "path=${CP_DISK},image_type=qcow2,backing_files=on" \
+	"path=${TOKEN_DISK},image_type=raw,readonly=on" \
 	--net "vhost_user=true,socket=${PASST_SOCKET},mac=${CP_MAC},num_queues=2,queue_size=256" \
-	--serial file="$CP_CONSOLE_LOG" \
+	--serial "file=${CP_CONSOLE_LOG}" \
 	--console off \
-	&
+	>"$CH_LOG" 2>&1 &
 CH_PID=$!
 echo "$CH_PID" >"$CH_PID_FILE"
+info "Console log: ${CP_CONSOLE_LOG}"
 
-echo "passt PID: ${PASST_PID}  Cloud Hypervisor PID: ${CH_PID}"
-echo "Console log: ${CP_CONSOLE_LOG}"
-echo ""
+step "Waiting for the qarax API in the VM"
+wait_until 180 cp_url_up "${SERVER}/" || {
+	show_cp_logs
+	die "qarax API not reachable at ${SERVER} after 180s"
+}
+require_server
+ok "qarax API is up at ${SERVER}"
 
-echo -n "Waiting for qarax API at http://127.0.0.1:${API_HOST_PORT}/"
-timeout=120
-elapsed=0
-while [[ $elapsed -lt $timeout ]]; do
-	if curl -sf "http://127.0.0.1:${API_HOST_PORT}/" -o /dev/null 2>/dev/null; then
-		echo ""
-		echo -e "${GREEN}qarax API is ready!${NC}"
-		break
-	fi
-	echo -n "."
-	sleep 2
-	elapsed=$((elapsed + 2))
+step "Registering the control-plane VM as its own compute host"
+# qarax host add + host init, retrying while qarax-node starts in the VM.
+run bash e2e/setup_host.sh "$SERVER" "$CP_VM_IP" "$QARAX_NODE_PORT" local-node
 
-	if ! kill -0 "$CH_PID" 2>/dev/null; then
-		echo ""
-		echo -e "${RED}Cloud Hypervisor process died. Check logs:${NC}"
-		echo "--- passt log ---"
-		cat "$PASST_LOG" 2>/dev/null || true
-		echo "--- console log ---"
-		tail -20 "$CP_CONSOLE_LOG" 2>/dev/null || true
-		exit 1
-	fi
-
-	if [[ $((elapsed % 20)) -eq 0 ]]; then
-		echo -e " (${elapsed}s / ${timeout}s)"
-		echo -n "  "
-	fi
-done
-
-if [[ $elapsed -ge $timeout ]]; then
-	echo ""
-	echo -e "${RED}Timeout waiting for qarax API. Console log tail:${NC}"
-	tail -30 "$CP_CONSOLE_LOG" 2>/dev/null || true
-	exit 1
-fi
-
-echo ""
-
-echo -e "${YELLOW}Phase 4: Register host${NC}"
-
-QARAX_API="http://127.0.0.1:${API_HOST_PORT}"
-export QARAX_SERVER="${QARAX_API}"
-require_auth "$QARAX_API"
-
-# The CP VM's qarax-node is reached over gRPC; no SSH credentials are needed.
-echo "Adding CP VM as compute host (self-registration)..."
-"$QARAX_CLI" host add --name local-node --address "${CP_VM_IP}" \
-	--port "${QARAX_NODE_PORT}" --user root
-
-echo "Initializing host (gRPC handshake)..."
-# qarax-node may still be starting inside the VM; retry for up to ~60s.
-for attempt in $(seq 1 20); do
-	"$QARAX_CLI" host init local-node && break
-	[[ $attempt -lt 20 ]] || die "Host init failed. Check qarax-node inside the CP VM: ssh -p ${CP_SSH_PORT} root@localhost (password: qarax), journalctl -u qarax-node"
-	echo -e "${YELLOW}Host init failed (attempt ${attempt}/20), retrying in 3s...${NC}"
-	sleep 3
-done
-echo ""
-
-# Wait for in-VM telemetry backend (Grafana) to be ready
-echo -e "${YELLOW}Waiting for Grafana (otel-lgtm) at localhost:${GRAFANA_HOST_PORT}...${NC}"
-timeout=120
-grafana_ready=0
-for ((elapsed = 0; elapsed < timeout; elapsed += 2)); do
-	if curl -sf "http://127.0.0.1:${GRAFANA_HOST_PORT}/api/health" -o /dev/null 2>/dev/null; then
-		echo -e "${GREEN}Grafana is ready at http://localhost:${GRAFANA_HOST_PORT} (admin/admin)${NC}"
-		grafana_ready=1
-		break
-	fi
-
-	if ! kill -0 "$CH_PID" 2>/dev/null; then
-		echo ""
-		echo -e "${RED}Cloud Hypervisor process died while waiting for Grafana. Check logs:${NC}"
-		echo "--- passt log ---"
-		cat "$PASST_LOG" 2>/dev/null || true
-		echo "--- console log ---"
-		cat "$CP_CONSOLE_LOG" 2>/dev/null || true
-		exit 1
-	fi
-
-	echo -n "."
-	sleep 2
-done
-if [[ "$grafana_ready" -ne 1 ]]; then
-	echo ""
-	echo -e "${YELLOW}Warning: Grafana did not become ready within ${timeout}s. It may still be starting inside the control-plane VM.${NC}"
-	echo -e "You can check inside the CP VM: ssh -p ${CP_SSH_PORT} root@localhost (password: qarax) and run: podman ps -a"
+step "Waiting for Grafana (otel-lgtm) in the VM"
+if wait_until 180 cp_url_up "${GRAFANA_URL}/api/health"; then
+	ok "Grafana is up at http://localhost:${GRAFANA_HOST_PORT} (admin/admin)"
+	import_dashboards
 else
-	echo "Importing Qarax demo dashboards into Grafana..."
-	python3 - "$GRAFANA_HOST_PORT" \
-		"${DEMO_DIR}/grafana/qarax-overview-dashboard.json" \
-		"${DEMO_DIR}/grafana/qarax-vm-start-dashboard.json" <<'PY'
-import base64
-import json
-import sys
-import urllib.error
-import urllib.request
-
-port = sys.argv[1]
-dashboard_paths = sys.argv[2:]
-base_url = f"http://127.0.0.1:{port}"
-auth = base64.b64encode(b"admin:admin").decode()
-
-
-def request(method, path, payload=None):
-    req = urllib.request.Request(f"{base_url}{path}", method=method)
-    req.add_header("Authorization", f"Basic {auth}")
-    req.add_header("Content-Type", "application/json")
-    data = None if payload is None else json.dumps(payload).encode()
-    with urllib.request.urlopen(req, data=data, timeout=15) as resp:
-        body = resp.read().decode()
-        return json.loads(body) if body else {}
-
-
-datasources = request("GET", "/api/datasources")
-prometheus = next((ds for ds in datasources if ds.get("type") == "prometheus"), None)
-if prometheus is None:
-    print("Warning: Prometheus datasource not found; skipping dashboard import.")
-    raise SystemExit(0)
-
-folder_uid = "qarax-demo"
-try:
-    request("POST", "/api/folders", {"uid": folder_uid, "title": "Qarax Demo"})
-except urllib.error.HTTPError as exc:
-    if exc.code not in (409, 412):
-        raise
-
-
-def replace_prom_uid(value):
-    if isinstance(value, dict):
-        return {k: replace_prom_uid(v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [replace_prom_uid(v) for v in value]
-    if value == "__PROM_UID__":
-        return prometheus["uid"]
-    return value
-
-
-for dashboard_path in dashboard_paths:
-    with open(dashboard_path, encoding="utf-8") as f:
-        dashboard = replace_prom_uid(json.load(f))
-    request(
-        "POST",
-        "/api/dashboards/db",
-        {"dashboard": dashboard, "folderUid": folder_uid, "overwrite": True},
-    )
-    print(f"  Imported: {dashboard['title']}")
-PY
+	# Telemetry is an add-on: the workloads below don't depend on it.
+	warn "Grafana is not up after 180s. Check inside the VM: ssh -p ${CP_SSH_PORT} root@localhost (password: qarax), then journalctl -u otel-lgtm"
 fi
 
-echo -e "${YELLOW}Phase 5: Create storage pools and workload VMs${NC}"
+# ── Phase 3: storage pools and workload VMs ─────────────────────────────────
 
-DEMO_IMAGE="${DEMO_IMAGE:-public.ecr.aws/docker/library/alpine:latest}"
-DEMO_VM_NAME="alpine-vm"
-DEMO_VM_MEMORY=268435456 # 256 MiB
-
-echo "Creating default ${NETWORK_BACKEND} network (192.168.100.0/24)..."
-net_retries=5
-net_attempt=0
-until "$QARAX_CLI" network create --name default --subnet 192.168.100.0/24 --gateway 192.168.100.1 --network-type "$NETWORK_BACKEND" 2>/dev/null; do
-	net_attempt=$((net_attempt + 1))
-	if [[ $net_attempt -ge $net_retries ]]; then
-		echo -e "${RED}Network creation failed after ${net_retries} attempts.${NC}"
-		echo -e "Check qarax logs: ssh -p ${CP_SSH_PORT} root@localhost (password: qarax) and run: journalctl -u qarax -n 50"
-		exit 1
-	fi
-	echo -e "${YELLOW}Network creation failed (attempt ${net_attempt}/${net_retries}), retrying in 5s...${NC}"
-	sleep 5
-done
-
+step "Creating the default ${NETWORK_BACKEND} network"
+run qarax network create --name default --subnet 192.168.100.0/24 --gateway 192.168.100.1 \
+	--network-type "$NETWORK_BACKEND"
 if [[ "$NETWORK_BACKEND" == "passt" ]]; then
-	echo "Registering passt-backed network on host..."
-	"$QARAX_CLI" network attach-host --network default --host local-node --bridge-name passt0
+	run qarax network attach-host --network default --host local-node --bridge-name passt0
 else
-	echo "Attaching bridged network to host (bridged to eth0)..."
-	"$QARAX_CLI" network attach-host --network default --host local-node --bridge-name qbr0 --parent-interface eth0
+	# Bridged to the VM's eth0
+	run qarax network attach-host --network default --host local-node --bridge-name qbr0 --parent-interface eth0
 fi
-echo ""
 
-echo "Creating overlaybd storage pool..."
-"$QARAX_CLI" storage-pool create --name overlaybd-pool --pool-type overlaybd \
-	--config '{"url":"http://'"${VM_SEES_HOST}"':'"${REGISTRY_PORT}"'"}'
-
-echo "Importing OCI image: ${DEMO_IMAGE}..."
-"$QARAX_CLI" storage-pool import --pool overlaybd-pool \
-	--image-ref "${DEMO_IMAGE}" \
-	--name alpine-obd
-
-echo "Creating OCI VM: ${DEMO_VM_NAME}..."
-"$QARAX_CLI" vm create --name "${DEMO_VM_NAME}" --vcpus 1 --memory "${DEMO_VM_MEMORY}" --network default
-
-echo "Attaching OCI disk..."
-"$QARAX_CLI" vm attach-disk "${DEMO_VM_NAME}" --object alpine-obd
-
-echo "Starting OCI VM..."
-"$QARAX_CLI" vm start "${DEMO_VM_NAME}"
-echo ""
+step "Booting an OCI VM from the OverlayBD pool (backed by the host's registry)"
+run qarax storage-pool create --name overlaybd-pool --pool-type overlaybd \
+	--url "http://${CP_GW_IP}:${REGISTRY_PORT}"
+run qarax storage-pool import --pool overlaybd-pool --image-ref "$DEMO_IMAGE" --name alpine-obd
+run qarax vm create --name "$DEMO_VM_NAME" --vcpus 1 --memory 256MiB --network default
+run qarax vm attach-disk "$DEMO_VM_NAME" --object alpine-obd
+run qarax vm start "$DEMO_VM_NAME"
+assert_running "$DEMO_VM_NAME"
+info "Guest console (last lines):"
+qarax vm console "$DEMO_VM_NAME" | tail -n 5 | sed 's/^/    /'
 
 if [[ "$WITH_LOCAL" -eq 1 ]]; then
-	echo "Creating local storage pool..."
-	"$QARAX_CLI" storage-pool create --name local-pool --pool-type local \
-		--config '{"path":"'"${LOCAL_POOL_PATH}"'"}' --host local-node
-	echo -e "${GREEN}Local storage pool 'local-pool' created (path: ${LOCAL_POOL_PATH})${NC}"
-	echo ""
+	step "Creating a local storage pool"
+	run qarax storage-pool create --name local-pool --pool-type local \
+		--path "$LOCAL_POOL_PATH" --host local-node
 fi
 
 if [[ "$WITH_NFS" -eq 1 ]]; then
-	echo "Creating NFS storage pool..."
-	"$QARAX_CLI" storage-pool create --name nfs-pool --pool-type nfs \
-		--config '{"url":"'"${NFS_URL}"'"}'
-	echo -e "${GREEN}NFS storage pool 'nfs-pool' created (url: ${NFS_URL})${NC}"
-	echo ""
+	step "Creating an NFS storage pool"
+	run qarax storage-pool create --name nfs-pool --pool-type nfs --url "$NFS_URL"
 fi
 
 if [[ "$WITH_LOCAL_VM" -eq 1 ]]; then
-	CLOUD_VM_NAME="cloud-vm"
-
-	CLOUD_VM_MEMORY=1073741824 # 1 GiB
-
-	echo "Transferring cloud image into local pool (waits for the download)..."
-	"$QARAX_CLI" transfer create --pool local-pool --name cloud-disk \
+	step "Booting a firmware VM from a cloud image"
+	# --wait blocks until the download into the local pool finishes.
+	run qarax transfer create --pool local-pool --name cloud-disk \
 		--source "$CLOUD_IMAGE_URL" --object-type disk --wait
-
-	echo "Creating firmware-boot VM: ${CLOUD_VM_NAME}..."
-	"$QARAX_CLI" vm create --name "${CLOUD_VM_NAME}" --vcpus 1 \
-		--memory "${CLOUD_VM_MEMORY}" --boot-mode firmware
-
-	echo "Attaching cloud disk..."
-	"$QARAX_CLI" vm attach-disk "${CLOUD_VM_NAME}" --object cloud-disk
-
-	echo "Starting firmware-boot VM..."
-	"$QARAX_CLI" vm start "${CLOUD_VM_NAME}"
-
-	echo -e "${GREEN}Firmware-boot VM '${CLOUD_VM_NAME}' started${NC}"
-	echo ""
+	run qarax vm create --name cloud-vm --vcpus 1 --memory 1GiB --boot-mode firmware
+	run qarax vm attach-disk cloud-vm --object cloud-disk
+	run qarax vm start cloud-vm
+	assert_running cloud-vm
 fi
 
+DB_VM_IP=""
 if [[ "$WITH_DB_VM" -eq 1 ]]; then
-	DB_VM_NAME="db-vm"
-	DB_VM_MEMORY=536870912 # 512 MiB
-
+	step "Booting an OCI PostgreSQL VM"
 	if [[ "$DB_IMAGE" == "$DEFAULT_DB_IMAGE" ]]; then
-		echo "Building custom Postgres image with POSTGRES_HOST_AUTH_METHOD=trust..."
-		DB_CONTAINERFILE="${TMP_PREFIX}-Containerfile.postgres"
-		cat <<EOF >"$DB_CONTAINERFILE"
-FROM ${DB_IMAGE}
-ENV POSTGRES_PASSWORD=postgres
-ENV POSTGRES_HOST_AUTH_METHOD=trust
-EOF
-		podman build -t "localhost:${REGISTRY_PORT}/postgres:17-alpine-trust" -f "$DB_CONTAINERFILE"
-		podman push "localhost:${REGISTRY_PORT}/postgres:17-alpine-trust" --tls-verify=false
-		rm -f "$DB_CONTAINERFILE"
-		DB_IMAGE="${VM_SEES_HOST}:${REGISTRY_PORT}/postgres:17-alpine-trust"
+		info "Building a Postgres image with POSTGRES_HOST_AUTH_METHOD=trust into the local registry"
+		db_build_dir="${RUN_DIR}/postgres-image"
+		mkdir -p "$db_build_dir"
+		printf 'FROM %s\nENV POSTGRES_PASSWORD=postgres\nENV POSTGRES_HOST_AUTH_METHOD=trust\n' \
+			"$DB_IMAGE" >"${db_build_dir}/Containerfile"
+		podman build -t "localhost:${REGISTRY_PORT}/postgres:17-alpine-trust" "$db_build_dir"
+		podman push --tls-verify=false "localhost:${REGISTRY_PORT}/postgres:17-alpine-trust"
+		DB_IMAGE="${CP_GW_IP}:${REGISTRY_PORT}/postgres:17-alpine-trust"
 	fi
-
-	echo "Creating OCI database VM: ${DB_VM_NAME} (image: ${DB_IMAGE})..."
-	"$QARAX_CLI" vm create --name "${DB_VM_NAME}" --vcpus 1 --memory "${DB_VM_MEMORY}" \
-		--image-ref "${DB_IMAGE}" --network default
-
-	echo "Starting database VM..."
-	"$QARAX_CLI" vm start "${DB_VM_NAME}"
-
-	DB_VM_JSON=$("$QARAX_CLI" --output json vm get "${DB_VM_NAME}" 2>/dev/null || true)
-	DB_VM_ID=$(python3 -c 'import json,sys
-try:
-    print(json.loads(sys.stdin.read()).get("id",""))
-except Exception:
-    print("")' <<<"${DB_VM_JSON}")
-	DB_VM_IP=""
-	if [[ "$NETWORK_BACKEND" == "bridge" && -n "${DB_VM_ID}" ]]; then
-		DB_VM_IPS_JSON=$("$QARAX_CLI" --output json network list-ips default 2>/dev/null || true)
-		DB_VM_IP=$(python3 -c 'import json,sys
-vmid=sys.argv[1]
-try:
-    items=json.loads(sys.stdin.read())
-except Exception:
-    items=[]
-for item in items:
-    if item.get("vm_id")==vmid:
-        print((item.get("ip_address","") or "").split("/",1)[0])
-        break' "${DB_VM_ID}" <<<"${DB_VM_IPS_JSON}")
+	run qarax vm create --name db-vm --vcpus 1 --memory 512MiB --image-ref "$DB_IMAGE" --network default
+	run qarax vm start db-vm
+	assert_running db-vm
+	if [[ "$NETWORK_BACKEND" == "bridge" ]]; then
+		db_vm_id=$(qarax vm get db-vm -o json | jq -r .id)
+		DB_VM_IP=$(qarax network list-ips default -o json |
+			jq -r --arg id "$db_vm_id" '.[] | select(.vm_id == $id) | .ip_address | split("/")[0]')
+		[[ -n "$DB_VM_IP" ]] || die "db-vm has no IP allocation on network default"
 	fi
-
-	echo -e "${GREEN}OCI database VM '${DB_VM_NAME}' started (image: ${DB_IMAGE})${NC}"
-	echo ""
-	echo -e "${YELLOW}Database VM usage:${NC}"
-	echo "  qarax vm attach ${DB_VM_NAME}   # interactive console"
-	echo "  psql -U postgres                # inside the VM"
-	if [[ -n "${DB_VM_IP}" ]]; then
-		echo "  psql -h ${DB_VM_IP} -U postgres # from the host"
-	elif [[ "$NETWORK_BACKEND" == "passt" ]]; then
-		echo "  Host-side direct DB access is not advertised in passt mode."
-	fi
-	echo ""
 fi
 
-HOST_LAN_IP="$(
-	ip -4 route get 1.1.1.1 2>/dev/null | awk '
-		{
-			for (i = 1; i <= NF; i++) {
-				if ($i == "src") {
-					print $(i + 1)
-					exit
-				}
-			}
-		}
-	'
-)"
+# The host's LAN address, for the from-the-LAN URLs. Skipped when the host has
+# no default route (`ip route get` would fail).
+HOST_LAN_IP=""
+if [[ -n "$(ip -4 route show default)" ]]; then
+	HOST_LAN_IP=$(ip -4 -j route get 1.1.1.1 | jq -r '.[0].prefsrc // empty')
+fi
 
-echo -e "${GREEN}=== Hyperconverged qarax Demo Ready ===${NC}"
-echo ""
+banner "Hyperconverged qarax Demo Ready"
 echo "Control Plane VM (hyperconverged — API + compute):"
 echo "  API (this host):  http://localhost:${API_HOST_PORT}/"
 if [[ -n "$HOST_LAN_IP" ]]; then
@@ -870,14 +636,14 @@ echo "  SSH to CP VM:     ssh -o StrictHostKeyChecking=no -p ${CP_SSH_PORT} root
 echo "  Console log:      ${CP_CONSOLE_LOG}"
 echo ""
 echo "Storage pools:"
-echo "  overlaybd-pool   (overlaybd, registry: http://${VM_SEES_HOST}:${REGISTRY_PORT})"
-[[ "$WITH_LOCAL" -eq 1 ]] && echo "  local-pool        (local, path: ${LOCAL_POOL_PATH})"
-[[ "$WITH_NFS" -eq 1 ]] && echo "  nfs-pool          (nfs, url: ${NFS_URL})"
+echo "  overlaybd-pool   (overlaybd, registry: http://${CP_GW_IP}:${REGISTRY_PORT})"
+[[ "$WITH_LOCAL" -eq 0 ]] || echo "  local-pool       (local, path: ${LOCAL_POOL_PATH})"
+[[ "$WITH_NFS" -eq 0 ]] || echo "  nfs-pool         (nfs, url: ${NFS_URL})"
 echo ""
 echo "Workload VMs:"
-echo "  ${DEMO_VM_NAME}         (OCI: ${DEMO_IMAGE})"
-[[ "$WITH_DB_VM" -eq 1 ]] && echo "  db-vm             (OCI: ${DB_IMAGE}, PostgreSQL)"
-[[ "$WITH_LOCAL_VM" -eq 1 ]] && echo "  cloud-vm          (firmware boot, cloud image)"
+echo "  ${DEMO_VM_NAME}        (OCI: ${DEMO_IMAGE})"
+[[ "$WITH_DB_VM" -eq 0 ]] || echo "  db-vm            (OCI: ${DB_IMAGE}, PostgreSQL)"
+[[ "$WITH_LOCAL_VM" -eq 0 ]] || echo "  cloud-vm         (firmware boot, cloud image)"
 echo ""
 echo "Set server and API token for CLI commands:"
 echo "  export QARAX_SERVER=http://localhost:${API_HOST_PORT}"
@@ -886,9 +652,16 @@ echo ""
 echo "Interact with VMs:"
 echo "  qarax vm list"
 echo "  qarax vm attach ${DEMO_VM_NAME}"
-[[ "$WITH_DB_VM" -eq 1 ]] && echo "  qarax vm attach db-vm"
-[[ "$WITH_LOCAL_VM" -eq 1 ]] && echo "  qarax vm attach cloud-vm"
+if [[ "$WITH_DB_VM" -eq 1 ]]; then
+	echo "  qarax vm attach db-vm             # then, inside the VM: psql -U postgres"
+	if [[ "$NETWORK_BACKEND" == "bridge" ]]; then
+		echo "  psql -h ${DB_VM_IP} -U postgres  # from the host"
+	else
+		echo "  (host-side direct DB access is not advertised in passt mode)"
+	fi
+fi
+[[ "$WITH_LOCAL_VM" -eq 0 ]] || echo "  qarax vm attach cloud-vm"
 echo ""
-echo "Cleanup:"
-echo "  $0 --cleanup   (run as the same user that started the demo)"
+echo "Cleanup (as the same user that started the demo; a re-run also replaces the VM):"
+echo "  $0 --cleanup"
 echo ""

@@ -86,6 +86,11 @@ pub struct OverlayBdManager {
     cache_dir: PathBuf,
     /// Currently mounted devices, keyed by VM ID
     mounts: Arc<Mutex<HashMap<String, MountedDevice>>>,
+    /// Held from listing the existing sd* devices until the new one is found.
+    /// The new device is identified as "the sd* that wasn't there before", so
+    /// two mounts in flight at once would otherwise both claim whichever
+    /// device appeared first, and the second VM fails to lock its disk.
+    device_discovery: Mutex<()>,
 }
 
 impl OverlayBdManager {
@@ -101,6 +106,7 @@ impl OverlayBdManager {
             convertor_binary,
             cache_dir,
             mounts: Arc::new(Mutex::new(HashMap::new())),
+            device_discovery: Mutex::new(()),
         }
     }
 
@@ -1036,6 +1042,7 @@ impl OverlayBdManager {
         tcmu_name: &str,
         tcmu_dir: &Path,
     ) -> Result<String, OverlayBdError> {
+        let _discovery = self.device_discovery.lock().await;
         // Record sd* devices that already exist so we can detect the new one.
         let known = self.list_sd_devices().await?;
 

@@ -253,11 +253,28 @@ async fn recovered_vm_deletion_cleans_overlaybd_state_and_preserves_external_upp
         let socket = manager.socket_path(&vm_id);
         let listener = UnixListener::bind(&socket).unwrap();
         let hypervisor = tokio::spawn(async move {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            for expected in ["GET /api/v1/vm.info", "PUT /api/v1/vm.shutdown"] {
+            // Recovery first checks that the socket answers, with a connection
+            // it closes without a request; serve the one that sends requests.
+            let (mut stream, mut pending) = loop {
+                let (mut stream, _) = listener.accept().await.unwrap();
                 let mut request = vec![0; 4096];
                 let size = stream.read(&mut request).await.unwrap();
-                let request = String::from_utf8_lossy(&request[..size]);
+                if size > 0 {
+                    request.truncate(size);
+                    break (stream, Some(request));
+                }
+            };
+            for expected in ["GET /api/v1/vm.info", "PUT /api/v1/vm.shutdown"] {
+                let request = match pending.take() {
+                    Some(request) => request,
+                    None => {
+                        let mut request = vec![0; 4096];
+                        let size = stream.read(&mut request).await.unwrap();
+                        request.truncate(size);
+                        request
+                    }
+                };
+                let request = String::from_utf8_lossy(&request);
                 let (method, path) = expected.split_once(' ').unwrap();
                 let mut parts = request.split_whitespace();
                 assert_eq!(parts.next(), Some(method), "{request}");

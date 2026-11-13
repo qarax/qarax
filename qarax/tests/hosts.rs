@@ -256,3 +256,103 @@ async fn test_list_host_gpus_returns_discovered_gpus() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn test_delete_host_refuses_while_vms_are_placed_on_it() {
+    let app = spawn_app().await;
+    let client = reqwest::Client::new();
+    let host_id = support::add_up_host(&client, &app.address, "busy-host").await;
+    let vm_id = support::create_vm(
+        &client,
+        &app.address,
+        json!({
+            "name": "vm-on-busy-host",
+            "hypervisor": "cloud_hv",
+            "boot_vcpus": 1,
+            "max_vcpus": 1,
+            "memory_size": 256 * 1024 * 1024,
+            "config": {}
+        }),
+    )
+    .await;
+
+    let res = client
+        .delete(format!("{}/hosts/{host_id}", &app.address))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert!(
+        body["message"]
+            .as_str()
+            .unwrap()
+            .contains("vm-on-busy-host"),
+        "{body}"
+    );
+
+    let res = client
+        .delete(format!("{}/vms/{vm_id}", &app.address))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let res = client
+        .delete(format!("{}/hosts/{host_id}", &app.address))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let res = client
+        .delete(format!("{}/hosts/{host_id}", &app.address))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn test_delete_host_drops_it_from_pending_storage_cleanups() {
+    let app = spawn_app().await;
+    let client = reqwest::Client::new();
+    let gone = add_host(&client, &app.address, "cleanup-gone-host").await;
+    let stays = add_host(&client, &app.address, "cleanup-stays-host").await;
+    let res = client
+        .post(format!("{}/storage-pools", &app.address))
+        .json(&json!({
+            "name": "cleanup-pool",
+            "pool_type": "local",
+            "config": {"path": "/tmp/cleanup-pool"}
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let pool_id: Uuid = res.text().await.unwrap().parse().unwrap();
+    let object_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO storage_cleanup (object_id, pool_id, upper_layer, size_bytes, host_ids)
+         VALUES ($1, $2, false, 0, $3)",
+    )
+    .bind(object_id)
+    .bind(pool_id)
+    .bind(vec![gone, stays])
+    .execute(&app.pool)
+    .await
+    .unwrap();
+
+    let res = client
+        .delete(format!("{}/hosts/{gone}", &app.address))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+
+    let host_ids: Vec<Uuid> =
+        sqlx::query_scalar("SELECT host_ids FROM storage_cleanup WHERE object_id = $1")
+            .bind(object_id)
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+    assert_eq!(host_ids, [stays]);
+}

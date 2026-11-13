@@ -729,7 +729,7 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
                     } else {
                         println!("Creating VM: {}", new_vm.name);
                         println!("Job:         {job_id}");
-                        poll_job(client, job_id).await?;
+                        crate::wait::wait_for_job(client, job_id).await?;
                     }
                 }
             }
@@ -749,7 +749,7 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
             } else {
                 println!("Starting VM: {vm}");
                 println!("Job:         {}", resp.job_id);
-                poll_job(client, resp.job_id).await?;
+                crate::wait::wait_for_job(client, resp.job_id).await?;
             }
         }
 
@@ -794,9 +794,8 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
             api::vms::stop(client, id).await?;
             if wait {
                 crate::wait::wait_for_vm_status(client, id, "shutdown").await?;
-            } else {
-                println!("Stopped VM: {vm}");
             }
+            println!("Stopped VM: {vm}");
         }
 
         VmCommand::ForceStop { vm, wait } => {
@@ -804,9 +803,8 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
             api::vms::force_stop(client, id).await?;
             if wait {
                 crate::wait::wait_for_vm_status(client, id, "shutdown").await?;
-            } else {
-                println!("Force stopped VM: {vm}");
             }
+            println!("Force stopped VM: {vm}");
         }
 
         VmCommand::Pause { vm, wait } => {
@@ -814,9 +812,8 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
             api::vms::pause(client, id).await?;
             if wait {
                 crate::wait::wait_for_vm_status(client, id, "paused").await?;
-            } else {
-                println!("Paused VM: {vm}");
             }
+            println!("Paused VM: {vm}");
         }
 
         VmCommand::Resume { vm, wait } => {
@@ -824,9 +821,8 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
             api::vms::resume(client, id).await?;
             if wait {
                 crate::wait::wait_for_vm_status(client, id, "running").await?;
-            } else {
-                println!("Resumed VM: {vm}");
             }
+            println!("Resumed VM: {vm}");
         }
 
         VmCommand::Console { vm } => {
@@ -837,7 +833,7 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
 
         VmCommand::Attach { vm } => {
             let id = resolve_vm_id(client, &vm).await?;
-            console::attach(client.base_url(), id).await?;
+            console::attach(client.base_url(), client.token(), id).await?;
         }
 
         VmCommand::Exec {
@@ -1030,7 +1026,7 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
             } else {
                 println!("Migrating VM: {vm}");
                 println!("Job:          {}", resp.job_id);
-                poll_job(client, resp.job_id).await?;
+                crate::wait::wait_for_job(client, resp.job_id).await?;
             }
         }
 
@@ -1051,7 +1047,7 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
             } else {
                 println!("Committing VM: {vm}");
                 println!("Job:           {}", resp.job_id);
-                poll_job(client, resp.job_id).await?;
+                crate::wait::wait_for_job(client, resp.job_id).await?;
             }
         }
 
@@ -1108,105 +1104,4 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
     }
 
     Ok(())
-}
-
-/// Redraw the progress bar in-place on stderr.
-fn draw_bar(stderr: &mut impl std::io::Write, pct: usize, desc: &str, elapsed: u64) {
-    use crossterm::{
-        cursor,
-        terminal::{self, ClearType},
-    };
-    const BAR_WIDTH: usize = 30;
-    let filled = BAR_WIDTH * pct / 100;
-    let bar = format!("[{}{}]", "█".repeat(filled), "░".repeat(BAR_WIDTH - filled));
-    let _ = crossterm::execute!(
-        stderr,
-        cursor::MoveToColumn(0),
-        terminal::Clear(ClearType::CurrentLine),
-    );
-    let _ = write!(stderr, "  {} {:>3}%  {}  {}s", bar, pct, desc, elapsed);
-    let _ = stderr.flush();
-}
-
-/// Poll a job until it completes or fails, animating the progress bar between
-/// polled values so it never jumps ahead suddenly.
-async fn poll_job(client: &Client, job_id: Uuid) -> anyhow::Result<()> {
-    use crossterm::{
-        cursor,
-        terminal::{self, ClearType},
-    };
-    use std::time::Instant;
-
-    const POLL_INTERVAL_MS: u64 = 2000;
-    const FRAME_MS: u64 = 50;
-
-    let started = Instant::now();
-    let mut stderr = std::io::stderr();
-    let mut displayed_pct: usize = 0;
-
-    loop {
-        let job = api::jobs::get(client, job_id).await?;
-        let elapsed = started.elapsed().as_secs();
-
-        match job.status.as_str() {
-            "completed" => {
-                // Animate to 100% before finishing.
-                let desc = job.description.as_deref().unwrap_or("completing");
-                while displayed_pct < 100 {
-                    displayed_pct += 1;
-                    draw_bar(
-                        &mut stderr,
-                        displayed_pct,
-                        desc,
-                        started.elapsed().as_secs(),
-                    );
-                    tokio::time::sleep(std::time::Duration::from_millis(FRAME_MS / 2)).await;
-                }
-                let _ = crossterm::execute!(
-                    stderr,
-                    cursor::MoveToColumn(0),
-                    terminal::Clear(ClearType::CurrentLine),
-                );
-                eprintln!("  done in {}s", started.elapsed().as_secs());
-                return Ok(());
-            }
-            "failed" => {
-                let _ = crossterm::execute!(
-                    stderr,
-                    cursor::MoveToColumn(0),
-                    terminal::Clear(ClearType::CurrentLine),
-                );
-                return Err(anyhow!(
-                    "Job {job_id} failed: {}",
-                    job.error.unwrap_or_else(|| "unknown error".to_string())
-                ));
-            }
-            status => {
-                let target_pct = job.progress.unwrap_or(0).clamp(0, 99) as usize;
-                let desc = job.description.as_deref().unwrap_or(status).to_string();
-
-                // Animate from current displayed percentage toward target over the poll interval.
-                let frames = POLL_INTERVAL_MS / FRAME_MS;
-                let start_pct = displayed_pct;
-                for frame in 0..frames {
-                    // Interpolate linearly toward target.
-                    let interp = start_pct
-                        + (target_pct.saturating_sub(start_pct)) * (frame as usize + 1)
-                            / frames as usize;
-                    if interp > displayed_pct {
-                        displayed_pct = interp;
-                    }
-                    draw_bar(
-                        &mut stderr,
-                        displayed_pct,
-                        &desc,
-                        started.elapsed().as_secs(),
-                    );
-                    tokio::time::sleep(std::time::Duration::from_millis(FRAME_MS)).await;
-                }
-
-                let _ = elapsed; // already used via started.elapsed() inside draw_bar calls
-            }
-        }
-    }
 }

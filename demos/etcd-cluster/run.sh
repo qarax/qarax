@@ -1,346 +1,268 @@
 #!/usr/bin/env bash
 #
-# Demo: self-contained 3-node etcd cluster on qarax
+# Demo: a 3-node etcd cluster on qarax VMs
 #
-# Starts the qarax stack if needed (hack/run-local.sh), builds the etcd node
-# image, converts it to OverlayBD, imports it, and boots three VMs on an
-# isolated network.
+# Builds the etcd node image (Containerfile in this directory), pushes it to
+# the local stack's registry, imports it into overlaybd-pool (which converts
+# it to OverlayBD) and boots three VMs from it with static IPs on a qarax
+# network. It then checks that the members formed a cluster, writes a key
+# through one node and reads it through another, and plumbs a veth from this
+# machine into the VM bridge (sudo) so the cluster is reachable from here.
 #
-# Network layout:
-#   etcd-net  10.100.0.0/24  (isolated bridge + NAT)
-#   etcd-0    10.100.0.10
-#   etcd-1    10.100.0.11
-#   etcd-2    10.100.0.12
+# The cluster is left running. A re-run replaces the VMs and the image object
+# and reuses the network; --cleanup removes all of it.
 #
-# Requirements:
-#   - Docker (with Compose)
-#   - podman  (to build the etcd node OCI image)
-#   - jq
-#   - KVM     (/dev/kvm)
-#   - Rust toolchain
-#   - sudo    (to plumb a host veth into the VM bridge)
+# Layout (NET_PREFIX below is the one place to change the subnet):
+#   etcd-net   10.100.0.0/24, gateway 10.100.0.1 on bridge br-etcd
+#   etcd-0     10.100.0.10
+#   etcd-1     10.100.0.11
+#   etcd-2     10.100.0.12
+#   this host  10.100.0.254 on veth-etcd
 #
-# Environment:
-#   QARAX_TOKEN  API token (default: the local stack's e2e-test-token)
-#   QARAX_HOST   host to attach etcd-net to (default: the host at address qarax-node)
+# Needs the local Docker Compose stack (make run-local, not VM=1): the VM
+# bridge lives in the qarax-node container's network namespace.
+#
+# Requirements: docker, jq, curl, sudo, KVM; cargo or a qarax CLI on PATH.
 #
 # Usage:
-#   ./demos/etcd-cluster/run.sh           # run everything
-#   ./demos/etcd-cluster/run.sh --cleanup # remove host veth and tear down the stack
+#   ./demos/etcd-cluster/run.sh            # build, boot and check the cluster
+#   ./demos/etcd-cluster/run.sh --cleanup  # remove the VMs, network, image object and host veth
+#
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 DEMO_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=demos/lib.sh
 source "${REPO_ROOT}/demos/lib.sh"
 
-cd "$REPO_ROOT"
-
-# Configuration
-
-NETWORK_NAME="etcd-net"
-SUBNET="10.100.0.0/24"
-GATEWAY="10.100.0.1"
-BRIDGE_NAME="br-etcd"
-VETH_HOST="veth-host"
-VETH_VM="veth-vm"
-HOST_ACCESS_IP="10.100.0.254/24"
-POOL_NAME="overlaybd-pool"
-REGISTRY_URL="http://registry:5000"
-IMAGE_REF="registry:5000/etcd-node:latest"
-IMAGE_OBJECT_NAME="etcd-node"
-NODE_ADDRESS="qarax-node"
-NODE_PORT=50051
-SERVER="http://localhost:8000"
-VCPUS=1
-MEMORY_MIB=256
-
+NET_PREFIX="10.100.0"
+NETWORK="etcd-net"
+SUBNET="${NET_PREFIX}.0/24"
+GATEWAY="${NET_PREFIX}.1"
+BRIDGE="br-etcd"
+HOST_VETH="veth-etcd"
+HOST_ACCESS_CIDR="${NET_PREFIX}.254/24"
+POOL="overlaybd-pool"
+REPO="etcd-node"         # repository in the local registry
+IMAGE_OBJECT="etcd-node" # storage object the VMs boot from
 NODES=(etcd-0 etcd-1 etcd-2)
-declare -A NODE_IPS=([etcd - 0]="10.100.0.10" [etcd - 1]="10.100.0.11" [etcd - 2]="10.100.0.12")
+NODE_IPS=("${NET_PREFIX}.10" "${NET_PREFIX}.11" "${NET_PREFIX}.12")
+MEMORY="256MiB"
+BOOT_TIMEOUT=180
 
-MEMORY_BYTES=$((MEMORY_MIB * 1024 * 1024))
-COMPOSE=(docker compose -f "${REPO_ROOT}/e2e/docker-compose.yml")
-NODE_SERVICE="qarax-node"
+members=() endpoints=()
+for i in "${!NODES[@]}"; do
+	members+=("${NODES[$i]}=http://${NODE_IPS[$i]}:2380")
+	endpoints+=("http://${NODE_IPS[$i]}:2379")
+done
+CLUSTER_MEMBERS=$(
+	IFS=,
+	echo "${members[*]}"
+)
+ENDPOINTS=$(
+	IFS=,
+	echo "${endpoints[*]}"
+)
 
-step() { echo -e "\n${CYAN}=== $* ===${NC}"; }
-ok() { echo -e "${GREEN}✓ $*${NC}"; }
-info() { echo -e "${YELLOW}$*${NC}"; }
+CLEANUP=0
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+	--cleanup)
+		CLEANUP=1
+		shift
+		;;
+	*)
+		die "unknown option: $1 (usage: $0 [--cleanup])"
+		;;
+	esac
+done
 
-# Run a command inside the qarax-node container (where the VM bridge lives).
-node_exec() { "${COMPOSE[@]}" exec -T "$NODE_SERVICE" "$@"; }
-
-vm_status() { "${QARAX[@]}" vm get "$1" -o json | jq -r '.status'; }
-
-# Locate qarax CLI
-
-QARAX_BIN="$(find_qarax_bin)"
-if [[ -z "$QARAX_BIN" ]]; then
-	echo "qarax CLI not found — building..."
-	cargo build -p cli
-	QARAX_BIN="$(find_qarax_bin)"
-fi
-[[ -n "$QARAX_BIN" ]] || die "qarax CLI not found even after build"
-QARAX=("$QARAX_BIN" --server "$SERVER")
-
-# Cleanup
-
-cleanup() {
-	step "Cleaning up etcd cluster demo"
-
-	if ip link show "$VETH_HOST" &>/dev/null; then
-		sudo ip link del "$VETH_HOST" 2>/dev/null || true
-		ok "Host veth removed"
-	fi
-
-	# Tearing down the stack (containers + volumes) removes the VMs, the
-	# network, and the imported image along with it.
-	bash "${REPO_ROOT}/hack/run-local.sh" --cleanup
-	ok "Stack torn down"
+# Set HOST (the UP host the demo uses) and NODE_CID (the compose container
+# that runs it).
+resolve_node() {
+	local address service
+	# A host that can mount the OverlayBD image: one the shared pool is
+	# attached to (nodes without overlaybd-tcmu refuse it), and UP.
+	HOST=$(qarax host list -o json | jq -r --argjson attached "$(qarax storage-pool hosts "$POOL" -o json)" \
+		'[.[] | select(.status == "up" and (.name as $n | $attached | any(.host_name == $n)))][0].name // empty')
+	[[ -n "$HOST" ]] || die "no UP host has storage pool ${POOL}; run 'make run-local'"
+	address=$(qarax host get "$HOST" -o json | jq -r .address)
+	service=$(node_service_for_address "$address") ||
+		die "host ${HOST} (${address}) is not a local compose node: this demo needs the Docker Compose stack (make run-local, without VM=1)"
+	NODE_CID=$(compose ps -q "$service")
+	[[ -n "$NODE_CID" ]] || die "compose service ${service} is not running"
 }
 
-if [[ "${1:-}" == "--cleanup" ]]; then
-	cleanup
+# Delete this demo's VMs by name (etcd-* is too generic to sweep by prefix).
+# Deleting a running VM stops it on the node.
+delete_vms() {
+	local vm
+	for vm in "${NODES[@]}"; do
+		if exists vm "$vm"; then
+			run qarax vm delete "$vm"
+		fi
+	done
+}
+
+# Whether this machine has the veth into the VM bridge; "no" is an error from ip.
+host_veth_up() {
+	ip link show "$HOST_VETH" >/dev/null 2>&1
+}
+
+# plumb_host_veth CONTAINER BRIDGE VETH CIDR: connect this machine to BRIDGE
+# in CONTAINER's network namespace with a veth pair (VETH here, VETH-br in the
+# container) and give the host end CIDR, so VMs on that bridge are reachable
+# from here. demos/k8s-cluster does the same.
+plumb_host_veth() {
+	local container="$1" bridge="$2" veth="$3" cidr="$4" pid
+	pid=$(docker inspect -f '{{.State.Pid}}' "$container")
+	run sudo ip link add "$veth" type veth peer name "${veth}-br"
+	run sudo ip link set "${veth}-br" netns "$pid"
+	run sudo nsenter -t "$pid" -n ip link set "${veth}-br" master "$bridge" up
+	run sudo ip addr add "$cidr" dev "$veth"
+	run sudo ip link set "$veth" up
+}
+
+# `vm exec` fails (HTTP 422) until the guest agent is up, and etcdctl fails
+# until the members have elected a leader: both are expected while the VMs boot.
+cluster_healthy() {
+	qarax vm exec "${NODES[0]}" -- etcdctl --endpoints="$ENDPOINTS" endpoint health >/dev/null 2>&1
+}
+
+banner "qarax demo: 3-node etcd cluster"
+
+if ((CLEANUP)); then
+	step "Removing the etcd demo"
+	if host_veth_up; then
+		run sudo ip link del "$HOST_VETH"
+	fi
+	if ! server_reachable; then
+		info "qarax server not reachable at ${SERVER}: nothing else to clean up."
+		exit 0
+	fi
+	require_auth
+	require_cli
+	delete_vms
+	if exists storage-object "$IMAGE_OBJECT"; then
+		run qarax storage-object delete "$IMAGE_OBJECT"
+	fi
+	if exists network "$NETWORK"; then
+		# Also detaches it from the node: bridge, DHCP server and NAT rules.
+		run qarax network delete "$NETWORK"
+	fi
+	info "The ${REPO} images stay in the local registry (its volume goes with the stack)."
+	ok "Done"
 	exit 0
 fi
 
-# Preflight
+for tool in docker jq curl sudo; do
+	command -v "$tool" >/dev/null || die "${tool} is required"
+done
 
-step "Preflight checks"
+ensure_stack
+require_cli
+resolve_node
+exists storage-pool "$POOL" ||
+	die "storage pool ${POOL} not found: make run-local creates it"
 
-command -v docker &>/dev/null || die "docker is required"
-command -v podman &>/dev/null || die "podman is required (to build the etcd image)"
-command -v jq &>/dev/null || die "jq is required (to parse JSON output)"
-[[ -e /dev/kvm ]] || die "/dev/kvm not found — KVM is required"
+info "Host:    ${HOST}"
+info "Network: ${NETWORK} (${SUBNET})"
+info "Nodes:   ${NODES[*]}"
 
-if [[ ! -e /dev/net/tun ]]; then
-	info "Warning: /dev/net/tun not found — VM networking will fail."
-	info "Fix: sudo modprobe tun && sudo mkdir -p /dev/net && sudo mknod /dev/net/tun c 10 200 && sudo chmod 0666 /dev/net/tun"
-fi
+step "Remove VMs left by an earlier run"
+delete_vms
 
-ok "Preflight passed"
+step "1. Build the etcd node image and push it to the local registry"
+run docker build -f "${DEMO_DIR}/Containerfile" --build-arg "CLUSTER_MEMBERS=${CLUSTER_MEMBERS}" \
+	-t "localhost:5001/${REPO}:src" "$DEMO_DIR"
+run docker push "localhost:5001/${REPO}:src"
 
-# Start the qarax stack (hack/run-local.sh) if it is not already running
-
-step "Ensuring qarax stack is running"
-ensure_stack "$SERVER"
-ok "qarax API is ready at $SERVER"
-
-# Host + overlaybd storage pool (run-local.sh normally creates both)
-
-step "Checking host and overlaybd storage pool"
-
-HOST_NAME="${QARAX_HOST:-$("${QARAX[@]}" host list -o json |
-	jq -r --arg addr "$NODE_ADDRESS" '[.[] | select(.address == $addr)][0].name // empty')}"
-if [[ -z "$HOST_NAME" ]]; then
-	HOST_NAME="local-node"
-	"${QARAX[@]}" host add --name "$HOST_NAME" --address "$NODE_ADDRESS" --port "$NODE_PORT" --user root
-fi
-
-if [[ "$("${QARAX[@]}" host get "$HOST_NAME" -o json | jq -r '.status')" == "up" ]]; then
-	ok "Host '$HOST_NAME' is up"
+step "2. Network ${NETWORK} on ${HOST}"
+if exists network "$NETWORK"; then
+	ok "Network ${NETWORK} exists"
 else
-	# Init with retries (qarax-node may still be starting)
-	for attempt in 1 2 3 4 5; do
-		if "${QARAX[@]}" host init "$HOST_NAME" >/dev/null 2>&1; then
-			ok "Host '$HOST_NAME' initialized"
-			break
-		fi
-		[[ $attempt -lt 5 ]] || die "Could not initialize host '$HOST_NAME' after 5 attempts"
-		info "Host init attempt $attempt/5 failed, retrying..."
-		sleep 3
+	run qarax network create --name "$NETWORK" --subnet "$SUBNET" --gateway "$GATEWAY"
+fi
+# Pin it to HOST: the members talk over the bridge, so they must share a host.
+pin_network "$NETWORK" "$HOST" "$BRIDGE"
+
+step "3. Import ${REPO}:src into ${POOL} (converts it to OverlayBD)"
+# The import converts the image under its own tag, and step 1 just pushed a
+# plain build over that tag, so import again on every run.
+if exists storage-object "$IMAGE_OBJECT"; then
+	run qarax storage-object delete "$IMAGE_OBJECT"
+fi
+run qarax storage-pool import --pool "$POOL" --image-ref "registry:5000/${REPO}:src" --name "$IMAGE_OBJECT"
+
+step "4. Create the VMs (static IPs; the guest agent enables qarax vm exec)"
+for i in "${!NODES[@]}"; do
+	run qarax vm create --name "${NODES[$i]}" --vcpus 1 --memory "$MEMORY" \
+		--network "$NETWORK" --ip "${NODE_IPS[$i]}" --guest-agent
+	run qarax vm attach-disk "${NODES[$i]}" --object "$IMAGE_OBJECT"
+done
+
+step "5. Start the cluster"
+start_vms "${NODES[@]}"
+
+step "6. Wait for the members to elect a leader"
+wait_until "$BOOT_TIMEOUT" cluster_healthy ||
+	die "etcd did not become healthy within ${BOOT_TIMEOUT}s.\nBoot log: qarax vm console ${NODES[0]}"
+run qarax vm exec "${NODES[0]}" -- etcdctl --endpoints="$ENDPOINTS" endpoint status -w table
+
+step "7. Write through ${NODES[0]}, read through ${NODES[2]}"
+expected="hello-from-${NODES[0]}"
+run qarax vm exec "${NODES[0]}" -- etcdctl put greeting "$expected"
+info "\$ qarax vm exec ${NODES[2]} -- etcdctl get --print-value-only greeting"
+value=$(qarax vm exec "${NODES[2]}" -- etcdctl get --print-value-only greeting)
+echo "$value"
+[[ "$value" == "$expected" ]] || die "${NODES[2]} read '${value}', expected '${expected}'"
+ok "The write through ${NODES[0]} is visible through ${NODES[2]}"
+
+step "8. Reach the cluster from this machine (sudo)"
+host_reachable=1
+if host_veth_up; then
+	ok "${HOST_VETH} exists"
+elif sudo -n true 2>/dev/null || [[ -t 0 ]]; then
+	plumb_host_veth "$NODE_CID" "$BRIDGE" "$HOST_VETH" "$HOST_ACCESS_CIDR"
+else
+	# No terminal to ask for a sudo password (e.g. CI): the cluster itself was
+	# proven through vm exec above.
+	host_reachable=0
+	warn "Skipped: creating ${HOST_VETH} needs sudo, which can't prompt here. Re-run from a terminal to reach the members from this machine."
+fi
+if ((host_reachable)); then
+	for i in "${!NODES[@]}"; do
+		url="http://${NODE_IPS[$i]}:2379/health"
+		health=$(curl -sf --max-time 5 "$url" | jq -r .health) ||
+			die "${url} is not reachable from this machine through ${HOST_VETH}"
+		[[ "$health" == true ]] || die "${NODES[$i]} reports health=${health}"
+		ok "${NODES[$i]}: ${url} reports healthy"
 	done
 fi
 
-if "${QARAX[@]}" storage-pool get "$POOL_NAME" &>/dev/null; then
-	ok "Storage pool '$POOL_NAME' already exists"
-else
-	"${QARAX[@]}" storage-pool create --name "$POOL_NAME" --pool-type overlaybd --url "$REGISTRY_URL"
-	# The server attaches UP hosts in the background; do it explicitly so the
-	# import below does not race the attachment.
-	"${QARAX[@]}" storage-pool attach-host "$POOL_NAME" --all >/dev/null 2>&1 || true
-	ok "Storage pool '$POOL_NAME' created"
-fi
-
-# Build and push etcd node image
-
-step "Building etcd node OCI image"
-
-podman build -f "${DEMO_DIR}/Containerfile" -t localhost:5001/etcd-node:src "${DEMO_DIR}/"
-ok "Image built"
-
-step "Pushing etcd image to local registry"
-# Push to a staging tag to avoid overwriting the overlaybd-converted :latest
-podman push --tls-verify=false localhost:5001/etcd-node:src
-ok "Image pushed as registry:5000/etcd-node:src"
-
-step "Converting to OverlayBD format"
-# The convertor converts :src → :latest in overlaybd block format.
-# Running on every demo invocation is fast when nothing changed (registry
-# returns the existing manifest) and keeps :latest in sync with :src.
-node_exec /opt/overlaybd/snapshotter/convertor \
-	--repository "registry:5000/etcd-node" \
-	--input-tag src \
-	--overlaybd latest \
-	--plain
-ok "OverlayBD conversion complete ($IMAGE_REF)"
-
-# Demo
-
-echo ""
-echo "╔══════════════════════════════════════════════╗"
-echo "║   qarax demo — 3-node etcd cluster           ║"
-echo "╚══════════════════════════════════════════════╝"
-echo ""
-echo "  Image:   $IMAGE_REF"
-echo "  Network: $NETWORK_NAME ($SUBNET)"
-echo "  Nodes:   ${NODES[*]}"
-echo ""
-
-step "Step 1: Create isolated network"
-if "${QARAX[@]}" network get "$NETWORK_NAME" &>/dev/null; then
-	ok "Network '$NETWORK_NAME' already exists"
-	# Re-attach in case a previous run failed between create and attach.
-	"${QARAX[@]}" network attach-host --network "$NETWORK_NAME" --host "$HOST_NAME" \
-		--bridge-name "$BRIDGE_NAME" >/dev/null 2>&1 || true
-else
-	"${QARAX[@]}" network create --name "$NETWORK_NAME" --subnet "$SUBNET" --gateway "$GATEWAY"
-	"${QARAX[@]}" network attach-host --network "$NETWORK_NAME" --host "$HOST_NAME" --bridge-name "$BRIDGE_NAME"
-	ok "Network ready"
-fi
-
-step "Step 2: Import etcd image into storage pool"
-if "${QARAX[@]}" storage-object get "$IMAGE_OBJECT_NAME" &>/dev/null; then
-	ok "Storage object '$IMAGE_OBJECT_NAME' already exists"
-else
-	"${QARAX[@]}" storage-pool import --pool "$POOL_NAME" --image-ref "$IMAGE_REF" --name "$IMAGE_OBJECT_NAME"
-	ok "Image imported as '$IMAGE_OBJECT_NAME'"
-fi
-
-step "Step 3: Create VMs with static IPs"
-for node in "${NODES[@]}"; do
-	ip="${NODE_IPS[$node]}"
-	if "${QARAX[@]}" vm get "$node" &>/dev/null; then
-		ok "VM $node already exists"
-	else
-		"${QARAX[@]}" vm create --name "$node" --vcpus "$VCPUS" --memory "$MEMORY_BYTES" \
-			--network "$NETWORK_NAME" --ip "$ip"
-		ok "VM $node ($ip)"
-	fi
-done
-
-step "Step 4: Attach etcd disk to each VM"
-for node in "${NODES[@]}"; do
-	status=$(vm_status "$node")
-	if [[ "$status" != "created" ]]; then
-		ok "Skipping disk attach for $node (status: $status)"
-	else
-		"${QARAX[@]}" vm attach-disk "$node" --object "$IMAGE_OBJECT_NAME"
-		ok "Disk attached to $node"
-	fi
-done
-
-step "Step 5: Start the cluster"
-for node in "${NODES[@]}"; do
-	status=$(vm_status "$node")
-	if [[ "$status" == "running" ]]; then
-		ok "$node already running"
-	else
-		"${QARAX[@]}" vm start "$node"
-		ok "$node started"
-	fi
-done
-
-step "Step 6: Wait for etcd cluster to be ready"
-
-ETCD_ENDPOINTS="http://10.100.0.10:2379,http://10.100.0.11:2379,http://10.100.0.12:2379"
-BOOT_TIMEOUT=120
-elapsed=0
-
-info "Waiting for all 3 etcd nodes to be reachable..."
-while [[ $elapsed -lt $BOOT_TIMEOUT ]]; do
-	all_up=true
-	for node in "${NODES[@]}"; do
-		ip="${NODE_IPS[$node]}"
-		if ! node_exec nc -z -w2 "$ip" 2379 &>/dev/null; then
-			all_up=false
-			break
-		fi
-	done
-
-	if $all_up; then
-		ok "All 3 etcd nodes are reachable"
-		break
-	fi
-
-	echo -n "."
-	sleep 3
-	elapsed=$((elapsed + 3))
+banner "etcd cluster is ready"
+echo "Members:"
+for i in "${!NODES[@]}"; do
+	echo "  ${NODES[$i]}  http://${NODE_IPS[$i]}:2379"
 done
 echo ""
-[[ $elapsed -lt $BOOT_TIMEOUT ]] ||
-	die "Timeout after ${BOOT_TIMEOUT}s waiting for etcd nodes to boot.\nInspect a boot log with: $QARAX_BIN --server $SERVER vm console etcd-0"
-
-info "Checking etcd cluster health via HTTP..."
-sleep 2
-for node in "${NODES[@]}"; do
-	ip="${NODE_IPS[$node]}"
-	health=$(node_exec sh -c \
-		"curl -sf http://${ip}:2379/health 2>/dev/null || echo '{\"health\":\"false\"}'")
-	ok "$node ($ip): $health"
-done
-
-step "Step 7: Make VM network accessible from the host"
-
-if ip link show "$VETH_HOST" &>/dev/null; then
-	ok "Host veth already exists"
-else
-	NODE_CONTAINER=$("${COMPOSE[@]}" ps -q "$NODE_SERVICE")
-	[[ -n "$NODE_CONTAINER" ]] || die "Could not find the $NODE_SERVICE container"
-	NODE_PID=$(docker inspect -f '{{.State.Pid}}' "$NODE_CONTAINER")
-	sudo ip link add "$VETH_HOST" type veth peer name "$VETH_VM"
-	sudo ip link set "$VETH_VM" netns "$NODE_PID"
-	sudo nsenter -t "$NODE_PID" -n ip link set "$VETH_VM" master "$BRIDGE_NAME"
-	sudo nsenter -t "$NODE_PID" -n ip link set "$VETH_VM" up
-	sudo ip link set "$VETH_HOST" up
-	sudo ip addr add "$HOST_ACCESS_IP" dev "$VETH_HOST"
-	ok "Host veth created — VMs are directly reachable from the host"
-fi
-
+echo "Try it (the qarax CLI needs: export QARAX_TOKEN=${QARAX_TOKEN}):"
 echo ""
-echo "╔══════════════════════════════════════════════════════════════════╗"
-echo "║  etcd cluster is READY                                           ║"
-echo "╚══════════════════════════════════════════════════════════════════╝"
+echo "  # etcdctl inside a member, no local install needed:"
+echo "  qarax vm exec ${NODES[0]} -- etcdctl --endpoints=${ENDPOINTS} endpoint health"
+echo "  qarax vm exec ${NODES[1]} -- etcdctl get greeting"
 echo ""
-for node in "${NODES[@]}"; do
-	"${QARAX[@]}" vm get "$node"
-	echo ""
-done
-echo "Cluster endpoints:"
-for node in "${NODES[@]}"; do
-	echo "  $node  http://${NODE_IPS[$node]}:2379"
-done
+echo "  # From this machine, over ${HOST_VETH}:"
+echo "  curl http://${NODE_IPS[0]}:2379/version"
+echo "  etcdctl --endpoints=${ENDPOINTS} member list   # if etcdctl is installed here"
 echo ""
-echo "Try it out (directly from your laptop):"
+echo "  # Kill a member; the other two keep quorum:"
+echo "  qarax vm force-stop ${NODES[2]}"
+echo "  qarax vm exec ${NODES[0]} -- etcdctl put still-running yes"
 echo ""
-echo "  # Cluster health:"
-echo "  etcdctl endpoint health --endpoints=$ETCD_ENDPOINTS"
+echo "  # etcd's log on a member's console:"
+echo "  qarax vm console ${NODES[0]}"
 echo ""
-echo "  # Write a key to one node, read from another:"
-echo "  etcdctl --endpoints=http://10.100.0.10:2379 put hello world"
-echo "  etcdctl --endpoints=http://10.100.0.11:2379 get hello"
-echo ""
-echo "  # The qarax CLI needs the API token:"
-echo "  export QARAX_TOKEN=$QARAX_TOKEN"
-echo ""
-echo "  # Kill a node and show the cluster survives:"
-echo "  $QARAX_BIN --server $SERVER vm stop etcd-2"
-echo "  etcdctl --endpoints=http://10.100.0.10:2379,http://10.100.0.11:2379 put still running yes"
-echo ""
-echo "  # View boot log:"
-echo "  $QARAX_BIN --server $SERVER vm console etcd-0"
-echo ""
-echo "  # Interactive serial console:"
-echo "  $QARAX_BIN --server $SERVER vm attach etcd-0"
-echo ""
-echo "  # Tear down everything:"
-echo "  ./demos/etcd-cluster/run.sh --cleanup"
+echo "  # Remove the VMs, network, image object and host veth:"
+echo "  $0 --cleanup"

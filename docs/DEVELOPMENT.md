@@ -2,65 +2,88 @@
 
 ## Host Deploy Testing with libvirt
 
-The script `hack/test-host-deploy-libvirt.sh` creates a libvirt VM from a bootc
-container image, registers it as a qarax host, and runs the full deploy flow
-(`bootc switch` + reboot).
+The script `hack/test-host-deploy-libvirt.sh` runs qarax-node in a libvirt VM
+and registers it with the local control plane through the real host-deploy
+flow: `qarax host deploy` SSHes into the VM, runs `bootc switch` to the node
+image and reboots it, and the host comes back `up`. `make run-local VM=1`
+(`hack/run-local.sh --vm`) runs it with `--keep-vm` to put the local stack's
+node in a VM instead of a container.
 
 ### Prerequisites
 
-- `podman`, `virsh`, `virt-install`, `qemu-img`, `curl`, `jq`, `nc`, `sshpass`
-- libvirt with the `default` network configured
-- A running qarax stack (or pass `--start-stack`)
+- libvirt + QEMU (`virsh`, `virt-install`, `qemu-img`) with the `default` NAT
+  network; your user must be able to use `qemu:///system` (usually the
+  `libvirt` group)
+- rootful podman through `sudo`, for the image builds and bootc-image-builder
+- Docker with Compose, `jq`, `curl`, `ssh-keygen`
+- Release binaries: `cargo build --release -p qarax -p qarax-node -p qarax-init -p cli`
+  (`make run-local` and `--start-stack` build them)
 
-### Quick start (using CI-published image)
+### Quick start
 
 ```bash
+# Full deploy test on a new VM, destroyed on exit
+./hack/test-host-deploy-libvirt.sh --start-stack
+
+# Leave the node running (what make run-local VM=1 does)
 ./hack/test-host-deploy-libvirt.sh --keep-vm
 ```
 
-This uses `ghcr.io/qarax/qarax-vmm-host:latest` as the deploy image, which is
-built by CI on every push to `master`.
+### What it does
 
-### Testing with a locally-built deploy image
+1. **Stack.** Applies `e2e/docker-compose.vm-mode.yml` to registry, postgres
+   and qarax: qarax runs on host networking, because libvirt's NAT network only
+   accepts connections from the host itself. Compose recreates only what
+   changed, so this is a no-op after `make run-local VM=1`. With
+   `--start-stack` and no stack reachable it builds missing release binaries
+   and starts those three services.
+2. **Images.** Builds the node appliance `deployments/Containerfile.qarax-vmm`
+   as `localhost/qarax-vmm-host:dev` with rootful podman (the build args of
+   `make appliance-build`), then a thin test layer on top of it,
+   `localhost/qarax-test-host:latest`. The test layer's Containerfile is
+   generated into `$STATE_DIR/build/` and adds only what the test host needs:
+   a password SSH login with passwordless sudo for `SSH_USER`, a fixed SSH host
+   key, and the compose registry (`<libvirt bridge IP>:5001`) as an insecure
+   registry. Images these builds replace are removed by ID.
+3. **VM.** Boots from a qcow2 that bootc-image-builder makes from the test
+   image, with a copy-on-write overlay disk per VM. The VM has a fixed MAC, so
+   a recreated VM gets the same DHCP address.
+4. **Deploy.** Registers the VM as host `libvirt-node` (once; re-runs reuse
+   the record), pushes the test image to the registry as
+   `<bridge IP>:5001/qarax-test-host:<image ID>`, runs `qarax host deploy`
+   and waits for the host to come back `up`, then `qarax host init`.
 
-When iterating on the deploy image (`deployments/Containerfile.qarax-vmm`), you
-can test locally using a registry on the libvirt bridge:
+### Re-runs and `--keep-vm`
 
-```bash
-# 1. Build qarax-node
-cargo build --release -p qarax-node --target x86_64-unknown-linux-musl
+With `--keep-vm` the VM stays running, and the next `--keep-vm` run reuses it:
 
-# 2. Build the deploy image
-sudo podman build -f deployments/Containerfile.qarax-vmm \
-  --build-arg CLOUD_HYPERVISOR_VERSION="$(cat versions/cloud-hypervisor-version)" \
-  --build-arg FIRECRACKER_VERSION="$(cat versions/firecracker-version)" \
-  -t localhost/qarax-vmm-host:latest .
+- If the VM already runs the image this run built (nothing changed), the run
+  skips the deploy: it registers `libvirt-node` again if the database was
+  reset and runs `qarax host init`. This takes seconds.
+- Otherwise it redeploys the new image onto the running VM (`bootc switch` +
+  reboot).
+- `--fresh` destroys and recreates the VM, then deploys.
 
-# 3. Start a local registry (skip if already running)
-sudo podman run -d --name qarax-registry -p 5000:5000 docker.io/library/registry:2
+Without `--keep-vm` every run is a full test: it replaces any VM a
+`--keep-vm` run left (same `VM_NAME`), deploys, and on exit destroys the VM
+and deletes the `libvirt-node` host record.
 
-# 4. Push to the local registry
-sudo podman tag localhost/qarax-vmm-host:latest localhost:5000/qarax-vmm-host:latest
-sudo podman push localhost:5000/qarax-vmm-host:latest --tls-verify=false
+### Cache
 
-# 5. Run the test (192.168.122.1 is the libvirt default bridge gateway)
-DEPLOY_IMAGE=192.168.122.1:5000/qarax-vmm-host:latest \
-  ./hack/test-host-deploy-libvirt.sh --keep-vm
-```
+`STATE_DIR` (default `/var/lib/libvirt/images/qarax-dev`) holds the base disk,
+the VM's overlay disk, the generated test layer with its SSH host key, and the
+name of the image the VM runs. It is on disk rather than in `/tmp`, which is
+often tmpfs, and under libvirt's image directory, which the `qemu:///system`
+emulator user can reach and which has the right SELinux/AppArmor labels. The
+script creates it owned by you.
 
-> [!NOTE]
-> The test VM is pre-configured to trust `192.168.122.1:5000` as an insecure
-> (HTTP) registry. If you need a different registry address, update the
-> `registries.conf.d` entry in the test host Containerfile inside the script.
-
-### Rebuilding the test VM base image
-
-The test VM disk image is cached at `/tmp/qarax-libvirt-deploy/base-bootc.qcow2`.
-Delete it to force a rebuild (e.g. after changing the test host Containerfile):
-
-```bash
-rm -f /tmp/qarax-libvirt-deploy/base-bootc.qcow2
-```
+The base disk is cached as `base-<key>.qcow2`, keyed by the appliance
+Containerfile, `versions/node-artifacts.env`, the Cloud Hypervisor and
+Firecracker versions and the test layer, but not by the binaries: the deploy
+installs the current binaries over whatever the base booted with. A recipe
+change rebuilds the base the next time a VM is created. `/var` is the one
+thing `bootc switch` leaves alone, so content the appliance puts under `/var`
+reaches a VM only through its base disk: use `--fresh` after changing it.
 
 ### Cleanup
 
@@ -68,23 +91,45 @@ rm -f /tmp/qarax-libvirt-deploy/base-bootc.qcow2
 ./hack/test-host-deploy-libvirt.sh --cleanup
 ```
 
+This destroys the VM and its overlay disk and deletes the `libvirt-node` host
+record. Base disks stay cached; `sudo rm -rf
+/var/lib/libvirt/images/qarax-dev` removes everything. Pushed test images stay
+in the compose registry's volume until `make stop-local`.
+
+### Troubleshooting
+
+- Console: `virsh -c qemu:///system console qarax-deploy-test`
+- SSH: `ssh qarax@<VM IP>` (password `qarax`), then `sudo journalctl -u qarax-node`
+- Deploy errors: `qarax host get libvirt-node` shows the failure;
+  `docker compose -f e2e/docker-compose.yml logs qarax` has the details
+- "host libvirt-node is registered at A, but VM is at B": the VM got a new
+  DHCP address. qarax can't change a host's address, so reset the stack with
+  `make stop-local` and run again.
+
 ### Script options
 
-| Flag             | Description                                    |
-|------------------|------------------------------------------------|
-| `--keep-vm`      | Preserve the VM after the test (pass or fail)  |
-| `--start-stack`  | Start the qarax docker-compose stack if needed |
-| `--cleanup`      | Remove the VM and exit                         |
+| Flag            | Description                                                    |
+|-----------------|----------------------------------------------------------------|
+| `--keep-vm`     | Leave the VM running, and reuse a kept VM                      |
+| `--fresh`       | With `--keep-vm`: recreate the VM instead of reusing it        |
+| `--start-stack` | Start registry, postgres and qarax if the API isn't reachable  |
+| `--cleanup`     | Destroy the VM, delete its host record, and exit               |
 
 ### Environment variables
 
-| Variable          | Default                                         | Description                           |
-|-------------------|-------------------------------------------------|---------------------------------------|
-| `DEPLOY_IMAGE`    | `ghcr.io/qarax/qarax-vmm-host:latest`           | Image used for `bootc switch`         |
-| `VM_BOOTC_IMAGE`  | `quay.io/centos-bootc/centos-bootc:stream10`    | Base image for the test VM            |
-| `API_URL`         | `http://localhost:8000`                          | qarax API endpoint                    |
-| `VM_MEMORY_MB`    | `3072`                                           | VM memory                             |
-| `VM_VCPUS`        | `2`                                              | VM vCPUs                              |
-| `VM_DISK_SIZE`    | `20G`                                            | VM disk size                          |
-| `SSH_USER`        | `qarax`                                          | Test VM SSH user                      |
-| `SSH_PASSWORD`    | `qarax`                                          | Test VM SSH password                  |
+| Variable              | Default                                       | Description                                  |
+|-----------------------|-----------------------------------------------|----------------------------------------------|
+| `API_URL`             | `http://localhost:8000`                       | qarax API endpoint                           |
+| `QARAX_TOKEN`         | `e2e-test-token`                              | API token                                    |
+| `VM_NAME`             | `qarax-deploy-test`                           | libvirt domain name                          |
+| `VM_MEMORY_MB`        | `3072`                                        | VM memory                                    |
+| `VM_VCPUS`            | `2`                                           | VM vCPUs                                     |
+| `VM_DISK_SIZE`        | `20G`                                         | VM overlay disk size                         |
+| `VM_MAC`              | `52:54:00:71:a8:01`                           | VM MAC address                               |
+| `HOST_NAME`           | `libvirt-node`                                | qarax host name                              |
+| `SSH_USER`            | `qarax`                                       | Test VM SSH user                             |
+| `SSH_PASSWORD`        | `qarax`                                       | Test VM SSH password                         |
+| `LIBVIRT_BRIDGE_IP`   | address of the libvirt `default` network      | Address the VM reaches the registry on       |
+| `LOCAL_REGISTRY_PORT` | `5001`                                        | Compose registry's published port            |
+| `STATE_DIR`           | `/var/lib/libvirt/images/qarax-dev`           | Disk and build cache                         |
+| `BIB_IMAGE`           | `quay.io/centos-bootc/bootc-image-builder@sha256:…` | bootc-image-builder image (pinned digest) |

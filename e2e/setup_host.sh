@@ -12,37 +12,17 @@ QARAX_NODE_HOST="${2:-qarax-node}"
 QARAX_NODE_PORT="${3:-50051}"
 HOST_NAME="${4:-e2e-node}"
 
-MUSL_TARGET="x86_64-unknown-linux-musl"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-
-# Prefer the newest repo build over a `qarax` on PATH: an installed CLI can be
-# older than the server it talks to (e.g. predate API token support).
-find_qarax_bin() {
-	local debug="$REPO_ROOT/target/$MUSL_TARGET/debug/qarax"
-	local release="$REPO_ROOT/target/$MUSL_TARGET/release/qarax"
-	if [[ -x "$debug" && -x "$release" ]]; then
-		if [[ "$release" -nt "$debug" ]]; then echo "$release"; else echo "$debug"; fi
-	elif [[ -x "$debug" ]]; then
-		echo "$debug"
-	elif [[ -x "$release" ]]; then
-		echo "$release"
-	elif command -v qarax &>/dev/null; then
-		echo "qarax"
-	else
-		echo ""
-	fi
-}
+# find_qarax_bin prefers the newest repo build over a `qarax` on PATH, which can
+# be older than the server it talks to.
+source "${REPO_ROOT}/demos/lib.sh"
 
 QARAX_BIN="$(find_qarax_bin)"
-if [[ -z "$QARAX_BIN" ]]; then
-	echo "ERROR: qarax CLI binary not found. Build it with: cargo build -p cli" >&2
-	exit 1
-fi
-
-QARAX="$QARAX_BIN --server $QARAX_URL"
+[[ -n "$QARAX_BIN" ]] || die "qarax CLI binary not found. Build it with: cargo build -p cli"
+SERVER="$QARAX_URL"
 
 resolve_existing_host_name() {
-	$QARAX host list -o json 2>/dev/null | python3 -c '
+	qarax host list -o json 2>/dev/null | python3 -c '
 import json, sys
 wanted_name, wanted_address, wanted_port = sys.argv[1], sys.argv[2], int(sys.argv[3])
 for host in json.load(sys.stdin):
@@ -68,7 +48,7 @@ else
 	for add_attempt in $(seq 1 "$add_attempts"); do
 		add_output=""
 		if add_output=$(
-			$QARAX host add \
+			qarax host add \
 				--name "$HOST_NAME" \
 				--address "$QARAX_NODE_HOST" \
 				--port "$QARAX_NODE_PORT" \
@@ -102,7 +82,7 @@ fi
 attempts=10
 delay_secs=2
 for attempt in $(seq 1 "$attempts"); do
-	if init_output=$($QARAX host init "$HOST_NAME" 2>&1); then
+	if init_output=$(qarax host init "$HOST_NAME" 2>&1); then
 		echo "$init_output"
 		echo "Host initialized and set to UP (name: ${HOST_NAME})"
 		exit 0

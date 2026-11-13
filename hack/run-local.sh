@@ -1,851 +1,268 @@
 #!/usr/bin/env bash
 #
-# Run qarax control plane + qarax-node + PostgreSQL in Docker for local testing.
-# Uses the same stack as E2E: Docker Compose with KVM passthrough for real VMs.
-#
-# Requirements:
-#   - Docker (with Compose)
-#   - KVM: /dev/kvm must be available (native Linux with KVM or nested virt)
-#   - Rust toolchain (to build qarax-node binary for the node container)
+# Run the local qarax stack in Docker: the control plane, qarax-node (with KVM
+# passthrough for real VMs), Postgres and an OCI registry. It is the compose
+# stack the e2e tests use (e2e/docker-compose.yml, project "e2e").
 #
 # Usage:
-#   ./hack/run-local.sh            # Build and start the stack
-#   ./hack/run-local.sh --vm       # Run qarax-node in a libvirt VM instead of a container
-#   ./hack/run-local.sh --with-vm  # Also create and start an example boot-source VM
-#   ./hack/run-local.sh --cleanup  # Stop and remove stack + volumes
-#   REBUILD=1 ./hack/run-local.sh  # Rebuild Docker images from scratch
-#   SKIP_BUILD=1 ./hack/run-local.sh # Use existing qarax-node binary
+#   ./hack/run-local.sh            # build and start the stack       (make run-local)
+#   ./hack/run-local.sh --vm       # run qarax-node in a libvirt VM   (make run-local VM=1)
+#   ./hack/run-local.sh --cleanup  # remove the stack and its volumes (make stop-local)
+#   SKIP_BUILD=1 ./hack/run-local.sh   # use the existing release binaries
+#   REBUILD=1 ./hack/run-local.sh      # rebuild the Docker images without cache
 #
-# After start:
-#   API:        http://localhost:8000
-#   Swagger UI: http://localhost:8000/swagger-ui
-#
-# Typical workflow (OverlayBD disk-first):
-#   1. Import OCI image into pool:
-#      qarax storage-pool import --pool <pool> --image-ref <ref> --name <name>
-#   2. Create VM:
-#      qarax vm create --name my-vm --vcpus 1 --memory 268435456
-#   3. Attach disk to VM:
-#      qarax vm attach-disk my-vm --object <name>
-#   4. Start VM:
-#      qarax vm start <VM_ID>
-#
+# Requires Docker with Compose, /dev/kvm and a Rust toolchain. Afterwards the
+# API is on http://localhost:8000 (token: $QARAX_TOKEN, default e2e-test-token),
+# host "local-node" is UP and the shared OverlayBD pool "overlaybd-pool" exists,
+# so the demos under demos/ run as is.
 
-set -e
+set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$REPO_ROOT"
+# Colors, die, QARAX_TOKEN, version exports and the CLI helpers.
+source "${REPO_ROOT}/demos/lib.sh"
 
-# e2e/docker-compose.yml enables API token auth with
-# AUTH_TOKENS=${QARAX_TEST_TOKEN:-e2e-test-token}. Export the matching token so
-# our own API calls (and setup_vm.py / the qarax CLI) authenticate.
-: "${QARAX_TOKEN:=${QARAX_TEST_TOKEN:-e2e-test-token}}"
-export QARAX_TOKEN
+E2E_DIR="${REPO_ROOT}/e2e"
+COMPOSE=(docker compose -f "${E2E_DIR}/docker-compose.yml")
+RELEASE_DIR="${REPO_ROOT}/target/${MUSL_TARGET}/release"
 
-CH_VERSION_FILE="${REPO_ROOT}/versions/cloud-hypervisor-version"
-export CLOUD_HYPERVISOR_VERSION="${CLOUD_HYPERVISOR_VERSION:-$(tr -d '\n' <"$CH_VERSION_FILE")}"
-FC_VERSION_FILE="${REPO_ROOT}/versions/firecracker-version"
-export FIRECRACKER_VERSION="${FIRECRACKER_VERSION:-$(tr -d '\n' <"$FC_VERSION_FILE")}"
-
-COMPOSE_ARGS=()
-E2E_COMPOSE_ARGS=(-f "${REPO_ROOT}/e2e/docker-compose.yml")
-
-compose_cmd() {
-	docker compose "${COMPOSE_ARGS[@]}" "$@"
+usage() {
+	sed -n '3,17p' "$0" | sed 's/^# \{0,1\}//'
 }
 
-e2e_compose_cmd() {
-	docker compose "${E2E_COMPOSE_ARGS[@]}" "$@"
-}
-
-kill_processes_by_exact_name() {
-	local name="$1"
-	local pids
-
-	pids=$(pgrep -x "$name" 2>/dev/null || true)
-	[[ -z "$pids" ]] && return 0
-
-	while IFS= read -r pid; do
-		[[ -n "$pid" ]] || continue
-		kill -9 "$pid" 2>/dev/null || true
-	done <<<"$pids"
-}
-
-kill_container_scope_processes() {
-	local cid="$1"
-	local scope="/sys/fs/cgroup/system.slice/docker-${cid}.scope/cgroup.procs"
-	[[ -f "$scope" ]] || return 0
-
-	python3 - "$scope" <<'PY'
-import os
-import signal
-import sys
-
-scope = sys.argv[1]
-
-with open(scope, encoding="utf-8") as f:
-    for line in f:
-        line = line.strip()
-        if not line:
-            continue
-
-        pid = int(line)
-        if pid in {os.getpid(), os.getppid()}:
-            continue
-
-        try:
-            os.kill(pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        except PermissionError:
-            pass
-PY
-}
+# ── Cleanup ──────────────────────────────────────────────────────────────────
+#
+# The e2e runner shares this compose project and may have started nfs-server.
+# Its nfsd kernel threads run on the HOST and outlive the container's init, so
+# a plain `docker compose down` can wedge on it; stop nfsd from inside first.
 
 lookup_nfs_container_id() {
-	docker ps -a --filter "name=e2e-nfs-server-1" --format "{{.ID}}" 2>/dev/null | head -1
+	docker ps -a --filter "label=com.docker.compose.project=e2e" \
+		--filter "label=com.docker.compose.service=nfs-server" --format "{{.ID}}" | head -1
+}
+
+container_status() {
+	docker inspect --format "{{.State.Status}}" "$1" 2>/dev/null || true
 }
 
 graceful_stop_nfs_container() {
 	local cid
 	cid=$(lookup_nfs_container_id)
-	[[ -z "$cid" ]] && return 0
-
-	local status
-	status=$(docker inspect --format "{{.State.Status}}" "$cid" 2>/dev/null || echo "")
-	[[ "$status" != "running" ]] && return 0
+	[[ -n "$cid" && "$(container_status "$cid")" == "running" ]] || return 0
 
 	echo -e "${YELLOW}Stopping NFS container cleanly...${NC}"
+	# Best effort: whatever this fails to stop is force-removed below.
 	docker exec "$cid" /bin/sh -c '
-		exportfs -au 2>/dev/null || true
-		exportfs -f 2>/dev/null || true
-		rpc.nfsd 0 2>/dev/null || true
-		umount /proc/fs/nfsd 2>/dev/null || true
-		kill -TERM 1
+		exportfs -au; exportfs -f; rpc.nfsd 0; umount /proc/fs/nfsd; kill -TERM 1
 	' >/dev/null 2>&1 || true
-
-	local attempt
-	for attempt in $(seq 1 10); do
-		status=$(docker inspect --format "{{.State.Status}}" "$cid" 2>/dev/null || echo "")
-		[[ -z "$status" ]] && return 0
-		[[ "$status" != "running" ]] && return 0
-		sleep 1
-	done
+	wait_until 10 container_not_running "$cid" || true
 }
 
-# Fallback for previously wedged containers that did not shut down nfsd cleanly.
+container_not_running() {
+	[[ "$(container_status "$1")" != "running" ]]
+}
+
+# Fallback for a wedged NFS container: kill the host-side nfsd threads that
+# hold its cgroup open, then remove it.
 force_remove_nfs_container() {
 	local cid
 	cid=$(lookup_nfs_container_id)
-	[[ -z "$cid" ]] && return 0
+	[[ -n "$cid" ]] || return 0
 
-	local status
-	status=$(docker inspect --format "{{.State.Status}}" "$cid" 2>/dev/null || echo "")
-	[[ -z "$status" ]] && return 0
-
-	echo -e "${YELLOW}Removing NFS container (killing host-side nfsd kernel threads)...${NC}"
-
-	# nfsd spawns kernel threads on the HOST that survive SIGKILL sent to the
-	# container's init process. These threads hold the container's cgroup open,
-	# making docker stop/rm impossible. Kill them directly on the host first.
-	kill_processes_by_exact_name nfsd
-	kill_processes_by_exact_name nfsd4
-	kill_container_scope_processes "$cid"
-
-	local attempt
-	local status
-	for attempt in $(seq 1 15); do
-		status=$(docker inspect --format "{{.State.Status}}" "$cid" 2>/dev/null || echo "")
-		[[ -z "$status" ]] && return 0
-
-		if [[ "$status" == "running" ]] || [[ "$status" == "restarting" ]]; then
-			docker kill --signal=SIGKILL "$cid" 2>/dev/null || true
-		fi
-
-		docker rm -f "$cid" 2>/dev/null || true
-
-		if ! docker inspect "$cid" >/dev/null 2>&1; then
-			return 0
-		fi
-
-		sleep 1
-	done
+	echo -e "${YELLOW}Removing NFS container (killing host-side nfsd threads)...${NC}"
+	pkill -9 -x nfsd || true
+	pkill -9 -x nfsd4 || true
+	local full_id procs
+	full_id=$(docker inspect --format '{{.Id}}' "$cid")
+	procs="/sys/fs/cgroup/system.slice/docker-${full_id}.scope/cgroup.procs"
+	if [[ -f "$procs" ]]; then
+		xargs -r kill -9 <"$procs" 2>/dev/null || true
+	fi
+	wait_until 15 remove_container "$cid" || die "could not remove NFS container ${cid}"
 }
 
-force_remove_compose_containers() {
-	local ids
-	ids=$(list_compose_container_ids)
-	[[ -z "$ids" ]] && return 0
-
-	echo -e "${YELLOW}Force-removing lingering Compose containers...${NC}"
-
-	local cid
-	local status
-	while IFS= read -r cid; do
-		[[ -n "$cid" ]] || continue
-		status=$(docker inspect --format "{{.State.Status}}" "$cid" 2>/dev/null || echo "")
-		[[ -z "$status" ]] && continue
-
-		if [[ "$status" == "running" ]] || [[ "$status" == "restarting" ]]; then
-			docker kill --signal=SIGKILL "$cid" 2>/dev/null || true
-		fi
-
-		docker rm -f "$cid" 2>/dev/null || true
-	done <<<"$ids"
-}
-
-list_compose_containers() {
-	docker ps -a \
-		--filter "label=com.docker.compose.project=e2e" \
-		--format "{{.Names}} {{.Status}}" 2>/dev/null || true
-}
-
-list_compose_container_ids() {
-	docker ps -a \
-		--filter "label=com.docker.compose.project=e2e" \
-		--format "{{.ID}}" 2>/dev/null || true
-}
-
-list_compose_networks() {
-	docker network ls \
-		--filter "label=com.docker.compose.project=e2e" \
-		--format "{{.Name}}" 2>/dev/null || true
-}
-
-list_compose_volumes() {
-	docker volume ls \
-		--filter "label=com.docker.compose.project=e2e" \
-		--format "{{.Name}}" 2>/dev/null || true
-}
-
-purge_local_host_records() {
-	local postgres_container
-	postgres_container="$(
-		docker ps \
-			--filter "label=com.docker.compose.project=e2e" \
-			--filter "label=com.docker.compose.service=postgres" \
-			--format "{{.Names}}" 2>/dev/null | head -1
-	)"
-	[[ -z "$postgres_container" ]] && return 0
-
-	echo -e "${YELLOW}Clearing local host records from Postgres...${NC}"
-	docker exec "$postgres_container" psql -U qarax -d qarax -v ON_ERROR_STOP=1 -c "
-BEGIN;
-UPDATE vms SET host_id = NULL;
-DELETE FROM hosts;
-COMMIT;
-" >/dev/null
-}
-
-lookup_host_id_by_address() {
-	local api_url="$1"
-	local address="$2"
-
-	curl -fsS -H "Authorization: Bearer ${QARAX_TOKEN}" "${api_url}/hosts" | python3 -c "
-import json, sys
-address = sys.argv[1]
-for host in json.load(sys.stdin):
-    if host.get('address') == address:
-        print(host['id'])
-        break
-" "$address"
-}
-
-mark_host_down_by_address() {
-	local api_url="$1"
-	local address="$2"
-	local host_id
-
-	host_id="$(lookup_host_id_by_address "$api_url" "$address" || true)"
-	[[ -z "$host_id" ]] && return 0
-
-	curl -fsS -X PATCH "${api_url}/hosts/${host_id}" \
-		-H "Authorization: Bearer ${QARAX_TOKEN}" \
-		-H "Content-Type: application/json" \
-		-d '{"status":"down"}' >/dev/null
-	echo -e "${YELLOW}Marked stale host ${address} DOWN (id: ${host_id}).${NC}"
+remove_container() {
+	docker rm -f "$1" >/dev/null 2>&1 || true
+	! docker inspect "$1" >/dev/null 2>&1
 }
 
 cleanup_stack() {
-	local down_failed=0
-
-	purge_local_host_records
+	echo -e "${YELLOW}Removing the local stack and its volumes...${NC}"
 	graceful_stop_nfs_container
-
-	if ! docker compose down -v; then
-		down_failed=1
-	fi
-
+	(cd "$E2E_DIR" && docker compose --profile '*' down -v --remove-orphans) ||
+		warn "docker compose down reported an error; removing leftovers directly"
 	force_remove_nfs_container
-	force_remove_compose_containers
 
-	local remaining
-	remaining=$(list_compose_containers)
-	if [[ -n "$remaining" ]]; then
-		echo -e "${RED}Cleanup incomplete. Remaining Compose containers:${NC}" >&2
-		echo "$remaining" >&2
-		exit 1
+	# Demos can add services and volumes to the project from compose files of
+	# their own (demos/block-storage), which the down above doesn't know about.
+	local label="label=com.docker.compose.project=e2e" leftovers
+	leftovers=$(docker ps -aq --filter "$label")
+	if [[ -n "$leftovers" ]]; then
+		# shellcheck disable=SC2086 # one container ID per word
+		docker rm -f $leftovers >/dev/null
+	fi
+	leftovers=$(docker volume ls -q --filter "$label")
+	if [[ -n "$leftovers" ]]; then
+		# shellcheck disable=SC2086 # one volume name per word
+		docker volume rm $leftovers >/dev/null
+	fi
+	leftovers=$(docker network ls -q --filter "$label")
+	if [[ -n "$leftovers" ]]; then
+		# shellcheck disable=SC2086 # one network ID per word
+		docker network rm $leftovers >/dev/null
+	fi
+	leftovers="$(docker ps -aq --filter "$label")$(docker network ls -q --filter "$label")$(docker volume ls -q --filter "$label")"
+	[[ -z "$leftovers" ]] || die "cleanup incomplete; inspect: docker ps -a / network ls / volume ls --filter ${label}"
+	# Boot images from the old run-local.sh --with-vm, still on disk in older checkouts.
+	rm -rf "${E2E_DIR}/local-test-images"
+	echo -e "${GREEN}Done.${NC}"
+}
+
+# ── Start ────────────────────────────────────────────────────────────────────
+
+preflight() {
+	command -v docker >/dev/null || die "Docker is required."
+	[[ -e /dev/kvm ]] || die "/dev/kvm not found: qarax-node needs KVM (a Linux host with VT-x/AMD-V, or nested virtualization)."
+	if [[ ! -e /dev/net/tun ]]; then
+		warn "/dev/net/tun not found: VMs with network interfaces will fail to start. Create it, then recreate the stack:"
+		warn "  sudo modprobe tun && sudo mkdir -p /dev/net && sudo mknod /dev/net/tun c 10 200 && sudo chmod 0666 /dev/net/tun"
+	fi
+}
+
+# Build the binaries the images package, plus the CLI the demos use. Cargo is
+# a fast no-op when nothing changed.
+build_binaries() {
+	local packages=(-p qarax -p qarax-node -p qarax-init -p cli)
+	if [[ -n "${SKIP_BUILD:-}" ]]; then
+		local bin
+		for bin in qarax-server qarax-node qarax-init qarax; do
+			[[ -f "${RELEASE_DIR}/${bin}" ]] || die "SKIP_BUILD=1 but ${RELEASE_DIR}/${bin} is missing."
+		done
+		echo -e "${YELLOW}Using existing binaries (SKIP_BUILD=1)${NC}"
+		return
 	fi
 
-	local remaining_networks
-	remaining_networks=$(list_compose_networks)
-	if [[ -n "$remaining_networks" ]]; then
-		echo -e "${RED}Cleanup incomplete. Remaining Compose networks:${NC}" >&2
-		echo "$remaining_networks" >&2
-		exit 1
-	fi
-
-	local remaining_volumes
-	remaining_volumes=$(list_compose_volumes)
-	if [[ -n "$remaining_volumes" ]]; then
-		echo -e "${RED}Cleanup incomplete. Remaining Compose volumes:${NC}" >&2
-		echo "$remaining_volumes" >&2
-		exit 1
-	fi
-
-	if [[ "$down_failed" -eq 1 ]]; then
-		echo -e "${YELLOW}Compose reported an NFS shutdown error, but the stack is now removed.${NC}"
-	fi
-}
-
-show_compose_diagnostics() {
-	compose_cmd ps
-	compose_cmd logs --tail=80
-}
-
-print_api_endpoints() {
-	cat <<EOF
-Endpoints:
-  API (root):   http://localhost:8000/
-  Swagger UI:   http://localhost:8000/swagger-ui
-  OpenAPI JSON: http://localhost:8000/api-docs/openapi.json
-
-API auth is enabled. Export the token before using the CLI or curl:
-  export QARAX_TOKEN=${QARAX_TOKEN}
-
-EOF
-}
-
-print_overlaybd_workflow() {
-	local pool_name="${1:-<POOL_NAME_OR_ID>}"
-
-	cat <<EOF
-Explicit disk workflow (OverlayBD):
-  # 1. Import an OCI image into the storage pool (async, polls to completion):
-  cargo run -p cli storage-pool import --pool ${pool_name} \\
-    --image-ref public.ecr.aws/docker/library/alpine:latest \\
-    --name alpine-obd
-
-  # 2. Create a VM:
-  cargo run -p cli vm create --name my-vm --vcpus 1 --memory 268435456
-
-  # 3. Link the imported storage object as the boot disk:
-  cargo run -p cli vm attach-disk my-vm --object alpine-obd
-
-  # 4. Start the VM (provisions on node + boots):
-  cargo run -p cli vm start my-vm
-
-EOF
-}
-
-print_command_section() {
-	local title="$1"
-	shift
-
-	echo "${title}"
-	for command in "$@"; do
-		echo "  ${command}"
-	done
-	echo ""
-}
-
-set_compose_service_lists() {
-	if [[ "$VM_MODE" -eq 1 ]]; then
-		UP_SERVICES=(registry postgres qarax)
-		BUILD_SERVICES=(qarax)
-		FORCE_RECREATE_SERVICES=(qarax)
-		TOTAL_SERVICES=3
+	echo -e "${YELLOW}Building qarax, qarax-node, qarax-init and the CLI (release, musl)...${NC}"
+	if [[ "$(uname -s)" == "Darwin" ]]; then
+		# The system linker can't cross-link musl from macOS.
+		command -v cross >/dev/null || die "Cross-compiling from macOS needs 'cross': cargo install cross"
+		(cd "$REPO_ROOT" && cross build --target "${MUSL_TARGET}" --release "${packages[@]}")
+	elif [[ -n "${SUDO_USER:-}" ]]; then
+		# Build as the invoking user so target/ stays user-owned.
+		(cd "$REPO_ROOT" && sudo -u "$SUDO_USER" cargo build --release "${packages[@]}")
 	else
-		UP_SERVICES=(nfs-server registry postgres qarax-node qarax)
-		BUILD_SERVICES=(nfs-server qarax-node qarax)
-		FORCE_RECREATE_SERVICES=(qarax qarax-node)
-		TOTAL_SERVICES=4
+		(cd "$REPO_ROOT" && cargo build --release "${packages[@]}")
 	fi
 }
 
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-NC='\033[0m'
+start_services() {
+	local services=("$@")
+	if [[ -n "${REBUILD:-}" ]]; then
+		"${COMPOSE[@]}" build --no-cache "${services[@]}"
+	fi
+	echo -e "${YELLOW}Starting ${services[*]}...${NC}"
+	# --wait returns once every service's healthcheck passes; Compose only
+	# recreates containers whose image or configuration changed.
+	if ! "${COMPOSE[@]}" up -d --build --wait --wait-timeout 300 "${services[@]}"; then
+		"${COMPOSE[@]}" ps
+		"${COMPOSE[@]}" logs --tail=80
+		die "the stack did not become healthy"
+	fi
+}
 
-WITH_VM=0
+# Create the shared OverlayBD pool the demos import images into, and attach
+# every UP host. Attaching is idempotent, so re-runs pick up new hosts.
+ensure_overlaybd_pool() {
+	local registry_url="$1" existing_url
+	existing_url=$(qarax storage-pool list -o json |
+		jq -r '.[] | select(.name == "overlaybd-pool") | .config.url')
+	if [[ -z "$existing_url" ]]; then
+		qarax storage-pool create --name overlaybd-pool --pool-type overlaybd --url "$registry_url" >/dev/null
+	elif [[ "$existing_url" != "$registry_url" ]]; then
+		warn "overlaybd-pool points at ${existing_url}, not ${registry_url}."
+		warn "It was created for the other node mode; run 'make stop-local' to start fresh."
+	fi
+	qarax storage-pool attach-host overlaybd-pool --all >/dev/null
+}
+
+# A local-node row left from a container-mode run would look UP to the
+# scheduler but be unreachable from a VM-mode control plane.
+mark_container_node_down() {
+	local id
+	id=$(qarax host list -o json | jq -r '.[] | select(.address == "qarax-node") | .id')
+	[[ -n "$id" ]] || return 0
+	api_curl -fsS -X PATCH "${SERVER}/hosts/${id}" -H "Content-Type: application/json" \
+		-d '{"status":"down"}' >/dev/null
+	warn "Marked the container node (qarax-node) DOWN: it isn't running in VM mode."
+}
+
+print_summary() {
+	cat <<EOF
+
+$(echo -e "${GREEN}Qarax is running.${NC}")
+
+  API:          ${SERVER}/
+  Swagger UI:   ${SERVER}/swagger-ui
+  Token:        export QARAX_TOKEN=${QARAX_TOKEN}
+  CLI:          ${QARAX_BIN} (or cargo run -p cli --)
+
+Try it:
+  qarax host list
+  qarax vm create --name alpine --image-ref public.ecr.aws/docker/library/alpine:latest
+  qarax vm start alpine
+  ./demos/oci/run.sh            # more in demos/README.md
+
+Logs:   docker compose -f e2e/docker-compose.yml logs -f qarax qarax-node
+Stop:   make stop-local
+EOF
+}
+
 VM_MODE=0
 for arg in "$@"; do
-	case $arg in
-	--vm)
-		VM_MODE=1
-		shift
-		;;
-	--with-vm)
-		WITH_VM=1
-		shift
-		;;
+	case "$arg" in
+	--vm) VM_MODE=1 ;;
 	--cleanup)
-		echo "===== Qarax local cleanup ====="
-		cd "${REPO_ROOT}/e2e"
-		echo -e "${YELLOW}Stopping and removing stack (postgres, qarax, qarax-node) and volumes...${NC}"
 		cleanup_stack
-		# Clean up local test images if they exist
-		if [[ -d "${REPO_ROOT}/e2e/local-test-images" ]]; then
-			echo -e "${YELLOW}Removing local test kernel/initramfs/rootfs...${NC}"
-			rm -rf "${REPO_ROOT}/e2e/local-test-images"
-		fi
-		echo -e "${GREEN}Done.${NC}"
 		exit 0
 		;;
+	--with-vm) die "--with-vm was removed: ./demos/boot-source/run.sh or ./demos/cloud-image/run.sh boot an example VM on the running stack." ;;
+	-h | --help)
+		usage
+		exit 0
+		;;
+	*) die "unknown option: ${arg} (see --help)" ;;
 	esac
 done
 
-echo "===== Qarax local run (Docker stack) ====="
+preflight
+build_binaries
+QARAX_BIN="$(find_qarax_bin)"
+[[ -n "$QARAX_BIN" ]] || die "qarax CLI not found after the build"
 
-# Preflight
-if ! command -v docker &>/dev/null; then
-	echo -e "${RED}Docker is required. Install Docker and try again.${NC}"
-	exit 1
-fi
-
-if [[ ! -e /dev/kvm ]]; then
-	echo -e "${RED}/dev/kvm not found.${NC}"
-	echo "qarax-node needs KVM to run VMs. Options:"
-	echo "  - Run on a Linux host with KVM (e.g. Intel VT-x / AMD-V)"
-	echo "  - Use a VM with nested virtualization and /dev/kvm exposed"
-	exit 1
-fi
-
-if [[ ! -e /dev/net/tun ]]; then
-	echo -e "${YELLOW}Warning: /dev/net/tun not found on host.${NC}"
-	echo "VMs with network interfaces will fail to start (virtio-net needs it)."
-	echo "Create it on the host, then recreate the stack:"
-	echo "  sudo modprobe tun && sudo mkdir -p /dev/net && sudo mknod /dev/net/tun c 10 200 && sudo chmod 0666 /dev/net/tun"
-	echo "  ./hack/run-local.sh --cleanup && ./hack/run-local.sh"
-	echo ""
-fi
-
-# Build the release binaries that local Docker/VM flows package and run.
-# We invoke the build step on every run so startup always uses fresh artifacts;
-# Cargo/Cross will be a fast no-op when nothing changed.
-# Use cross on macOS (system linker doesn't support musl cross-compile); cargo on Linux.
-MUSL_TARGET="x86_64-unknown-linux-musl"
-NODE_BINARY="${REPO_ROOT}/target/${MUSL_TARGET}/release/qarax-node"
-QARAX_BINARY="${REPO_ROOT}/target/${MUSL_TARGET}/release/qarax-server"
-INIT_BINARY="${REPO_ROOT}/target/${MUSL_TARGET}/release/qarax-init"
-if [[ -z "${SKIP_BUILD}" ]]; then
-	echo -e "${YELLOW}Building qarax, qarax-node, and qarax-init (release, musl)...${NC}"
-	if [[ "$(uname -s)" == "Darwin" ]]; then
-		if ! command -v cross &>/dev/null; then
-			echo -e "${RED}Cross-compilation from macOS requires 'cross'. Install with: cargo install cross${NC}"
-			exit 1
-		fi
-		cross build --target "${MUSL_TARGET}" --release -p qarax -p qarax-node -p qarax-init
-	else
-		# If running under sudo, build as the original user so target/ stays user-owned.
-		if [[ -n "${SUDO_USER:-}" ]]; then
-			sudo -u "$SUDO_USER" cargo build --release -p qarax -p qarax-node -p qarax-init
-		else
-			cargo build --release -p qarax -p qarax-node -p qarax-init
-		fi
-	fi
+if [[ "$VM_MODE" -eq 1 ]]; then
+	COMPOSE+=(-f "${E2E_DIR}/docker-compose.vm-mode.yml")
+	start_services registry postgres qarax
+	echo -e "${YELLOW}Deploying qarax-node into a libvirt VM...${NC}"
+	API_URL="$SERVER" bash "${REPO_ROOT}/hack/test-host-deploy-libvirt.sh" --keep-vm
+	mark_container_node_down
+	# The VM reaches the Docker-hosted registry through the libvirt bridge, not
+	# the Compose DNS name "registry".
+	ensure_overlaybd_pool "http://${LIBVIRT_BRIDGE_IP:-192.168.122.1}:5001"
 else
-	if [[ ! -f "${NODE_BINARY}" ]] || [[ ! -f "${QARAX_BINARY}" ]] || [[ ! -f "${INIT_BINARY}" ]]; then
-		echo -e "${RED}SKIP_BUILD=1 but binaries not found. Build first or remove SKIP_BUILD.${NC}"
-		exit 1
+	services=(registry postgres qarax-node qarax)
+	# A two-host demo may have started qarax-node-2 (profile multi-node); keep
+	# it on the same images as the first node.
+	if [[ -n "$("${COMPOSE[@]}" --profile multi-node ps -q qarax-node-2 2>/dev/null)" ]]; then
+		COMPOSE+=(--profile multi-node)
+		services+=(qarax-node-2)
 	fi
-	echo -e "${YELLOW}Skipping build (SKIP_BUILD=1)${NC}"
-fi
-
-# Build rootfs before starting the stack (if --with-vm)
-BOOT_IMAGES_DIR=""
-export PRODUCTION_ROOTFS=""
-if [[ $WITH_VM -eq 1 ]]; then
-	BOOT_IMAGES_DIR="${REPO_ROOT}/e2e/local-test-images"
-	ROOTFS_IMG="${BOOT_IMAGES_DIR}/rootfs.img"
-
-	if [[ -f "$ROOTFS_IMG" ]]; then
-		echo -e "${GREEN}Using existing rootfs: $ROOTFS_IMG${NC}"
-	else
-		mkdir -p "$BOOT_IMAGES_DIR"
-		echo -e "${YELLOW}Building Alpine Linux rootfs with SSH (this takes a few minutes)...${NC}"
-
-		cat >/tmp/build-rootfs-$$.sh <<'ROOTFS_SCRIPT'
-#!/bin/sh
-set -e
-apk add --no-cache e2fsprogs wget util-linux >/dev/null 2>&1
-# Ensure loop devices exist (may be absent inside Docker even with --privileged)
-if [ ! -e /dev/loop-control ]; then
-    mknod /dev/loop-control c 10 237
-fi
-for i in $(seq 0 7); do
-    [ ! -e "/dev/loop$i" ] && mknod "/dev/loop$i" b 7 "$i"
-done
-echo "Creating 1GB rootfs image..."
-dd if=/dev/zero of=/output/rootfs.img bs=1M count=1024
-echo "Formatting with ext4..."
-mkfs.ext4 -F /output/rootfs.img
-echo "Mounting rootfs..."
-mkdir -p /mnt/rootfs
-LOOP=$(losetup --find --show /output/rootfs.img)
-mount "$LOOP" /mnt/rootfs
-echo "Installing Alpine Linux..."
-ALPINE_VERSION="3.19"
-wget -q -O /tmp/alpine.tar.gz \
-  "https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VERSION}/releases/x86_64/alpine-minirootfs-${ALPINE_VERSION}.1-x86_64.tar.gz"
-tar xzf /tmp/alpine.tar.gz -C /mnt/rootfs
-rm /tmp/alpine.tar.gz
-echo "nameserver 8.8.8.8" > /mnt/rootfs/etc/resolv.conf
-cat > /mnt/rootfs/etc/network/interfaces << 'NET_EOF'
-auto lo
-iface lo inet loopback
-
-auto eth0
-iface eth0 inet static
-    address 192.168.100.2
-    netmask 255.255.255.0
-    gateway 192.168.100.1
-NET_EOF
-mkdir -p /mnt/rootfs/etc/ssh
-cat > /mnt/rootfs/etc/ssh/sshd_config << 'SSH_EOF'
-PermitRootLogin yes
-PasswordAuthentication yes
-PrintMotd no
-Subsystem sftp /usr/lib/ssh/sftp-server
-SSH_EOF
-echo "root:qarax" | chroot /mnt/rootfs /usr/sbin/chpasswd
-chroot /mnt/rootfs /bin/sh << 'CHROOT_EOF'
-apk add --no-cache openssh openrc util-linux
-rc-update add sshd default
-rc-update add networking boot
-rc-update add devfs boot
-rc-update add procfs boot
-rc-update add sysfs boot
-CHROOT_EOF
-cat > /mnt/rootfs/etc/fstab << 'FSTAB_EOF'
-/dev/vda    /    ext4    defaults    0 1
-FSTAB_EOF
-echo "Rootfs setup complete"
-umount /mnt/rootfs
-losetup -d "$LOOP"
-chmod 666 /output/rootfs.img
-ls -lh /output/rootfs.img
-ROOTFS_SCRIPT
-
-		chmod +x /tmp/build-rootfs-$$.sh
-		LOOP_DEVICES=()
-		[[ -e /dev/loop-control ]] && LOOP_DEVICES+=(--device /dev/loop-control)
-		for ld in /dev/loop[0-9]*; do
-			[[ -e "$ld" ]] && LOOP_DEVICES+=("--device=$ld")
-		done
-		docker run --rm --privileged \
-			"${LOOP_DEVICES[@]}" \
-			-v "${BOOT_IMAGES_DIR}:/output" \
-			-v "/tmp/build-rootfs-$$.sh:/build-rootfs.sh:ro" \
-			alpine:3.19 sh /build-rootfs.sh
-		rm -f /tmp/build-rootfs-$$.sh
-		echo -e "${GREEN}Rootfs built: $ROOTFS_IMG${NC}"
+	start_services "${services[@]}"
+	bash "${E2E_DIR}/setup_host.sh" "$SERVER" qarax-node 50051 local-node
+	if [[ " ${services[*]} " == *" qarax-node-2 "* ]]; then
+		# Init re-creates the networks and pools a recreated container lost.
+		bash "${E2E_DIR}/setup_host.sh" "$SERVER" qarax-node-2 50051 local-node-2
 	fi
-
-	export PRODUCTION_IMAGES_DIR="$BOOT_IMAGES_DIR"
-	export PRODUCTION_ROOTFS="/var/lib/qarax/production-images/rootfs.img"
+	ensure_overlaybd_pool "http://registry:5000"
 fi
 
-# Start stack (postgres + qarax [+ qarax-node unless --vm])
-echo -e "${YELLOW}Starting Docker stack...${NC}"
-cd "${REPO_ROOT}/e2e"
-
-COMPOSE_ARGS=(-f docker-compose.yml)
-if [[ $VM_MODE -eq 1 ]]; then
-	COMPOSE_ARGS+=(-f docker-compose.vm-mode.yml)
-fi
-set_compose_service_lists
-
-if [[ -n "${REBUILD}" ]]; then
-	compose_cmd build --no-cache "${BUILD_SERVICES[@]}"
-fi
-force_remove_nfs_container
-
-compose_cmd up -d --build "${UP_SERVICES[@]}"
-compose_cmd up -d --force-recreate "${FORCE_RECREATE_SERVICES[@]}"
-
-# Wait for services to be healthy
-echo -e "${YELLOW}Waiting for services to be healthy...${NC}"
-timeout=90
-elapsed=0
-while [[ $elapsed -lt $timeout ]]; do
-	compose_ps=$(compose_cmd ps 2>/dev/null || true)
-	healthy_count=$(printf '%s\n' "$compose_ps" | grep -c '(healthy)' || echo "0")
-
-	if [[ "$healthy_count" -ge "$TOTAL_SERVICES" ]]; then
-		echo ""
-		echo -e "${GREEN}All services are healthy.${NC}"
-		break
-	fi
-
-	if printf '%s\n' "$compose_ps" | grep -q "Exit"; then
-		echo ""
-		echo -e "${RED}A service has failed.${NC}"
-		show_compose_diagnostics
-		exit 1
-	fi
-
-	echo -n "."
-	sleep 2
-	elapsed=$((elapsed + 2))
-done
-
-if [[ $elapsed -ge $timeout ]]; then
-	echo ""
-	echo -e "${RED}Timeout waiting for services.${NC}"
-	show_compose_diagnostics
-	exit 1
-fi
-
-# --vm mode: launch a libvirt VM as the qarax-node host
-if [[ $VM_MODE -eq 1 ]]; then
-	echo ""
-	echo -e "${YELLOW}Launching libvirt VM as qarax-node host...${NC}"
-	LOCAL_API_URL="${API_URL:-http://localhost:8000}"
-	API_URL="${LOCAL_API_URL}" \
-		bash "${REPO_ROOT}/hack/test-host-deploy-libvirt.sh" --keep-vm
-	mark_host_down_by_address "${LOCAL_API_URL}" "qarax-node"
-
-	echo ""
-	echo -e "${YELLOW}Creating overlaybd storage pool...${NC}"
-	# The VM reaches the Docker-hosted registry via the libvirt bridge IP, not
-	# the Compose DNS name "registry" which is only resolvable inside Docker.
-	LIBVIRT_BRIDGE_IP="${LIBVIRT_BRIDGE_IP:-192.168.122.1}"
-	setup_output=$(python3 "${REPO_ROOT}/hack/setup_vm.py" \
-		--skip-vm \
-		--skip-host \
-		--kernel-path /dev/null \
-		--overlaybd-registry-url "http://${LIBVIRT_BRIDGE_IP}:5001")
-	eval "$setup_output"
-	echo -e "${GREEN}Storage pool created: ${OVERLAYBD_POOL_ID}${NC}"
-
-	echo ""
-	echo -e "${GREEN}Qarax stack ready (node running in libvirt VM).${NC}"
-	echo ""
-	print_api_endpoints
-	print_overlaybd_workflow "overlaybd-pool"
-	print_command_section "Other useful commands:" \
-		"cargo run -p cli vm list" \
-		"cargo run -p cli vm get <VM_ID>" \
-		"cargo run -p cli vm stop <VM_ID>" \
-		"cargo run -p cli storage-pool list" \
-		"cargo run -p cli job get <JOB_ID>" \
-		"cargo run -p cli -- -o json vm list           # raw JSON output"
-	print_command_section "Docker stack commands:" \
-		"docker compose -f e2e/docker-compose.yml logs -f qarax" \
-		"docker compose -f e2e/docker-compose.yml logs -f qarax-node"
-	echo "Cleanup: make stop-local (Docker stack) + virsh destroy ${VM_NAME:-qarax-deploy-test}"
-	echo ""
-	exit 0
-fi
-
-# Create and start a VM if --with-vm flag is set
-if [[ $WITH_VM -eq 1 ]]; then
-	echo ""
-	echo -e "${YELLOW}Creating example VM with boot source...${NC}"
-
-	# Build initramfs: loads virtio_net modules then switch_roots into Alpine on /dev/vda
-	# (virtio_blk is built-in so /dev/vda is available at boot without modules)
-	INITRAMFS_GZ="${REPO_ROOT}/e2e/local-test-images/boot-initramfs.gz"
-	if [[ ! -f "$INITRAMFS_GZ" ]]; then
-		echo -e "${YELLOW}Building boot initramfs...${NC}"
-		KERNEL_VERSION=$(e2e_compose_cmd exec -T qarax-node ls /lib/modules/ | head -1 | tr -d '\r')
-		MODULE_DIR="/tmp/qarax-mods-$$"
-		mkdir -p "$MODULE_DIR"
-
-		# Extract network modules from qarax-node
-		cat >/tmp/get-mods-$$.sh <<GETMODS
-#!/bin/sh
-set -e
-mkdir -p /tmp/mods
-KDIR="/lib/modules/${KERNEL_VERSION}/kernel"
-for name in failover net_failover virtio_net; do
-  f=\$(find "\$KDIR" -name "\${name}.ko" -o -name "\${name}.ko.xz" 2>/dev/null | head -1)
-  [ -z "\$f" ] && echo "MISSING: \$name" && continue
-  cp "\$f" /tmp/mods/
-  case "\$f" in *.xz) cd /tmp/mods && unxz "\$(basename \$f)" && cd -;; esac
-  echo "OK: \$name"
-done
-ls /tmp/mods/
-GETMODS
-		chmod +x /tmp/get-mods-$$.sh
-		docker cp /tmp/get-mods-$$.sh e2e-qarax-node-1:/tmp/get-mods.sh
-		e2e_compose_cmd exec -T qarax-node /tmp/get-mods.sh
-		docker cp e2e-qarax-node-1:/tmp/mods/. "$MODULE_DIR/"
-
-		# Build the initramfs inside the qarax-node container (uses Fedora busybox)
-		docker cp "$MODULE_DIR/." e2e-qarax-node-1:/tmp/bootmods/
-		e2e_compose_cmd exec -T qarax-node sh -c '
-      set -e
-      mkdir -p /tmp/initrd/bin /tmp/initrd/dev /tmp/initrd/proc /tmp/initrd/sys /tmp/initrd/newroot /tmp/initrd/lib/modules
-      cp /usr/sbin/busybox /tmp/initrd/bin/busybox
-      for cmd in sh mount insmod sleep switch_root; do ln -sf busybox /tmp/initrd/bin/$cmd; done
-      cp /tmp/bootmods/*.ko /tmp/initrd/lib/modules/ 2>/dev/null || true
-      cat > /tmp/initrd/init << '"'"'INIT'"'"'
-#!/bin/sh
-mount -t proc proc /proc
-mount -t sysfs sys /sys
-mount -t devtmpfs dev /dev
-echo "Loading network modules..."
-for m in failover.ko net_failover.ko virtio_net.ko; do
-  [ -f "/lib/modules/$m" ] && insmod "/lib/modules/$m" 2>/dev/null && echo "  loaded $m" || true
-done
-echo "Waiting for /dev/vda..."
-i=0
-while [ ! -b /dev/vda ] && [ $i -lt 10 ]; do sleep 1; i=$((i+1)); done
-if [ ! -b /dev/vda ]; then echo "ERROR: /dev/vda not found"; exec /bin/sh; fi
-echo "Mounting rootfs on /dev/vda..."
-mount /dev/vda /newroot
-exec switch_root /newroot /sbin/init
-INIT
-      chmod +x /tmp/initrd/init
-      cd /tmp/initrd && find . | cpio -o -H newc 2>/dev/null | gzip > /var/lib/qarax/production-images/boot-initramfs.gz
-      echo "Initramfs built: $(ls -lh /var/lib/qarax/production-images/boot-initramfs.gz | awk '"'"'{print $5}'"'"')"
-    '
-		rm -f /tmp/get-mods-$$.sh
-		rm -rf "$MODULE_DIR"
-		echo -e "${GREEN}Boot initramfs built.${NC}"
-	else
-		echo -e "${GREEN}Using existing boot initramfs.${NC}"
-	fi
-
-	KERNEL_PATH="/var/lib/qarax/images/vmlinux"
-	INITRAMFS_PATH="/var/lib/qarax/production-images/boot-initramfs.gz"
-	CMDLINE="console=ttyS0"
-
-	# Use Python script for all API interactions:
-	# host registration, storage pool, transfers, boot source, VM create+start
-	echo -e "${YELLOW}Setting up resources via API...${NC}"
-	setup_output=$(python3 "${REPO_ROOT}/hack/setup_vm.py" \
-		--kernel-path "$KERNEL_PATH" \
-		--initramfs-path "$INITRAMFS_PATH" \
-		--cmdline "$CMDLINE")
-
-	# Parse key=value output from setup_vm.py
-	eval "$setup_output"
-
-	if [[ -n "$VM_ID" ]]; then
-		vm_id="$VM_ID"
-
-		# Assign the host-side IP on the qarax-node-managed TAP device.
-		# qarax-node creates TAP devices with a deterministic name:
-		# "qt" + first 8 hex chars of VM UUID (no dashes) + "n" + NIC index.
-		tap_name="qt$(echo "${vm_id}" | tr -d '-' | cut -c1-8)n0"
-		echo -e "${YELLOW}Configuring host network for SSH access (${tap_name})...${NC}"
-		e2e_compose_cmd exec -T qarax-node \
-			ip addr add 192.168.100.1/24 dev "${tap_name}" 2>/dev/null || true
-
-		# Wait for VM SSH to become available (static IP: 192.168.100.2)
-		echo -e "${YELLOW}Waiting for VM SSH to become available...${NC}"
-		ssh_ready=0
-		timeout=60
-		elapsed=0
-		while [[ $elapsed -lt $timeout ]]; do
-			sleep 2
-			elapsed=$((elapsed + 2))
-			if e2e_compose_cmd exec -T qarax-node nc -z -w1 192.168.100.2 22 2>/dev/null; then
-				ssh_ready=1
-				echo -e "${GREEN}VM SSH is ready!${NC}"
-				break
-			fi
-			if [[ $((elapsed % 10)) -eq 0 ]]; then
-				echo -e "${YELLOW}  Still waiting... (${elapsed}s / ${timeout}s)${NC}"
-			fi
-		done
-		if [[ $ssh_ready -eq 0 ]]; then
-			echo -e "${YELLOW}SSH not ready yet - VM may still be booting${NC}"
-		fi
-
-		# Show VM access info
-		echo ""
-		echo -e "${GREEN}===== Example VM Ready =====${NC}"
-		echo "VM ID: ${vm_id}"
-		echo "Status: running"
-		echo "Network: net0 (MAC: 52:54:00:12:34:56, TAP: ${tap_name})"
-		echo "VM IP: 192.168.100.2 (static)"
-		echo ""
-		echo -e "${GREEN}SSH Access:${NC}"
-		echo "  Username: root  |  Password: qarax"
-		echo ""
-		echo "SSH via nc ProxyCommand (from host):"
-		echo "  ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ProxyCommand='docker compose -f e2e/docker-compose.yml exec -T qarax-node nc %h %p' root@192.168.100.2"
-		echo ""
-		echo "Or open a shell in the node and use nc to verify connectivity:"
-		echo "  docker compose -f e2e/docker-compose.yml exec qarax-node nc -z 192.168.100.2 22 && echo 'SSH port open'"
-		echo ""
-		echo "View VM console output:"
-		echo "  docker compose -f e2e/docker-compose.yml exec qarax-node tail -f /var/lib/qarax/vms/${vm_id}.console.log"
-		echo ""
-		echo "Stop VM:   qarax vm stop ${vm_id}"
-		echo "Delete VM: qarax vm delete ${vm_id}"
-		echo ""
-	else
-		echo -e "${RED}VM was not created. Check logs above for errors.${NC}"
-	fi
-else
-	# No --with-vm: register host, init, and create overlaybd storage pool
-	echo ""
-	echo -e "${YELLOW}Setting up host and storage pools...${NC}"
-	setup_output=$(python3 "${REPO_ROOT}/hack/setup_vm.py" \
-		--skip-vm \
-		--kernel-path /dev/null)
-	eval "$setup_output"
-	echo -e "${GREEN}Host registered and overlaybd storage pool created.${NC}"
-fi
-
-if [[ $WITH_VM -eq 0 ]]; then
-	# Only show verbose instructions if --with-vm was not used
-	echo ""
-	echo -e "${GREEN}Qarax is running locally.${NC}"
-	echo ""
-	echo -e "${GREEN}✓ Ready to create VMs with networking and SSH access${NC}"
-	echo "  Use: ./hack/run-local.sh --with-vm"
-	echo ""
-	print_api_endpoints
-	print_command_section "Quick try (qarax):" \
-		"cargo run -p cli vm list" \
-		"cargo run -p cli host list"
-	print_overlaybd_workflow
-	echo "Create VM from OCI image ref (OverlayBD):"
-	echo '  cargo run -p cli vm create --name alpine-vm --vcpus 1 --memory 268435456 \'
-	echo '    --image-ref public.ecr.aws/docker/library/alpine:latest'
-	echo '  cargo run -p cli vm start my-vm'
-	echo ""
-	print_command_section "Other useful commands:" \
-		"cargo run -p cli vm get <VM_ID>" \
-		"cargo run -p cli vm stop <VM_ID>" \
-		"cargo run -p cli vm delete <VM_ID>" \
-		"cargo run -p cli host init <HOST_ID>         # connect via gRPC, mark host UP" \
-		"cargo run -p cli -- -o json vm list           # raw JSON output" \
-		"cargo run -p cli boot-source list" \
-		"cargo run -p cli storage-pool list" \
-		"cargo run -p cli transfer list --pool <POOL_ID>" \
-		"cargo run -p cli job get <JOB_ID>"
-	print_command_section "Docker stack commands:" \
-		"docker compose -f e2e/docker-compose.yml logs -f    # Follow all logs" \
-		"docker compose -f e2e/docker-compose.yml logs -f qarax-node" \
-		"docker compose -f e2e/docker-compose.yml exec qarax-node sh" \
-		"docker compose -f e2e/docker-compose.yml up -d --force-recreate qarax-node  # Apply device/compose changes" \
-		"make stop-local                                      # Stop and remove stack + volumes"
-else
-	# With --with-vm (Alpine guest in container), show concise summary
-	echo ""
-	echo -e "${GREEN}Qarax stack ready.${NC}"
-	echo ""
-	echo "API:        http://localhost:8000/"
-	echo "Swagger UI: http://localhost:8000/swagger-ui"
-	echo ""
-	echo "Cleanup: ./hack/run-local.sh --cleanup"
-	echo ""
-fi
+print_summary

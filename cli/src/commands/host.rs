@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 
 use clap::{Args, Subcommand};
 use tabled::{Table, Tabled, settings::Style};
-use uuid::Uuid;
 
 use crate::{
     api::{
@@ -41,8 +40,8 @@ enum HostCommand {
         /// Host address (IP or hostname)
         #[arg(long)]
         address: String,
-        /// SSH port
-        #[arg(long, default_value = "22")]
+        /// qarax-node gRPC port (deploys reach SSH separately, see `host deploy --ssh-port`)
+        #[arg(long, default_value = "50051")]
         port: i32,
         /// SSH user
         #[arg(long)]
@@ -56,6 +55,11 @@ enum HostCommand {
         /// Placement label in key=value form. Repeat to set multiple labels.
         #[arg(long = "label")]
         labels: Vec<String>,
+    },
+    /// Delete a host record (refused while VMs are placed on it)
+    Delete {
+        /// Host name or ID
+        host: String,
     },
     /// Deploy a bootc image to a host
     Deploy {
@@ -344,6 +348,12 @@ pub async fn run(args: HostArgs, client: &Client, output: OutputFormat) -> anyho
             }
         }
 
+        HostCommand::Delete { host } => {
+            let id = resolve_host_id(client, &host).await?;
+            api::hosts::delete(client, id).await?;
+            println!("Deleted host: {host}");
+        }
+
         HostCommand::Deploy {
             host,
             image,
@@ -484,7 +494,7 @@ pub async fn run(args: HostArgs, client: &Client, output: OutputFormat) -> anyho
             } else {
                 println!("Evacuating host: {host}");
                 println!("Job:            {}", resp.job_id);
-                poll_job(client, resp.job_id).await?;
+                crate::wait::wait_for_job(client, resp.job_id).await?;
             }
         }
 
@@ -571,18 +581,4 @@ pub async fn run(args: HostArgs, client: &Client, output: OutputFormat) -> anyho
     }
 
     Ok(())
-}
-
-async fn poll_job(client: &Client, job_id: Uuid) -> anyhow::Result<()> {
-    loop {
-        let job = api::jobs::get(client, job_id).await?;
-        match job.status.as_str() {
-            "completed" => return Ok(()),
-            "failed" => {
-                let error = job.error.unwrap_or_else(|| "job failed".to_string());
-                return Err(anyhow::anyhow!(error));
-            }
-            _ => tokio::time::sleep(std::time::Duration::from_secs(2)).await,
-        }
-    }
 }

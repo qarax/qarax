@@ -14,10 +14,13 @@ NC='\033[0m' # No Color
 cd "$(dirname "$0")"
 
 # Environment variables:
-#   REBUILD=1       - Force rebuild of all images
+#   REBUILD=1       - Rebuild the Docker images without cache
 #   KEEP=1          - Keep services running after tests (for debugging)
-#   SKIP_BUILD=1    - Skip building qarax-node binary
+#   SKIP_BUILD=1    - Use the existing release binaries (CI downloads them)
 #   ENABLE_OTEL=1   - Build with `otel` features and point services at a host OTLP receiver
+#
+# A stack that was already up when this started (e.g. from `make run-local`,
+# which shares the compose project) is left running afterwards, as with KEEP=1.
 
 : "${CLOUD_HYPERVISOR_VERSION:=$(cat ../versions/cloud-hypervisor-version)}"
 export CLOUD_HYPERVISOR_VERSION
@@ -58,7 +61,7 @@ needs_bootc_vm() {
 
 	for arg in "$@"; do
 		case "$arg" in
-		*test_node_upgrade.py* | *test_node_upgrade.py::* )
+		*test_node_upgrade.py*)
 			return 0
 			;;
 		esac
@@ -85,16 +88,21 @@ docker_build_image() {
 	fi
 }
 
+if curl -sf --max-time 3 http://localhost:8000/ >/dev/null 2>&1; then
+	PREEXISTING_STACK=1
+	echo -e "${YELLOW}A stack is already running on :8000; it will be left up afterwards.${NC}"
+fi
+
 cleanup() {
-	if [ -n "$KEEP" ]; then
+	if [ -n "$KEEP" ] || [ -n "${PREEXISTING_STACK:-}" ]; then
 		echo ""
-		echo -e "${GREEN}Services kept running (KEEP=1)${NC}"
+		echo -e "${GREEN}Services kept running${NC}"
 		echo ""
 		echo "Useful commands:"
 		echo "  docker compose logs -f           # Follow logs"
 		echo "  docker compose logs qarax-node   # qarax-node logs"
 		echo "  docker compose exec qarax-node sh  # Shell into qarax-node"
-		echo "  docker compose down -v           # Stop and remove everything"
+		echo "  docker compose --profile '*' down -v   # Stop and remove everything"
 		echo ""
 		echo "Test endpoint:"
 		echo "  curl http://localhost:8000/vms"
@@ -102,7 +110,7 @@ cleanup() {
 	else
 		echo -e "${YELLOW}Cleaning up...${NC}"
 		rm -f "${BOOTC_OVERLAY_DISK}"
-		docker compose down -v
+		docker compose --profile '*' down -v
 	fi
 }
 
@@ -111,7 +119,6 @@ trap cleanup EXIT
 # Build qarax binaries if needed (Linux musl binary for Docker)
 MUSL_TARGET="x86_64-unknown-linux-musl"
 BOOTC_OVERLAY_DISK="${PWD}/bootc-vm-overlay.qcow2"
-NODE_BINARY="../target/${MUSL_TARGET}/release/qarax-node"
 
 CARGO_FEATURE_ARGS=()
 if is_truthy "${ENABLE_OTEL:-}"; then
@@ -125,35 +132,25 @@ if is_truthy "${ENABLE_OTEL:-}"; then
 	echo -e "${YELLOW}Telemetry e2e enabled:${NC} ${OTEL_EXPORTER_OTLP_ENDPOINT}"
 fi
 
+# Build on every run: cargo is a fast no-op when nothing changed, and an
+# existence-only check would bake stale binaries into the images.
 if [ -z "$SKIP_BUILD" ]; then
-	INIT_BINARY="../target/${MUSL_TARGET}/release/qarax-init"
-	QARAX_BINARY="../target/${MUSL_TARGET}/release/qarax-server"
-	CLI_BINARY="../target/${MUSL_TARGET}/release/qarax"
-	if [ -n "$REBUILD" ] || is_truthy "${ENABLE_OTEL:-}" || [ ! -f "$NODE_BINARY" ] || [ ! -f "$INIT_BINARY" ] || [ ! -f "$QARAX_BINARY" ] || [ ! -f "$CLI_BINARY" ]; then
-		echo -e "${YELLOW}Building qarax-server, qarax-node, qarax-init, and qarax CLI binaries...${NC}"
-		cd ..
-		if [ "$(uname -s)" = "Darwin" ]; then
-			if ! command -v cross &>/dev/null; then
-				echo -e "${RED}Cross-compilation from macOS requires 'cross'. Install with: cargo install cross${NC}"
-				exit 1
-			fi
-			cross build --target "${MUSL_TARGET}" --release -p qarax -p qarax-node -p qarax-init "${CARGO_FEATURE_ARGS[@]}"
-			cross build --target "${MUSL_TARGET}" --release -p cli
-		else
-			# If running under sudo, build as the original user so target/ stays user-owned.
-			if [ -n "${SUDO_USER:-}" ]; then
-				sudo -u "$SUDO_USER" cargo build --release -p qarax -p qarax-node -p qarax-init "${CARGO_FEATURE_ARGS[@]}"
-				sudo -u "$SUDO_USER" cargo build --release -p cli
-			else
-				cargo build --release -p qarax -p qarax-node -p qarax-init "${CARGO_FEATURE_ARGS[@]}"
-				cargo build --release -p cli
-			fi
+	BUILD_ARGS=(--release -p qarax -p qarax-node -p qarax-init -p cli "${CARGO_FEATURE_ARGS[@]}")
+	echo -e "${YELLOW}Building qarax-server, qarax-node, qarax-init and the qarax CLI...${NC}"
+	cd ..
+	if [ "$(uname -s)" = "Darwin" ]; then
+		if ! command -v cross &>/dev/null; then
+			echo -e "${RED}Cross-compilation from macOS requires 'cross'. Install with: cargo install cross${NC}"
+			exit 1
 		fi
-		cd e2e
+		cross build --target "${MUSL_TARGET}" "${BUILD_ARGS[@]}"
+	elif [ -n "${SUDO_USER:-}" ]; then
+		# Build as the invoking user so target/ stays user-owned.
+		sudo -u "$SUDO_USER" cargo build "${BUILD_ARGS[@]}"
 	else
-		echo -e "${GREEN}Using existing binaries${NC}"
-		echo -e "${YELLOW}To rebuild, run: REBUILD=1 ./run_e2e_tests.sh${NC}"
+		cargo build "${BUILD_ARGS[@]}"
 	fi
+	cd e2e
 elif is_truthy "${ENABLE_OTEL:-}"; then
 	echo -e "${YELLOW}SKIP_BUILD=1 set; make sure existing binaries were built with ENABLE_OTEL=1${NC}"
 fi
@@ -176,18 +173,7 @@ build_bootc_vm() {
 
 	# Start just the registry so we can push images for BIB and the test
 	echo -e "${YELLOW}Starting registry for bootc image build...${NC}"
-	docker compose up -d registry
-	local i
-	for i in $(seq 1 30); do
-		if docker compose ps registry 2>/dev/null | grep -q "(healthy)"; then
-			break
-		fi
-		sleep 2
-	done
-	if ! docker compose ps registry 2>/dev/null | grep -q "(healthy)"; then
-		echo -e "${RED}Registry failed to become healthy${NC}" >&2
-		exit 1
-	fi
+	docker compose up -d --wait registry
 
 	# Build base bootc image
 	echo -e "${YELLOW}Building bootc node image...${NC}"
@@ -267,43 +253,10 @@ echo -e "${YELLOW}Starting services...${NC}"
 if [ -n "$REBUILD" ]; then
 	docker compose build --no-cache "${SERVICES[@]}"
 fi
-docker compose up -d --build "${SERVICES[@]}"
-
-# Wait for services to be healthy
-echo -e "${YELLOW}Waiting for services to be healthy...${NC}"
-timeout=300
-elapsed=0
-while [ $elapsed -lt $timeout ]; do
-	# Check if all requested services are healthy
-	healthy_count=$(docker compose ps 2>/dev/null | grep -c "(healthy)" || echo "0")
-	total_services=6 # nfs-server, registry, postgres, qarax, qarax-node, qarax-node-2
-	if [ "$BOOTC_VM_ENABLED" -eq 1 ]; then
-		total_services=7 # + bootc-vm
-	fi
-
-	if [ "$healthy_count" -ge "$total_services" ]; then
-		echo ""
-		echo -e "${GREEN}All services are healthy!${NC}"
-		break
-	fi
-
-	# Check for failed services
-	if docker compose ps 2>/dev/null | grep -q "Exit"; then
-		echo ""
-		echo -e "${RED}A service has failed!${NC}"
-		docker compose ps
-		docker compose logs
-		exit 1
-	fi
-
-	echo -n "."
-	sleep 2
-	elapsed=$((elapsed + 2))
-done
-
-if [ $elapsed -ge $timeout ]; then
-	echo ""
-	echo -e "${RED}Timeout waiting for services to be healthy${NC}"
+# --wait returns once every service's healthcheck passes. Naming the services
+# also enables their compose profiles (nfs-server, qarax-node-2, bootc-vm).
+if ! docker compose up -d --build --wait --wait-timeout 600 "${SERVICES[@]}"; then
+	echo -e "${RED}Services did not become healthy${NC}"
 	docker compose ps
 	docker compose logs
 	exit 1

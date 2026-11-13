@@ -1022,20 +1022,33 @@ impl VmService for VmServiceImpl {
         info!("Attaching network bridge: {}", req.bridge_name);
 
         let bridged = !req.parent_interface.is_empty();
+        // Attaching is idempotent: host init re-attaches every network after a
+        // node restart, when the bridge may survive (a process restart) or be
+        // gone (a reboot), and the in-process DHCP server always is.
+        let exists = crate::networking::bridge::link_exists(&req.bridge_name)
+            .await
+            .map_err(|e| Status::internal(format!("Failed to look up bridge: {}", e)))?;
 
         if bridged {
             // Bridged mode: bridge an existing NIC (its IP moves to the bridge)
-            crate::networking::bridge::bridge_interface(&req.bridge_name, &req.parent_interface)
+            if !exists {
+                crate::networking::bridge::bridge_interface(
+                    &req.bridge_name,
+                    &req.parent_interface,
+                )
                 .await
                 .map_err(|e| Status::internal(format!("Failed to bridge interface: {}", e)))?;
+            }
         } else {
             // Isolated mode: create a new bridge with its own gateway IP
             let prefix = req.subnet.split_once('/').map(|(_, p)| p).unwrap_or("24");
             let gateway_cidr = format!("{}/{}", req.gateway, prefix);
 
-            crate::networking::bridge::create_bridge(&req.bridge_name)
-                .await
-                .map_err(|e| Status::internal(format!("Failed to create bridge: {}", e)))?;
+            if !exists {
+                crate::networking::bridge::create_bridge(&req.bridge_name)
+                    .await
+                    .map_err(|e| Status::internal(format!("Failed to create bridge: {}", e)))?;
+            }
 
             crate::networking::bridge::set_bridge_ip(&req.bridge_name, &gateway_cidr)
                 .await

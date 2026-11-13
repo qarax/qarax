@@ -14,7 +14,6 @@ def _get_kwargs(
     name: None | str | Unset = UNSET,
     tags: None | str | Unset = UNSET,
 ) -> dict[str, Any]:
-
     params: dict[str, Any] = {}
 
     json_name: None | str | Unset

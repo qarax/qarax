@@ -7,29 +7,28 @@
 # Includes: PostgreSQL, qarax, qarax-node, Cloud Hypervisor, overlaybd,
 # kernel/initramfs for nested VMs, and systemd services.
 #
-# The image is exported to a flat rootfs tarball, then the demo script builds
-# a GPT disk image with an ESP (FAT32, kernel + BLS entry) and an ext4 root
-# partition. Cloud Hypervisor boots via --firmware (hypervisor-fw).
+# demos/hyperconverged/run.sh streams the image's filesystem into a GPT disk
+# image with an ESP (FAT32, kernel + BLS entry) and an ext4 root partition.
+# Cloud Hypervisor boots it via --firmware (hypervisor-fw).
 #
-# Build:
+# Build (from the repo root, which must be the build context):
 #   cargo build --release -p qarax -p qarax-node -p qarax-init
-#   podman build --build-arg CLOUD_HYPERVISOR_VERSION=$(cat versions/cloud-hypervisor-version) \
+#   podman build \
+#     --build-arg CLOUD_HYPERVISOR_VERSION=$(cat versions/cloud-hypervisor-version) \
+#     --build-arg NODE_ARTIFACTS_SHA=$(sha256sum versions/node-artifacts.env | cut -d' ' -f1) \
+#     --build-arg OTEL_LGTM_IMAGE=grafana/otel-lgtm:<tag> \
 #     -f demos/hyperconverged/Containerfile.control-plane -t qarax-control-plane .
 #
-# API auth: production.yaml enables token auth. run.sh writes
-# /etc/qarax/qarax.env (AUTH_TOKENS=...) into the disk image after export, so
-# the token is never baked into an image layer.
+# API auth: production.yaml enables token auth. run.sh attaches the token as a
+# small second disk (/dev/vdb) on every boot, so it never lands in an image
+# layer or in the cached root disk.
+#
+# Layers are ordered by how often they change: packages and downloads first,
+# the qarax binaries (which change on every code edit) last. Each ARG is
+# declared right before the step that uses it, since every RUN after an ARG
+# sees it in its environment and is rebuilt when it changes.
 
 FROM fedora:43
-
-ARG CLOUD_HYPERVISOR_VERSION
-ARG OVERLAYBD_VERSION=1.0.16
-ARG OVERLAYBD_RPM_SUFFIX=20250818.4601fb2
-ARG OVERLAYBD_RPM_DIST=azurelinux.3.0
-ARG ACI_VERSION=1.4.1
-ARG ACI_RPM_SUFFIX=20260114025326.c6ba42c
-ARG REGISTRY_PORT=5000
-ARG CLOUDHV_FW_TAG=ch-a54f262b09
 
 # Install PostgreSQL, qarax-node runtime dependencies, and minimal tools
 RUN dnf install -y \
@@ -71,64 +70,49 @@ RUN mkdir -p /run/postgresql && chown postgres:postgres /run/postgresql && \
     su - postgres -c "createdb -O qarax qarax" && \
     su - postgres -c "pg_ctl stop -D /var/lib/pgsql/data -w"
 
-# Install Cloud Hypervisor (static binary)
-RUN curl -fsSL \
-    "https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/${CLOUD_HYPERVISOR_VERSION:?set CLOUD_HYPERVISOR_VERSION}/cloud-hypervisor-static" \
-    -o /usr/local/bin/cloud-hypervisor && \
-    chmod +x /usr/local/bin/cloud-hypervisor
-
-# Install overlaybd-tcmu
-RUN curl -fsSL \
-    "https://github.com/containerd/overlaybd/releases/download/v${OVERLAYBD_VERSION}/overlaybd-${OVERLAYBD_VERSION}-${OVERLAYBD_RPM_SUFFIX}.${OVERLAYBD_RPM_DIST}.x86_64.rpm" \
-    -o /tmp/overlaybd.rpm && \
-    cd / && rpm2cpio /tmp/overlaybd.rpm | cpio -idm --no-absolute-filenames && \
-    rm /tmp/overlaybd.rpm
-
-# Install overlaybd-snapshotter convertor
-RUN curl -fsSL \
-    "https://github.com/containerd/accelerated-container-image/releases/download/v${ACI_VERSION}/overlaybd-snapshotter-${ACI_VERSION}-${ACI_RPM_SUFFIX}.x86_64.rpm" \
-    -o /tmp/aci.rpm && \
-    cd / && rpm2cpio /tmp/aci.rpm | cpio -idm --no-absolute-filenames && \
-    rm /tmp/aci.rpm
-
-# Copy qarax, qarax-node, and qarax-init binaries
-COPY target/x86_64-unknown-linux-musl/release/qarax-server /usr/local/bin/qarax-server
-COPY target/x86_64-unknown-linux-musl/release/qarax-node /usr/local/bin/qarax-node
-COPY target/x86_64-unknown-linux-musl/release/qarax-init /usr/local/bin/qarax-init
-RUN chmod +x /usr/local/bin/qarax-server /usr/local/bin/qarax-node /usr/local/bin/qarax-init
-
-# Copy configuration
-COPY configuration/ /etc/qarax/configuration/
-
 # Create directories for VM data and overlaybd
 RUN mkdir -p /var/lib/qarax/vms \
     /var/lib/qarax/images \
     /var/lib/qarax/disks \
     /var/lib/qarax/overlaybd \
     /opt/overlaybd/registry_cache \
-    /opt/overlaybd/gzip_cache
+    /opt/overlaybd/gzip_cache \
+    /usr/share/cloud-hypervisor
 
-# Install Cloud Hypervisor UEFI firmware (CLOUDHV.fd) for firmware-boot
-# workload VMs (e.g. --with-local-vm). Same tag as e2e/Dockerfile.qarax-node.
-RUN mkdir -p /usr/share/cloud-hypervisor && \
+# Install Cloud Hypervisor (static binary)
+ARG CLOUD_HYPERVISOR_VERSION
+RUN curl -fsSL \
+    "https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/${CLOUD_HYPERVISOR_VERSION:?set CLOUD_HYPERVISOR_VERSION}/cloud-hypervisor-static" \
+    -o /usr/local/bin/cloud-hypervisor && \
+    chmod +x /usr/local/bin/cloud-hypervisor
+
+# Pinned node artifacts from versions/node-artifacts.env, read through a bind
+# mount: overlaybd-tcmu, the overlaybd-snapshotter convertor, the CLOUDHV.fd
+# UEFI firmware for firmware-boot workload VMs (e.g. --with-local-vm), and the
+# guest vmlinux for nested VMs. NODE_ARTIFACTS_SHA (the file's checksum, passed
+# by run.sh) busts the layer cache on a pin change under podman/buildah, whose
+# cache key doesn't cover mounted files the way BuildKit's does.
+ARG NODE_ARTIFACTS_SHA
+RUN --mount=type=bind,source=versions/node-artifacts.env,target=/tmp/node-artifacts.env \
+    . /tmp/node-artifacts.env && \
+    curl -fsSL \
+    "https://github.com/containerd/overlaybd/releases/download/v${OVERLAYBD_VERSION}/overlaybd-${OVERLAYBD_VERSION}-${OVERLAYBD_RPM_SUFFIX}.${OVERLAYBD_RPM_DIST}.x86_64.rpm" \
+    -o /tmp/overlaybd.rpm && \
+    curl -fsSL \
+    "https://github.com/containerd/accelerated-container-image/releases/download/v${ACI_VERSION}/overlaybd-snapshotter-${ACI_VERSION}-${ACI_RPM_SUFFIX}.x86_64.rpm" \
+    -o /tmp/aci.rpm && \
+    cd / && \
+    rpm2cpio /tmp/overlaybd.rpm | cpio -idm --no-absolute-filenames && \
+    rpm2cpio /tmp/aci.rpm | cpio -idm --no-absolute-filenames && \
+    rm /tmp/overlaybd.rpm /tmp/aci.rpm && \
     curl -fsSL \
     "https://github.com/cloud-hypervisor/edk2/releases/download/${CLOUDHV_FW_TAG}/CLOUDHV.fd" \
     -o /usr/share/cloud-hypervisor/CLOUDHV.fd && \
-    chmod 644 /usr/share/cloud-hypervisor/CLOUDHV.fd
-
-# Download Cloud Hypervisor kernel (vmlinux)
-RUN curl -fsSL \
-    "https://github.com/cloud-hypervisor/linux/releases/download/ch-release-v6.16.9-20251112/vmlinux-x86_64" \
+    chmod 644 /usr/share/cloud-hypervisor/CLOUDHV.fd && \
+    curl -fsSL \
+    "https://github.com/cloud-hypervisor/linux/releases/download/${CH_KERNEL_TAG}/vmlinux-x86_64" \
     -o /var/lib/qarax/images/vmlinux && \
     chmod 644 /var/lib/qarax/images/vmlinux
-
-# Build production initramfs with qarax-init (handles root mounting + switch_root)
-RUN mkdir -p /tmp/initramfs/{dev,proc,sys,newroot} && \
-    cp /usr/local/bin/qarax-init /tmp/initramfs/init && \
-    chmod +x /tmp/initramfs/init && \
-    cd /tmp/initramfs && \
-    find . | cpio -o -H newc | gzip > /var/lib/qarax/images/initramfs-production.gz && \
-    rm -rf /tmp/initramfs
 
 # Create production symlinks so production.yaml vm_defaults paths resolve
 RUN ln -sf /var/lib/qarax/images/vmlinux /var/lib/qarax/images/vmlinux-production
@@ -143,6 +127,12 @@ Requires=postgresql.service
 
 [Service]
 Type=simple
+# AUTH_TOKENS for the API: run.sh attaches a second disk (/dev/vdb) holding an
+# AUTH_TOKENS=... line padded with zeros. ExecStartPre copies that line to
+# /run/qarax.env and fails the unit if the disk is missing; the "-" only
+# covers ExecStartPre itself, which runs before the file exists.
+ExecStartPre=/bin/sh -c 'umask 077 && head -n 1 /dev/vdb > /run/qarax.env'
+EnvironmentFile=-/run/qarax.env
 ExecStart=/usr/local/bin/qarax-server
 Restart=always
 RestartSec=3
@@ -156,8 +146,6 @@ Environment="DATABASE_URL=postgres://qarax:qarax@127.0.0.1:5432/qarax"
 Environment="OTEL_ENABLED=true"
 Environment="OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318"
 Environment="VM_FIRMWARE=/usr/share/cloud-hypervisor/CLOUDHV.fd"
-# AUTH_TOKENS for the API (written by demos/hyperconverged/run.sh)
-EnvironmentFile=-/etc/qarax/qarax.env
 
 StandardOutput=journal
 StandardError=journal
@@ -167,46 +155,11 @@ SyslogIdentifier=qarax
 WantedBy=multi-user.target
 EOF
 
-# Copy overlaybd-tcmu systemd service
-COPY deployments/overlaybd-tcmu.service /etc/systemd/system/overlaybd-tcmu.service
-
-# Copy qarax-node systemd service
-COPY deployments/qarax-node.service /etc/systemd/system/qarax-node.service
 RUN mkdir -p /etc/systemd/system/qarax-node.service.d && \
     cat > /etc/systemd/system/qarax-node.service.d/otel.conf << 'EOF'
 [Service]
 Environment="OTEL_ENABLED=true"
 Environment="OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318"
-EOF
-
-# Run a Grafana OTEL LGTM stack inside the control-plane (for demos/telemetry).
-# This systemd service launches the grafana/otel-lgtm container with host
-# networking so Grafana is reachable at the VM's IP (e.g. 192.168.100.10:3000).
-RUN cat > /etc/systemd/system/otel-lgtm.service << 'EOF' && \
-    sed -i "s/__REGISTRY_PORT__/${REGISTRY_PORT}/g" /etc/systemd/system/otel-lgtm.service
-[Unit]
-Description=Grafana OTEL LGTM Stack (Grafana+Tempo+Prometheus+Loki)
-Wants=network-online.target
-After=network-online.target
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-# Ensure podman binary is available and pull image before start so failures are visible
-ExecStartPre=/usr/bin/podman --version
-## Pull from local demo registry running on the host. The registry host is the
-## DHCP gateway passt assigns (it NATs to the host's loopback where the registry listens).
-ExecStartPre=-/usr/bin/podman rm -f otel-lgtm
-ExecStartPre=/bin/bash -c 'GW=$(ip route | awk "/default/ {print \$3; exit}") && /usr/bin/podman pull --tls-verify=false $${GW}:__REGISTRY_PORT__/grafana/otel-lgtm:latest'
-ExecStart=/bin/bash -c 'GW=$(ip route | awk "/default/ {print \$3; exit}") && /usr/bin/podman run --name otel-lgtm --net host -d $${GW}:__REGISTRY_PORT__/grafana/otel-lgtm:latest'
-ExecStop=/usr/bin/podman rm -f otel-lgtm || true
-Restart=on-failure
-RestartSec=5
-StartLimitIntervalSec=600
-StartLimitBurst=5
-
-[Install]
-WantedBy=multi-user.target
 EOF
 
 # Configure kernel modules to load at boot (needed for overlaybd and KVM)
@@ -222,7 +175,8 @@ EOF
 # Ensure /run/postgresql exists at boot (systemd tmpfiles.d)
 RUN echo "d /run/postgresql 0755 postgres postgres -" > /etc/tmpfiles.d/postgresql.conf
 
-# Enable services via symlinks (can't use systemctl during build)
+# Enable services via symlinks (can't use systemctl during build). The
+# overlaybd-tcmu and qarax-node units are copied in further down.
 RUN mkdir -p /etc/systemd/system/multi-user.target.wants && \
     ln -sf /usr/lib/systemd/system/postgresql.service /etc/systemd/system/multi-user.target.wants/postgresql.service && \
     ln -sf /etc/systemd/system/qarax.service /etc/systemd/system/multi-user.target.wants/qarax.service && \
@@ -268,3 +222,58 @@ RUN echo "root:qarax" | chpasswd
 # Create /etc/fstab for GPT disk with ESP + ext4 root
 RUN echo "/dev/vda2   /       ext4    defaults    0 1" > /etc/fstab && \
     echo "/dev/vda1   /boot   vfat    defaults    0 2" >> /etc/fstab
+
+# Run a Grafana OTEL LGTM stack inside the control-plane (for demos/telemetry).
+# This systemd service launches the grafana/otel-lgtm container with host
+# networking so Grafana is reachable at the VM's IP (e.g. 192.168.100.10:3000).
+# run.sh seeds OTEL_LGTM_IMAGE (a pinned tag) into the demo registry on the
+# host, which the VM reaches at its default gateway: passt maps that address
+# to the host's loopback.
+ARG REGISTRY_PORT=5000
+ARG OTEL_LGTM_IMAGE
+RUN cat > /etc/systemd/system/otel-lgtm.service << 'EOF' && \
+    sed -i \
+    -e "s|__REGISTRY_PORT__|${REGISTRY_PORT}|g" \
+    -e "s|__OTEL_LGTM_IMAGE__|${OTEL_LGTM_IMAGE:?set OTEL_LGTM_IMAGE}|g" \
+    /etc/systemd/system/otel-lgtm.service
+[Unit]
+Description=Grafana OTEL LGTM Stack (Grafana+Tempo+Prometheus+Loki)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Ensure podman binary is available and pull image before start so failures are visible
+ExecStartPre=/usr/bin/podman --version
+ExecStartPre=-/usr/bin/podman rm -f otel-lgtm
+ExecStartPre=/bin/bash -c 'GW=$(ip route | awk "/default/ {print \$3; exit}") && /usr/bin/podman pull --tls-verify=false $${GW}:__REGISTRY_PORT__/__OTEL_LGTM_IMAGE__'
+ExecStart=/bin/bash -c 'GW=$(ip route | awk "/default/ {print \$3; exit}") && /usr/bin/podman run --name otel-lgtm --net host -d $${GW}:__REGISTRY_PORT__/__OTEL_LGTM_IMAGE__'
+ExecStop=-/usr/bin/podman rm -f otel-lgtm
+Restart=on-failure
+RestartSec=5
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Copy configuration and the node's systemd units
+COPY configuration/ /etc/qarax/configuration/
+COPY deployments/overlaybd-tcmu.service /etc/systemd/system/overlaybd-tcmu.service
+COPY deployments/qarax-node.service /etc/systemd/system/qarax-node.service
+
+# Copy qarax, qarax-node, and qarax-init binaries: these change on every code
+# edit, so everything above stays cached across rebuilds.
+COPY --chmod=0755 target/x86_64-unknown-linux-musl/release/qarax-server /usr/local/bin/qarax-server
+COPY --chmod=0755 target/x86_64-unknown-linux-musl/release/qarax-node /usr/local/bin/qarax-node
+COPY --chmod=0755 target/x86_64-unknown-linux-musl/release/qarax-init /usr/local/bin/qarax-init
+
+# Build production initramfs with qarax-init (handles root mounting + switch_root)
+RUN mkdir -p /tmp/initramfs/{dev,proc,sys,newroot} && \
+    cp /usr/local/bin/qarax-init /tmp/initramfs/init && \
+    chmod +x /tmp/initramfs/init && \
+    cd /tmp/initramfs && \
+    find . | cpio -o -H newc | gzip > /var/lib/qarax/images/initramfs-production.gz && \
+    rm -rf /tmp/initramfs

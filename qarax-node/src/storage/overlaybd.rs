@@ -27,6 +27,17 @@ impl OverlayBdBackend {
 #[tonic::async_trait]
 impl StorageBackend for OverlayBdBackend {
     async fn attach(&self, _pool_id: &str, config_json: &str) -> anyhow::Result<String> {
+        // OverlayBD disks are TCMU devices served by overlaybd-tcmu. Without
+        // it every mount fails with ENOENT on the backstore's enable file, so
+        // refuse the pool and keep the scheduler from sending image VMs here.
+        // (The e2e stack runs it on one node only: two daemons can't share a
+        // kernel's TCMU handler.)
+        if !tcmu_daemon_running().await {
+            anyhow::bail!(
+                "overlaybd-tcmu is not running on this node, so it can't serve OverlayBD disks"
+            );
+        }
+
         let cfg: serde_json::Value = serde_json::from_str(config_json)
             .map_err(|e| anyhow::anyhow!("Invalid OverlayBD pool config JSON: {}", e))?;
 
@@ -120,4 +131,19 @@ impl StorageBackend for OverlayBdBackend {
         self.manager.recover().await;
         Ok(())
     }
+}
+
+/// Whether an overlaybd-tcmu process is running on this node.
+async fn tcmu_daemon_running() -> bool {
+    let Ok(mut entries) = tokio::fs::read_dir("/proc").await else {
+        return false;
+    };
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        if let Ok(comm) = tokio::fs::read_to_string(entry.path().join("comm")).await
+            && comm.trim_end() == "overlaybd-tcmu"
+        {
+            return true;
+        }
+    }
+    false
 }

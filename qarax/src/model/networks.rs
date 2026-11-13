@@ -82,6 +82,14 @@ pub struct IpAllocation {
     pub allocated_at: chrono::DateTime<chrono::Utc>,
 }
 
+/// A host a network is attached to, and the bridge carrying it there.
+#[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
+pub struct NetworkHost {
+    pub host_id: Uuid,
+    pub host_name: String,
+    pub bridge_name: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct AttachedNetwork {
     pub host_id: Uuid,
@@ -185,16 +193,18 @@ pub async fn attach_host(
     network_id: Uuid,
     host_id: Uuid,
     bridge_name: &str,
+    parent_interface: Option<&str>,
 ) -> Result<(), sqlx::Error> {
     sqlx::query!(
         r#"
-INSERT INTO host_networks (host_id, network_id, bridge_name)
-VALUES ($1, $2, $3)
+INSERT INTO host_networks (host_id, network_id, bridge_name, parent_interface)
+VALUES ($1, $2, $3, $4)
 ON CONFLICT DO NOTHING
         "#,
         host_id,
         network_id,
-        bridge_name
+        bridge_name,
+        parent_interface
     )
     .execute(pool)
     .await?;
@@ -234,6 +244,44 @@ pub async fn host_has_network(
     Ok(row > 0)
 }
 
+/// Hosts the network is attached to, by host name.
+pub async fn list_hosts(pool: &PgPool, network_id: Uuid) -> Result<Vec<NetworkHost>, sqlx::Error> {
+    sqlx::query_as!(
+        NetworkHost,
+        r#"
+SELECT hn.host_id, h.name AS host_name, hn.bridge_name
+FROM host_networks hn
+JOIN hosts h ON h.id = hn.host_id
+WHERE hn.network_id = $1
+ORDER BY h.name
+        "#,
+        network_id
+    )
+    .fetch_all(pool)
+    .await
+}
+
+/// What still uses a network: "vm <name>" for VMs with a NIC on it and
+/// "template <name>" for VM templates that create VMs on it.
+pub async fn users(pool: &PgPool, network_id: Uuid) -> Result<Vec<String>, sqlx::Error> {
+    sqlx::query_scalar!(
+        r#"
+SELECT DISTINCT 'vm ' || v.name AS "user!"
+FROM vms v
+JOIN network_interfaces ni ON ni.vm_id = v.id
+WHERE ni.network_id = $1
+UNION
+SELECT 'template ' || t.name
+FROM vm_templates t
+WHERE t.network_id = $1
+ORDER BY 1
+        "#,
+        network_id
+    )
+    .fetch_all(pool)
+    .await
+}
+
 /// Return the bridge name for a network on a specific host.
 pub async fn get_host_bridge(
     pool: &PgPool,
@@ -251,10 +299,17 @@ pub async fn get_host_bridge(
     Ok(row)
 }
 
+/// A network attached to a host, with what re-creating it there needs.
+pub struct HostAttachment {
+    pub network: Network,
+    pub bridge_name: String,
+    pub parent_interface: Option<String>,
+}
+
 pub async fn list_for_host(
     pool: &PgPool,
     host_id: Uuid,
-) -> Result<Vec<(Network, String)>, sqlx::Error> {
+) -> Result<Vec<HostAttachment>, sqlx::Error> {
     let rows = sqlx::query!(
         r#"
 SELECT n.id,
@@ -265,7 +320,8 @@ SELECT n.id,
        n.vpc_name,
        n.type AS network_type,
        n.status AS "status: NetworkStatus",
-       hn.bridge_name
+       hn.bridge_name,
+       hn.parent_interface
 FROM networks n
 JOIN host_networks hn ON hn.network_id = n.id
 WHERE hn.host_id = $1
@@ -278,22 +334,21 @@ ORDER BY n.name
 
     Ok(rows
         .into_iter()
-        .map(|r| {
-            (
-                Network {
-                    id: r.id,
-                    name: r.name,
-                    subnet: r.subnet,
-                    gateway: r
-                        .gateway
-                        .map(|v| v.split('/').next().unwrap_or(&v).to_string()),
-                    dns: r.dns.map(|v| v.split('/').next().unwrap_or(&v).to_string()),
-                    vpc_name: r.vpc_name,
-                    network_type: r.network_type,
-                    status: r.status,
-                },
-                r.bridge_name,
-            )
+        .map(|r| HostAttachment {
+            network: Network {
+                id: r.id,
+                name: r.name,
+                subnet: r.subnet,
+                gateway: r
+                    .gateway
+                    .map(|v| v.split('/').next().unwrap_or(&v).to_string()),
+                dns: r.dns.map(|v| v.split('/').next().unwrap_or(&v).to_string()),
+                vpc_name: r.vpc_name,
+                network_type: r.network_type,
+                status: r.status,
+            },
+            bridge_name: r.bridge_name,
+            parent_interface: r.parent_interface,
         })
         .collect())
 }

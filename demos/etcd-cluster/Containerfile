@@ -1,64 +1,38 @@
-# Containerfile for an etcd cluster node (qarax distributed demo)
+# etcd cluster node image for demos/etcd-cluster.
 #
-# Each VM boots from this OCI image and determines its etcd identity by reading
-# the IP address assigned to eth0 (statically allocated by qarax via --ip).
+# qarax boots it from OverlayBD with qarax-init as PID 1 (no systemd), which
+# runs the CMD below with the image's ENV. CLUSTER_MEMBERS (name=peer-url,...)
+# comes from run.sh's node list; etcd-node.sh picks this node's entry by the
+# IP qarax assigned to eth0.
 #
-# Fixed cluster layout (hardcoded in etcd-node.sh):
-#   etcd-0  10.100.0.10
-#   etcd-1  10.100.0.11
-#   etcd-2  10.100.0.12
-#
-# Built, pushed, and converted to OverlayBD automatically by the demo:
-#   ./demos/etcd-cluster/run.sh
-#
-# Manual build (the local registry is published on localhost:5001):
-#   podman build -f demos/etcd-cluster/Containerfile -t localhost:5001/etcd-node:src demos/etcd-cluster/
-#   podman push --tls-verify=false localhost:5001/etcd-node:src
+# Built and pushed by ./demos/etcd-cluster/run.sh, whose import converts it to OverlayBD. By
+# hand (the local stack's registry is published on localhost:5001):
+#   docker build -f demos/etcd-cluster/Containerfile -t localhost:5001/etcd-node:src \
+#     --build-arg CLUSTER_MEMBERS=etcd-0=http://10.100.0.10:2380,etcd-1=http://10.100.0.11:2380,etcd-2=http://10.100.0.12:2380 \
+#     demos/etcd-cluster/
+#   docker push localhost:5001/etcd-node:src
 
 FROM fedora:43
 
 ARG ETCD_VERSION=v3.5.21
 
-# Minimal system tools needed at runtime
-RUN dnf install -y \
-    iproute \
-    util-linux \
-    procps-ng \
-    openssh-server \
-    && dnf clean all
+# iproute for etcd-node.sh; procps-ng so `qarax vm exec <vm> -- ps aux` works
+RUN dnf install -y iproute procps-ng && dnf clean all
 
-# Download etcd and etcdctl static binaries
+# etcd and etcdctl static binaries
 RUN curl -fsSL \
     "https://github.com/etcd-io/etcd/releases/download/${ETCD_VERSION}/etcd-${ETCD_VERSION}-linux-amd64.tar.gz" \
     | tar -xz --strip-components=1 -C /usr/local/bin/ \
       "etcd-${ETCD_VERSION}-linux-amd64/etcd" \
       "etcd-${ETCD_VERSION}-linux-amd64/etcdctl" && \
-    chmod +x /usr/local/bin/etcd /usr/local/bin/etcdctl
+    chmod +x /usr/local/bin/etcd /usr/local/bin/etcdctl && \
+    mkdir -p /var/lib/etcd
 
-# Create etcd data directory
-RUN mkdir -p /var/lib/etcd
-
-# Copy startup script and systemd unit
 COPY etcd-node.sh /usr/local/bin/etcd-node.sh
 RUN chmod +x /usr/local/bin/etcd-node.sh
 
-COPY etcd-node.service /etc/systemd/system/etcd-node.service
+# Last, so changing the node layout only rebuilds this layer.
+ARG CLUSTER_MEMBERS
+ENV CLUSTER_MEMBERS="${CLUSTER_MEMBERS}"
 
-# Enable etcd service at boot
-RUN mkdir -p /etc/systemd/system/multi-user.target.wants && \
-    ln -sf /etc/systemd/system/etcd-node.service \
-       /etc/systemd/system/multi-user.target.wants/etcd-node.service
-
-# Configure SSH for interactive access via the demo script
-RUN ssh-keygen -A && \
-    sed -i 's/^#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config && \
-    sed -i 's/^PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config && \
-    mkdir -p /etc/systemd/system/multi-user.target.wants && \
-    ln -sf /usr/lib/systemd/system/sshd.service \
-       /etc/systemd/system/multi-user.target.wants/sshd.service
-
-# Set root password for console + SSH access
-RUN echo "root:qarax" | chpasswd
-
-# Generic hostname; the etcd script identifies the node by IP not hostname
-RUN echo "etcd-node" > /etc/hostname
+CMD ["/usr/local/bin/etcd-node.sh"]

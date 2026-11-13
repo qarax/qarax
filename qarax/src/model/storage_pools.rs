@@ -343,6 +343,30 @@ pub async fn list_host_ids(pool: &PgPool, pool_id: Uuid) -> Result<Vec<Uuid>, sq
     Ok(rows)
 }
 
+/// A host a storage pool is attached to.
+#[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
+pub struct PoolHost {
+    pub host_id: Uuid,
+    pub host_name: String,
+}
+
+/// Hosts the storage pool is attached to, by host name.
+pub async fn list_hosts(pool: &PgPool, pool_id: Uuid) -> Result<Vec<PoolHost>, sqlx::Error> {
+    sqlx::query_as!(
+        PoolHost,
+        r#"
+SELECT hsp.host_id, h.name AS host_name
+FROM host_storage_pools hsp
+JOIN hosts h ON h.id = hsp.host_id
+WHERE hsp.storage_pool_id = $1
+ORDER BY h.name
+        "#,
+        pool_id
+    )
+    .fetch_all(pool)
+    .await
+}
+
 /// Check whether a host is attached to a given storage pool.
 pub async fn host_has_pool(
     pool: &PgPool,

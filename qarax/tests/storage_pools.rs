@@ -334,3 +334,52 @@ async fn import_to_pool_requires_an_up_host_attached_to_the_pool() {
     let body: serde_json::Value = response.json().await.unwrap();
     assert_eq!(body["message"], "No UP host attached to this storage pool");
 }
+
+#[tokio::test]
+async fn test_list_pool_hosts() {
+    let app = spawn_app().await;
+    let client = reqwest::Client::new();
+    let res = client
+        .post(format!("{}/storage-pools", &app.address))
+        .json(&serde_json::json!({
+            "name": "listed-pool",
+            "pool_type": "local",
+            "config": {"path": "/tmp/listed-pool"}
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), reqwest::StatusCode::CREATED);
+    let pool_id: uuid::Uuid = res.text().await.unwrap().parse().unwrap();
+    for name in ["pool-host-b", "pool-host-a"] {
+        let host_id = support::add_host(&client, &app.address, name).await;
+        qarax::model::storage_pools::attach_host(&app.pool, pool_id, host_id)
+            .await
+            .unwrap();
+    }
+    support::add_host(&client, &app.address, "pool-host-unattached").await;
+
+    let res = client
+        .get(format!("{}/storage-pools/{pool_id}/hosts", &app.address))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), reqwest::StatusCode::OK);
+    let hosts: Vec<serde_json::Value> = res.json().await.unwrap();
+    let names: Vec<&str> = hosts
+        .iter()
+        .map(|h| h["host_name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["pool-host-a", "pool-host-b"]);
+
+    let res = client
+        .get(format!(
+            "{}/storage-pools/{}/hosts",
+            &app.address,
+            uuid::Uuid::new_v4()
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), reqwest::StatusCode::NOT_FOUND);
+}

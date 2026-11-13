@@ -14,7 +14,6 @@ from ...types import Response
 def _get_kwargs(
     network_id: UUID,
 ) -> dict[str, Any]:
-
     _kwargs: dict[str, Any] = {
         "method": "get",
         "url": "/networks/{network_id}".format(

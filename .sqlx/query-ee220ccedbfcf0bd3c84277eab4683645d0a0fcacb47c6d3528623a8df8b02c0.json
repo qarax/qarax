@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nINSERT INTO host_networks (host_id, network_id, bridge_name, parent_interface)\nVALUES ($1, $2, $3, $4)\nON CONFLICT DO NOTHING\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Varchar",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ee220ccedbfcf0bd3c84277eab4683645d0a0fcacb47c6d3528623a8df8b02c0"
+}

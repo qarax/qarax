@@ -52,6 +52,10 @@ pub async fn add(client: &Client, host: &NewHost) -> anyhow::Result<String> {
 }
 
 /// Deploy a bootc image to a host (async, returns 202).
+pub async fn delete(client: &Client, host_id: Uuid) -> anyhow::Result<()> {
+    client.delete(&format!("/hosts/{host_id}")).await
+}
+
 pub async fn deploy(client: &Client, host_id: Uuid, req: &DeployHostRequest) -> anyhow::Result<()> {
     client
         .post_text(&format!("/hosts/{host_id}/deploy"), req)

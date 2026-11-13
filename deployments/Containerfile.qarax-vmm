@@ -16,11 +16,6 @@ FROM quay.io/centos-bootc/centos-bootc:stream10
 ARG CLOUD_HYPERVISOR_VERSION
 ARG FIRECRACKER_VERSION
 ARG QARAX_VERSION=0.1.0
-ARG OVERLAYBD_VERSION=1.0.16
-ARG OVERLAYBD_RPM_SUFFIX=20250818.4601fb2
-ARG OVERLAYBD_RPM_DIST=azurelinux.3.0
-ARG ACI_VERSION=1.4.1
-ARG ACI_RPM_SUFFIX=20260114025326.c6ba42c
 
 # Install system dependencies for running VMs
 RUN dnf install -y \
@@ -63,9 +58,17 @@ RUN curl -fsSL \
     rm -rf /tmp/firecracker.tgz /tmp/release-${FIRECRACKER_VERSION}-x86_64 && \
     firecracker --version
 
+# OverlayBD and ACI pins come from versions/node-artifacts.env, read through a
+# bind mount. NODE_ARTIFACTS_SHA (its checksum, passed by `make appliance-build`)
+# busts the layer cache on a pin change under podman/buildah, whose cache key
+# doesn't cover mounted files the way BuildKit's does.
+ARG NODE_ARTIFACTS_SHA
+
 # Install overlaybd-tcmu (provides the TCMU block-device backend for OverlayBD images).
 # Files are extracted manually via rpm2cpio to avoid running RPM scriptlets.
-RUN curl -fsSL \
+RUN --mount=type=bind,source=versions/node-artifacts.env,target=/tmp/node-artifacts.env \
+    . /tmp/node-artifacts.env && \
+    curl -fsSL \
     "https://github.com/containerd/overlaybd/releases/download/v${OVERLAYBD_VERSION}/overlaybd-${OVERLAYBD_VERSION}-${OVERLAYBD_RPM_SUFFIX}.${OVERLAYBD_RPM_DIST}.x86_64.rpm" \
     -o /tmp/overlaybd.rpm && \
     cd / && rpm2cpio /tmp/overlaybd.rpm | cpio -idm --no-absolute-filenames 2>/dev/null && \
@@ -82,13 +85,13 @@ RUN sed -i \
 
 # Install the overlaybd-snapshotter convertor (statically-linked Go binary).
 # Used to convert OCI images to OverlayBD format.
-RUN curl -fsSL \
+RUN --mount=type=bind,source=versions/node-artifacts.env,target=/tmp/node-artifacts.env \
+    . /tmp/node-artifacts.env && \
+    curl -fsSL \
     "https://github.com/containerd/accelerated-container-image/releases/download/v${ACI_VERSION}/overlaybd-snapshotter-${ACI_VERSION}-${ACI_RPM_SUFFIX}.x86_64.rpm" \
     -o /tmp/aci.rpm && \
     cd / && rpm2cpio /tmp/aci.rpm | cpio -idm --no-absolute-filenames 2>/dev/null && \
     rm /tmp/aci.rpm
-
-
 
 # Copy qarax-node and qarax-init binaries (must be built before image build)
 # Build with: cargo build --release -p qarax-node && cargo build --release -p qarax-init

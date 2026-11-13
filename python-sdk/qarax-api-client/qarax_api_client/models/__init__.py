@@ -50,6 +50,7 @@ from .job_status import JobStatus
 from .job_type import JobType
 from .lifecycle_hook import LifecycleHook
 from .network import Network
+from .network_host import NetworkHost
 from .network_interface import NetworkInterface
 from .network_status import NetworkStatus
 from .new_boot_source import NewBootSource
@@ -70,6 +71,7 @@ from .new_vm_template import NewVmTemplate
 from .placement_policy import PlacementPolicy
 from .placement_policy_preferred_host_labels import PlacementPolicyPreferredHostLabels
 from .placement_policy_required_host_labels import PlacementPolicyRequiredHostLabels
+from .pool_host import PoolHost
 from .rate_limiter_config import RateLimiterConfig
 from .register_lun_request import RegisterLunRequest
 from .restore_backup_response import RestoreBackupResponse
@@ -164,6 +166,7 @@ __all__ = (
     "JobType",
     "LifecycleHook",
     "Network",
+    "NetworkHost",
     "NetworkInterface",
     "NetworkStatus",
     "NewBootSource",
@@ -184,6 +187,7 @@ __all__ = (
     "PlacementPolicy",
     "PlacementPolicyPreferredHostLabels",
     "PlacementPolicyRequiredHostLabels",
+    "PoolHost",
     "RateLimiterConfig",
     "RegisterLunRequest",
     "RestoreBackupResponse",

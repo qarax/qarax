@@ -2,8 +2,6 @@ use clap::{Args, Subcommand};
 use tabled::{Table, Tabled, settings::Style};
 use uuid::Uuid;
 
-use crate::api::jobs;
-
 use crate::{
     api::{
         self,
@@ -19,31 +17,6 @@ use super::{
     OutputFormat, format_bytes, parse_size, print_output, resolve_host_id, resolve_object_id,
     resolve_pool_id,
 };
-
-/// Poll a job to completion, printing progress to stderr. Returns an error if the job fails.
-async fn poll_job_to_completion(client: &Client, job_id: Uuid, label: &str) -> anyhow::Result<()> {
-    use std::io::Write as _;
-    loop {
-        let job = jobs::get(client, job_id).await?;
-        match job.status.as_str() {
-            "completed" => {
-                eprintln!("\r[completed]                    ");
-                return Ok(());
-            }
-            "failed" => {
-                return Err(anyhow::anyhow!(
-                    "{label} job {job_id} failed: {}",
-                    job.error.unwrap_or_else(|| "unknown error".to_string())
-                ));
-            }
-            status => {
-                eprint!("\r[{status}] {}%   ", job.progress.unwrap_or(0));
-                let _ = std::io::stderr().flush();
-                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-            }
-        }
-    }
-}
 
 fn active_hosts(hosts: &[api::models::Host]) -> impl Iterator<Item = &api::models::Host> {
     hosts
@@ -103,6 +76,11 @@ enum StoragePoolCommand {
     },
     /// Delete a storage pool
     Delete {
+        /// Pool name or ID
+        pool: String,
+    },
+    /// List the hosts a storage pool is attached to
+    Hosts {
         /// Pool name or ID
         pool: String,
     },
@@ -294,6 +272,18 @@ pub async fn run_pool(
             println!("Deleted storage pool: {id}");
         }
 
+        StoragePoolCommand::Hosts { pool } => {
+            let pool_id = resolve_pool_id(client, &pool).await?;
+            let hosts = api::storage::list_pool_hosts(client, pool_id).await?;
+            if !matches!(output, OutputFormat::Table) {
+                print_output(&hosts, output)?;
+            } else {
+                for host in hosts {
+                    println!("{}  {}", host.host_id, host.host_name);
+                }
+            }
+        }
+
         StoragePoolCommand::AttachHost { pool, host, all } => {
             let pool_id = resolve_pool_id(client, &pool).await?;
             if all {
@@ -371,7 +361,7 @@ pub async fn run_pool(
                 } else {
                     println!("Disk object: {}", resp.storage_object_id);
                     println!("Download job: {job_id}");
-                    poll_job_to_completion(client, job_id, "Disk creation").await?;
+                    crate::wait::wait_for_job(client, job_id).await?;
                 }
             } else if !matches!(output, OutputFormat::Table) {
                 print_output(&resp, output)?;
@@ -414,7 +404,7 @@ pub async fn run_pool(
             } else {
                 println!("Import job: {}", resp.job_id);
                 println!("Storage object: {}", resp.storage_object_id);
-                poll_job_to_completion(client, resp.job_id, "Import").await?;
+                crate::wait::wait_for_job(client, resp.job_id).await?;
             }
         }
     }

@@ -2,7 +2,7 @@ use uuid::Uuid;
 
 use crate::client::Client;
 
-use super::models::{AttachHostToNetworkRequest, IpAllocation, Network, NewNetwork};
+use super::models::{AttachHostToNetworkRequest, IpAllocation, Network, NetworkHost, NewNetwork};
 
 pub async fn list(client: &Client, name: Option<&str>) -> anyhow::Result<Vec<Network>> {
     let path = match name {
@@ -48,6 +48,10 @@ pub async fn detach_host(client: &Client, network_id: Uuid, host_id: Uuid) -> an
     client
         .delete(&format!("/networks/{network_id}/hosts/{host_id}"))
         .await
+}
+
+pub async fn list_hosts(client: &Client, network_id: Uuid) -> anyhow::Result<Vec<NetworkHost>> {
+    client.get(&format!("/networks/{network_id}/hosts")).await
 }
 
 pub async fn list_ips(client: &Client, network_id: Uuid) -> anyhow::Result<Vec<IpAllocation>> {

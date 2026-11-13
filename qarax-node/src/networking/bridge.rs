@@ -188,11 +188,21 @@ pub async fn create_bridge(name: &str) -> Result<()> {
 }
 
 /// Assign an IP address to the bridge (gateway for the subnet).
+/// Whether a network interface with this name exists.
+pub async fn link_exists(name: &str) -> Result<bool> {
+    let handle = netlink_handle().await?;
+    Ok(link_message(&handle, name).await.is_ok())
+}
+
+/// Assign the gateway address to a bridge; a no-op if it already has it.
 pub async fn set_bridge_ip(name: &str, gateway_cidr: &str) -> Result<()> {
     info!("Setting bridge {name} IP to {gateway_cidr}");
     let (ip, prefix) = parse_cidr(gateway_cidr)?;
     let handle = netlink_handle().await?;
     let idx = link_index(&handle, name).await?;
+    if ipv4_addrs(&handle, idx).await?.contains(&(ip, prefix)) {
+        return Ok(());
+    }
 
     handle
         .address()

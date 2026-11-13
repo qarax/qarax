@@ -1,4 +1,4 @@
-.PHONY: build test test-deps clean openapi sdk help lint fmt shfmt ruff-check ruff-fmt ci-checks appliance-build appliance-push run-local stop-local
+.PHONY: build test test-deps clean openapi sdk help lint fmt shfmt shellcheck ruff-check ruff-fmt ci-checks appliance-build appliance-push run-local stop-local
 
 # On macOS, override default musl target (linker fails cross-compiling from Mac)
 UNAME_S := $(shell uname -s)
@@ -85,8 +85,15 @@ fmt: ruff-fmt shfmt
 ci-checks:
 	CI=1 dagger --progress plain call --mod ./ci all --src=.
 
+# Tracked and new shell scripts that still exist (a deleted file stays in the
+# index until it's staged).
+SHELL_SCRIPTS = $(shell git ls-files -co --exclude-standard '*.sh' | while read -r f; do [ -f "$$f" ] && echo "$$f"; done)
+
 shfmt:
-	shfmt -w -i 0 hack/*.sh scripts/*.sh
+	shfmt -w -i 0 $(SHELL_SCRIPTS)
+
+shellcheck:
+	shellcheck -x $(SHELL_SCRIPTS)
 
 ruff-check:
 	@cd python-sdk && ruff check .
@@ -95,11 +102,12 @@ ruff-fmt:
 	@cd python-sdk && ruff format .
 
 appliance-build:
-	cargo build --release -p qarax-node --target $(APPLIANCE_TARGET)
+	cargo build --release -p qarax-node -p qarax-init --target $(APPLIANCE_TARGET)
 	$(CONTAINER_ENGINE) build \
 		-f deployments/Containerfile.qarax-vmm \
 		--build-arg CLOUD_HYPERVISOR_VERSION=$(CLOUD_HYPERVISOR_VERSION) \
 		--build-arg FIRECRACKER_VERSION=$(FIRECRACKER_VERSION) \
+		--build-arg NODE_ARTIFACTS_SHA=$(shell sha256sum versions/node-artifacts.env | cut -d' ' -f1) \
 		--build-arg QARAX_VERSION=$(APPLIANCE_TAG) \
 		-t $(APPLIANCE_IMAGE):$(APPLIANCE_TAG) \
 		.

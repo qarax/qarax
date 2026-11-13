@@ -3,60 +3,51 @@
 # Demo: host maintenance / manual evacuation
 #
 # Shows a two-host live evacuation workflow end to end:
-#   1. Verify two hosts are UP
+#   1. Make sure two hosts are UP
 #   2. Create and start a small migration-compatible VM
-#   3. Identify the VM's source host
-#   4. Evacuate that host
-#   5. Show the host ends in maintenance and the VM moves away
-#   6. Create another VM and show scheduling avoids the maintenance host
+#   3. Evacuate the VM's host
+#   4. Show the host ends in maintenance and the VM is running on the other host
+#   5. Create another VM and show scheduling avoids the maintenance host
+#
+# Prerequisites:
+#   - local qarax stack (make run-local); started via hack/run-local.sh if not
+#     running. The second node (qarax-node-2) is started and registered
+#     automatically.
+#   - jq
 #
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+# shellcheck source=demos/lib.sh
 source "${REPO_ROOT}/demos/lib.sh"
 
-cd "$REPO_ROOT"
+PREFIX="demo-evac-"
+VM="${PREFIX}vm"
+FOLLOWUP_VM="${PREFIX}followup"
 
-SERVER="${QARAX_SERVER:-http://localhost:8000}"
-SUFFIX="$$"
-VM_NAME="demo-evacuate-vm-${SUFFIX}"
-FOLLOWUP_VM_NAME="demo-evacuate-post-${SUFFIX}"
-VCPUS=1
-MEMORY_MIB=256
-MEMORY_BYTES=$((MEMORY_MIB * 1024 * 1024))
-
-SOURCE_HOST_ID=""
-SOURCE_HOST_NAME=""
-DEST_HOST_ID=""
-DEST_HOST_NAME=""
-FOLLOWUP_HOST_ID=""
-FOLLOWUP_HOST_NAME=""
-PRIMARY_VM_CREATED=0
-FOLLOWUP_VM_CREATED=0
-
-banner() {
-	echo -e "\n${BOLD}${CYAN}══════════════════════════════════════════════════════════════${NC}"
-	echo -e "${BOLD}${CYAN}  $1${NC}"
-	echo -e "${BOLD}${CYAN}══════════════════════════════════════════════════════════════${NC}\n"
-}
-step() { echo -e "${GREEN}▸${NC} ${BOLD}$1${NC}"; }
-info() { echo -e "  ${DIM}$1${NC}"; }
-run() {
-	echo -e "  ${DIM}\$ $*${NC}"
-	"$@"
-}
+CLEANUP_ONLY=0
 
 usage() {
-	echo "Usage: $0 [OPTIONS]"
-	echo ""
-	echo "Options:"
-	echo "  --server URL   qarax API URL (default: \$QARAX_SERVER or http://localhost:8000)"
-	echo "  --help, -h     Show this help"
+	cat <<EOF
+Usage: $0 [OPTIONS]
+
+Options:
+  --cleanup      Delete the demo VMs and return hosts in maintenance to UP, then exit
+  --server URL   qarax API URL (default: \$QARAX_SERVER or http://localhost:8000)
+  --help, -h     Show this help
+
+Environment:
+  KEEP=1         Leave the VMs in place and the evacuated host in maintenance at exit
+EOF
 }
 
 while [[ $# -gt 0 ]]; do
 	case "$1" in
+	--cleanup)
+		CLEANUP_ONLY=1
+		shift
+		;;
 	--server)
 		SERVER="${2:?--server requires a URL}"
 		shift 2
@@ -71,181 +62,85 @@ while [[ $# -gt 0 ]]; do
 	esac
 done
 
-if [[ -z "$(find_qarax_bin)" ]]; then
-	echo "qarax CLI not found — building..."
-	cargo build -p cli
-fi
-
-QARAX_BIN="$(find_qarax_bin)"
-[[ -n "$QARAX_BIN" ]] || die "qarax CLI not found even after build"
-
-qarax() {
-	"$QARAX_BIN" --server "$SERVER" "$@"
-}
-
-host_name_for_id() {
+host_name() {
 	qarax host get "$1" -o json | jq -r '.name'
 }
 
-wait_for_vm_status() {
-	local vm="$1"
-	local target="$2"
-	local timeout="${3:-90}"
-	local elapsed=0
-
-	while [[ $elapsed -lt $timeout ]]; do
-		local status
-		status="$(qarax vm get "$vm" -o json | jq -r '.status')"
-		if [[ "$status" == "$target" ]]; then
-			info "${vm}: ${status}"
-			return 0
-		fi
-		sleep 2
-		elapsed=$((elapsed + 2))
+# Return every host in maintenance to UP. The demo leaves the evacuated host
+# in maintenance until exit, so an interrupted or KEEP=1 run leaves it there.
+release_hosts() {
+	local host
+	for host in $(qarax host list -o json | jq -r '.[] | select(.status == "maintenance") | .name'); do
+		run qarax host maintenance exit "$host"
 	done
-
-	die "Timed out waiting for VM ${vm} to reach status '${target}'"
 }
 
-wait_for_host_status() {
-	local host="$1"
-	local target="$2"
-	local timeout="${3:-60}"
-	local elapsed=0
-
-	while [[ $elapsed -lt $timeout ]]; do
-		local status
-		status="$(qarax host get "$host" -o json | jq -r '.status')"
-		if [[ "$status" == "$target" ]]; then
-			info "${host}: ${status}"
-			return 0
-		fi
-		sleep 2
-		elapsed=$((elapsed + 2))
-	done
-
-	die "Timed out waiting for host ${host} to reach status '${target}'"
-}
-
-wait_for_vm_host_change() {
-	local vm="$1"
-	local original_host_id="$2"
-	local timeout="${3:-90}"
-	local elapsed=0
-
-	while [[ $elapsed -lt $timeout ]]; do
-		local current_host_id
-		current_host_id="$(qarax vm get "$vm" -o json | jq -r '.host_id // empty')"
-		if [[ -n "$current_host_id" && "$current_host_id" != "$original_host_id" ]]; then
-			printf '%s\n' "$current_host_id"
-			return 0
-		fi
-		sleep 2
-		elapsed=$((elapsed + 2))
-	done
-
-	die "Timed out waiting for VM ${vm} to move off host ${original_host_id}"
+sweep_all() {
+	sweep vm "$PREFIX"
+	release_hosts
 }
 
 cleanup() {
-	echo
-	step "Cleaning up..."
-
-	if [[ "$FOLLOWUP_VM_CREATED" -eq 1 ]]; then
-		qarax vm stop "$FOLLOWUP_VM_NAME" 2>/dev/null || true
-		qarax vm delete "$FOLLOWUP_VM_NAME" 2>/dev/null || true
+	if [[ "$KEEP" == 1 ]]; then
+		info "KEEP=1: leaving ${PREFIX}* VMs, and ${SOURCE_HOST:-the evacuated host} in maintenance. Undo with: $0 --cleanup"
+		return
 	fi
-
-	if [[ "$PRIMARY_VM_CREATED" -eq 1 ]]; then
-		qarax vm stop "$VM_NAME" 2>/dev/null || true
-		qarax vm delete "$VM_NAME" 2>/dev/null || true
-	fi
-
-	if [[ -n "$SOURCE_HOST_NAME" ]]; then
-		current_status="$(qarax host get "$SOURCE_HOST_NAME" -o json 2>/dev/null | jq -r '.status // empty' 2>/dev/null || true)"
-		if [[ "$current_status" == "maintenance" ]]; then
-			qarax host maintenance exit "$SOURCE_HOST_NAME" 2>/dev/null || true
-		fi
-	fi
-
-	info "Done."
+	step "Cleaning up"
+	sweep_all
 }
-trap cleanup EXIT
 
 banner "Host Maintenance / Evacuation Demo"
 
-step "Preflight checks"
 command -v jq >/dev/null || die "jq is required"
-require_server "$SERVER"
+ensure_stack
+require_cli
 
-host_json="$(qarax host list -o json 2>&1)" || {
-	if grep -qi "missing field" <<<"$host_json"; then
-		die "CLI/server schema mismatch detected. Rebuild the local stack with: REBUILD=1 ./hack/run-local.sh"
-	fi
-	die "Failed to list hosts: $host_json"
-}
+step "Clearing leftovers from earlier runs"
+sweep_all
+if ((CLEANUP_ONLY)); then
+	ok "Done"
+	exit 0
+fi
 
-up_hosts="$(jq -r '.[] | select(.status == "up") | [.name, .address] | @tsv' <<<"$host_json")"
-up_host_count="$(jq -r '[.[] | select(.status == "up")] | length' <<<"$host_json")"
-[[ "$up_host_count" -ge 2 ]] || die "This demo requires two UP hosts (found ${up_host_count}).
-With 'make run-local' running, register the second node:
-  QARAX_TOKEN=\${QARAX_TOKEN:-e2e-test-token} bash e2e/setup_host.sh ${SERVER} qarax-node-2 50051 local-node-2
-If a host is still in maintenance from an earlier run: qarax host maintenance exit <host>
-See demos/host-evacuation/README.md for details."
-
-info "UP hosts:"
-while IFS=$'\t' read -r host_name host_address; do
-	[[ -n "${host_name:-}" ]] || continue
-	info "- ${host_name} (${host_address})"
-done <<<"$up_hosts"
-echo
+ensure_up_hosts 2
+trap cleanup EXIT
 run qarax host list
-echo
 
 step "Creating and starting a migration-compatible VM"
-info "This demo uses the local two-node test stack's default boot configuration, which already supports live migration."
-run qarax vm create --name "$VM_NAME" --vcpus "$VCPUS" --memory "$MEMORY_BYTES"
-PRIMARY_VM_CREATED=1
-run qarax vm start "$VM_NAME"
-wait_for_vm_status "$VM_NAME" running 120
+info "The local stack's default boot (shared kernel + initramfs) supports live migration."
+run qarax vm create --name "$VM" --vcpus 1 --memory 256MiB
+run qarax vm start "$VM"
+SOURCE_HOST_ID=$(qarax vm get "$VM" -o json | jq -r '.host_id')
+SOURCE_HOST=$(host_name "$SOURCE_HOST_ID")
+ok "${VM} is running on ${SOURCE_HOST}"
 
-SOURCE_HOST_ID="$(qarax vm get "$VM_NAME" -o json | jq -r '.host_id // empty')"
-[[ -n "$SOURCE_HOST_ID" ]] || die "VM ${VM_NAME} does not have an assigned source host"
-SOURCE_HOST_NAME="$(host_name_for_id "$SOURCE_HOST_ID")"
-info "${VM_NAME} initially landed on ${SOURCE_HOST_NAME}"
-echo
-run qarax vm get "$VM_NAME"
-echo
+# Evacuation moves every VM on the host. Other demos leave VMs running, and
+# some can't migrate (local-pool disks), so check before taking the host down.
+others=$(qarax vm list -o json | jq -r --arg h "$SOURCE_HOST_ID" --arg vm "$VM" \
+	'[.[] | select(.host_id == $h and .name != $vm) | .name] | join(", ")')
+[[ -z "$others" ]] ||
+	die "Evacuating ${SOURCE_HOST} would move every VM on it, and these aren't this demo's: ${others}\nRemove them (e.g. ./demos/<demo>/run.sh --cleanup) and re-run."
 
-step "Evacuating source host ${SOURCE_HOST_NAME}"
-run qarax host evacuate "$SOURCE_HOST_NAME"
-wait_for_host_status "$SOURCE_HOST_NAME" maintenance 60
-wait_for_vm_status "$VM_NAME" running 120
-DEST_HOST_ID="$(wait_for_vm_host_change "$VM_NAME" "$SOURCE_HOST_ID" 120)"
-DEST_HOST_NAME="$(host_name_for_id "$DEST_HOST_ID")"
-[[ "$DEST_HOST_ID" != "$SOURCE_HOST_ID" ]] || die "VM ${VM_NAME} did not move off ${SOURCE_HOST_NAME}"
-info "${VM_NAME} moved from ${SOURCE_HOST_NAME} to ${DEST_HOST_NAME}"
-echo
-run qarax host get "$SOURCE_HOST_NAME"
-echo
-run qarax vm get "$VM_NAME"
-echo
+step "Evacuating ${SOURCE_HOST}"
+info "Blocks until the evacuation job has migrated every VM off the host."
+run qarax host evacuate "$SOURCE_HOST"
+
+read -r status vm_host_id < <(qarax vm get "$VM" -o json | jq -r '"\(.status) \(.host_id)"')
+[[ "$vm_host_id" != "$SOURCE_HOST_ID" ]] || die "${VM} is still on ${SOURCE_HOST}"
+[[ "$status" == running ]] || die "${VM} is '${status}' after the migration, expected running"
+ok "${VM} is running on $(host_name "$vm_host_id")"
+host_status=$(qarax host get "$SOURCE_HOST" -o json | jq -r '.status')
+[[ "$host_status" == maintenance ]] || die "${SOURCE_HOST} is '${host_status}' after evacuation, expected maintenance"
+ok "${SOURCE_HOST} is in maintenance"
+run qarax host list
 
 step "Creating another VM to prove scheduling avoids the maintenance host"
-run qarax vm create --name "$FOLLOWUP_VM_NAME" --vcpus "$VCPUS" --memory "$MEMORY_BYTES"
-FOLLOWUP_VM_CREATED=1
-FOLLOWUP_HOST_ID="$(qarax vm get "$FOLLOWUP_VM_NAME" -o json | jq -r '.host_id // empty')"
-[[ -n "$FOLLOWUP_HOST_ID" ]] || die "VM ${FOLLOWUP_VM_NAME} was not scheduled onto a host"
-FOLLOWUP_HOST_NAME="$(host_name_for_id "$FOLLOWUP_HOST_ID")"
-[[ "$FOLLOWUP_HOST_ID" != "$SOURCE_HOST_ID" ]] || die "Maintenance host ${SOURCE_HOST_NAME} was incorrectly selected for ${FOLLOWUP_VM_NAME}"
-run qarax vm start "$FOLLOWUP_VM_NAME"
-wait_for_vm_status "$FOLLOWUP_VM_NAME" running 120
-info "${FOLLOWUP_VM_NAME} landed on ${FOLLOWUP_HOST_NAME}, not on maintenance host ${SOURCE_HOST_NAME}"
-echo
-run qarax vm get "$FOLLOWUP_VM_NAME"
+run qarax vm create --name "$FOLLOWUP_VM" --vcpus 1 --memory 256MiB
+followup_host_id=$(qarax vm get "$FOLLOWUP_VM" -o json | jq -r '.host_id')
+[[ "$followup_host_id" != "$SOURCE_HOST_ID" ]] ||
+	die "the scheduler placed ${FOLLOWUP_VM} on maintenance host ${SOURCE_HOST}"
+ok "${FOLLOWUP_VM} was scheduled onto $(host_name "$followup_host_id"), not ${SOURCE_HOST}"
 
-echo
 banner "Demo Complete"
-info "Host ${SOURCE_HOST_NAME} entered maintenance after evacuation."
-info "VM ${VM_NAME} live-migrated to ${DEST_HOST_NAME}."
-info "New VM ${FOLLOWUP_VM_NAME} avoided the maintenance host."
+ok "Evacuating ${SOURCE_HOST} live-migrated ${VM} away and left the host in maintenance"
+ok "New VMs are scheduled elsewhere until the host leaves maintenance"
