@@ -36,11 +36,25 @@ def list_audit_logs(
     return resp.json()
 
 
+def unused_test_net_address() -> str:
+    """Return a 192.0.2.0/24 address no registered host has yet.
+
+    Host addresses are unique, and TEST-NET-1 is never routed, so these hosts
+    are unreachable by design.
+    """
+    resp = httpx.get(f"{QARAX_URL}/hosts", headers=AUTH_HEADERS)
+    resp.raise_for_status()
+    taken = {host["address"] for host in resp.json()}
+    free = [a for a in (f"192.0.2.{i}" for i in range(1, 255)) if a not in taken]
+    assert free, "every 192.0.2.0/24 address is registered; reset the e2e stack"
+    return free[0]
+
+
 def create_host() -> dict[str, str]:
     suffix = uuid.uuid4().hex[:8]
     host = {
         "name": f"audit-host-{suffix}",
-        "address": f"192.0.2.{int(suffix[:2], 16) % 250 + 1}",
+        "address": unused_test_net_address(),
         "port": 50051,
         "host_user": "root",
     }
