@@ -37,6 +37,7 @@ mod tests {
     #[test]
     fn expand_cpu_list_mixed() {
         assert_eq!(expand_cpu_list("0-3,8"), vec![0, 1, 2, 3, 8]);
+        assert_eq!(expand_cpu_list("0-2,5,8-9"), vec![0, 1, 2, 5, 8, 9]);
     }
 
     #[test]

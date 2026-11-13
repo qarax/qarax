@@ -142,17 +142,6 @@ pub struct VmManager {
 }
 
 impl VmManager {
-    /// Create a new VM manager
-    pub fn new(runtime_dir: impl Into<PathBuf>, ch_binary: impl Into<PathBuf>) -> Self {
-        Self::with_storage(
-            runtime_dir,
-            ch_binary,
-            StorageBackendRegistry::new(),
-            None,
-            None,
-        )
-    }
-
     /// Create a new VM manager with storage backends
     pub fn with_storage(
         runtime_dir: impl Into<PathBuf>,

@@ -123,15 +123,6 @@ pub fn validate_guest_command(
     Ok(format!("guest command resolves to {}", resolved))
 }
 
-pub fn supported_layer_media_type(media_type: &str) -> bool {
-    matches!(
-        media_type,
-        "application/vnd.oci.image.layer.v1.tar+gzip"
-            | "application/vnd.docker.image.rootfs.diff.tar.gzip"
-            | "application/vnd.oci.image.layer.v1.tar"
-    )
-}
-
 fn resolve_program_path(program: &str, env: Option<&[String]>, rootfs: &Path) -> Option<String> {
     if program.starts_with('/') {
         let candidate = rootfs_candidate(rootfs, program.trim_start_matches('/'))?;
@@ -183,7 +174,7 @@ fn is_executable(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{supported_layer_media_type, validate_guest_command};
+    use super::validate_guest_command;
     use crate::oci_config::OciImageConfigDetails;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
@@ -196,22 +187,6 @@ mod tests {
         }
         fs::write(&path, b"#!/bin/sh\n").unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
-    }
-
-    #[test]
-    fn supports_expected_layer_types() {
-        assert!(supported_layer_media_type(
-            "application/vnd.oci.image.layer.v1.tar+gzip"
-        ));
-        assert!(supported_layer_media_type(
-            "application/vnd.docker.image.rootfs.diff.tar.gzip"
-        ));
-        assert!(supported_layer_media_type(
-            "application/vnd.oci.image.layer.v1.tar"
-        ));
-        assert!(!supported_layer_media_type(
-            "application/vnd.oci.image.layer.v1.tar+zstd"
-        ));
     }
 
     #[test]
@@ -244,20 +219,28 @@ mod tests {
 
         let detail = validate_guest_command(&config, root.path()).unwrap();
         assert!(detail.contains("/usr/bin/app"));
+
+        let missing = OciImageConfigDetails {
+            entrypoint: Some(vec!["/usr/bin/missing".to_string()]),
+            ..Default::default()
+        };
+        let err = validate_guest_command(&missing, root.path()).unwrap_err();
+        assert!(err.contains("'/usr/bin/missing' was not found in the guest rootfs"));
     }
 
     #[test]
     fn bare_command_uses_image_path() {
         let root = TempDir::new().unwrap();
-        make_exec(&root, "/usr/local/bin/server");
+        // /opt/app/bin is only on the image's PATH, not on the default one.
+        make_exec(&root, "/opt/app/bin/server");
         let config = OciImageConfigDetails {
             entrypoint: Some(vec!["server".to_string()]),
-            env: Some(vec!["PATH=/usr/local/bin:/usr/bin".to_string()]),
+            env: Some(vec!["PATH=/opt/app/bin:/usr/bin".to_string()]),
             ..Default::default()
         };
 
         let detail = validate_guest_command(&config, root.path()).unwrap();
-        assert!(detail.contains("/usr/local/bin/server"));
+        assert!(detail.contains("/opt/app/bin/server"));
     }
 
     #[test]

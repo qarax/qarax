@@ -50,18 +50,24 @@ mod tests {
     use std::fs;
 
     #[test]
-    fn round_trips_server_url() {
+    fn reads_and_writes_the_on_disk_format() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
 
-        let cfg = Config {
-            server: Some("http://example.com:8000".to_string()),
-            token: None,
-        };
-        save_to(&path, &cfg).unwrap();
-
+        // Files written by `qarax configure` use these keys.
+        fs::write(
+            &path,
+            "server = \"http://example.com:8000\"\ntoken = \"secret-token\"\n",
+        )
+        .unwrap();
         let loaded = load_from(&path);
         assert_eq!(loaded.server.as_deref(), Some("http://example.com:8000"));
+        assert_eq!(loaded.token.as_deref(), Some("secret-token"));
+
+        save_to(&path, &loaded).unwrap();
+        let written: toml::Table = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(written["server"].as_str(), Some("http://example.com:8000"));
+        assert_eq!(written["token"].as_str(), Some("secret-token"));
     }
 
     #[test]

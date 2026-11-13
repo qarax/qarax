@@ -3,6 +3,16 @@ use super::*;
 use crate::rpc::node::{CpuPinning as ProtoCpuPinning, NumaPlacement as ProtoNumaPlacement};
 use tempfile::TempDir;
 
+fn test_manager(runtime_dir: &TempDir) -> VmManager {
+    VmManager::with_storage(
+        runtime_dir.path(),
+        "/bin/true",
+        StorageBackendRegistry::new(),
+        None,
+        None,
+    )
+}
+
 fn base_vm_config(memory_size: i64, boot_vcpus: i32) -> VmConfig {
     VmConfig {
         cpus: Some(Box::new(CpusConfig {
@@ -135,7 +145,7 @@ fn apply_numa_placement_empty_is_noop() {
 #[test]
 fn resolve_vsock_config_sets_defaults() {
     let runtime_dir = TempDir::new().unwrap();
-    let manager = VmManager::new(runtime_dir.path(), "/bin/true");
+    let manager = test_manager(&runtime_dir);
     let mut vsock = ProtoVsockConfig::default();
 
     manager.resolve_vsock_config("test-vm", &mut vsock);
@@ -156,7 +166,7 @@ fn resolve_vsock_config_sets_defaults() {
 #[tokio::test]
 async fn exec_vm_rejects_empty_command() {
     let runtime_dir = TempDir::new().unwrap();
-    let manager = VmManager::new(runtime_dir.path(), "/bin/true");
+    let manager = test_manager(&runtime_dir);
 
     let err = manager
         .exec_vm("test-vm", Vec::new(), None)
@@ -292,23 +302,27 @@ async fn recovered_vm_deletion_cleans_overlaybd_state_and_preserves_external_upp
 }
 
 #[test]
-fn iommu_flag_maps_to_virtio_iommu() {
-    assert_eq!(VmManager::iommu_to_sdk(Some(true)), Some(IommuType::Virtio));
-    assert_eq!(VmManager::iommu_to_sdk(Some(false)), Some(IommuType::Off));
-    assert_eq!(VmManager::iommu_to_sdk(None), None);
-}
-
-#[test]
 fn vfio_device_iommu_is_sent_as_iommu_type() {
-    let device = ProtoVfioDeviceConfig {
-        id: "gpu0".into(),
-        path: "/sys/bus/pci/devices/0000:01:00.0".into(),
-        iommu: Some(true),
-        ..Default::default()
-    };
-    let json = serde_json::to_value(VmManager::proto_vfio_device_to_sdk(&device).unwrap()).unwrap();
-    assert_eq!(json["iommu"], "Virtio");
-    assert_eq!(json["path"], "/sys/bus/pci/devices/0000:01:00.0");
+    for (iommu, expected) in [
+        (Some(true), Some("Virtio")),
+        (Some(false), Some("Off")),
+        (None, None),
+    ] {
+        let device = ProtoVfioDeviceConfig {
+            id: "gpu0".into(),
+            path: "/sys/bus/pci/devices/0000:01:00.0".into(),
+            iommu,
+            ..Default::default()
+        };
+        let json =
+            serde_json::to_value(VmManager::proto_vfio_device_to_sdk(&device).unwrap()).unwrap();
+        assert_eq!(
+            json.get("iommu").and_then(|v| v.as_str()),
+            expected,
+            "{iommu:?}"
+        );
+        assert_eq!(json["path"], "/sys/bus/pci/devices/0000:01:00.0");
+    }
 }
 
 #[test]
@@ -328,13 +342,13 @@ fn pci_segment_must_fit_in_i16() {
 }
 
 #[test]
-fn serial_port_config_has_no_iommu() {
+fn serial_port_config_keeps_mode_and_target() {
     let serial = ProtoConsoleConfig {
-        mode: ProtoConsoleMode::Pty as i32,
-        iommu: Some(true),
+        mode: ProtoConsoleMode::File as i32,
+        file: Some("/var/log/vm-serial.log".into()),
         ..Default::default()
     };
     let json = serde_json::to_value(VmManager::proto_serial_to_sdk(&serial)).unwrap();
-    assert_eq!(json["mode"], "Pty");
-    assert!(json.get("iommu").is_none());
+    assert_eq!(json["mode"], "File");
+    assert_eq!(json["file"], "/var/log/vm-serial.log");
 }

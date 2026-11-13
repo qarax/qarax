@@ -88,6 +88,7 @@ async fn test_deploy_resolves_file_credential_without_exposing_it() {
         .await
         .unwrap();
     assert!(!body.contains("credential_ref"));
+    assert!(!body.contains("password"));
     assert!(!body.contains(&reference));
     assert!(!body.contains("not-a-real-password"));
 

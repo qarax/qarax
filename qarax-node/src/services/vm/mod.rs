@@ -1636,24 +1636,4 @@ mod tests {
         let nodes = discover_numa_topology("/nonexistent/path").await;
         assert!(nodes.is_empty());
     }
-
-    #[test]
-    fn expand_cpu_list_range() {
-        assert_eq!(expand_cpu_list("0-3"), vec![0, 1, 2, 3]);
-    }
-
-    #[test]
-    fn expand_cpu_list_mixed() {
-        assert_eq!(expand_cpu_list("0-2,5,8-9"), vec![0, 1, 2, 5, 8, 9]);
-    }
-
-    #[test]
-    fn expand_cpu_list_single() {
-        assert_eq!(expand_cpu_list("7"), vec![7]);
-    }
-
-    #[test]
-    fn expand_cpu_list_empty() {
-        assert!(expand_cpu_list("").is_empty());
-    }
 }
