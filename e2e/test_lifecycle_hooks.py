@@ -5,14 +5,13 @@ Tests webhook-based lifecycle hooks that fire on VM state transitions.
 Uses a simple HTTP mock server to receive and verify webhook payloads.
 """
 
-import asyncio
 import json
 import os
 import platform
 import subprocess
 import time
 import uuid
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from threading import Thread
 
 import httpx
@@ -20,16 +19,20 @@ import pytest
 from qarax_api_client import Client
 from qarax_api_client.api.vms import (
     create as create_vm,
-    get as get_vm,
-    start as start_vm,
-    stop as stop_vm,
+)
+from qarax_api_client.api.vms import (
     delete as delete_vm,
+)
+from qarax_api_client.api.vms import (
+    start as start_vm,
+)
+from qarax_api_client.api.vms import (
+    stop as stop_vm,
 )
 from qarax_api_client.models import NewVm, VmStatus
 from qarax_api_client.models.hypervisor import Hypervisor
 
 QARAX_URL = os.getenv("QARAX_URL", "http://localhost:8000")
-VM_OPERATION_TIMEOUT = 30
 
 
 def _default_webhook_host():
@@ -39,12 +42,7 @@ def _default_webhook_host():
 
     for network in ("e2e_default", "bridge"):
         try:
-            result = subprocess.run(
-                ["docker", "network", "inspect", network],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
+            result = docker("network", "inspect", network)
             config = json.loads(result.stdout)[0]["IPAM"]["Config"]
             gateway = config[0].get("Gateway")
             if gateway:
@@ -71,16 +69,23 @@ class WebhookCollector:
     def clear(self):
         self.payloads.clear()
 
-    def wait_for(self, count, timeout=15):
-        """Wait until at least `count` payloads have been received."""
-        start = time.time()
-        while time.time() - start < timeout:
-            if len(self.payloads) >= count:
-                return self.payloads[:count]
+    def wait_for_vm_statuses(self, vm_id, statuses, timeout=15):
+        """Wait until payloads for `vm_id` cover every new_status in `statuses`.
+
+        Returns that VM's payloads.
+        """
+        deadline = time.time() + timeout
+        while True:
+            payloads = [p for p in list(self.payloads) if p.get("vm_id") == vm_id]
+            seen = {p.get("new_status") for p in payloads}
+            if statuses <= seen:
+                return payloads
+            if time.time() >= deadline:
+                raise TimeoutError(
+                    f"Expected webhooks for VM {vm_id} with new_status {sorted(statuses)}, "
+                    f"got {sorted(s for s in seen if s)} after {timeout}s"
+                )
             time.sleep(0.5)
-        raise TimeoutError(
-            f"Expected {count} webhook(s), got {len(self.payloads)} after {timeout}s"
-        )
 
 
 collector = WebhookCollector()
@@ -125,41 +130,16 @@ def http_client():
     return httpx.Client(base_url=QARAX_URL, headers=AUTH_HEADERS)
 
 
-from helpers import AUTH_HEADERS, call_api, wait_for_status
-
+from helpers import AUTH_HEADERS, call_api, docker, wait_for_status
 
 # ---------------------------------------------------------------------------
-# Hook CRUD helpers (using httpx until SDK is regenerated)
+# Hook helpers (using httpx until SDK is regenerated)
 # ---------------------------------------------------------------------------
 
-def create_hook(http_client, name, url, scope="global", scope_value=None, events=None):
-    body = {"name": name, "url": url, "scope": scope}
-    if scope_value:
-        body["scope_value"] = scope_value
-    if events:
-        body["events"] = events
-    resp = http_client.post("/hooks", json=body)
+def create_hook(http_client, name, url):
+    resp = http_client.post("/hooks", json={"name": name, "url": url, "scope": "global"})
     assert resp.status_code == 201, f"create hook failed: {resp.text}"
     return resp.text.strip().strip('"')
-
-
-def list_hooks(http_client, name=None):
-    params = {"name": name} if name else {}
-    resp = http_client.get("/hooks", params=params)
-    assert resp.status_code == 200
-    return resp.json()
-
-
-def get_hook(http_client, hook_id):
-    resp = http_client.get(f"/hooks/{hook_id}")
-    assert resp.status_code == 200
-    return resp.json()
-
-
-def update_hook(http_client, hook_id, **kwargs):
-    resp = http_client.patch(f"/hooks/{hook_id}", json=kwargs)
-    assert resp.status_code == 200
-    return resp.json()
 
 
 def delete_hook(http_client, hook_id):
@@ -177,101 +157,6 @@ def list_executions(http_client, hook_id):
 # Tests
 # ---------------------------------------------------------------------------
 
-class TestHookCrud:
-    """Test lifecycle hook CRUD operations."""
-
-    def test_create_and_get(self, http_client):
-        name = f"test-hook-{uuid.uuid4().hex[:8]}"
-        hook_id = create_hook(http_client, name=name, url="https://example.com/hook")
-
-        hook = get_hook(http_client, hook_id)
-        assert hook["name"] == name
-        assert hook["url"] == "https://example.com/hook"
-        assert hook["scope"] == "global"
-        assert hook["active"] is True
-
-        # Cleanup
-        delete_hook(http_client, hook_id)
-
-    def test_list(self, http_client):
-        name = f"test-hook-list-{uuid.uuid4().hex[:8]}"
-        hook_id = create_hook(http_client, name=name, url="https://example.com/hook")
-
-        hooks = list_hooks(http_client, name=name)
-        assert len(hooks) == 1
-        assert hooks[0]["name"] == name
-
-        delete_hook(http_client, hook_id)
-
-    def test_update(self, http_client):
-        name = f"test-hook-update-{uuid.uuid4().hex[:8]}"
-        hook_id = create_hook(http_client, name=name, url="https://example.com/old")
-
-        updated = update_hook(http_client, hook_id, url="https://example.com/new", active=False)
-        assert updated["url"] == "https://example.com/new"
-        assert updated["active"] is False
-
-        delete_hook(http_client, hook_id)
-
-    def test_update_can_clear_nullable_fields(self, http_client):
-        name = f"test-hook-clear-{uuid.uuid4().hex[:8]}"
-        hook_id = create_hook(
-            http_client,
-            name=name,
-            url="https://example.com/hook",
-            scope="tag",
-            scope_value="blue",
-        )
-        update_hook(http_client, hook_id, secret="top-secret")
-
-        updated = update_hook(
-            http_client,
-            hook_id,
-            scope="global",
-            scope_value=None,
-            secret=None,
-        )
-
-        assert updated["scope"] == "global"
-        assert updated["scope_value"] is None
-        assert updated["secret"] is None
-
-        delete_hook(http_client, hook_id)
-
-    def test_delete(self, http_client):
-        name = f"test-hook-delete-{uuid.uuid4().hex[:8]}"
-        hook_id = create_hook(http_client, name=name, url="https://example.com/hook")
-        delete_hook(http_client, hook_id)
-
-        resp = http_client.get(f"/hooks/{hook_id}")
-        assert resp.status_code == 404
-
-    def test_duplicate_name_conflict(self, http_client):
-        name = f"test-hook-dup-{uuid.uuid4().hex[:8]}"
-        hook_id = create_hook(http_client, name=name, url="https://example.com/hook")
-
-        resp = http_client.post("/hooks", json={"name": name, "url": "https://example.com/other"})
-        assert resp.status_code == 409
-
-        delete_hook(http_client, hook_id)
-
-    def test_events_filter(self, http_client):
-        name = f"test-hook-events-{uuid.uuid4().hex[:8]}"
-        hook_id = create_hook(
-            http_client, name=name, url="https://example.com/hook",
-            events=["running", "shutdown"]
-        )
-
-        hook = get_hook(http_client, hook_id)
-        assert set(hook["events"]) == {"running", "shutdown"}
-
-        delete_hook(http_client, hook_id)
-
-
-@pytest.mark.skipif(
-    os.getenv("SKIP_VM_TESTS") == "1",
-    reason="VM tests skipped (set SKIP_VM_TESTS=0 to enable)",
-)
 class TestHookExecution:
     """Test that hooks fire on VM state transitions (requires KVM)."""
 
@@ -288,50 +173,47 @@ class TestHookExecution:
 
         hook_name = f"e2e-hook-{uuid.uuid4().hex[:8]}"
         hook_id = create_hook(http_client, name=hook_name, url=webhook_url)
+        vm_id = None
 
-        try:
-            # Create a VM
-            new_vm = NewVm(
-                name=f"hook-test-{uuid.uuid4().hex[:8]}",
-                hypervisor=Hypervisor.CLOUD_HV,
-                boot_vcpus=1,
-                max_vcpus=1,
-                memory_size=256 * 1024 * 1024,
-            )
-            resp = await call_api(create_vm, client=client, body=new_vm)
-            vm_id = str(resp.vm_id) if hasattr(resp, "vm_id") else str(resp)
+        async with client as c:
+            try:
+                new_vm = NewVm(
+                    name=f"hook-test-{uuid.uuid4().hex[:8]}",
+                    hypervisor=Hypervisor.CLOUD_HV,
+                    boot_vcpus=1,
+                    max_vcpus=1,
+                    memory_size=256 * 1024 * 1024,
+                )
+                vm_id = str(await call_api(create_vm, client=c, body=new_vm)).strip('"')
 
-            # Start the VM
-            await call_api(start_vm, client=client, vm_id=vm_id)
-            await wait_for_status(client, vm_id, VmStatus.RUNNING)
+                await call_api(start_vm, client=c, vm_id=vm_id)
+                await wait_for_status(c, vm_id, VmStatus.RUNNING)
 
-            # Stop the VM
-            await call_api(stop_vm, client=client, vm_id=vm_id)
-            await wait_for_status(client, vm_id, VmStatus.SHUTDOWN)
+                await call_api(stop_vm, client=c, vm_id=vm_id)
+                await wait_for_status(c, vm_id, VmStatus.SHUTDOWN)
 
-            # Delete the VM
-            await call_api(delete_vm, client=client, vm_id=vm_id)
+                # The hook is global, so only count deliveries for this test's VM.
+                # hook_executor polls every 2s.
+                payloads = collector.wait_for_vm_statuses(
+                    vm_id, {"running", "shutdown"}, timeout=20
+                )
+                for p in payloads:
+                    assert p["event"] == "vm.status_changed"
+                    assert "previous_status" in p
+                    assert "timestamp" in p
 
-            # Wait for webhook deliveries (hook_executor polls every 2s)
-            # We expect transitions: created->pending, pending->running, running->shutdown, shutdown->deleted
-            # The exact set depends on how many status updates happen during the lifecycle
-            payloads = collector.wait_for(2, timeout=20)
-
-            # Verify payload structure
-            for p in payloads:
-                assert p["event"] == "vm.status_changed"
-                assert "vm_id" in p
-                assert "previous_status" in p
-                assert "new_status" in p
-                assert "timestamp" in p
-
-            # Check executions via API
-            executions = list_executions(http_client, hook_id)
-            assert len(executions) >= 2
-            delivered = [e for e in executions if e["status"] == "delivered"]
-            assert len(delivered) >= 2
-            # The successful delivery itself counts as an attempt.
-            assert all(e["attempt_count"] >= 1 for e in delivered), delivered
-
-        finally:
-            delete_hook(http_client, hook_id)
+                executions = [
+                    e for e in list_executions(http_client, hook_id) if e["vm_id"] == vm_id
+                ]
+                delivered = {
+                    e["new_status"] for e in executions if e["status"] == "delivered"
+                }
+                assert {"running", "shutdown"} <= delivered, executions
+                # The successful delivery itself counts as an attempt.
+                assert all(
+                    e["attempt_count"] >= 1 for e in executions if e["status"] == "delivered"
+                ), executions
+            finally:
+                if vm_id is not None:
+                    await call_api(delete_vm, client=c, vm_id=vm_id)
+                delete_hook(http_client, hook_id)

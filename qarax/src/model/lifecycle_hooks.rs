@@ -214,8 +214,92 @@ WHERE id = $1
 #[cfg(test)]
 mod tests {
     use serde_json::json;
+    use uuid::Uuid;
 
-    use super::UpdateLifecycleHook;
+    use super::{HookScope, NewLifecycleHook, UpdateLifecycleHook};
+    use crate::{
+        model::vms::{self, ResolvedNewVm, VmStatus},
+        test_support::{TestDatabase, resolved_vm},
+    };
+
+    #[tokio::test]
+    async fn status_changes_enqueue_only_matching_active_hooks() {
+        let db = TestDatabase::new().await;
+        let vm = ResolvedNewVm {
+            tags: vec!["blue".to_string()],
+            ..resolved_vm("hooked-vm")
+        };
+        let mut tx = db.pool.begin().await.unwrap();
+        let vm_id = vms::create_tx_with_status(&mut tx, &vm, None, VmStatus::Created)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        let vm = vms::get(&db.pool, vm_id).await.unwrap();
+
+        let hook = |name: &str, scope: HookScope, scope_value: Option<String>, events: &[&str]| {
+            super::create(
+                &db.pool,
+                NewLifecycleHook {
+                    name: name.to_string(),
+                    url: "https://example.com/hook".to_string(),
+                    secret: None,
+                    scope,
+                    scope_value,
+                    events: events.iter().map(|e| e.to_string()).collect(),
+                },
+            )
+        };
+        let mut expected = vec![
+            hook("global-any", HookScope::Global, None, &[])
+                .await
+                .unwrap(),
+            hook("global-running", HookScope::Global, None, &["running"])
+                .await
+                .unwrap(),
+            hook("this-vm", HookScope::Vm, Some(vm_id.to_string()), &[])
+                .await
+                .unwrap(),
+            hook("blue-tag", HookScope::Tag, Some("blue".into()), &[])
+                .await
+                .unwrap(),
+        ];
+        hook("global-shutdown", HookScope::Global, None, &["shutdown"])
+            .await
+            .unwrap();
+        hook(
+            "other-vm",
+            HookScope::Vm,
+            Some(Uuid::new_v4().to_string()),
+            &[],
+        )
+        .await
+        .unwrap();
+        hook("red-tag", HookScope::Tag, Some("red".into()), &[])
+            .await
+            .unwrap();
+        let inactive = hook("inactive", HookScope::Global, None, &[])
+            .await
+            .unwrap();
+        sqlx::query("UPDATE lifecycle_hooks SET active = FALSE WHERE id = $1")
+            .bind(inactive)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+
+        super::enqueue_matching(&db.pool, &vm, "created", "running")
+            .await
+            .unwrap();
+
+        let mut enqueued: Vec<Uuid> =
+            sqlx::query_scalar("SELECT hook_id FROM hook_executions WHERE vm_id = $1")
+                .bind(vm_id)
+                .fetch_all(&db.pool)
+                .await
+                .unwrap();
+        enqueued.sort();
+        expected.sort();
+        assert_eq!(enqueued, expected);
+    }
 
     #[test]
     fn update_request_distinguishes_missing_and_null_nullable_fields() {

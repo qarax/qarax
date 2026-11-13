@@ -7,7 +7,6 @@ These tests cover:
 - Backup deletion, including removal of the stored snapshot / dump
 """
 
-import subprocess
 import uuid
 
 import pytest
@@ -34,32 +33,15 @@ from qarax_api_client.models import (
 )
 from qarax_api_client.models.attach_pool_host_request import AttachPoolHostRequest
 
-from helpers import AUTH_HEADERS, QARAX_URL, wait_for_status
+from helpers import (
+    AUTH_HEADERS,
+    NODE_CONTAINER_PREFIX,
+    QARAX_URL,
+    path_exists_in_any,
+    wait_for_status,
+)
 
 VM_OPERATION_TIMEOUT = 60
-
-
-def _containers(prefix):
-    result = subprocess.run(
-        ["docker", "ps", "--format", "{{.Names}}"],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return [name for name in result.stdout.splitlines() if name.startswith(prefix)]
-
-
-def _path_exists_in_any(prefix, path):
-    """True if `path` exists in any running container whose name starts with prefix."""
-    containers = _containers(prefix)
-    assert containers, f"no running containers matching {prefix}"
-    return any(
-        subprocess.run(
-            ["docker", "exec", c, "test", "-e", path], check=False
-        ).returncode
-        == 0
-        for c in containers
-    )
 
 
 async def _backup_data_path(httpx_client, backup):
@@ -285,10 +267,10 @@ async def test_vm_backup_delete_removes_snapshot(client, backup_storage_pool):
             backup = create_resp.json()
 
             snapshot_dir = await _backup_data_path(httpx_client, backup)
-            assert _path_exists_in_any("e2e-qarax-node", snapshot_dir)
+            assert path_exists_in_any(NODE_CONTAINER_PREFIX, snapshot_dir)
 
             await _assert_backup_deleted(httpx_client, backup)
-            assert not _path_exists_in_any("e2e-qarax-node", snapshot_dir)
+            assert not path_exists_in_any(NODE_CONTAINER_PREFIX, snapshot_dir)
         finally:
             await stop_vm.asyncio_detailed(client=c, vm_id=vm_id)
             await delete_vm.asyncio_detailed(client=c, vm_id=vm_id)
@@ -310,7 +292,7 @@ async def test_database_backup_delete_removes_dump(client, backup_storage_pool):
         backup = create_resp.json()
 
         dump_path = await _backup_data_path(httpx_client, backup)
-        assert _path_exists_in_any("e2e-qarax-1", dump_path)
+        assert path_exists_in_any("e2e-qarax-1", dump_path)
 
         await _assert_backup_deleted(httpx_client, backup)
-        assert not _path_exists_in_any("e2e-qarax-1", dump_path)
+        assert not path_exists_in_any("e2e-qarax-1", dump_path)

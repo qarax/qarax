@@ -127,32 +127,6 @@ mod tests {
     use common::cpu_list::expand_cpu_list;
 
     #[test]
-    fn expand_cpu_list_range() {
-        assert_eq!(expand_cpu_list("0-3"), vec![0, 1, 2, 3]);
-    }
-
-    #[test]
-    fn expand_cpu_list_single() {
-        assert_eq!(expand_cpu_list("8"), vec![8]);
-    }
-
-    #[test]
-    fn expand_cpu_list_mixed() {
-        assert_eq!(expand_cpu_list("0-3,8"), vec![0, 1, 2, 3, 8]);
-    }
-
-    #[test]
-    fn expand_cpu_list_empty() {
-        assert_eq!(expand_cpu_list(""), Vec::<i32>::new());
-    }
-
-    #[test]
-    fn expand_cpu_list_sorted() {
-        // Out-of-order input should still produce sorted output
-        assert_eq!(expand_cpu_list("8,0-3"), vec![0, 1, 2, 3, 8]);
-    }
-
-    #[test]
     fn expand_cpu_list_to_string_range() {
         assert_eq!(expand_cpu_list_to_string(&[0, 1, 2, 3]), "0-3");
     }

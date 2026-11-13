@@ -30,14 +30,20 @@ import uuid
 
 import pytest
 from qarax_api_client import Client
-from helpers import AUTH_HEADERS
 from qarax_api_client.api.hosts import add as add_host
 from qarax_api_client.api.hosts import deploy as deploy_host
 from qarax_api_client.api.hosts import init as init_host
 from qarax_api_client.api.hosts import list_ as list_hosts
 from qarax_api_client.api.hosts import node_upgrade
 from qarax_api_client.api.hosts import update as update_host
-from qarax_api_client.models import DeployHostRequest, HostStatus, NewHost, UpdateHostRequest
+from qarax_api_client.models import (
+    DeployHostRequest,
+    HostStatus,
+    NewHost,
+    UpdateHostRequest,
+)
+
+from helpers import AUTH_HEADERS
 
 QARAX_URL = os.getenv("QARAX_URL", "http://localhost:8000")
 # bootc-vm is the QEMU container running the real bootc VM
@@ -57,6 +63,10 @@ HOST_POLL_INTERVAL_SECONDS = 5
 
 # How long to wait for the bootc VM to become reachable after compose up.
 VM_BOOT_TIMEOUT_SECONDS = 600
+
+# A test may wait for the VM to boot and then for up to two deploy/upgrade
+# cycles, well past the suite-wide pytest-timeout.
+pytestmark = pytest.mark.timeout(VM_BOOT_TIMEOUT_SECONDS + 2 * DEPLOY_TIMEOUT_SECONDS + 300)
 
 
 def _is_truthy(value: str | None) -> bool:
@@ -160,15 +170,6 @@ def upgrade_host_id():
         client=client,
         body=UpdateHostRequest(status=HostStatus.DOWN),
     )
-
-
-def test_init_populates_node_version(upgrade_host_id):
-    """After init, the host should have a non-null node_version."""
-    client = Client(base_url=QARAX_URL, headers=AUTH_HEADERS)
-    host = get_host(client, upgrade_host_id)
-    assert host.status == HostStatus.UP
-    assert host.node_version is not None, "node_version should be set after init"
-    assert len(host.node_version) > 0
 
 
 def test_deploy_sets_last_deployed_image_and_node_version(upgrade_host_id):

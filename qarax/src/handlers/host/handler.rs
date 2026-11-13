@@ -723,121 +723,40 @@ pub async fn init(
 
 #[cfg(test)]
 mod tests {
-    use sqlx::{Connection, Executor, PgConnection, PgPool};
     use uuid::Uuid;
 
     use super::fail_host_evacuation;
     use crate::{
-        configuration::get_configuration,
         model::{
-            hosts::{self, HostStatus, NewHost},
+            hosts::{self, HostStatus},
             jobs::{self, JobStatus, JobType, NewJob},
         },
+        test_support::TestDatabase,
     };
 
-    struct TestDatabase {
-        name: String,
-        pool: PgPool,
-    }
-
-    impl TestDatabase {
-        async fn new() -> Self {
-            let mut configuration = get_configuration().expect("Failed to read configuration");
-            configuration.database.name = Uuid::new_v4().to_string();
-
-            let mut connection =
-                PgConnection::connect(&configuration.database.connection_string_without_db())
-                    .await
-                    .expect("Failed to connect to Postgres");
-            connection
-                .execute(format!(r#"CREATE DATABASE "{}";"#, configuration.database.name).as_str())
-                .await
-                .expect("Failed to create test database");
-
-            let pool = PgPool::connect(&configuration.database.connection_string())
-                .await
-                .expect("Failed to connect to test database");
-            sqlx::migrate!("../migrations")
-                .run(&pool)
-                .await
-                .expect("Failed to run migrations");
-
-            Self {
-                name: configuration.database.name,
-                pool,
-            }
-        }
-
-        async fn insert_host(&self, name: &str, status: HostStatus) -> Uuid {
-            let host_id = hosts::add(
-                &self.pool,
-                &NewHost {
-                    name: name.to_string(),
-                    address: "127.0.0.1".to_string(),
-                    port: 50051,
-                    host_user: "root".to_string(),
-                    credential_ref: None,
-                    reservation_class: None,
-                    placement_labels: std::collections::BTreeMap::new(),
-                },
-            )
-            .await
-            .expect("Failed to insert host");
-            hosts::update_status(&self.pool, host_id, status)
-                .await
-                .expect("Failed to update host status");
-            host_id
-        }
-
-        async fn insert_host_evacuation_job(&self, host_id: Uuid) -> Uuid {
-            jobs::create(
-                &self.pool,
-                NewJob {
-                    job_type: JobType::HostEvacuate,
-                    description: Some("test evacuation".to_string()),
-                    resource_id: Some(host_id),
-                    resource_type: Some(jobs::resource_types::HOST.to_string()),
-                },
-            )
-            .await
-            .expect("Failed to create job")
-            .id
-        }
-    }
-
-    impl Drop for TestDatabase {
-        fn drop(&mut self) {
-            let db_name = self.name.clone();
-            let (tx, rx) = std::sync::mpsc::channel();
-
-            std::thread::spawn(move || {
-                let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
-                rt.block_on(async move {
-                    let configuration = get_configuration().expect("Failed to read configuration");
-                    let mut connection =
-                        PgConnection::connect_with(&configuration.database.without_db())
-                            .await
-                            .expect("Failed to connect to Postgres");
-                    connection
-                        .execute(&*format!(r#"DROP DATABASE "{}" WITH (FORCE)"#, db_name))
-                        .await
-                        .expect("Failed to drop test database");
-                    let _ = tx.send(());
-                });
-            });
-
-            let _ = rx.recv();
-        }
+    async fn insert_host_evacuation_job(db: &TestDatabase, host_id: Uuid) -> Uuid {
+        jobs::create(
+            &db.pool,
+            NewJob {
+                job_type: JobType::HostEvacuate,
+                description: Some("test evacuation".to_string()),
+                resource_id: Some(host_id),
+                resource_type: Some(jobs::resource_types::HOST.to_string()),
+            },
+        )
+        .await
+        .expect("Failed to create job")
+        .id
     }
 
     #[tokio::test]
     async fn fail_host_evacuation_restores_original_status_when_no_vm_moved() {
         let db = TestDatabase::new().await;
-        let host_id = db.insert_host("host-no-progress", HostStatus::Up).await;
+        let host_id = db.add_host("host-no-progress", HostStatus::Up).await;
         hosts::update_status(&db.pool, host_id, HostStatus::Maintenance)
             .await
             .expect("Failed to mark host maintenance");
-        let job_id = db.insert_host_evacuation_job(host_id).await;
+        let job_id = insert_host_evacuation_job(&db, host_id).await;
 
         fail_host_evacuation(
             &db.pool,
@@ -873,9 +792,9 @@ mod tests {
     async fn fail_host_evacuation_keeps_maintenance_after_partial_progress() {
         let db = TestDatabase::new().await;
         let host_id = db
-            .insert_host("host-partial-progress", HostStatus::Maintenance)
+            .add_host("host-partial-progress", HostStatus::Maintenance)
             .await;
-        let job_id = db.insert_host_evacuation_job(host_id).await;
+        let job_id = insert_host_evacuation_job(&db, host_id).await;
 
         fail_host_evacuation(
             &db.pool,

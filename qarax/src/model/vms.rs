@@ -93,15 +93,9 @@ pub fn set_ha_enabled_config(config: &mut serde_json::Value, enabled: bool) {
     }
 }
 
-/// Host the VM was failed over from, if an HA failover is pending cleanup
-/// (the stale copy on the source host has not been confirmed gone yet).
-pub fn failed_over_from(config: &serde_json::Value) -> Option<Uuid> {
-    config
-        .get(FAILED_OVER_FROM_CONFIG_KEY)
-        .and_then(|value| value.as_str())
-        .and_then(|value| Uuid::parse_str(value).ok())
-}
-
+/// Records the host the VM was failed over from while the HA failover is
+/// pending cleanup (the stale copy on the source host has not been confirmed
+/// gone yet). `list_failed_over_from` reads it back.
 pub fn set_failed_over_from(config: &mut serde_json::Value, source_host_id: Option<Uuid>) {
     if !config.is_object() {
         *config = default_vm_config();
@@ -972,13 +966,6 @@ WHERE id = $1
     Ok(vm.into())
 }
 
-pub async fn create(pool: &PgPool, vm: &ResolvedNewVm) -> Result<Uuid, sqlx::Error> {
-    let mut tx = pool.begin().await?;
-    let id = create_tx(&mut tx, vm, None).await?;
-    tx.commit().await?;
-    Ok(id)
-}
-
 /// Creates a VM row inside the given transaction. Used by the handler to roll back on node failure.
 pub async fn create_tx(
     tx: &mut Transaction<'_, Postgres>,
@@ -1323,4 +1310,25 @@ pub async fn delete(pool: &PgPool, vm_id: Uuid) -> Result<(), sqlx::Error> {
         .await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ha_enabled, set_ha_enabled_config};
+
+    #[test]
+    fn ha_enabled_defaults_to_false() {
+        assert!(!ha_enabled(&serde_json::json!({})));
+        assert!(!ha_enabled(&serde_json::Value::Null));
+        assert!(ha_enabled(&serde_json::json!({"ha_enabled": true})));
+    }
+
+    #[test]
+    fn set_ha_enabled_config_replaces_non_object_config() {
+        let mut config = serde_json::Value::Null;
+        set_ha_enabled_config(&mut config, true);
+        assert!(ha_enabled(&config));
+        set_ha_enabled_config(&mut config, false);
+        assert!(!ha_enabled(&config));
+    }
 }

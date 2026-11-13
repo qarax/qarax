@@ -74,13 +74,18 @@ pub(super) async fn unlink(path: &Path) -> Result<(), Status> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use tonic::Request;
 
+    use super::*;
+    use crate::rpc::node::file_transfer_service_server::FileTransferService as _;
+    use crate::services::file_transfer::FileTransferServiceImpl;
+
+    /// Deletes through the RPC handler the control plane calls.
     async fn delete(req: DeleteStorageFilesRequest) -> Result<(), Status> {
-        for path in paths(req).await? {
-            unlink(&path).await?;
-        }
-        Ok(())
+        FileTransferServiceImpl::default()
+            .delete_storage_files(Request::new(req))
+            .await
+            .map(|_| ())
     }
 
     fn request(root: &Path, upper_layer: bool) -> DeleteStorageFilesRequest {
@@ -130,10 +135,13 @@ mod tests {
     async fn refuses_directories_traversal_and_unmounted_nfs() {
         let dir = tempfile::tempdir().unwrap();
         let mut req = request(dir.path(), false);
-        tokio::fs::create_dir(dir.path().join(&req.object_id))
-            .await
-            .unwrap();
-        assert!(delete(req.clone()).await.is_err());
+        let object_dir = dir.path().join(&req.object_id);
+        tokio::fs::create_dir(&object_dir).await.unwrap();
+        assert_eq!(
+            delete(req.clone()).await.unwrap_err().code(),
+            tonic::Code::Internal
+        );
+        assert!(object_dir.is_dir());
         req.object_id = "../external".into();
         assert_eq!(
             delete(req.clone()).await.unwrap_err().code(),

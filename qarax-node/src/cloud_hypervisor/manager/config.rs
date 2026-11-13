@@ -390,7 +390,7 @@ impl VmManager {
     /// Cloud Hypervisor 54 replaced the boolean `iommu` device flag with the
     /// IOMMU to attach the device to. qarax only exposes on/off, and "on" has
     /// always meant virtio-iommu.
-    pub(super) fn iommu_to_sdk(iommu: Option<bool>) -> Option<IommuType> {
+    fn iommu_to_sdk(iommu: Option<bool>) -> Option<IommuType> {
         iommu.map(|on| {
             if on {
                 IommuType::Virtio

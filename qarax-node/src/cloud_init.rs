@@ -69,29 +69,42 @@ mod tests {
     use super::*;
     use std::io::Read;
 
-    #[test]
-    fn seed_image_contains_expected_files() {
-        let buf = build_seed_image(
-            "#cloud-config\npackages:\n  - curl\n",
-            "instance-id: test-vm\nlocal-hostname: test\n",
-            Some("version: 1\n"),
-        )
-        .unwrap();
-
-        assert_eq!(buf.len(), SEED_IMAGE_SIZE);
-
-        let cursor = Cursor::new(buf);
-        let fs = fatfs::FileSystem::new(cursor, fatfs::FsOptions::new()).unwrap();
-
-        // fatfs trims trailing spaces from volume_label()
-        assert_eq!(fs.volume_label().trim(), "CIDATA");
-
-        let root = fs.root_dir();
-        for name in &["meta-data", "user-data", "network-config"] {
-            let mut f = root.open_file(name).unwrap();
+    fn read_seed(buf: Vec<u8>) -> (String, Vec<(String, String)>) {
+        let fs = fatfs::FileSystem::new(Cursor::new(buf), fatfs::FsOptions::new()).unwrap();
+        // fatfs keeps the label's space padding.
+        let label = fs.volume_label().trim().to_string();
+        let mut files = Vec::new();
+        for entry in fs.root_dir().iter() {
+            let entry = entry.unwrap();
             let mut content = String::new();
-            f.read_to_string(&mut content).unwrap();
-            assert!(!content.is_empty(), "{name} should not be empty");
+            entry.to_file().read_to_string(&mut content).unwrap();
+            files.push((entry.file_name(), content));
         }
+        files.sort();
+        (label, files)
+    }
+
+    #[test]
+    fn seed_image_holds_each_file_under_its_nocloud_name() {
+        let user_data = "#cloud-config\npackages:\n  - curl\n";
+        let meta_data = "instance-id: test-vm\nlocal-hostname: test\n";
+        let network_config = "version: 1\n";
+
+        let buf = build_seed_image(user_data, meta_data, Some(network_config)).unwrap();
+        assert_eq!(buf.len(), SEED_IMAGE_SIZE);
+        let (label, files) = read_seed(buf);
+        assert_eq!(label, "CIDATA");
+        assert_eq!(
+            files,
+            [
+                ("meta-data".to_string(), meta_data.to_string()),
+                ("network-config".to_string(), network_config.to_string()),
+                ("user-data".to_string(), user_data.to_string()),
+            ]
+        );
+
+        let (_, files) = read_seed(build_seed_image(user_data, meta_data, None).unwrap());
+        let names: Vec<&str> = files.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(names, ["meta-data", "user-data"]);
     }
 }

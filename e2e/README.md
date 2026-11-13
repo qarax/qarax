@@ -1,171 +1,101 @@
 # Qarax E2E Tests
 
-End-to-end tests for the Qarax VM management platform using Docker Compose and the Python SDK.
+End-to-end tests for the Qarax VM management platform, run with pytest and
+the generated Python SDK (`qarax-api-client`) against a Docker Compose stack.
 
-## Overview
+They own what the Rust suites cannot prove: real Cloud Hypervisor and
+Firecracker VMs under KVM, guest networking, storage on real nodes, and the
+control plane to node gRPC path. REST status codes, validation errors and
+persistence round trips belong in `qarax/tests/*.rs`, which run on every PR.
 
-These tests verify the complete VM lifecycle by running:
-- **qarax** (control plane) - REST API server
-- **qarax-node** (data plane) - gRPC service with Cloud Hypervisor
-- **postgres** - Database
+## Stack
 
-All services run in containers with KVM passthrough for real VM operations.
+`run_e2e_tests.sh` starts these compose services and registers both nodes as
+UP hosts (`setup_host.sh`) before pytest runs:
 
-## What Gets Tested
+- **qarax**: control plane on `:8000`, with API token auth enabled
+- **qarax-node** and **qarax-node-2**: data plane nodes with `/dev/kvm`,
+  Cloud Hypervisor and Firecracker (versions from `../versions/`)
+- **postgres**: database (internal to the compose network)
+- **nfs-server**: shared NFS export for shared-storage tests
+- **registry**: local OCI registry for OverlayBD image tests
 
-The E2E tests create **real virtual machines** using Cloud Hypervisor:
-
-1. **qarax-node** spawns actual Cloud Hypervisor processes
-2. Each VM boots a minimal test kernel with initramfs
-3. Full lifecycle is verified: create → boot → pause → resume → shutdown → delete
-4. Multiple VMs can run concurrently
-
-The test environment includes:
-- **Test kernel**: Linux 6.1.6 built for Cloud Hypervisor
-- **Test initramfs**: Minimal BusyBox-based initramfs that boots and halts
-- **Cloud Hypervisor v44.0**: VMM for running microVMs
+VMs boot the Cloud Hypervisor test kernel with a BusyBox initramfs that runs
+`qarax-init` and dropbear, built in `Dockerfile.qarax-node`.
 
 ## Prerequisites
 
-- **Docker/Podman Compose**: For running services
-- **KVM support**: `/dev/kvm` must be accessible
-- **uv**: Fast Python package manager
-  ```bash
-  curl -LsSf https://astral.sh/uv/install.sh | sh
-  ```
-- **Rust toolchain**: For building qarax binaries
+- Docker with Compose v2
+- `/dev/kvm` readable and writable by your user
+- [uv](https://docs.astral.sh/uv/)
+- Rust toolchain (the runner builds release musl binaries if they are missing)
 
-Check KVM access:
-```bash
-ls -la /dev/kvm
-# Should show read/write access for your user
-```
-
-## Quick Start
+## Running
 
 ```bash
 cd e2e
-./run_e2e_tests.sh
+./run_e2e_tests.sh                       # whole suite
+./run_e2e_tests.sh test_vm_lifecycle.py  # one file
+./run_e2e_tests.sh -k live_migration     # by expression
 ```
 
-This will:
-1. Build qarax-node binary (if needed)
-2. Start all services via docker-compose
-3. Run the E2E tests
-4. Clean up
+Release binaries are reused when present; rebuild after code changes
+(`REBUILD=1`), or the stack runs stale binaries.
 
-## Environment Variables
+| Variable | Description |
+|----------|-------------|
+| `REBUILD` | Rebuild binaries and images |
+| `KEEP` | Keep services running after the tests |
+| `SKIP_BUILD` | Skip building binaries |
+| `ENABLE_OTEL` | Build with `otel` and run the telemetry test against a local OTLP receiver |
+| `ENABLE_BOOTC_UPGRADE_E2E` | Build a bootc VM and run `test_node_upgrade.py` |
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `REBUILD` | Force rebuild of all images | - |
-| `KEEP` | Keep services running after tests | - |
-| `SKIP_BUILD` | Skip building qarax-node binary | - |
-| `ENABLE_OTEL` | Build qarax/qarax-node with `otel` and export to a host OTLP receiver | - |
+Every test has a 600 s pytest-timeout (`pyproject.toml`), and skip reasons are
+printed in the summary (`-rs`).
 
-Examples:
-```bash
-# Keep services running for debugging
-KEEP=1 ./run_e2e_tests.sh
+## Test Overview
 
-# Force rebuild everything
-REBUILD=1 ./run_e2e_tests.sh
+| File | Covers |
+|------|--------|
+| `test_auth.py` | The deployed API rejects requests without a token |
+| `test_backups.py` | VM and database backups: create, restore, delete removes stored data |
+| `test_cloud_init.py` | Cloud-init seed image written on start and removed on delete (Cloud Hypervisor) |
+| `test_disk_resize.py` | Disk resize on a Shutdown VM grows the backing file on the node |
+| `test_firecracker.py` | Firecracker lifecycle, force stop, cloud-init, snapshot/restore, unsupported disk hotplug, host versions |
+| `test_gpu_scheduling.py` | A VM requesting a GPU is rejected when no host has one |
+| `test_ha_failover.py` | HA VMs restart on the surviving host when a node dies; non-HA VMs stay |
+| `test_hotplug.py` | Disk and NIC hotplug on running and Shutdown VMs |
+| `test_lifecycle_hooks.py` | Webhooks fire for a VM's status transitions |
+| `test_live_migration.py` | Live migration with a shared NFS disk, host evacuation, placement policies |
+| `test_network.py` | Isolated networks, guest connectivity, cross-host VPC routing and security groups |
+| `test_node_upgrade.py` | bootc deploy and upgrade of a real node VM (opt-in) |
+| `test_numa.py` | NUMA topology discovery and NUMA-pinned VM boot |
+| `test_resize.py` | vCPU and memory hotplug on a running VM |
+| `test_sandboxes.py` | Sandbox create, exec, delete, warm pools and idle reaping |
+| `test_snapshots.py` | Snapshot a running VM and restore it |
+| `test_storage_safety.py` | Pool capacity accounting and node file cleanup for local and NFS pools |
+| `test_storage_types.py` | OCI images via OverlayBD: create, preflight, persistent upper layer, commit |
+| `test_telemetry.py` | OTLP trace propagation and metrics (needs `ENABLE_OTEL=1`) |
+| `test_transfers.py` | Local copy transfer into a storage pool |
+| `test_vm_lifecycle.py` | VM lifecycle, start/stop cycles, force stop, guest exec, monitor tick |
 
-# Skip binary build (use existing)
-SKIP_BUILD=1 ./run_e2e_tests.sh
+## Writing Tests
 
-# Run telemetry e2e coverage
-ENABLE_OTEL=1 ./run_e2e_tests.sh test_telemetry.py -m telemetry
-```
+- Use `helpers.call_api` for calls that must succeed (it raises on any HTTP
+  error) and `helpers.call_api_detailed` when the test checks an error status.
+- Wait for states with `helpers.wait_for_status` / `wait_for_host_status`,
+  never a fixed sleep. Never `pytest.skip` on a product failure.
+- Async fixtures that open a client must create their own `Client`; an httpx
+  client can only be opened once.
+- Run `docker compose` commands from `e2e/`.
+- Lint with `uv run --with ruff ruff check .`.
 
 ## Debugging
 
-When tests fail, keep services running:
 ```bash
 KEEP=1 ./run_e2e_tests.sh
-```
-
-Then debug:
-```bash
-# View logs
-docker-compose logs -f
-docker-compose logs qarax-node
-
-# Shell into qarax-node
-docker-compose exec qarax-node sh
-
-# Check qarax API
-curl http://localhost:8000/vms
-
-# Stop when done
-docker-compose down -v
-```
-
-## Running Individual Tests
-
-```bash
-# Install deps once
-uv sync
-
-# Run all tests
-uv run pytest test_vm_lifecycle.py -v
-
-# Run specific test
-uv run pytest test_vm_lifecycle.py::test_vm_create_and_list -v
-uv run pytest test_vm_lifecycle.py::test_vm_full_lifecycle -v
-```
-
-## Architecture
-
-```
-Docker Compose
-├── qarax (control plane) :8000
-├── qarax-node (data plane) :50051
-│   └── Cloud Hypervisor (with /dev/kvm)
-└── postgres (internal compose service)
-
-E2E Tests (Python + pytest)
-└── qarax-api-client SDK -> qarax :8000
-```
-
-## Test Cases
-
-| Test | Description |
-|------|-------------|
-| `test_vm_create_and_list` | Create VM, verify in list |
-| `test_vm_full_lifecycle` | Create → Start → Pause → Resume → Stop → Delete |
-| `test_vm_delete` | Create and delete VM |
-| `test_multiple_vms` | Create/manage multiple VMs |
-| `test_vm_start_stop_cycle` | Start/stop VM multiple times |
-
-## Troubleshooting
-
-### KVM Permission Denied
-
-```bash
-# Add user to kvm group
-sudo usermod -aG kvm $USER
-newgrp kvm
-```
-
-### Service Won't Start
-
-```bash
-# Check logs
-docker-compose logs qarax-node
-docker-compose logs qarax
-
-# Rebuild images
-REBUILD=1 ./run_e2e_tests.sh
-```
-
-### Tests Fail with Connection Errors
-
-```bash
-# Ensure services are healthy
-docker-compose ps
-
-# Check connectivity
-curl http://localhost:8000/
-nc -zv localhost 50051
+docker compose logs qarax-node
+docker compose exec qarax-node sh
+curl -H "Authorization: Bearer e2e-test-token" http://localhost:8000/vms
+docker compose down -v
 ```

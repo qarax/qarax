@@ -13,12 +13,12 @@ dependencies = [
     "attrs>=25.4.0",
     "qarax-api-client",
     "asyncssh>=2.22.0",
+    "pytest-timeout>=2.2.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest-xdist>=3.5.0",
-    "pytest-timeout>=2.2.0",
 ]
 
 [tool.uv.sources]
@@ -33,9 +33,13 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = [
     "-v",
+    "-rs",
     "--tb=short",
     "--strict-markers",
 ]
+# Per-test ceiling (fixture setup included) so a hung wait fails the test
+# instead of the CI job timeout killing the whole run.
+timeout = 600
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "integration: marks tests as integration tests",

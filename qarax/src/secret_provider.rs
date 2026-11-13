@@ -103,11 +103,20 @@ mod tests {
 
     #[test]
     fn resolves_mounted_files_and_removes_one_trailing_newline() {
-        let mut file = tempfile::NamedTempFile::new().unwrap();
-        write!(file, "file-secret\n").unwrap();
-        let credential_ref = format!("file://{}", file.path().display());
-        let secret = ExternalSecretProvider.resolve(&credential_ref).unwrap();
-        assert_eq!(secret.expose_secret(), "file-secret");
+        for (contents, expected) in [
+            ("file-secret", "file-secret"),
+            ("file-secret\n", "file-secret"),
+            ("file-secret\r\n", "file-secret"),
+            // Only one newline is a file terminator; the rest is the secret.
+            ("file-secret\n\n", "file-secret\n"),
+            (" file-secret \n", " file-secret "),
+        ] {
+            let mut file = tempfile::NamedTempFile::new().unwrap();
+            write!(file, "{contents}").unwrap();
+            let credential_ref = format!("file://{}", file.path().display());
+            let secret = ExternalSecretProvider.resolve(&credential_ref).unwrap();
+            assert_eq!(secret.expose_secret(), expected, "contents {contents:?}");
+        }
     }
 
     #[test]

@@ -456,215 +456,54 @@ async fn pick_failover_host(
 
 #[cfg(test)]
 mod tests {
-    use sqlx::{Connection, Executor, PgConnection, PgPool};
     use uuid::Uuid;
 
     use super::{collect_failover_candidates, gpu_request_for_vm, reallocate_vm_gpus};
     use crate::{
-        App,
-        configuration::{default_control_plane_architecture, get_configuration},
         model::{
             host_gpus::{self, GpuDiscovery},
-            hosts::{self, GpuRequest, HostStatus, NewHost},
-            vms::{self, BootMode, Hypervisor, ResolvedNewVm, VmStatus},
+            hosts::{GpuRequest, HostStatus},
+            vms::{self, ResolvedNewVm, VmStatus},
         },
+        test_support::{TestDatabase, resolved_vm},
     };
 
-    #[test]
-    fn ha_enabled_defaults_to_false() {
-        assert!(!vms::ha_enabled(&serde_json::json!({})));
-        assert!(!vms::ha_enabled(&serde_json::Value::Null));
-        assert!(vms::ha_enabled(&serde_json::json!({"ha_enabled": true})));
-    }
-
-    #[test]
-    fn set_ha_enabled_config_round_trips() {
-        let mut config = serde_json::Value::Null;
-        vms::set_ha_enabled_config(&mut config, true);
-        assert!(vms::ha_enabled(&config));
-        vms::set_ha_enabled_config(&mut config, false);
-        assert!(!vms::ha_enabled(&config));
-    }
-
-    #[test]
-    fn failed_over_from_round_trips() {
-        let host_id = Uuid::new_v4();
-        let mut config = serde_json::json!({"ha_enabled": true});
-
-        vms::set_failed_over_from(&mut config, Some(host_id));
-        assert_eq!(vms::failed_over_from(&config), Some(host_id));
-        // The HA flag must survive the marker updates.
-        assert!(vms::ha_enabled(&config));
-
-        vms::set_failed_over_from(&mut config, None);
-        assert_eq!(vms::failed_over_from(&config), None);
-        assert!(vms::ha_enabled(&config));
-    }
-
-    struct TestDatabase {
-        name: String,
-        pool: PgPool,
-    }
-
-    impl TestDatabase {
-        async fn new() -> Self {
-            let mut configuration = get_configuration().expect("Failed to read configuration");
-            configuration.database.name = Uuid::new_v4().to_string();
-
-            let mut connection =
-                PgConnection::connect(&configuration.database.connection_string_without_db())
-                    .await
-                    .expect("Failed to connect to Postgres");
-            connection
-                .execute(format!(r#"CREATE DATABASE "{}";"#, configuration.database.name).as_str())
-                .await
-                .expect("Failed to create test database");
-
-            let pool = PgPool::connect(&configuration.database.connection_string())
-                .await
-                .expect("Failed to connect to test database");
-            sqlx::migrate!("../migrations")
-                .run(&pool)
-                .await
-                .expect("Failed to run migrations");
-
-            Self {
-                name: configuration.database.name,
-                pool,
-            }
-        }
-
-        fn app(&self) -> App {
-            let mut configuration = get_configuration().expect("Failed to read configuration");
-            configuration.database.name = self.name.clone();
-            App::new(
-                self.pool.clone(),
-                configuration.database,
-                configuration.vm_defaults,
-                configuration.scheduling,
-                configuration.sandbox,
-                configuration.auth,
-                default_control_plane_architecture(),
-            )
-        }
-
-        async fn insert_down_host(&self) -> Uuid {
-            self.insert_down_host_with_address("ha-test-host", "127.0.0.1")
-                .await
-        }
-
-        async fn insert_down_host_with_address(&self, name: &str, address: &str) -> Uuid {
-            let host_id = hosts::add(
-                &self.pool,
-                &NewHost {
-                    name: name.to_string(),
-                    address: address.to_string(),
-                    port: 50051,
-                    host_user: "root".to_string(),
-                    credential_ref: None,
-                    reservation_class: None,
-                    placement_labels: std::collections::BTreeMap::new(),
-                },
-            )
+    /// Inserts a VM on `host_id` through the writer the create handler uses.
+    async fn insert_vm(
+        db: &TestDatabase,
+        name: &str,
+        host_id: Uuid,
+        status: VmStatus,
+        ha: bool,
+    ) -> Uuid {
+        let vm = ResolvedNewVm {
+            config: serde_json::json!({ "ha_enabled": ha }),
+            ..resolved_vm(name)
+        };
+        let mut tx = db.pool.begin().await.expect("Failed to begin tx");
+        let vm_id = vms::create_tx_with_status(&mut tx, &vm, Some(host_id), status)
             .await
-            .expect("Failed to insert host");
-
-            hosts::update_status(&self.pool, host_id, HostStatus::Down)
-                .await
-                .expect("Failed to mark host DOWN");
-            host_id
-        }
-
-        async fn insert_vm(&self, name: &str, host_id: Uuid, status: VmStatus, ha: bool) -> Uuid {
-            let resolved = ResolvedNewVm {
-                name: name.to_string(),
-                tags: vec![],
-                hypervisor: Hypervisor::CloudHv,
-                architecture: None,
-                boot_vcpus: 1,
-                max_vcpus: 1,
-                cpu_topology: None,
-                kvm_hyperv: None,
-                memory_size: 256 * 1024 * 1024,
-                memory_hotplug_size: None,
-                memory_mergeable: None,
-                memory_shared: None,
-                memory_hugepages: None,
-                memory_hugepage_size: None,
-                memory_prefault: None,
-                memory_thp: None,
-                boot_source_id: None,
-                root_disk_object_id: None,
-                boot_mode: Some(BootMode::Kernel),
-                description: None,
-                image_ref: None,
-                cloud_init_user_data: None,
-                cloud_init_meta_data: None,
-                cloud_init_network_config: None,
-                network_id: None,
-                networks: None,
-                security_group_ids: None,
-                accelerator_config: None,
-                numa_config: None,
-                persistent_upper_pool_id: None,
-                placement_policy: None,
-                config: serde_json::json!({ "ha_enabled": ha }),
-            };
-            let vm_id = vms::create(&self.pool, &resolved)
-                .await
-                .expect("Failed to insert VM");
-            vms::update_host_id(&self.pool, vm_id, host_id)
-                .await
-                .expect("Failed to assign VM host");
-            vms::update_status(&self.pool, vm_id, status)
-                .await
-                .expect("Failed to set VM status");
-            vm_id
-        }
-    }
-
-    impl Drop for TestDatabase {
-        fn drop(&mut self) {
-            let db_name = self.name.clone();
-            let (tx, rx) = std::sync::mpsc::channel();
-
-            std::thread::spawn(move || {
-                let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
-                rt.block_on(async move {
-                    let configuration = get_configuration().expect("Failed to read configuration");
-                    let mut connection =
-                        PgConnection::connect_with(&configuration.database.without_db())
-                            .await
-                            .expect("Failed to connect to Postgres");
-                    connection
-                        .execute(&*format!(r#"DROP DATABASE "{}" WITH (FORCE)"#, db_name))
-                        .await
-                        .expect("Failed to drop test database");
-                    let _ = tx.send(());
-                });
-            });
-
-            let _ = rx.recv();
-        }
+            .expect("Failed to insert VM");
+        tx.commit().await.expect("Failed to commit");
+        vm_id
     }
 
     #[tokio::test]
-    async fn only_running_ha_vms_are_failover_candidates() {
+    async fn only_active_ha_vms_are_failover_candidates() {
         let db = TestDatabase::new().await;
-        let host_id = db.insert_down_host().await;
+        let host_id = db.add_host("ha-test-host", HostStatus::Down).await;
 
-        let ha_running = db
-            .insert_vm("ha-running", host_id, VmStatus::Running, true)
-            .await;
-        let ha_unknown = db
-            .insert_vm("ha-unknown", host_id, VmStatus::Unknown, true)
-            .await;
-        let _non_ha_running = db
-            .insert_vm("plain-running", host_id, VmStatus::Running, false)
-            .await;
-        let _ha_stopped = db
-            .insert_vm("ha-stopped", host_id, VmStatus::Shutdown, true)
-            .await;
+        let mut expected = Vec::new();
+        for (name, status) in [
+            ("ha-running", VmStatus::Running),
+            ("ha-paused", VmStatus::Paused),
+            ("ha-unknown", VmStatus::Unknown),
+        ] {
+            expected.push(insert_vm(&db, name, host_id, status, true).await);
+        }
+        insert_vm(&db, "plain-running", host_id, VmStatus::Running, false).await;
+        insert_vm(&db, "ha-stopped", host_id, VmStatus::Shutdown, true).await;
+        insert_vm(&db, "ha-never-started", host_id, VmStatus::Created, true).await;
 
         let candidates = collect_failover_candidates(&db.app(), host_id)
             .await
@@ -672,7 +511,6 @@ mod tests {
 
         let mut ids: Vec<Uuid> = candidates.iter().map(|vm| vm.id).collect();
         ids.sort();
-        let mut expected = vec![ha_running, ha_unknown];
         expected.sort();
         assert_eq!(ids, expected);
     }
@@ -680,10 +518,8 @@ mod tests {
     #[tokio::test]
     async fn failed_over_vms_are_listed_by_source_host() {
         let db = TestDatabase::new().await;
-        let host_id = db.insert_down_host().await;
-        let vm_id = db
-            .insert_vm("ha-failed-over", host_id, VmStatus::Running, true)
-            .await;
+        let host_id = db.add_host("ha-test-host", HostStatus::Down).await;
+        let vm_id = insert_vm(&db, "ha-failed-over", host_id, VmStatus::Running, true).await;
 
         let vm = vms::get(&db.pool, vm_id).await.expect("Failed to get VM");
         let mut config = vm.config.clone();
@@ -697,6 +533,8 @@ mod tests {
             .expect("Failed to list failed-over VMs");
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].id, vm_id);
+        // The HA flag must survive the marker updates.
+        assert!(listed[0].ha_enabled);
 
         vms::set_failed_over_from(&mut config, None);
         vms::update_config(&db.pool, vm_id, &config)
@@ -707,15 +545,14 @@ mod tests {
             .await
             .expect("Failed to list failed-over VMs");
         assert!(listed.is_empty());
+        assert!(vms::get(&db.pool, vm_id).await.unwrap().ha_enabled);
     }
 
     #[tokio::test]
     async fn gpu_request_reflects_current_allocation() {
         let db = TestDatabase::new().await;
-        let host_id = db.insert_down_host().await;
-        let vm_id = db
-            .insert_vm("gpu-vm", host_id, VmStatus::Running, true)
-            .await;
+        let host_id = db.add_host("ha-test-host", HostStatus::Down).await;
+        let vm_id = insert_vm(&db, "gpu-vm", host_id, VmStatus::Running, true).await;
 
         host_gpus::sync_gpus(
             &db.pool,
@@ -754,10 +591,8 @@ mod tests {
     #[tokio::test]
     async fn gpu_request_is_none_without_allocated_gpus() {
         let db = TestDatabase::new().await;
-        let host_id = db.insert_down_host().await;
-        let vm_id = db
-            .insert_vm("no-gpu-vm", host_id, VmStatus::Running, true)
-            .await;
+        let host_id = db.add_host("ha-test-host", HostStatus::Down).await;
+        let vm_id = insert_vm(&db, "no-gpu-vm", host_id, VmStatus::Running, true).await;
 
         let vm = vms::get(&db.pool, vm_id).await.expect("Failed to get VM");
         let gpu_request = gpu_request_for_vm(&db.app(), &vm)
@@ -769,15 +604,9 @@ mod tests {
     #[tokio::test]
     async fn reallocate_vm_gpus_moves_allocation_to_target_host() {
         let db = TestDatabase::new().await;
-        let dead_host_id = db
-            .insert_down_host_with_address("ha-test-host-dead", "127.0.0.1")
-            .await;
-        let target_host_id = db
-            .insert_down_host_with_address("ha-test-host-target", "127.0.0.2")
-            .await;
-        let vm_id = db
-            .insert_vm("gpu-vm", dead_host_id, VmStatus::Running, true)
-            .await;
+        let dead_host_id = db.add_host("ha-test-host-dead", HostStatus::Down).await;
+        let target_host_id = db.add_host("ha-test-host-target", HostStatus::Down).await;
+        let vm_id = insert_vm(&db, "gpu-vm", dead_host_id, VmStatus::Running, true).await;
 
         host_gpus::sync_gpus(
             &db.pool,
@@ -841,15 +670,9 @@ mod tests {
     #[tokio::test]
     async fn reallocate_vm_gpus_fails_when_target_lacks_gpus() {
         let db = TestDatabase::new().await;
-        let dead_host_id = db
-            .insert_down_host_with_address("ha-test-host-dead", "127.0.0.1")
-            .await;
-        let target_host_id = db
-            .insert_down_host_with_address("ha-test-host-target", "127.0.0.2")
-            .await;
-        let vm_id = db
-            .insert_vm("gpu-vm", dead_host_id, VmStatus::Running, true)
-            .await;
+        let dead_host_id = db.add_host("ha-test-host-dead", HostStatus::Down).await;
+        let target_host_id = db.add_host("ha-test-host-target", HostStatus::Down).await;
+        let vm_id = insert_vm(&db, "gpu-vm", dead_host_id, VmStatus::Running, true).await;
 
         host_gpus::sync_gpus(
             &db.pool,

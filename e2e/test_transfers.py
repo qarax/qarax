@@ -10,37 +10,49 @@ Tests verify the transfer lifecycle:
 
 import asyncio
 import time
+import uuid
+from uuid import UUID
 
 import pytest
 from qarax_api_client import Client
 from qarax_api_client.api.hosts import list_ as list_hosts
-from qarax_api_client.api.storage_pools import (
-    create as create_pool,
-    delete as delete_pool,
-    attach_host as attach_pool_host,
+from qarax_api_client.api.storage_objects import (
+    delete as delete_storage_object,
 )
 from qarax_api_client.api.storage_objects import (
     get as get_storage_object,
-    delete as delete_storage_object,
+)
+from qarax_api_client.api.storage_pools import (
+    attach_host as attach_pool_host,
+)
+from qarax_api_client.api.storage_pools import (
+    create as create_pool,
+)
+from qarax_api_client.api.storage_pools import (
+    delete as delete_pool,
 )
 from qarax_api_client.api.transfers import (
     create as create_transfer,
+)
+from qarax_api_client.api.transfers import (
     get as get_transfer,
+)
+from qarax_api_client.api.transfers import (
     list_ as list_transfers,
 )
 from qarax_api_client.models import (
     NewStoragePool,
-    StoragePoolType,
     NewTransfer,
     StorageObjectType,
+    StoragePoolType,
     TransferStatus,
 )
-from qarax_api_client.models.attach_host_request import AttachHostRequest
-
+from qarax_api_client.models.attach_pool_host_request import AttachPoolHostRequest
 
 TRANSFER_TIMEOUT = 30
 
-from helpers import AUTH_HEADERS, QARAX_URL, up_hosts as _up_hosts
+from helpers import AUTH_HEADERS, QARAX_URL, call_api
+from helpers import up_hosts as _up_hosts
 
 
 @pytest.fixture
@@ -52,7 +64,6 @@ def client():
 @pytest.mark.asyncio
 async def test_local_copy_transfer(client):
     """Test submitting a local file copy transfer and verifying completion."""
-    import uuid
     test_id = uuid.uuid4().hex[:8]
     async with client as c:
         # 1. Find the e2e-node host
@@ -70,15 +81,15 @@ async def test_local_copy_transfer(client):
         assert pool_id is not None
         pool_id_str = str(pool_id).strip('"')
 
-        from uuid import UUID
-        await attach_pool_host.asyncio_detailed(
-            client=c,
-            pool_id=UUID(pool_id_str),
-            body=AttachHostRequest(host_id=host.id, bridge_name="unused"),
-        )
-
         transfer = None
         try:
+            await call_api(
+                attach_pool_host,
+                client=c,
+                pool_id=UUID(pool_id_str),
+                body=AttachPoolHostRequest(host_id=host.id),
+            )
+
             # 3. Submit a local_copy transfer
             # The test kernel is already on the node at this path
             new_transfer = NewTransfer(
@@ -133,17 +144,10 @@ async def test_local_copy_transfer(client):
             assert any(str(t.id) == transfer_id_str for t in transfers_list)
 
         finally:
-            # Cleanup: try to delete storage object, then pool.
-            # Storage object deletion may fail if the transfer's FK still references it;
-            # that's acceptable since unique pool names prevent stale data collisions.
-            try:
-                if transfer is not None and transfer.storage_object_id is not None:
-                    await delete_storage_object.asyncio_detailed(
-                        client=c, object_id=str(transfer.storage_object_id)
-                    )
-            except Exception:
-                pass
-            try:
-                await delete_pool.asyncio_detailed(client=c, pool_id=pool_id_str)
-            except Exception:
-                pass
+            if transfer is not None and transfer.storage_object_id is not None:
+                await call_api(
+                    delete_storage_object,
+                    client=c,
+                    object_id=str(transfer.storage_object_id),
+                )
+            await call_api(delete_pool, client=c, pool_id=pool_id_str)

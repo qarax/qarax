@@ -16,6 +16,8 @@ pub mod sandbox_runtime;
 pub mod secret_provider;
 pub mod startup;
 pub mod storage_cleanup;
+#[cfg(test)]
+mod test_support;
 pub mod transfer_executor;
 pub mod vm_monitor;
 

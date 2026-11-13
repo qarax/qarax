@@ -7,48 +7,30 @@ They verify:
   - Creating a VM with --numa-node 0 (explicit pin) boots successfully
 """
 
-import asyncio
-import time
-
 import pytest
 from qarax_api_client import Client
 from qarax_api_client.api.hosts import list_ as list_hosts
 from qarax_api_client.api.hosts import list_numa_nodes
 from qarax_api_client.api.vms import (
     create as create_vm,
+)
+from qarax_api_client.api.vms import (
     delete as delete_vm,
-    get as get_vm,
+)
+from qarax_api_client.api.vms import (
     start as start_vm,
 )
-from qarax_api_client.models import NewVm, Hypervisor, VmStatus
+from qarax_api_client.models import Hypervisor, NewVm, VmStatus
 
 VM_OPERATION_TIMEOUT = 60
 
-from helpers import AUTH_HEADERS, QARAX_URL, call_api, up_hosts as _up_hosts
+from helpers import AUTH_HEADERS, QARAX_URL, call_api, wait_for_status
+from helpers import up_hosts as _up_hosts
 
 
 @pytest.fixture
 def client():
     return Client(base_url=QARAX_URL, headers=AUTH_HEADERS)
-
-
-async def wait_for_vm_status(
-    client, vm_id: str, expected: VmStatus, timeout: int = VM_OPERATION_TIMEOUT
-):
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        vm = await call_api(get_vm, client=client, vm_id=vm_id)
-        if vm.status == expected:
-            return vm
-        if vm.status in (VmStatus.SHUTDOWN, VmStatus.UNKNOWN):
-            raise RuntimeError(
-                f"VM {vm_id} entered terminal state {vm.status} waiting for {expected}"
-            )
-        await asyncio.sleep(1)
-    vm = await call_api(get_vm, client=client, vm_id=vm_id)
-    raise TimeoutError(
-        f"VM {vm_id} did not reach {expected} in {timeout}s; current: {vm.status}"
-    )
 
 
 @pytest.mark.asyncio
@@ -95,7 +77,9 @@ async def test_vm_start_with_explicit_numa_pin(client):
 
         try:
             await call_api(start_vm, client=c, vm_id=vm_id_str)
-            vm = await wait_for_vm_status(c, vm_id_str, VmStatus.RUNNING)
+            vm = await wait_for_status(
+                c, vm_id_str, VmStatus.RUNNING, timeout=VM_OPERATION_TIMEOUT
+            )
             assert vm.status == VmStatus.RUNNING, f"VM status: {vm.status}"
         finally:
             await call_api(delete_vm, client=c, vm_id=vm_id_str)

@@ -94,6 +94,8 @@ jobs:
     name: E2E Tests
     runs-on: ubuntu-latest
     needs: build
+    # Runs take ~7 minutes; a hung VM or wait must not hold the runner for 6 hours.
+    timeout-minutes: 60
     if: github.event.label.name == 'run-e2e'
     steps:
       - uses: actions/checkout@v6

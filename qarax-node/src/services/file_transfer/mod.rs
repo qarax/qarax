@@ -47,10 +47,6 @@ pub struct FileTransferServiceImpl {
 }
 
 impl FileTransferServiceImpl {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     pub fn with_overlaybd(overlaybd_manager: Option<Arc<OverlayBdManager>>) -> Self {
         Self {
             overlaybd_manager,
@@ -430,7 +426,7 @@ mod cleanup_tests {
         let directory = tempfile::tempdir().unwrap();
         let object_id = uuid::Uuid::new_v4().to_string();
         let path = directory.path().join(&object_id);
-        let service = FileTransferServiceImpl::new();
+        let service = FileTransferServiceImpl::default();
         let writer = service.file_locks.get(&path).lock_owned().await;
         let req = crate::rpc::node::DeleteStorageFilesRequest {
             pool_id: uuid::Uuid::new_v4().to_string(),

@@ -30,6 +30,8 @@ QARAX_URL = os.getenv("QARAX_URL", "http://localhost:8000")
 # Address of qarax-node as seen from the qarax control plane (inside docker network)
 QARAX_NODE_HOST = os.getenv("QARAX_NODE_HOST", "qarax-node")
 QARAX_NODE_PORT = int(os.getenv("QARAX_NODE_PORT", "50051"))
+QARAX_NODE_2_HOST = os.getenv("QARAX_NODE_2_HOST", "qarax-node-2")
+QARAX_NODE_2_PORT = int(os.getenv("QARAX_NODE_2_PORT", "50051"))
 OTEL_TEST_PORT = int(os.getenv("OTEL_TEST_PORT", "14318"))
 
 
@@ -183,7 +185,7 @@ class _TelemetryHandler(BaseHTTPRequestHandler):
             else:
                 self.send_error(404)
                 return
-        except Exception as exc:  # surfaced explicitly to the test via store.errors
+        except Exception as exc:  # noqa: BLE001 - surfaced to the test via store.errors
             self.store.record_error(f"{self.path}: {exc}")
             self.send_error(500, explain=str(exc))
             return
@@ -276,3 +278,49 @@ def ensure_host_registered():
     raise RuntimeError(
         last_error or "Failed to initialize any candidate qarax-node host"
     )
+
+
+def _register_and_init_host(client, address, port, name):
+    """Register a host if not already present and initialize it. Returns host_id."""
+    hosts = list_hosts.sync(client=client)
+    if hosts is None:
+        raise RuntimeError("Failed to list hosts")
+
+    existing = next((h for h in hosts if h.address == address), None)
+    if existing is not None:
+        host_id = existing.id
+    else:
+        new_host = NewHost(name=name, address=address, port=port, host_user="root")
+        result = add_host.sync_detailed(client=client, body=new_host)
+        if result.status_code.value == 201:
+            host_id = uuid.UUID(result.parsed.strip())
+        else:
+            hosts = list_hosts.sync(client=client)
+            existing = next((h for h in hosts if h.address == address), None)
+            if existing is None:
+                raise RuntimeError(f"Could not register host at {address}:{port}")
+            host_id = existing.id
+
+    result = init_host.sync_detailed(host_id=host_id, client=client)
+    if result.status_code.value != 200:
+        raise RuntimeError(
+            f"Failed to initialize host {host_id}: HTTP {result.status_code}"
+        )
+    return host_id
+
+
+@pytest.fixture(scope="module")
+def two_hosts():
+    """Ensure both qarax-node instances are registered and initialized.
+
+    Returns (host1_id, host2_id): host1 is the qarax-node service, host2 is
+    qarax-node-2.
+    """
+    c = Client(base_url=QARAX_URL, headers=AUTH_HEADERS)
+    host1_id = _register_and_init_host(
+        c, QARAX_NODE_HOST, QARAX_NODE_PORT, "e2e-node-1"
+    )
+    host2_id = _register_and_init_host(
+        c, QARAX_NODE_2_HOST, QARAX_NODE_2_PORT, "e2e-node-2"
+    )
+    return host1_id, host2_id

@@ -1484,8 +1484,13 @@ mod tests {
         // no answer at all: only the connect timeout ends it early.
         let client = NodeClient::new("192.0.2.1", 50051);
         let started = std::time::Instant::now();
-        assert!(client.connect_vm_service().await.is_err());
-        assert!(client.connect_file_transfer_service().await.is_err());
-        assert!(started.elapsed() < 2 * NODE_CONNECT_TIMEOUT + Duration::from_secs(5));
+        let (vm_service, file_transfer_service) = tokio::join!(
+            client.connect_vm_service(),
+            client.connect_file_transfer_service()
+        );
+        assert!(vm_service.is_err());
+        assert!(file_transfer_service.is_err());
+        // Each connect gives up at the timeout instead of the kernel's ~2 min SYN budget.
+        assert!(started.elapsed() < NODE_CONNECT_TIMEOUT + Duration::from_secs(5));
     }
 }
