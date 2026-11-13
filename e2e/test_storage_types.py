@@ -183,6 +183,15 @@ async def test_create_vm_with_oci_image(client, oci_image_ref):
             )
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "Known product bug: busybox ships /bin/sh as a tar hard link (to bin/[), and the "
+        "OverlayBD-converted rootfs the preflight mounts has no executable sh on PATH. "
+        "It failed this way in every run since 889804c, hidden by a skip until now. "
+        "strict: remove this marker once conversion keeps hard links."
+    ),
+)
 @pytest.mark.asyncio
 async def test_preflight_oci_image(client, oci_image_ref):
     """Preflight should mark the test image bootable via OverlayBD."""
