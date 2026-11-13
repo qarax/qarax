@@ -4,6 +4,7 @@ import subprocess
 import httpx
 import pytest
 from qarax_api_client import Client
+from qarax_api_client.api.hosts import init as init_host
 from qarax_api_client.api.hosts import list_ as list_hosts
 from qarax_api_client.api.networks import (
     attach_host,
@@ -20,6 +21,9 @@ from qarax_api_client.api.networks import (
 )
 from qarax_api_client.api.networks import (
     list_ as list_networks,
+)
+from qarax_api_client.api.networks import (
+    list_hosts as list_network_hosts,
 )
 from qarax_api_client.api.networks import (
     list_ips as list_network_ips,
@@ -112,6 +116,100 @@ async def test_network_crud(client):
         assert resp.status_code == 404, (
             f"Expected deleted network to return 404, got {resp.status_code}: {resp.content}"
         )
+
+
+@pytest.mark.asyncio
+async def test_deleting_an_attached_network_removes_its_bridge(client):
+    """Deleting a network detaches it from its hosts first, so no bridge,
+    DHCP server or NAT rule is left behind on the node."""
+    import uuid
+
+    test_id = uuid.uuid4().hex[:6]
+    bridge_name = f"br87{test_id}"
+    async with client as c:
+        hosts = _up_hosts(await call_api(list_hosts, client=c))
+        assert hosts, "No UP hosts available"
+        host = hosts[0]
+        container = compose_container(str(host.address))
+        net_id = await call_api(
+            create_network,
+            client=c,
+            body=NewNetwork(
+                name=f"e2e-net-del-{test_id}",
+                subnet="10.87.0.0/24",
+                gateway="10.87.0.1",
+                type_="isolated",
+            ),
+        )
+        deleted = False
+        try:
+            await call_api(
+                attach_host,
+                client=c,
+                network_id=str(net_id),
+                body=AttachHostRequest(host_id=host.id, bridge_name=bridge_name),
+            )
+            attached = await call_api(list_network_hosts, client=c, network_id=str(net_id))
+            assert [(str(a.host_id), a.bridge_name) for a in attached] == [
+                (str(host.id), bridge_name)
+            ]
+            assert docker("exec", container, "ip", "link", "show", bridge_name, check=False).returncode == 0
+
+            await call_api(delete_network, client=c, network_id=str(net_id))
+            deleted = True
+            assert docker("exec", container, "ip", "link", "show", bridge_name, check=False).returncode != 0, (
+                f"bridge {bridge_name} is still on {host.name} after the network was deleted"
+            )
+        finally:
+            if not deleted:
+                await call_api_detailed(delete_network, client=c, network_id=str(net_id))
+
+
+@pytest.mark.asyncio
+async def test_host_init_recreates_lost_network_bridges(client):
+    """A reboot loses a node's bridges; host init re-creates the networks the
+    host is attached to."""
+    import uuid
+
+    test_id = uuid.uuid4().hex[:6]
+    bridge_name = f"br86{test_id}"
+    async with client as c:
+        hosts = _up_hosts(await call_api(list_hosts, client=c))
+        assert hosts, "No UP hosts available"
+        host = hosts[0]
+        container = compose_container(str(host.address))
+        net_id = await call_api(
+            create_network,
+            client=c,
+            body=NewNetwork(
+                name=f"e2e-net-reinit-{test_id}",
+                subnet="10.86.0.0/24",
+                gateway="10.86.0.1",
+                type_="isolated",
+            ),
+        )
+        try:
+            await call_api(
+                attach_host,
+                client=c,
+                network_id=str(net_id),
+                body=AttachHostRequest(host_id=host.id, bridge_name=bridge_name),
+            )
+            docker("exec", container, "ip", "link", "delete", bridge_name)
+
+            await call_api(init_host, client=c, host_id=str(host.id))
+
+            # Init re-attaches networks in the background.
+            for _ in range(60):
+                if docker("exec", container, "ip", "link", "show", bridge_name, check=False).returncode == 0:
+                    break
+                await asyncio.sleep(0.5)
+            else:
+                pytest.fail(f"bridge {bridge_name} was not re-created on {host.name} by host init")
+            addrs = docker("exec", container, "ip", "-4", "addr", "show", bridge_name).stdout
+            assert "10.86.0.1/24" in addrs, addrs
+        finally:
+            await call_api_detailed(delete_network, client=c, network_id=str(net_id))
 
 
 @pytest.mark.asyncio

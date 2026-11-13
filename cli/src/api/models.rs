@@ -369,6 +369,8 @@ pub struct StoragePool {
     pub name: String,
     pub pool_type: String,
     pub status: String,
+    /// Type-specific settings (path, url, portal/iqn).
+    pub config: serde_json::Value,
     pub capacity_bytes: Option<i64>,
     pub allocated_bytes: Option<i64>,
 }
@@ -394,6 +396,8 @@ pub struct StorageObject {
     pub storage_pool_id: Uuid,
     pub object_type: String,
     pub size_bytes: i64,
+    /// Type-specific settings, e.g. the file path on the node.
+    pub config: serde_json::Value,
     pub parent_id: Option<Uuid>,
 }
 
@@ -491,6 +495,19 @@ pub struct AttachHostToNetworkRequest {
     pub bridge_name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_interface: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PoolHost {
+    pub host_id: Uuid,
+    pub host_name: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct NetworkHost {
+    pub host_id: Uuid,
+    pub host_name: String,
+    pub bridge_name: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

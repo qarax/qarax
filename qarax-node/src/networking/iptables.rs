@@ -30,7 +30,9 @@ impl VmFirewallChains {
     }
 }
 
-/// Set up NAT masquerade and forwarding rules for a bridge subnet.
+/// Set up NAT masquerade and forwarding rules for a bridge subnet. Rules that
+/// are already present aren't added again, so re-attaching a network doesn't
+/// pile up duplicates that a later teardown (one `-D` each) would leave behind.
 pub async fn setup_nat(bridge: &str, subnet: &str) -> Result<()> {
     super::validate_iface_name(bridge)?;
     super::validate_ipv4_cidr(subnet)?;
@@ -41,35 +43,31 @@ pub async fn setup_nat(bridge: &str, subnet: &str) -> Result<()> {
         .await
         .context("Failed to enable ip_forward")?;
 
-    let _ = run_cmd(
-        "iptables",
-        &[
-            "-t",
-            "nat",
-            "-A",
-            "POSTROUTING",
-            "-s",
-            subnet,
-            "!",
-            "-o",
-            bridge,
-            "-j",
-            "MASQUERADE",
-        ],
+    ensure_rule(
+        &["-t", "nat"],
+        "POSTROUTING",
+        &["-s", subnet, "!", "-o", bridge, "-j", "MASQUERADE"],
     )
-    .await;
-    let _ = run_cmd(
-        "iptables",
-        &["-A", FORWARD_CHAIN, "-i", bridge, "-j", "ACCEPT"],
-    )
-    .await;
-    let _ = run_cmd(
-        "iptables",
-        &["-A", FORWARD_CHAIN, "-o", bridge, "-j", "ACCEPT"],
-    )
-    .await;
+    .await?;
+    ensure_rule(&[], FORWARD_CHAIN, &["-i", bridge, "-j", "ACCEPT"]).await?;
+    ensure_rule(&[], FORWARD_CHAIN, &["-o", bridge, "-j", "ACCEPT"]).await?;
 
     Ok(())
+}
+
+/// Append an iptables rule unless `-C` finds it already in the chain.
+async fn ensure_rule(table: &[&str], chain: &str, rule: &[&str]) -> Result<()> {
+    let with = |op: &'static str| -> Vec<&str> {
+        let mut args = table.to_vec();
+        args.push(op);
+        args.push(chain);
+        args.extend_from_slice(rule);
+        args
+    };
+    if run_cmd("iptables", &with("-C")).await.is_ok() {
+        return Ok(());
+    }
+    run_cmd("iptables", &with("-A")).await
 }
 
 /// Remove NAT and forwarding rules for a bridge subnet.

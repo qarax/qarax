@@ -318,6 +318,10 @@ pub struct SchedulingRequest {
     pub architecture: Option<String>,
     pub storage_pool_id: Option<Uuid>,
     pub required_network_ids: Vec<Uuid>,
+    /// The VM boots an OCI image: only hosts with an active OverlayBD pool
+    /// (and so an overlaybd-tcmu daemon) can run it.
+    #[serde(default)]
+    pub requires_overlaybd: bool,
     pub gpu: Option<GpuRequest>,
     pub placement_policy: Option<crate::model::vms::PlacementPolicy>,
     #[serde(default)]
@@ -520,6 +524,40 @@ pub async fn update_placement(
     Ok(())
 }
 
+/// Names of the VMs placed on the host.
+pub async fn vm_names_on(pool: &PgPool, host_id: Uuid) -> Result<Vec<String>, sqlx::Error> {
+    sqlx::query_scalar!(
+        "SELECT name FROM vms WHERE host_id = $1 ORDER BY name",
+        host_id
+    )
+    .fetch_all(pool)
+    .await
+}
+
+/// Delete a host. Its pool, network, GPU and NUMA rows cascade. Pending
+/// storage cleanups and managed objects list hosts in arrays, which don't
+/// cascade, so drop the host from those too: a cleanup aimed at a host that
+/// no longer exists would otherwise be retried forever.
+pub async fn delete(pool: &PgPool, host_id: Uuid) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    sqlx::query!(
+        "UPDATE storage_cleanup SET host_ids = array_remove(host_ids, $1) WHERE $1 = ANY(host_ids)",
+        host_id
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query!(
+        "UPDATE storage_objects SET managed_host_ids = array_remove(managed_host_ids, $1) WHERE $1 = ANY(managed_host_ids)",
+        host_id
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query!("DELETE FROM hosts WHERE id = $1", host_id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await
+}
+
 /// Returns a host by id, or `Error::NotFound` if it does not exist.
 pub async fn require_by_id(pool: &PgPool, id: Uuid) -> Result<Host, crate::errors::Error> {
     get_by_id(pool, id)
@@ -599,6 +637,15 @@ LEFT JOIN (
         qb.push("AND EXISTS (SELECT 1 FROM host_networks hn WHERE hn.host_id = h.id AND hn.network_id = ");
         qb.push_bind(*network_id);
         qb.push(") ");
+    }
+
+    if request.requires_overlaybd {
+        qb.push(
+            "AND EXISTS (SELECT 1 FROM host_storage_pools obd_hsp \
+             JOIN storage_pools obd_sp ON obd_sp.id = obd_hsp.storage_pool_id \
+             WHERE obd_hsp.host_id = h.id AND obd_sp.pool_type = 'OVERLAYBD' \
+             AND obd_sp.status = 'ACTIVE') ",
+        );
     }
 
     if let Some(architecture) = request.architecture.as_deref() {
@@ -1085,6 +1132,7 @@ mod tests {
                 architecture: Some("aarch64".to_string()),
                 storage_pool_id: None,
                 required_network_ids: vec![],
+                requires_overlaybd: false,
                 gpu: None,
                 placement_policy: None,
                 excluded_host_ids: vec![],
@@ -1119,6 +1167,7 @@ mod tests {
                 architecture: Some("x86_64".to_string()),
                 storage_pool_id: None,
                 required_network_ids: vec![],
+                requires_overlaybd: false,
                 gpu: None,
                 placement_policy: None,
                 excluded_host_ids: vec![],
@@ -1146,6 +1195,7 @@ mod tests {
             architecture: Some("x86_64".to_string()),
             storage_pool_id: None,
             required_network_ids: vec![],
+            requires_overlaybd: false,
             gpu: None,
             placement_policy: None,
             excluded_host_ids: vec![],
@@ -1235,7 +1285,7 @@ mod tests {
         let network_id = db
             .create_network("sched-net", "10.77.0.0/24", "10.77.0.1")
             .await;
-        networks::attach_host(&db.pool, network_id, attached_host_id, "qtnet0")
+        networks::attach_host(&db.pool, network_id, attached_host_id, "qtnet0", None)
             .await
             .expect("attach network to host");
 
@@ -1249,6 +1299,7 @@ mod tests {
                 architecture: Some("x86_64".to_string()),
                 storage_pool_id: None,
                 required_network_ids: vec![network_id],
+                requires_overlaybd: false,
                 gpu: None,
                 placement_policy: None,
                 excluded_host_ids: vec![],
@@ -1261,6 +1312,54 @@ mod tests {
 
         assert_eq!(host.id, attached_host_id);
         assert_ne!(host.id, unattached_host_id);
+    }
+
+    #[tokio::test]
+    async fn pick_host_requires_an_overlaybd_pool_for_image_vms() {
+        let db = TestDatabase::new().await;
+        let with_pool = db
+            .insert_up_host("obd-host", Some("x86_64"), 8, 16 * 1024, 10_000, 1.0)
+            .await;
+        // Less loaded, so the scheduler would prefer it without the constraint.
+        let without_pool = db
+            .insert_up_host("plain-host", Some("x86_64"), 8, 16 * 1024, 10_000, 0.1)
+            .await;
+        let pool_id = crate::model::storage_pools::create(
+            &db.pool,
+            crate::model::storage_pools::NewStoragePool {
+                name: "obd-pool".into(),
+                pool_type: crate::model::storage_pools::StoragePoolType::OverlayBd,
+                config: serde_json::json!({"url": "http://registry:5000"}),
+                capacity_bytes: None,
+            },
+        )
+        .await
+        .expect("create pool");
+        crate::model::storage_pools::attach_host(&db.pool, pool_id, with_pool)
+            .await
+            .expect("attach pool");
+
+        let request = |requires_overlaybd| SchedulingRequest {
+            memory_bytes: 1024,
+            vcpus: 1,
+            disk_bytes: 100,
+            architecture: Some("x86_64".to_string()),
+            storage_pool_id: None,
+            required_network_ids: vec![],
+            requires_overlaybd,
+            gpu: None,
+            placement_policy: None,
+            excluded_host_ids: vec![],
+        };
+        for (requires_overlaybd, expected) in [(true, with_pool), (false, without_pool)] {
+            let mut tx = db.pool.begin().await.expect("begin tx");
+            let host =
+                super::pick_host_tx(&mut tx, &request(requires_overlaybd), &scheduling_config())
+                    .await
+                    .expect("pick host")
+                    .expect("expected host");
+            assert_eq!(host.id, expected, "requires_overlaybd={requires_overlaybd}");
+        }
     }
 
     #[tokio::test]
@@ -1283,6 +1382,7 @@ mod tests {
                 architecture: Some("x86_64".to_string()),
                 storage_pool_id: None,
                 required_network_ids: vec![],
+                requires_overlaybd: false,
                 gpu: None,
                 placement_policy: None,
                 excluded_host_ids: vec![excluded_host_id],
@@ -1321,6 +1421,7 @@ mod tests {
                 architecture: Some("x86_64".to_string()),
                 storage_pool_id: None,
                 required_network_ids: vec![],
+                requires_overlaybd: false,
                 gpu: None,
                 placement_policy: Some(PlacementPolicy {
                     reservation_class: Some("batch".to_string()),
@@ -1370,6 +1471,7 @@ mod tests {
                 architecture: Some("x86_64".to_string()),
                 storage_pool_id: None,
                 required_network_ids: vec![],
+                requires_overlaybd: false,
                 gpu: None,
                 placement_policy: Some(PlacementPolicy {
                     reservation_class: None,
@@ -1419,6 +1521,7 @@ mod tests {
                 architecture: Some("x86_64".to_string()),
                 storage_pool_id: None,
                 required_network_ids: vec![],
+                requires_overlaybd: false,
                 gpu: None,
                 placement_policy: Some(PlacementPolicy {
                     reservation_class: None,
@@ -1468,6 +1571,7 @@ mod tests {
                 architecture: Some("x86_64".to_string()),
                 storage_pool_id: None,
                 required_network_ids: vec![],
+                requires_overlaybd: false,
                 gpu: None,
                 placement_policy: Some(PlacementPolicy {
                     reservation_class: None,
@@ -1519,6 +1623,7 @@ mod tests {
                 architecture: Some("x86_64".to_string()),
                 storage_pool_id: None,
                 required_network_ids: vec![],
+                requires_overlaybd: false,
                 gpu: None,
                 placement_policy: Some(PlacementPolicy {
                     reservation_class: None,
@@ -1576,6 +1681,7 @@ mod tests {
                         architecture: None,
                         storage_pool_id: None,
                         required_network_ids: vec![],
+                        requires_overlaybd: false,
                         gpu: Some(gpu),
                         placement_policy: None,
                         excluded_host_ids: vec![],

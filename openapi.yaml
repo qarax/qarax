@@ -505,6 +505,27 @@ paths:
         '500':
           description: Internal server error
   /hosts/{host_id}:
+    delete:
+      tags:
+      - hosts
+      operationId: delete
+      parameters:
+      - name: host_id
+        in: path
+        description: Host unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '204':
+          description: Host deleted
+        '404':
+          description: Host not found
+        '409':
+          description: VMs are still placed on the host
+        '500':
+          description: Internal server error
     patch:
       tags:
       - hosts
@@ -947,12 +968,41 @@ paths:
           format: uuid
       responses:
         '204':
-          description: Network deleted successfully
+          description: Network detached from its hosts and deleted
+        '404':
+          description: Network not found
+        '409':
+          description: Network is in use by VMs or VM templates
+        '422':
+          description: Failed to detach the network on a node
+        '500':
+          description: Internal server error
+  /networks/{network_id}/hosts:
+    get:
+      tags:
+      - networks
+      operationId: list_hosts
+      parameters:
+      - name: network_id
+        in: path
+        description: Network unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Hosts the network is attached to
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/NetworkHost'
         '404':
           description: Network not found
         '500':
           description: Internal server error
-  /networks/{network_id}/hosts:
     post:
       tags:
       - networks
@@ -1607,6 +1657,31 @@ paths:
         '500':
           description: Internal server error
   /storage-pools/{pool_id}/hosts:
+    get:
+      tags:
+      - storage-pools
+      operationId: list_hosts
+      parameters:
+      - name: pool_id
+        in: path
+        description: Storage pool unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Hosts the storage pool is attached to
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PoolHost'
+        '404':
+          description: Storage pool not found
+        '500':
+          description: Internal server error
     post:
       tags:
       - storage-pools
@@ -1630,6 +1705,8 @@ paths:
           description: Host attached to storage pool
         '404':
           description: Storage pool or host not found
+        '422':
+          description: The node can't attach the pool (e.g. OverlayBD without overlaybd-tcmu)
         '500':
           description: Internal server error
   /storage-pools/{pool_id}/hosts/{host_id}:
@@ -3927,6 +4004,21 @@ components:
           type:
           - string
           - 'null'
+    NetworkHost:
+      type: object
+      description: A host a network is attached to, and the bridge carrying it there.
+      required:
+      - host_id
+      - host_name
+      - bridge_name
+      properties:
+        bridge_name:
+          type: string
+        host_id:
+          type: string
+          format: uuid
+        host_name:
+          type: string
     NetworkInterface:
       type: object
       required:
@@ -4748,6 +4840,18 @@ components:
           items:
             type: string
           description: Prefer hosts with fewer active VMs that have all of these tags.
+    PoolHost:
+      type: object
+      description: A host a storage pool is attached to.
+      required:
+      - host_id
+      - host_name
+      properties:
+        host_id:
+          type: string
+          format: uuid
+        host_name:
+          type: string
     RateLimiterConfig:
       type: object
       properties:

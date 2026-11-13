@@ -6,7 +6,7 @@ use crate::{
         hosts,
         jobs::{self, JobType, NewJob},
         storage_objects::{self, NewStorageObject, StorageObjectType},
-        storage_pools::{self, NewStoragePool, StoragePool},
+        storage_pools::{self, NewStoragePool, PoolHost, StoragePool},
     },
 };
 use axum::{Extension, Json, extract::Path};
@@ -150,6 +150,31 @@ pub struct AttachPoolHostRequest {
 }
 
 #[utoipa::path(
+    get,
+    path = "/storage-pools/{pool_id}/hosts",
+    params(
+        ("pool_id" = uuid::Uuid, Path, description = "Storage pool unique identifier")
+    ),
+    responses(
+        (status = 200, description = "Hosts the storage pool is attached to", body = Vec<PoolHost>),
+        (status = 404, description = "Storage pool not found"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "storage-pools"
+)]
+#[instrument(skip(env))]
+pub async fn list_hosts(
+    Extension(env): Extension<App>,
+    Path(pool_id): Path<Uuid>,
+) -> Result<ApiResponse<Vec<PoolHost>>> {
+    storage_pools::get(env.pool(), pool_id).await?;
+    Ok(ApiResponse {
+        data: storage_pools::list_hosts(env.pool(), pool_id).await?,
+        code: StatusCode::OK,
+    })
+}
+
+#[utoipa::path(
     post,
     path = "/storage-pools/{pool_id}/hosts",
     params(
@@ -159,6 +184,7 @@ pub struct AttachPoolHostRequest {
     responses(
         (status = 204, description = "Host attached to storage pool"),
         (status = 404, description = "Storage pool or host not found"),
+        (status = 422, description = "The node can't attach the pool (e.g. OverlayBD without overlaybd-tcmu)"),
         (status = 500, description = "Internal server error")
     ),
     tag = "storage-pools"

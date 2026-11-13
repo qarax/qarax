@@ -79,6 +79,11 @@ enum StoragePoolCommand {
         /// Pool name or ID
         pool: String,
     },
+    /// List the hosts a storage pool is attached to
+    Hosts {
+        /// Pool name or ID
+        pool: String,
+    },
     /// Attach a host to a storage pool
     AttachHost {
         /// Pool name or ID
@@ -265,6 +270,18 @@ pub async fn run_pool(
             let id = resolve_pool_id(client, &pool).await?;
             api::storage::delete_pool(client, id).await?;
             println!("Deleted storage pool: {id}");
+        }
+
+        StoragePoolCommand::Hosts { pool } => {
+            let pool_id = resolve_pool_id(client, &pool).await?;
+            let hosts = api::storage::list_pool_hosts(client, pool_id).await?;
+            if !matches!(output, OutputFormat::Table) {
+                print_output(&hosts, output)?;
+            } else {
+                for host in hosts {
+                    println!("{}  {}", host.host_id, host.host_name);
+                }
+            }
         }
 
         StoragePoolCommand::AttachHost { pool, host, all } => {

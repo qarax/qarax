@@ -88,6 +88,17 @@ impl VmManager {
             };
 
             let socket_path = path.clone();
+            // A surviving Cloud Hypervisor answers on its socket right away; a
+            // dead one's socket refuses at once. Machine::connect would retry
+            // for 5 s (it is built for a process that is still starting), which
+            // held up node startup by 5 s for every VM that died with it.
+            if let Err(e) = UnixStream::connect(&socket_path).await {
+                warn!(
+                    "VM {} socket is not answering (process has died): {}",
+                    vm_id, e
+                );
+                continue;
+            }
             let machine_config = MachineConfig {
                 vm_id: vm_uuid,
                 socket_path: Cow::Owned(socket_path.clone()),

@@ -833,7 +833,7 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
 
         VmCommand::Attach { vm } => {
             let id = resolve_vm_id(client, &vm).await?;
-            console::attach(client.base_url(), id).await?;
+            console::attach(client.base_url(), client.token(), id).await?;
         }
 
         VmCommand::Exec {

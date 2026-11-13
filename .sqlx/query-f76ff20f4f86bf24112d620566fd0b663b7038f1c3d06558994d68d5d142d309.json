@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE storage_objects SET managed_host_ids = array_remove(managed_host_ids, $1) WHERE $1 = ANY(managed_host_ids)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f76ff20f4f86bf24112d620566fd0b663b7038f1c3d06558994d68d5d142d309"
+}

@@ -40,7 +40,7 @@ enum NetworkCommand {
         /// Optional VPC name. Networks with the same VPC name can route between subnets across attached hosts.
         #[arg(long)]
         vpc: Option<String>,
-        /// Network type (bridge or vlan)
+        /// Network type: bridge, isolated (same-VPC traffic between hosts is routed without NAT) or passt
         #[arg(long, value_name = "TYPE", default_value = "bridge")]
         network_type: String,
     },
@@ -75,11 +75,26 @@ enum NetworkCommand {
         #[arg(long)]
         host: String,
     },
+    /// List the hosts a network is attached to
+    Hosts {
+        /// Network name or ID
+        network: String,
+    },
     /// List IP allocations for a network
     ListIps {
         /// Network name or ID
         network: String,
     },
+}
+
+#[derive(Tabled)]
+struct NetworkHostRow {
+    #[tabled(rename = "Host")]
+    host: String,
+    #[tabled(rename = "Host ID")]
+    host_id: String,
+    #[tabled(rename = "Bridge")]
+    bridge: String,
 }
 
 #[derive(Tabled)]
@@ -226,6 +241,24 @@ pub async fn run(args: NetworkArgs, client: &Client, output: OutputFormat) -> an
                 )?;
             } else {
                 println!("Detached host {host} from network {network}");
+            }
+        }
+
+        NetworkCommand::Hosts { network } => {
+            let id = resolve_network_id(client, &network).await?;
+            let hosts = api::networks::list_hosts(client, id).await?;
+            if !matches!(output, OutputFormat::Table) {
+                print_output(&hosts, output)?;
+            } else {
+                let rows: Vec<NetworkHostRow> = hosts
+                    .into_iter()
+                    .map(|h| NetworkHostRow {
+                        host: h.host_name,
+                        host_id: h.host_id.to_string(),
+                        bridge: h.bridge_name,
+                    })
+                    .collect();
+                println!("{}", Table::new(rows).with(Style::psql()));
             }
         }
 

@@ -4,7 +4,15 @@ use anyhow::Context;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use futures_util::{SinkExt, StreamExt};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio_tungstenite::{connect_async, tungstenite::Message};
+use tokio_tungstenite::{
+    connect_async,
+    tungstenite::{
+        Message,
+        client::IntoClientRequest,
+        handshake::client::Request,
+        http::{HeaderValue, header::AUTHORIZATION},
+    },
+};
 use uuid::Uuid;
 
 /// Convert an HTTP(S) base URL to a WebSocket URL and append the console
@@ -22,18 +30,32 @@ fn build_ws_url(base_url: &str, vm_id: Uuid) -> String {
     )
 }
 
+/// The WebSocket upgrade request, with the API token if there is one: the
+/// server checks it on the upgrade like on any other request.
+fn ws_request(base_url: &str, token: Option<&str>, vm_id: Uuid) -> anyhow::Result<Request> {
+    let mut request = build_ws_url(base_url, vm_id).into_client_request()?;
+    if let Some(token) = token {
+        let mut value = HeaderValue::from_str(&format!("Bearer {token}"))
+            .context("API token must be a valid header value")?;
+        value.set_sensitive(true);
+        request.headers_mut().insert(AUTHORIZATION, value);
+    }
+    Ok(request)
+}
+
 /// Attach an interactive WebSocket console to a running VM.
 ///
 /// - Stdin bytes are forwarded to the server as `Binary` WebSocket frames.
 /// - Output from the server is written directly to stdout.
 /// - Press **Ctrl+]** (byte `0x1D`) to disconnect.
-pub async fn attach(base_url: &str, vm_id: Uuid) -> anyhow::Result<()> {
-    let ws_url = build_ws_url(base_url, vm_id);
+pub async fn attach(base_url: &str, token: Option<&str>, vm_id: Uuid) -> anyhow::Result<()> {
+    let request = ws_request(base_url, token, vm_id)?;
+    let ws_url = request.uri().to_string();
 
     eprintln!("[Connecting to console for VM {vm_id} ...]");
     eprintln!("[Press Ctrl+] to disconnect]");
 
-    let (ws_stream, _) = connect_async(&ws_url)
+    let (ws_stream, _) = connect_async(request)
         .await
         .with_context(|| format!("Failed to connect to WebSocket at {ws_url}"))?;
 
@@ -100,4 +122,23 @@ pub async fn attach(base_url: &str, vm_id: Uuid) -> anyhow::Result<()> {
     // _raw dropped here → raw mode disabled.
     eprintln!("\r\n[Disconnected]");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ws_request_carries_the_api_token() {
+        let vm_id = Uuid::nil();
+        let request = ws_request("https://qarax.example/", Some("secret"), vm_id).unwrap();
+        assert_eq!(
+            request.uri().to_string(),
+            format!("wss://qarax.example/vms/{vm_id}/console/attach")
+        );
+        assert_eq!(request.headers()[AUTHORIZATION], "Bearer secret");
+
+        let request = ws_request("http://localhost:8000", None, vm_id).unwrap();
+        assert!(!request.headers().contains_key(AUTHORIZATION));
+    }
 }

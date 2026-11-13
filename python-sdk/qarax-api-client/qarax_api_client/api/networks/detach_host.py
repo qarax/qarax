@@ -14,7 +14,6 @@ def _get_kwargs(
     network_id: UUID,
     host_id: UUID,
 ) -> dict[str, Any]:
-
     _kwargs: dict[str, Any] = {
         "method": "delete",
         "url": "/networks/{network_id}/hosts/{host_id}".format(

@@ -82,7 +82,7 @@ async def wait_for_job(c, job_id, timeout=JOB_TIMEOUT):
     raise TimeoutError(f"Job {job_id} did not complete within {timeout}s")
 
 
-from helpers import AUTH_HEADERS, call_api, docker
+from helpers import AUTH_HEADERS, call_api, call_api_detailed, docker
 from helpers import up_hosts as _up_hosts
 
 
@@ -107,6 +107,30 @@ async def _attach_pools_to_hosts(c, hosts, pool_ids):
                 pool_id=pool_id,
                 body=AttachPoolHostRequest(host_id=host.id),
             )
+
+
+async def _attach_overlaybd_pool(c, hosts, pool_id):
+    """Attach an OverlayBD pool to every UP host whose node accepts it.
+
+    A node refuses OverlayBD without an overlaybd-tcmu daemon, which the
+    compose stack runs on qarax-node only (two daemons can't share a kernel's
+    TCMU handler). The scheduler then places image VMs on a host that has it.
+    """
+    accepted = []
+    for host in _up_hosts(hosts):
+        resp = await call_api_detailed(
+            attach_pool_host,
+            client=c,
+            pool_id=pool_id,
+            body=AttachPoolHostRequest(host_id=host.id),
+        )
+        if resp.status_code == 204:
+            accepted.append(host.name)
+        else:
+            assert resp.status_code == 422 and b"overlaybd-tcmu" in resp.content, (
+                f"attaching OverlayBD pool to {host.name}: {resp.status_code} {resp.content}"
+            )
+    assert accepted, "no host accepted the OverlayBD pool"
 
 
 async def _cleanup(c, vm_id, object_name_prefixes, pool_ids):
@@ -151,7 +175,7 @@ async def test_create_vm_with_oci_image(client, oci_image_ref):
 
         vm_id = None
         try:
-            await _attach_pools_to_hosts(c, hosts, [overlaybd_pool_id])
+            await _attach_overlaybd_pool(c, hosts, overlaybd_pool_id)
 
             new_vm = NewVm(
                 name=f"e2e-oci-image-vm-{test_id}",
@@ -208,7 +232,7 @@ async def test_preflight_oci_image(client, oci_image_ref):
         )
 
         try:
-            await _attach_pools_to_hosts(c, hosts, [overlaybd_pool_id])
+            await _attach_overlaybd_pool(c, hosts, overlaybd_pool_id)
 
             response = await c.get_async_httpx_client().post(
                 f"{QARAX_URL}/vms/preflight",
@@ -263,9 +287,8 @@ async def test_create_vm_with_persistent_overlaybd_upper_has_storage_object(
 
         vm_id = None
         try:
-            await _attach_pools_to_hosts(
-                c, hosts, [upper_pool_id, overlaybd_pool_id]
-            )
+            await _attach_pools_to_hosts(c, hosts, [upper_pool_id])
+            await _attach_overlaybd_pool(c, hosts, overlaybd_pool_id)
 
             new_vm = NewVm(
                 name=f"e2e-oci-persistent-upper-{test_id}",

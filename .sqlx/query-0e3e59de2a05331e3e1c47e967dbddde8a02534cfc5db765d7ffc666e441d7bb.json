@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nSELECT hsp.host_id, h.name AS host_name\nFROM host_storage_pools hsp\nJOIN hosts h ON h.id = hsp.host_id\nWHERE hsp.storage_pool_id = $1\nORDER BY h.name\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "host_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "host_name",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "0e3e59de2a05331e3e1c47e967dbddde8a02534cfc5db765d7ffc666e441d7bb"
+}

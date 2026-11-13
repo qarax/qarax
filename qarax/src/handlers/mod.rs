@@ -101,6 +101,7 @@ pub struct BackupListQuery {
         host::handler::list,
         host::handler::add,
         host::handler::update,
+        host::handler::delete,
         host::handler::deploy,
         host::handler::init,
         host::handler::evacuate,
@@ -151,6 +152,7 @@ pub struct BackupListQuery {
         storage_pool::handler::get,
         storage_pool::handler::create,
         storage_pool::handler::delete,
+        storage_pool::handler::list_hosts,
         storage_pool::handler::attach_host,
         storage_pool::handler::detach_host,
         storage_pool::handler::import_to_pool,
@@ -174,6 +176,7 @@ pub struct BackupListQuery {
         network::handler::delete,
         network::handler::attach_host,
         network::handler::detach_host,
+        network::handler::list_hosts,
         network::handler::list_ips,
         security_group::handler::list,
         security_group::handler::get,
@@ -228,6 +231,7 @@ pub struct BackupListQuery {
             crate::model::storage_objects::NewStorageObject,
             crate::model::storage_objects::StorageObjectType,
             crate::model::storage_pools::StoragePool,
+            crate::model::storage_pools::PoolHost,
             crate::model::storage_pools::NewStoragePool,
             crate::model::storage_pools::StoragePoolType,
             crate::model::storage_pools::StoragePoolStatus,
@@ -279,6 +283,7 @@ pub struct BackupListQuery {
             crate::model::networks::NewNetwork,
             crate::model::networks::NetworkStatus,
             crate::model::networks::IpAllocation,
+            crate::model::networks::NetworkHost,
             crate::handlers::network::handler::AttachHostRequest,
             crate::model::security_groups::SecurityGroup,
             crate::model::security_groups::NewSecurityGroup,
@@ -461,7 +466,10 @@ pub fn app(env: App) -> Router {
 fn hosts() -> Router {
     Router::new()
         .route("/hosts", get(host::handler::list).post(host::handler::add))
-        .route("/hosts/{host_id}", patch(host::handler::update))
+        .route(
+            "/hosts/{host_id}",
+            patch(host::handler::update).delete(host::handler::delete),
+        )
         .route(
             "/hosts/{host_id}/placement",
             put(host::handler::update_placement),
@@ -604,7 +612,7 @@ fn storage_pools() -> Router {
         )
         .route(
             "/storage-pools/{pool_id}/hosts",
-            post(storage_pool::handler::attach_host),
+            get(storage_pool::handler::list_hosts).post(storage_pool::handler::attach_host),
         )
         .route(
             "/storage-pools/{pool_id}/hosts/{host_id}",
@@ -652,7 +660,7 @@ fn networks() -> Router {
         )
         .route(
             "/networks/{network_id}/hosts",
-            post(network::handler::attach_host),
+            get(network::handler::list_hosts).post(network::handler::attach_host),
         )
         .route(
             "/networks/{network_id}/hosts/{host_id}",

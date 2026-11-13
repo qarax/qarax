@@ -40,8 +40,8 @@ enum HostCommand {
         /// Host address (IP or hostname)
         #[arg(long)]
         address: String,
-        /// SSH port
-        #[arg(long, default_value = "22")]
+        /// qarax-node gRPC port (deploys reach SSH separately, see `host deploy --ssh-port`)
+        #[arg(long, default_value = "50051")]
         port: i32,
         /// SSH user
         #[arg(long)]
@@ -55,6 +55,11 @@ enum HostCommand {
         /// Placement label in key=value form. Repeat to set multiple labels.
         #[arg(long = "label")]
         labels: Vec<String>,
+    },
+    /// Delete a host record (refused while VMs are placed on it)
+    Delete {
+        /// Host name or ID
+        host: String,
     },
     /// Deploy a bootc image to a host
     Deploy {
@@ -341,6 +346,12 @@ pub async fn run(args: HostArgs, client: &Client, output: OutputFormat) -> anyho
                     new_host.name
                 );
             }
+        }
+
+        HostCommand::Delete { host } => {
+            let id = resolve_host_id(client, &host).await?;
+            api::hosts::delete(client, id).await?;
+            println!("Deleted host: {host}");
         }
 
         HostCommand::Deploy {

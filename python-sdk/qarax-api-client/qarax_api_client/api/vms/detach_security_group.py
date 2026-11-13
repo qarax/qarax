@@ -14,7 +14,6 @@ def _get_kwargs(
     vm_id: UUID,
     security_group_id: UUID,
 ) -> dict[str, Any]:
-
     _kwargs: dict[str, Any] = {
         "method": "delete",
         "url": "/vms/{vm_id}/security-groups/{security_group_id}".format(

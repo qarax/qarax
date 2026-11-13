@@ -120,6 +120,7 @@ pub(crate) async fn evacuation_scheduling_request(
         architecture: persisted_vm_architecture(vm),
         storage_pool_id: None,
         required_network_ids,
+        requires_overlaybd: vm.image_ref.is_some(),
         gpu,
         placement_policy: persisted_vm_placement_policy(vm),
         excluded_host_ids: vec![source_host_id],
@@ -338,6 +339,38 @@ pub async fn update(
         data: (),
         code: StatusCode::OK,
     })
+}
+
+#[utoipa::path(
+    delete,
+    path = "/hosts/{host_id}",
+    params(
+        ("host_id" = uuid::Uuid, Path, description = "Host unique identifier")
+    ),
+    responses(
+        (status = 204, description = "Host deleted"),
+        (status = 404, description = "Host not found"),
+        (status = 409, description = "VMs are still placed on the host"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "hosts"
+)]
+#[instrument(skip(env))]
+pub async fn delete(
+    Extension(env): Extension<App>,
+    Path(host_id): Path<Uuid>,
+) -> Result<StatusCode> {
+    let host = hosts::require_by_id(env.pool(), host_id).await?;
+    let vms = hosts::vm_names_on(env.pool(), host_id).await?;
+    if !vms.is_empty() {
+        return Err(crate::errors::Error::Conflict(format!(
+            "Host {} still has VMs: {}. Move or delete them first (e.g. evacuate the host)",
+            host.name,
+            vms.join(", ")
+        )));
+    }
+    hosts::delete(env.pool(), host_id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[utoipa::path(
@@ -706,8 +739,10 @@ pub async fn init(
     let updated_host = hosts::require_by_id(env.pool(), host_id).await?;
 
     // Background: re-attach pools this host already belongs to (including local pools),
-    // and attach any shared pools (NFS, OverlayBD) that it hasn't joined yet.
+    // attach any shared pools (NFS, OverlayBD) that it hasn't joined yet, and
+    // re-create its network attachments.
     let db_pool = env.pool_arc();
+    let task_env = env.clone();
     let host_address = host.address.clone();
     let host_port = host.port;
     tokio::spawn(async move {
@@ -773,6 +808,8 @@ pub async fn init(
                 }
             }
         }
+
+        crate::handlers::network::handler::reattach_host_networks(&task_env, host_id).await;
     });
 
     Ok(ApiResponse {

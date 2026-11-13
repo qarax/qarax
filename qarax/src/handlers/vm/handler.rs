@@ -153,15 +153,9 @@ async fn root_disk_scheduling_requirements(
         }
     }
 
-    let pool = storage_pools::get(env.pool(), object.storage_pool_id).await?;
-    let storage_pool_id = match pool.pool_type {
-        storage_pools::StoragePoolType::Local
-        | storage_pools::StoragePoolType::Nfs
-        | storage_pools::StoragePoolType::Block => Some(pool.id),
-        storage_pools::StoragePoolType::OverlayBd => None,
-    };
-
-    Ok((object.size_bytes.max(0), storage_pool_id))
+    // Every pool type needs the host attached, OverlayBD included: a node
+    // without overlaybd-tcmu refuses an OverlayBD pool.
+    Ok((object.size_bytes.max(0), Some(object.storage_pool_id)))
 }
 
 async fn validate_root_disk_for_host(
@@ -260,6 +254,7 @@ async fn scheduling_request_for_vm(
         architecture: Some(resolved_vm_architecture(env, vm.architecture.as_deref())),
         storage_pool_id,
         required_network_ids,
+        requires_overlaybd: vm.image_ref.is_some(),
         gpu: gpu_request(accel),
         placement_policy: vm.placement_policy.clone(),
         excluded_host_ids: vec![],
@@ -329,6 +324,7 @@ async fn select_preflight_host(
                     architecture: Some(architecture.to_string()),
                     storage_pool_id: None,
                     required_network_ids: vec![],
+                    requires_overlaybd: true,
                     gpu: None,
                     placement_policy: None,
                     excluded_host_ids: vec![],
@@ -477,6 +473,7 @@ async fn ensure_storage_object_can_be_attached_tx(
 }
 
 async fn ensure_vm_disk_attachments_can_start(pool: &sqlx::PgPool, vm_id: Uuid) -> Result<()> {
+    let host_id = vms::get(pool, vm_id).await?.host_id;
     for disk in vm_disks::list_by_vm(pool, vm_id).await? {
         let Some(storage_object_id) = disk.storage_object_id else {
             continue;
@@ -484,6 +481,17 @@ async fn ensure_vm_disk_attachments_can_start(pool: &sqlx::PgPool, vm_id: Uuid) 
         let object = storage_objects::get(pool, storage_object_id).await?;
         let storage_pool = storage_pools::get(pool, object.storage_pool_id).await?;
         ensure_storage_object_can_be_attached(pool, &object, &storage_pool, Some(vm_id)).await?;
+        // Disks added to a Created VM were only recorded; the node can only
+        // serve them from a pool its host is attached to. Say so here rather
+        // than fail later in the node's mount.
+        if let Some(host_id) = host_id
+            && !storage_pools::host_has_pool(pool, host_id, storage_pool.id).await?
+        {
+            return Err(crate::errors::Error::UnprocessableEntity(format!(
+                "Disk {} is in storage pool {}, which the VM's host isn't attached to",
+                disk.logical_name, storage_pool.name
+            )));
+        }
     }
 
     Ok(())

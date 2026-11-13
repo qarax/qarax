@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nSELECT DISTINCT 'vm ' || v.name AS \"user!\"\nFROM vms v\nJOIN network_interfaces ni ON ni.vm_id = v.id\nWHERE ni.network_id = $1\nUNION\nSELECT 'template ' || t.name\nFROM vm_templates t\nWHERE t.network_id = $1\nORDER BY 1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "d26c312cd188ab22aa9950ed756c3b98098a9a2335c93d75c93565edeae0f24d"
+}

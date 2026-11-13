@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nSELECT hn.host_id, h.name AS host_name, hn.bridge_name\nFROM host_networks hn\nJOIN hosts h ON h.id = hn.host_id\nWHERE hn.network_id = $1\nORDER BY h.name\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "host_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "host_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "bridge_name",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "4943674a4818bb255d9a49a71b70307e42c9f571726e8d2e8c49d034631c1b12"
+}

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE storage_cleanup SET host_ids = array_remove(host_ids, $1) WHERE $1 = ANY(host_ids)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9f1892336de0c1e42fd170b7b5c027c1b92563aee404568101ff3f5ed777f836"
+}
