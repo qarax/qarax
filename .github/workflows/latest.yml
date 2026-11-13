@@ -5,6 +5,13 @@ on:
     branches: [master]
   workflow_dispatch:
 
+# The publish step deletes and recreates the `latest` release, so overlapping runs
+# race on the tag. Queue them instead: GitHub keeps only the newest pending run,
+# so the newest commit is the one published.
+concurrency:
+  group: latest-release
+  cancel-in-progress: false
+
 env:
   CARGO_TERM_COLOR: always
   OTEL_CARGO_FEATURES: "qarax/otel qarax-node/otel"
