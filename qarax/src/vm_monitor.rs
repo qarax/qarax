@@ -3,7 +3,7 @@
 /// restarts or unexpected VM terminations and updates the DB accordingly.
 use std::collections::HashMap;
 use tokio::time::{Duration, interval};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::App;
@@ -71,21 +71,10 @@ pub async fn start_vm_monitor(env: App) {
                 for vm in vms {
                     match client.get_vm_info(vm.id).await {
                         Ok(state) => {
-                            let previous_status = vm.status;
-                            let live_status = proto_status_to_db(state.status, previous_status);
-                            if live_status != previous_status {
-                                info!(
-                                    "VM monitor: VM {} status changed from {:?} to {:?}",
-                                    vm.id, previous_status, live_status
-                                );
-                                if let Err(e) =
-                                    vms::update_status(env.pool(), vm.id, live_status).await
-                                {
-                                    warn!(
-                                        "VM monitor: failed to update VM {} status: {}",
-                                        vm.id, e
-                                    );
-                                }
+                            let live_status = proto_status_to_db(state.status, vm.status);
+                            if live_status != vm.status {
+                                record_status(&env, &vm, live_status, "status changed on node")
+                                    .await;
                             }
                         }
                         Err(e) => {
@@ -94,18 +83,7 @@ pub async fn start_vm_monitor(env: App) {
                                 .unwrap_or(false)
                             {
                                 if let Some(status) = status_when_missing_on_node(vm.status) {
-                                    info!(
-                                        "VM monitor: VM {} not found on node, marking as {:?}",
-                                        vm.id, status
-                                    );
-                                    if let Err(db_err) =
-                                        vms::update_status(env.pool(), vm.id, status).await
-                                    {
-                                        warn!(
-                                            "VM monitor: failed to update VM {} status: {}",
-                                            vm.id, db_err
-                                        );
-                                    }
+                                    record_status(&env, &vm, status, "not found on node").await;
                                 }
                             } else {
                                 warn!(
@@ -127,6 +105,23 @@ pub async fn start_vm_monitor(env: App) {
 
         #[cfg(feature = "otel")]
         record_monitor_cycle("vm", _cycle_start);
+    }
+}
+
+/// Write a status this tick derived for `vm`, unless another writer (a lifecycle
+/// handler, a job) changed the VM after `list_active` read it. That newer
+/// status wins; the next tick compares it against the node again.
+async fn record_status(env: &App, vm: &vms::Vm, status: VmStatus, reason: &str) {
+    match vms::update_status_from(env.pool(), vm, status).await {
+        Ok(true) => info!(
+            "VM monitor: VM {} {}: {:?} -> {:?}",
+            vm.id, reason, vm.status, status
+        ),
+        Ok(false) => debug!(
+            "VM monitor: VM {} changed since this tick read it, leaving it to the next tick",
+            vm.id
+        ),
+        Err(e) => warn!("VM monitor: failed to update VM {} status: {}", vm.id, e),
     }
 }
 

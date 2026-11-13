@@ -151,11 +151,13 @@ async def test_fc_vm_full_lifecycle(client):
             await wait_for_status(c, vm_id, VmStatus.RUNNING)
 
             # Pause
-            await call_api_detailed(pause_vm, client=c, vm_id=vm_id)
+            resp = await call_api_detailed(pause_vm, client=c, vm_id=vm_id)
+            assert resp.status_code == 200, f"pause: HTTP {resp.status_code} {resp.content}"
             await wait_for_status(c, vm_id, VmStatus.PAUSED)
 
             # Resume
-            await call_api_detailed(resume_vm, client=c, vm_id=vm_id)
+            resp = await call_api_detailed(resume_vm, client=c, vm_id=vm_id)
+            assert resp.status_code == 200, f"resume: HTTP {resp.status_code} {resp.content}"
             await wait_for_status(c, vm_id, VmStatus.RUNNING)
 
             # Stop (soft)
@@ -234,7 +236,8 @@ async def test_fc_vm_snapshot_restore(client, fc_snapshot_storage_pool):
             # Start and pause (FC requires paused state for snapshot)
             await call_api_detailed(start_vm, client=c, vm_id=vm_id)
             await wait_for_status(c, vm_id, VmStatus.RUNNING)
-            await call_api_detailed(pause_vm, client=c, vm_id=vm_id)
+            resp = await call_api_detailed(pause_vm, client=c, vm_id=vm_id)
+            assert resp.status_code == 200, f"pause: HTTP {resp.status_code} {resp.content}"
             await wait_for_status(c, vm_id, VmStatus.PAUSED)
 
             # Snapshot

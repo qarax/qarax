@@ -1107,31 +1107,62 @@ pub async fn update_status(
         .execute(pool)
         .await?;
 
-    // Enqueue lifecycle hooks and emit SSE event (best-effort — don't fail the status update)
-    if let Some(vm) = vm
-        && vm.status != status
-    {
-        let new_status_str = status.to_string();
-        let prev_status_str = vm.status.to_string();
-
-        super::events::emit(
-            vm.id,
-            &vm.name,
-            &prev_status_str,
-            &new_status_str,
-            vm.host_id,
-            &vm.tags,
-        );
-
-        if let Err(e) =
-            super::lifecycle_hooks::enqueue_matching(pool, &vm, &prev_status_str, &new_status_str)
-                .await
-        {
-            tracing::warn!("failed to enqueue lifecycle hooks for VM {}: {}", vm_id, e);
-        }
+    if let Some(vm) = vm {
+        notify_status_change(pool, &vm, status).await;
     }
 
     Ok(())
+}
+
+/// Set a VM's status only if it still has the status `vm` was read with, and
+/// return whether it did. For writers that act on an earlier read, like the VM
+/// monitor: a status another writer set since that read wins instead of being
+/// overwritten with stale data.
+pub async fn update_status_from(
+    pool: &PgPool,
+    vm: &Vm,
+    status: VmStatus,
+) -> Result<bool, sqlx::Error> {
+    let updated = sqlx::query("UPDATE vms SET status = $1 WHERE id = $2 AND status = $3")
+        .bind(status)
+        .bind(vm.id)
+        .bind(vm.status)
+        .execute(pool)
+        .await?
+        .rows_affected()
+        == 1;
+
+    if updated {
+        notify_status_change(pool, vm, status).await;
+    }
+
+    Ok(updated)
+}
+
+/// Emit the SSE event and enqueue lifecycle hooks for a status change.
+/// Best-effort: a failure here doesn't fail the status update.
+async fn notify_status_change(pool: &PgPool, vm: &Vm, status: VmStatus) {
+    if vm.status == status {
+        return;
+    }
+
+    let new_status_str = status.to_string();
+    let prev_status_str = vm.status.to_string();
+
+    super::events::emit(
+        vm.id,
+        &vm.name,
+        &prev_status_str,
+        &new_status_str,
+        vm.host_id,
+        &vm.tags,
+    );
+
+    if let Err(e) =
+        super::lifecycle_hooks::enqueue_matching(pool, vm, &prev_status_str, &new_status_str).await
+    {
+        tracing::warn!("failed to enqueue lifecycle hooks for VM {}: {}", vm.id, e);
+    }
 }
 
 /// Atomically set a VM's status to Committing if it is currently in a

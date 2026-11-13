@@ -4,7 +4,10 @@ use common::telemtry::{get_subscriber, init_subscriber};
 use once_cell::sync::Lazy;
 use qarax::{
     configuration::{DatabaseSettings, default_control_plane_architecture, get_configuration},
-    model::networks as network_model,
+    model::{
+        networks as network_model,
+        vms::{self, VmStatus},
+    },
     startup::run,
 };
 use reqwest::StatusCode;
@@ -1283,5 +1286,61 @@ async fn test_preflight_rejects_selected_host_architecture_mismatch() {
             .as_str()
             .unwrap_or_default()
             .contains("selected host architecture x86_64 does not match VM architecture aarch64")
+    );
+}
+
+/// The VM monitor writes statuses it derived from an earlier read. A status
+/// another writer set since that read must survive the monitor's write.
+#[tokio::test]
+async fn test_update_status_from_keeps_newer_status() {
+    let app = spawn_app().await;
+    let client = reqwest::Client::new();
+    ensure_host_up(&client, &app.address).await;
+
+    let vm_id = create_vm(
+        &client,
+        &app.address,
+        json!({
+            "name": "test-vm-status-cas",
+            "hypervisor": "cloud_hv",
+            "boot_vcpus": 1,
+            "max_vcpus": 1,
+            "memory_size": 268435456,
+            "config": {}
+        }),
+    )
+    .await;
+    let vm_id = Uuid::parse_str(&vm_id).unwrap();
+
+    // The monitor reads the VM while it is still created...
+    let stale = vms::get(&app.pool, vm_id).await.unwrap();
+    assert_eq!(stale.status, VmStatus::Created);
+
+    // ...a handler pauses it before the monitor writes...
+    vms::update_status(&app.pool, vm_id, VmStatus::Paused)
+        .await
+        .unwrap();
+
+    // ...so the monitor's write from the stale read is skipped.
+    assert!(
+        !vms::update_status_from(&app.pool, &stale, VmStatus::Running)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        vms::get(&app.pool, vm_id).await.unwrap().status,
+        VmStatus::Paused
+    );
+
+    // A write from a current read goes through.
+    let current = vms::get(&app.pool, vm_id).await.unwrap();
+    assert!(
+        vms::update_status_from(&app.pool, &current, VmStatus::Running)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        vms::get(&app.pool, vm_id).await.unwrap().status,
+        VmStatus::Running
     );
 }
