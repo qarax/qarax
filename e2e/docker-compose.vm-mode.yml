@@ -1,13 +1,22 @@
-# Compose overlay for VM mode: removes the qarax-node container service and
-# switches qarax to host networking so it can reach the libvirt VM (192.168.122.0/24).
-# Used by run-local.sh --vm so that qarax-node runs in a libvirt VM instead.
-# Usage: docker compose -f docker-compose.yml -f docker-compose.vm-mode.yml up -d ...
+# Overlay for running qarax-node in a libvirt VM instead of a container
+# (hack/run-local.sh --vm, hack/test-host-deploy-libvirt.sh):
+#   - qarax uses host networking, since libvirt's NAT network only accepts new
+#     connections from the host itself, not from a Docker bridge.
+#   - postgres publishes a loopback port of its own for that host-networked
+#     qarax, so it can't collide with (or silently connect to) a test
+#     Postgres on 5432.
+#   - qarax no longer waits for node containers; none are started.
+# Usage: docker compose -f docker-compose.yml -f docker-compose.vm-mode.yml up -d --wait registry postgres qarax
 services:
+  postgres:
+    ports:
+      - "127.0.0.1:15432:5432"
   qarax:
     network_mode: host
+    ports: !reset []
     environment:
-      # With host networking, postgres is reachable via localhost
       DATABASE_HOST: 127.0.0.1
-    depends_on:
+      DATABASE_PORT: "15432"
+    depends_on: !override
       postgres:
         condition: service_healthy

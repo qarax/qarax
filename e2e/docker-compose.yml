@@ -1,5 +1,13 @@
+# Profiles keep `make run-local` light: it starts registry, postgres, qarax-node
+# and qarax. The e2e runner names the rest explicitly, which enables them.
+#   e2e         nfs-server (NFS storage-pool tests)
+#   multi-node  qarax-node-2 (two-host tests and demos; demos/lib.sh
+#               ensure_up_hosts starts it on demand)
+#   bootc       bootc-vm (node upgrade tests)
+# Tear everything down with: docker compose --profile '*' down -v
 services:
   nfs-server:
+    profiles: [ e2e ]
     build:
       context: ..
       dockerfile: e2e/Dockerfile.nfs-server
@@ -41,6 +49,7 @@ services:
       - postgres_data:/var/lib/postgresql/data
 
   qarax-node-2:
+    profiles: [ multi-node ]
     build:
       context: ..
       dockerfile: e2e/Dockerfile.qarax-node
@@ -74,6 +83,7 @@ services:
         condition: service_healthy
       nfs-server:
         condition: service_healthy
+        required: false
     healthcheck:
       test: [ "CMD", "nc", "-z", "localhost", "50051" ]
       interval: 5s
@@ -117,6 +127,7 @@ services:
         condition: service_healthy
       qarax-node-2:
         condition: service_healthy
+        required: false
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8000/" ]
       interval: 5s
@@ -163,6 +174,7 @@ services:
         condition: service_healthy
       nfs-server:
         condition: service_healthy
+        required: false
     healthcheck:
       test: [ "CMD", "nc", "-z", "localhost", "50051" ]
       interval: 5s
@@ -170,6 +182,7 @@ services:
       retries: 10
 
   bootc-vm:
+    profiles: [ bootc ]
     build:
       context: ..
       dockerfile: e2e/Dockerfile.qemu-vm
