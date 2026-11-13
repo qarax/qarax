@@ -1,49 +1,53 @@
 # Sandbox Demo
 
-Ephemeral VMs on demand — spin up a sandbox from a template, use it, and let it auto-expire.
+Ephemeral VMs on demand: create a sandbox from a template, use it, and let it expire.
 
-A **sandbox** is a single-use VM with an idle timeout.  When there has been no
-activity (`exec` or `keepalive`) within the timeout window, the reaper
-automatically stops and deletes the underlying VM.  No manual cleanup required.
+A **sandbox** is a single-use VM with an idle timeout. When it has seen no
+activity (`exec` or `keepalive`) for longer than the timeout, the reaper
+deletes it and its VM.
 
 ## What this demo shows
 
-1. Create two VM templates backed by the same boot source (Firecracker default + Cloud Hypervisor comparison)
-2. Provision one sandbox from each template and measure cold time-to-ready
-3. Configure a prewarmed Firecracker sandbox pool and wait for a standby sandbox
-4. Inspect the Firecracker sandbox that represents the default sandbox path
-5. Execute a command inside the Firecracker sandbox over the guest agent
-6. Claim a second Firecracker sandbox from the prewarmed pool and measure warm time-to-ready
-7. Delete one sandbox manually
-8. Watch the remaining sandbox get auto-reaped after its idle timeout expires
+1. Get or create two templates for the same guest: `sandbox-demo-fc` (Firecracker) and `sandbox-demo-ch` (Cloud Hypervisor)
+2. Create a sandbox from each and time how long each takes from `sandbox create` to `ready`
+3. Configure a prewarmed sandbox pool for the Firecracker template
+4. Inspect the Firecracker sandbox, reset its idle clock with `keepalive` and run `uname -a` inside it with `sandbox exec`
+5. Claim a second sandbox from the pool and time it (the demo checks that it was claimed, not booted)
+6. Delete the first sandbox by hand
+7. Wait for the reaper to delete the second sandbox after its idle timeout (30 s by default)
+
+The summary lists the three times. They are end-to-end numbers from one run
+(the demo polls the sandbox every 0.1 s), useful for comparing backends in this
+environment, not a rigorous benchmark.
 
 ## Prerequisites
 
-- qarax stack: started automatically via `hack/run-local.sh` (same as `make run-local`) if it is not already running; `--cleanup` only requires it to be reachable
-- `cargo` (the script builds the CLI first; set `SKIP_BUILD=1` to use an existing build) and `python3`
-- A host registered and initialized (run-local.sh does this automatically; override the host name with `QARAX_HOST`, default `local-node`)
-- `QARAX_TOKEN` must match the server's API token; it defaults to the local stack's `e2e-test-token`
-- The demo requires an initramfs that contains `qarax-init`, because it runs `qarax sandbox exec` inside the guest
-- Firecracker is the default managed sandbox backend in this demo, and the exec step now runs against the Firecracker sandbox itself
-- By default it uses `/var/lib/qarax/images/test-initramfs.gz` from the local e2e/demo environment; override with `--initramfs PATH` or `SANDBOX_INITRAMFS_PATH`
-- The default run removes old `sandbox-demo-*` sandboxes, VMs, sandbox pools, and template assets left by interrupted runs, creates fresh per-run template assets, and configures a one-entry prewarmed sandbox pool before the warm-claim step
+- The qarax stack: started with `hack/run-local.sh` (same as `make run-local`) if it isn't running. `--cleanup` only needs it to be reachable.
+- `cargo` (the script builds the CLI) or a `qarax` CLI on `PATH`
+- `jq`, `curl`, and bash 5 or newer
+- `QARAX_TOKEN` matching the server's API token; it defaults to the local stack's `e2e-test-token`
+
+The demo templates have no boot source: their VMs boot the control plane's
+default kernel and initramfs (`VM_KERNEL` and `VM_INITRAMFS`, which on the local
+stack is `test-initramfs.gz`). That initramfs runs `qarax-init`, the guest agent
+`sandbox exec` talks to. A template passed with `--template` needs the same.
 
 ## Usage
 
 ```bash
-# Default: creates Firecracker + Cloud Hypervisor demo templates, benchmarks both, then configures a one-entry warm pool
+# Firecracker vs Cloud Hypervisor cold start, then a prewarmed pool
 ./demos/sandbox/run.sh
 
-# Custom server
-./demos/sandbox/run.sh --server http://localhost:8000
-
-# Reuse an existing template that boots with an exec-capable initramfs
+# Use an existing template (skips the Cloud Hypervisor comparison)
 ./demos/sandbox/run.sh --template my-template
 
-# Shorter idle timeout to see auto-reap faster
-./demos/sandbox/run.sh --idle-timeout 30
+# Give the pooled sandbox a longer idle timeout before it is reaped
+./demos/sandbox/run.sh --idle-timeout 60
 
-# Remove demo-managed resources only
+# Leave the sandboxes and the pool in place at exit
+KEEP=1 ./demos/sandbox/run.sh
+
+# Remove the demo's sandboxes, pools and templates
 ./demos/sandbox/run.sh --cleanup
 ```
 
@@ -52,39 +56,35 @@ automatically stops and deletes the underlying VM.  No manual cleanup required.
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--server URL` | `$QARAX_SERVER` or `http://localhost:8000` | qarax API URL |
-| `--template NAME` | demo-managed `sandbox-demo-template-*` | Reuse an existing VM template; it is not deleted by the demo, and an existing sandbox pool on it is restored to its original `min_ready` on exit. When this is used, the built-in Firecracker vs Cloud Hypervisor benchmark is skipped. |
-| `--idle-timeout SECS` | `90` | Idle timeout before auto-reap |
-| `--initramfs PATH` | `/var/lib/qarax/images/test-initramfs.gz` | Initramfs path on the qarax-node host; must contain `qarax-init` |
-| `--cleanup` | n/a | Remove demo-managed sandboxes, VMs, and template assets, then exit |
+| `--template NAME` | `sandbox-demo-fc` | Use an existing VM template. The demo doesn't delete it, and restores the `min_ready` of a sandbox pool it already had. If that pool has a standby ready, the first sandbox is claimed from it rather than booted. |
+| `--idle-timeout SECS` | `$SANDBOX_IDLE_TIMEOUT` or `30` | Idle timeout of the sandbox claimed from the pool, the one the demo waits to see reaped. The other sandboxes use the server's default (300 s). |
+| `--cleanup` | | Remove the demo's sandboxes, sandbox pools and templates, then exit |
 
 Environment variables:
 
-- `SANDBOX_POOL_MIN_READY` (default `1`): standby sandboxes kept ready before the warm claim
-- `SANDBOX_READY_TIMEOUT` (default `300`): seconds to wait for a sandbox to reach `ready`
-- `SANDBOX_IDLE_TIMEOUT`, `SANDBOX_INITRAMFS_PATH`, `QARAX_SERVER`: defaults for the matching flags
+- `KEEP=1`: leave the `sandbox-demo-*` sandboxes and the sandbox pool in place at exit
+- `SANDBOX_POOL_MIN_READY` (default `1`): standby sandboxes the pool keeps ready
+- `SANDBOX_READY_TIMEOUT` (default `300`): seconds to wait for a sandbox to be ready, and for the pool to fill
+- `QARAX_SERVER`, `SANDBOX_IDLE_TIMEOUT`: defaults for the matching flags
 
 ## How auto-reap works
 
-The `sandbox_reaper` background task runs every 10 seconds by default
-(`sandbox.reaper_interval_secs`) and queries for
-sandboxes where `last_activity_at + idle_timeout_secs < NOW()`.  Any matching
-sandbox transitions to `destroying` and its VM is stopped and deleted.
+The `sandbox_reaper` background task runs every 10 seconds
+(`sandbox.reaper_interval_secs`) and finds ready sandboxes where
+`last_activity_at + idle_timeout_secs < NOW()`. Each one moves to `destroying`,
+and its VM is stopped and deleted along with the sandbox.
 
-To reset the idle clock without fetching the full record, call
-`qarax sandbox keepalive <id>` (POST `/sandboxes/{id}/keepalive`). Plain
-`qarax sandbox get` no longer extends the lifetime — that side effect was
-removed so monitoring tools don't accidentally keep sandboxes alive.
-`qarax sandbox exec` continues to count as activity.
-
-## Benchmark notes
-
-The reported cold Firecracker vs Cloud Hypervisor numbers and the prewarmed claim number are simple end-to-end demo measurements from `sandbox create` until the sandbox reaches `ready`. They are useful for comparing this environment, but they are not a rigorous microbenchmark.
+`qarax sandbox exec` and `qarax sandbox keepalive` (POST
+`/sandboxes/{id}/keepalive`) reset the idle clock. `qarax sandbox get` doesn't,
+so monitoring a sandbox doesn't keep it alive. A sandbox claimed from a pool
+starts its idle clock at the claim.
 
 ## Cleanup
 
-The demo cleans up after itself (sandboxes, sandbox pool config, and template assets) on exit,
-including when interrupted. The shared `sandbox-demo-pool` storage pool is kept for reuse.
-If a run was killed before its exit trap could run:
+On exit, including when interrupted, the demo deletes its sandboxes and the
+sandbox pool it configured (unless `KEEP=1`). The two templates are kept, so the
+next run reuses them. A run also clears sandboxes and pools that an interrupted
+run left behind. To remove everything, templates included:
 
 ```bash
 ./demos/sandbox/run.sh --cleanup

@@ -51,7 +51,18 @@ warn() { echo -e "  ${YELLOW}!${NC} $1" >&2; }
 # Echo a command, then run it. Use it for the commands the demo is showing
 # off, so what's printed is exactly what ran.
 run() {
-	echo -e "  ${DIM}\$ $*${NC}"
+	local cmd
+	printf -v cmd '%q ' "$@"
+	echo -e "  ${DIM}\$ ${cmd% }${NC}"
+	"$@"
+}
+
+# Like run, but echo the command to stderr, so `out=$(capture CMD...)` holds
+# only the command's output.
+capture() {
+	local cmd
+	printf -v cmd '%q ' "$@"
+	echo -e "  ${DIM}\$ ${cmd% }${NC}" >&2
 	"$@"
 }
 
@@ -101,14 +112,18 @@ compose() {
 	docker compose -f "${REPO_ROOT}/e2e/docker-compose.yml" "$@"
 }
 
-# Run a command inside a local-stack container (e.g. qarax-node). Resolves
-# the container once instead of re-parsing the compose file per call.
+# Run a command inside a local-stack container (e.g. qarax-node). The
+# container ID is looked up once per service, not per call (calls from the
+# top-level shell share the cache; calls inside $(...) look it up again).
+declare -A NODE_CONTAINERS=()
 node_exec() {
-	local service="$1" cid
+	local service="$1"
 	shift
-	cid=$(compose ps -q "$service")
-	[[ -n "$cid" ]] || die "compose service ${service} is not running"
-	docker exec "$cid" "$@"
+	if [[ -z "${NODE_CONTAINERS[$service]:-}" ]]; then
+		NODE_CONTAINERS[$service]=$(compose ps -q "$service")
+		[[ -n "${NODE_CONTAINERS[$service]}" ]] || die "compose service ${service} is not running"
+	fi
+	docker exec "${NODE_CONTAINERS[$service]}" "$@"
 }
 
 # Map a registered host's address to the compose service running it.
@@ -139,9 +154,10 @@ find_qarax_bin() {
 }
 
 # Build the CLI from this checkout (a no-op when it's current) and set
-# QARAX_BIN. Without cargo, fall back to a qarax on PATH.
+# QARAX_BIN. With SKIP_BUILD=1 (as in CI, which downloads release binaries) or
+# without cargo, use an existing build or a qarax on PATH.
 require_cli() {
-	if command -v cargo >/dev/null 2>&1; then
+	if [[ -z "${SKIP_BUILD:-}" ]] && command -v cargo >/dev/null 2>&1; then
 		(cd "$REPO_ROOT" && cargo build -q -p cli) || die "failed to build the qarax CLI"
 	fi
 	QARAX_BIN="$(find_qarax_bin)"
@@ -165,6 +181,23 @@ wait_until() {
 		((SECONDS < deadline)) || return 1
 		sleep 0.5
 	done
+}
+
+# exists RESOURCE NAME: whether a RESOURCE (CLI noun) named NAME exists.
+exists() {
+	qarax "$1" list -o json | jq -e --arg n "$2" 'any(.[]; .name == $n)' >/dev/null
+}
+
+# The guest agent starts with the guest, a moment after `vm start` returns;
+# until it listens, `vm exec` fails, so errors are expected while it boots.
+guest_agent_ready() {
+	qarax vm exec "$1" --timeout 5 -- true >/dev/null 2>&1
+}
+
+# wait_guest_agent VM [TIMEOUT]
+wait_guest_agent() {
+	wait_until "${2:-60}" guest_agent_ready "$1" ||
+		die "the guest agent of '$1' did not answer within ${2:-60}s"
 }
 
 vm_status() {
@@ -231,7 +264,8 @@ ensure_up_hosts() {
 	((have >= want)) && return 0
 	if ((want == 2)) && server_is_local; then
 		info "Starting and registering the second local node (qarax-node-2)..."
-		compose --profile multi-node up -d --wait --no-recreate qarax-node-2 >/dev/null
+		# --build: an image left from an older checkout would run old node code.
+		compose --profile multi-node up -d --build --wait --no-recreate qarax-node-2 >/dev/null
 		bash "${REPO_ROOT}/e2e/setup_host.sh" "$SERVER" qarax-node-2 50051 local-node-2 >/dev/null
 		have=$(up_host_count)
 	fi
@@ -242,11 +276,26 @@ server_is_local() {
 	[[ "$SERVER" == "http://localhost:8000" || "$SERVER" == "http://127.0.0.1:8000" ]]
 }
 
+# pin_network NETWORK HOST BRIDGE: attach NETWORK to HOST (safe to repeat: it
+# re-creates a bridge the node lost) and detach it from every other host, so
+# the scheduler places the VMs that use it on HOST. Without a VPC, VMs on
+# different hosts can't reach each other.
+pin_network() {
+	local network="$1" host="$2" bridge="$3" other
+	run qarax network attach-host --network "$network" --host "$host" --bridge-name "$bridge"
+	for other in $(qarax network hosts "$network" -o json |
+		jq -r --arg h "$host" '.[] | select(.host_name != $h) | .host_name'); do
+		run qarax network detach-host --network "$network" --host "$other"
+	done
+}
+
 # ── Cleanup ──────────────────────────────────────────────────────────────────
 
 # sweep RESOURCE PREFIX: delete every RESOURCE (a CLI noun such as vm,
 # network, security-group, vm-template, boot-source, hook) whose name starts
 # with PREFIX. Used at start-up to clear an interrupted run, and on exit.
+# Sweep VMs before what they use. (Deleting a network also detaches it from
+# its hosts.)
 sweep() {
 	local resource="$1" prefix="$2" id
 	for id in $(qarax "$resource" list -o json |

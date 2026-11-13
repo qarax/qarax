@@ -1,88 +1,78 @@
 #!/usr/bin/env bash
 #
-# Demo: network isolation with VPC-scoped managed networks + VM security groups
+# Demo: VPC network isolation and VM security groups
 #
 # Shows:
-#   1. Two managed networks in the same VPC attached to one host
-#   2. Two VMs created on different subnets
-#   3. Cross-subnet routing working inside that VPC
-#   4. An empty security group attached to one VM, causing default-deny ingress
-#   5. A live ICMP rule update restoring connectivity without recreating the VM
+#   1. Two managed networks in one VPC, plus a third network in another VPC
+#   2. Same-VPC routing between the two subnets (ping VM A -> VM B)
+#   3. VPC isolation: VM A cannot reach VM C in the other VPC
+#   4. An empty security group on VM B: default-deny ingress
+#   5. An ICMP rule added live restores VM A -> VM B without restarting either VM
+#
+# With --cross-host, network A (with VMs A and C) lives on one host and network
+# B (with VM B) on a second host, so same-VPC traffic crosses the VXLAN overlay.
 #
 # Prerequisites:
 #   - local qarax stack (make run-local); started via hack/run-local.sh if not running
-#   - jq installed
-#   - docker with docker compose
+#   - --cross-host: a second UP host (on the local stack, qarax-node-2 is started
+#     and registered automatically)
+#   - jq, docker
 #
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+# shellcheck source=demos/lib.sh
 source "${REPO_ROOT}/demos/lib.sh"
 
-cd "$REPO_ROOT"
-
-SERVER="${QARAX_SERVER:-http://localhost:8000}"
-KEEP_RESOURCES=false
-export CLOUD_HYPERVISOR_VERSION="${CLOUD_HYPERVISOR_VERSION:-$(tr -d '\n' <"${REPO_ROOT}/versions/cloud-hypervisor-version")}"
-export FIRECRACKER_VERSION="${FIRECRACKER_VERSION:-$(tr -d '\n' <"${REPO_ROOT}/versions/firecracker-version")}"
-
-SUFFIX="$$"
-VPC_NAME="demo-vpc-${SUFFIX}"
-NETWORK_A="demo-vpc-a-${SUFFIX}"
-NETWORK_B="demo-vpc-b-${SUFFIX}"
+PREFIX="demo-netiso-"
+VPC="${PREFIX}vpc"
+OTHER_VPC="${PREFIX}other-vpc"
+NET_A="${PREFIX}a"
+NET_B="${PREFIX}b"
+NET_C="${PREFIX}c"
 SUBNET_A="10.121.1.0/24"
 SUBNET_B="10.121.2.0/24"
-GATEWAY_A="10.121.1.1"
-GATEWAY_B="10.121.2.1"
+SUBNET_C="10.122.1.0/24"
+VM_A="${PREFIX}vm-a"
+VM_B="${PREFIX}vm-b"
+VM_C="${PREFIX}vm-c"
 VM_A_IP="10.121.1.10"
 VM_B_IP="10.121.2.10"
-VM_A="demo-vm-a-${SUFFIX}"
-VM_B="demo-vm-b-${SUFFIX}"
-SG_NAME="demo-sg-${SUFFIX}"
-BRIDGE_A="qnia${SUFFIX}"
-BRIDGE_B="qnib${SUFFIX}"
-MEMORY_MIB=256
-MEMORY_BYTES=$((MEMORY_MIB * 1024 * 1024))
+VM_C_IP="10.122.1.10"
+SG="${PREFIX}sg"
 
-HOST_NAME=""
-HOST_ADDRESS=""
-NODE_SERVICE=""
-RULE_ID=""
-SG_ATTACHED=false
-
-banner() {
-	echo -e "\n${BOLD}${CYAN}══════════════════════════════════════════════════════════════${NC}"
-	echo -e "${BOLD}${CYAN}  $1${NC}"
-	echo -e "${BOLD}${CYAN}══════════════════════════════════════════════════════════════${NC}\n"
-}
-step() { echo -e "${GREEN}▸${NC} ${BOLD}$1${NC}"; }
-info() { echo -e "  ${DIM}$1${NC}"; }
-run() {
-	echo -e "  ${DIM}\$ $*${NC}"
-	"$@"
-}
+CROSS_HOST=0
+CLEANUP_ONLY=0
 
 usage() {
 	cat <<EOF
 Usage: $0 [OPTIONS]
 
 Options:
-  --server URL       qarax API URL (default: \$QARAX_SERVER or http://localhost:8000)
-  --keep-resources   Skip automatic cleanup so you can inspect the result
-  --help, -h         Show this help
+  --cross-host   Put network B (and VM B) on a second host
+  --cleanup      Delete resources left by an earlier run, then exit
+  --server URL   qarax API URL (default: \$QARAX_SERVER or http://localhost:8000)
+  --help, -h     Show this help
+
+Environment:
+  KEEP=1         Leave the VMs, networks and security group in place at exit
 EOF
 }
 
 while [[ $# -gt 0 ]]; do
 	case "$1" in
+	--cross-host)
+		CROSS_HOST=1
+		shift
+		;;
+	--cleanup)
+		CLEANUP_ONLY=1
+		shift
+		;;
 	--server)
 		SERVER="${2:?--server requires a URL}"
 		shift 2
-		;;
-	--keep-resources)
-		KEEP_RESOURCES=true
-		shift
 		;;
 	--help | -h)
 		usage
@@ -94,235 +84,149 @@ while [[ $# -gt 0 ]]; do
 	esac
 done
 
-if [[ -z "$(find_qarax_bin)" ]]; then
-	echo "qarax CLI not found — building..."
-	cargo build -p cli
-fi
-
-QARAX_BIN="$(find_qarax_bin)"
-[[ -n "$QARAX_BIN" ]] || die "qarax CLI not found even after build"
-
-qarax() {
-	"$QARAX_BIN" --server "$SERVER" "$@"
-}
-
-COMPOSE_FILE="${REPO_ROOT}/e2e/docker-compose.yml"
-
-docker_compose() {
-	docker compose -f "$COMPOSE_FILE" "$@"
-}
-
-wait_for_vm_status() {
-	local vm="$1"
-	local target="$2"
-	local timeout="${3:-60}"
-	local elapsed=0
-
-	while [[ $elapsed -lt $timeout ]]; do
-		local status
-		status="$(qarax vm get "$vm" -o json | jq -r '.status')"
-		if [[ "$status" == "$target" ]]; then
-			info "${vm}: ${status}"
-			return 0
-		fi
-		sleep 2
-		elapsed=$((elapsed + 2))
-	done
-
-	die "Timed out waiting for VM ${vm} to reach status '${target}'"
-}
-
-clear_known_host() {
-	docker_compose exec -T "$NODE_SERVICE" sh -lc \
-		"sed -i '/${VM_A_IP}/d' /root/.ssh/known_hosts 2>/dev/null || true"
-}
-
-# SSH into VM A via the node container and ping VM B. Bounded by `timeout` so a
-# hung SSH session cannot stall the demo.
-ping_vm_b_from_vm_a() {
-	timeout 30 docker compose -f "$COMPOSE_FILE" exec -T "$NODE_SERVICE" \
-		dbclient -y -i /root/.ssh/id_rsa "root@${VM_A_IP}" \
-		ping -c 3 -W 1 "$VM_B_IP" 2>&1
-}
-
-wait_for_ping_state() {
-	local desired="$1"
-	local attempts="${2:-15}"
-	local delay="${3:-2}"
-	local last_output="" status
-
-	for _ in $(seq 1 "$attempts"); do
-		status=0
-		last_output="$(ping_vm_b_from_vm_a)" || status=$?
-
-		if [[ "$desired" == "allowed" ]]; then
-			if [[ $status -eq 0 && "$last_output" == *" 0% packet loss"* ]]; then
-				info "Ping succeeded:"
-				echo "$last_output"
-				return 0
-			fi
-		else
-			# Only count it as blocked when ping itself ran and got nothing
-			# back; SSH/connectivity failures to VM A must not pass as "blocked".
-			if [[ "$last_output" == *"100% packet loss"* ]]; then
-				info "Ping is blocked (100% packet loss is expected here):"
-				echo "$last_output"
-				return 0
-			fi
-		fi
-
-		sleep "$delay"
-	done
-
-	echo "$last_output" >&2
-	if [[ "$desired" == "allowed" ]]; then
-		die "Expected ping from ${VM_A} (${VM_A_IP}) to ${VM_B} (${VM_B_IP}) to succeed"
-	fi
-	die "Expected ping from ${VM_A} (${VM_A_IP}) to ${VM_B} (${VM_B_IP}) to be blocked"
-}
-
-# Best-effort teardown of a demo VM. `vm stop --wait` has no timeout of its own,
-# so force-stop under `timeout` and delete regardless.
-remove_vm() {
-	timeout 60 "$QARAX_BIN" --server "$SERVER" vm force-stop "$1" --wait >/dev/null 2>&1 || true
-	qarax vm delete "$1" >/dev/null 2>&1 || true
+# Detach each demo network from every host, then delete it. Detaching tears
+# down the bridge, DHCP server and NAT rules on the node; deleting an attached
+# network would leave the bridge behind and the next run's attach would fail on
+# the existing bridge name.
+sweep_all() {
+	sweep vm "$PREFIX"
+	sweep security-group "$PREFIX"
+	sweep network "$PREFIX"
 }
 
 cleanup() {
-	if [[ "$KEEP_RESOURCES" == "true" ]]; then
-		echo
-		step "Keeping demo resources for inspection"
-		info "VMs: ${VM_A}, ${VM_B}"
-		info "Networks: ${NETWORK_A}, ${NETWORK_B}"
-		info "Security group: ${SG_NAME}"
-		info "Delete them before re-running: the demo reuses subnets ${SUBNET_A} and ${SUBNET_B}."
+	if [[ "$KEEP" == 1 ]]; then
+		info "KEEP=1: leaving ${PREFIX}* VMs, networks and security group. Remove them with: $0 --cleanup"
 		return
 	fi
-
-	echo
-	step "Cleaning up..."
-
-	if [[ "$SG_ATTACHED" == "true" ]]; then
-		qarax vm detach-security-group "$VM_B" --security-group "$SG_NAME" 2>/dev/null || true
-	fi
-
-	remove_vm "$VM_A"
-	remove_vm "$VM_B"
-
-	qarax security-group delete "$SG_NAME" 2>/dev/null || true
-
-	if [[ -n "$HOST_NAME" ]]; then
-		qarax network detach-host --network "$NETWORK_A" --host "$HOST_NAME" 2>/dev/null || true
-		qarax network detach-host --network "$NETWORK_B" --host "$HOST_NAME" 2>/dev/null || true
-	fi
-
-	qarax network delete "$NETWORK_A" 2>/dev/null || true
-	qarax network delete "$NETWORK_B" 2>/dev/null || true
-
-	info "Done."
+	step "Cleaning up"
+	sweep_all
 }
-trap cleanup EXIT
+
+# guest IP CMD...: run CMD in the guest at IP over SSH from the node container
+# that hosts it (guest subnets are only routable from there). The output lands
+# in GUEST_OUT so a polling caller can show the last attempt.
+GUEST_OUT=""
+guest() {
+	local ip="$1"
+	shift
+	GUEST_OUT=$(node_exec "$NODE_A" timeout 20 dbclient -y -i /root/.ssh/id_rsa "root@${ip}" "$@" 2>&1)
+}
+
+# Each boot gives a guest new SSH host keys; forget the ones an earlier run
+# recorded for the same IP.
+forget_host_key() {
+	node_exec "$NODE_A" sh -c 'f=/root/.ssh/known_hosts; [ ! -f "$f" ] || sed -i "/$1/d" "$f"' sh "${1//./\\.}"
+}
+
+# ping_ok FROM TO / ping_blocked FROM TO: ping TO from inside the guest at FROM.
+# Blocked means ping ran and got no replies; an SSH failure is neither.
+ping_ok() {
+	guest "$1" ping -c 3 -W 1 "$2" && [[ "$GUEST_OUT" == *" 0% packet loss"* ]]
+}
+ping_blocked() {
+	# ping exits non-zero when every probe is lost; its summary line decides.
+	guest "$1" ping -c 3 -W 1 "$2" || true
+	[[ "$GUEST_OUT" == *"100% packet loss"* ]]
+}
+
+# expect_ping ping_ok|ping_blocked FROM TO: poll until the ping has that outcome,
+# then show the guest's ping output.
+expect_ping() {
+	local check="$1" from="$2" to="$3"
+	info "\$ ping -c 3 -W 1 ${to}   (inside the guest at ${from})"
+	if ! wait_until 60 "$check" "$from" "$to"; then
+		echo "$GUEST_OUT" >&2
+		die "ping ${from} -> ${to}: expected ${check#ping_}"
+	fi
+	sed 's/^/    /' <<<"$GUEST_OUT"
+}
+
+# assert_on_host VM HOST_ID HOST_NAME
+assert_on_host() {
+	local host_id
+	host_id=$(qarax vm get "$1" -o json | jq -r '.host_id')
+	[[ "$host_id" == "$2" ]] || die "${1} was scheduled onto host ${host_id}, expected ${3}"
+	ok "${1} on ${3}"
+}
 
 banner "Network Isolation Demo"
 
-step "Preflight checks"
 command -v jq >/dev/null || die "jq is required"
-command -v docker >/dev/null || die "docker is required"
-docker compose version >/dev/null 2>&1 || die "docker compose is required"
+ensure_stack
+require_cli
 
-ensure_stack "$SERVER"
+if ((CLEANUP_ONLY)); then
+	sweep_all
+	ok "Removed ${PREFIX}* resources"
+	exit 0
+fi
 
-host_json="$(qarax host list -o json 2>&1)" || {
-	if grep -qi "missing field" <<<"$host_json"; then
-		die "CLI/server schema mismatch detected. Rebuild the local stack with: REBUILD=1 ./hack/run-local.sh"
-	fi
-	die "Failed to list hosts: $host_json"
-}
+step "Preparing"
+HOST_COUNT=$((CROSS_HOST + 1))
+ensure_up_hosts "$HOST_COUNT"
+mapfile -t UP_HOSTS < <(qarax host list -o json |
+	jq -r '.[] | select(.status == "up") | [.id, .name, .address] | @tsv')
+# Without --cross-host, host B is host A.
+IFS=$'\t' read -r HOST_A_ID HOST_A HOST_A_ADDR <<<"${UP_HOSTS[0]}"
+IFS=$'\t' read -r HOST_B_ID HOST_B _ <<<"${UP_HOSTS[HOST_COUNT - 1]}"
+NODE_A=$(node_service_for_address "$HOST_A_ADDR") ||
+	die "host ${HOST_A} (${HOST_A_ADDR}) is not a local compose node: this demo reaches guests through the qarax-node container"
+info "Host A: ${HOST_A} (networks ${NET_A}, ${NET_C})"
+info "Host B: ${HOST_B} (network ${NET_B})"
 
-HOST_NAME="$(jq -r '([.[] | select(.status == "up" and .name == "local-node")][0] // [.[] | select(.status == "up")][0]).name // empty' <<<"$host_json")"
-HOST_ADDRESS="$(jq -r '([.[] | select(.status == "up" and .name == "local-node")][0] // [.[] | select(.status == "up")][0]).address // empty' <<<"$host_json")"
-[[ -n "$HOST_NAME" ]] || die "No UP hosts available"
+sweep_all
+taken=$(qarax network list -o json | jq -r --arg a "$SUBNET_A" --arg b "$SUBNET_B" --arg c "$SUBNET_C" \
+	'[.[] | select(.subnet == $a or .subnet == $b or .subnet == $c) | .name] | join(", ")')
+[[ -z "$taken" ]] || die "other networks already use this demo's subnets: ${taken}"
+trap cleanup EXIT
 
-case "$HOST_ADDRESS" in
-qarax-node | local-node)
-	NODE_SERVICE="qarax-node"
-	;;
-qarax-node-2 | local-node-2)
-	NODE_SERVICE="qarax-node-2"
-	;;
-*)
-	die "This demo expects a local compose host address (qarax-node or qarax-node-2); got '${HOST_ADDRESS}'"
-	;;
-esac
+# Type "isolated" (a bridge with NAT, like the default "bridge") is the type
+# whose same-VPC traffic qarax exempts from NAT, so VM B sees VM A's own
+# address and the security-group rule for subnet A below matches, also when
+# the packets cross hosts.
+step "Creating networks: ${NET_A} and ${NET_B} in VPC ${VPC}, ${NET_C} in VPC ${OTHER_VPC}"
+run qarax network create --name "$NET_A" --subnet "$SUBNET_A" --gateway 10.121.1.1 --vpc "$VPC" --network-type isolated
+run qarax network create --name "$NET_B" --subnet "$SUBNET_B" --gateway 10.121.2.1 --vpc "$VPC" --network-type isolated
+run qarax network create --name "$NET_C" --subnet "$SUBNET_C" --gateway 10.122.1.1 --vpc "$OTHER_VPC" --network-type isolated
 
-info "Using host: ${HOST_NAME} (${HOST_ADDRESS})"
-info "Using docker compose service for SSH hop: ${NODE_SERVICE}"
-info "Resources are named with suffix: ${SUFFIX}"
+step "Attaching the networks to their hosts"
+run qarax network attach-host --network "$NET_A" --host "$HOST_A" --bridge-name qnisoa
+run qarax network attach-host --network "$NET_B" --host "$HOST_B" --bridge-name qnisob
+run qarax network attach-host --network "$NET_C" --host "$HOST_A" --bridge-name qnisoc
+run qarax network list
 
-existing_networks="$(qarax network list -o json | jq -r --arg a "$SUBNET_A" --arg b "$SUBNET_B" \
-	'[.[] | select(.subnet == $a or .subnet == $b) | .name] | join(", ")')"
-[[ -z "$existing_networks" ]] ||
-	die "Networks already use the demo subnets (${SUBNET_A}, ${SUBNET_B}): ${existing_networks}\nDelete them first (e.g. leftovers from --keep-resources)."
+step "Creating and starting one VM per network"
+run qarax vm create --name "$VM_A" --vcpus 1 --memory 256MiB --network "$NET_A" --ip "$VM_A_IP"
+run qarax vm create --name "$VM_B" --vcpus 1 --memory 256MiB --network "$NET_B" --ip "$VM_B_IP"
+run qarax vm create --name "$VM_C" --vcpus 1 --memory 256MiB --network "$NET_C" --ip "$VM_C_IP"
+start_vms "$VM_A" "$VM_B" "$VM_C"
+assert_on_host "$VM_A" "$HOST_A_ID" "$HOST_A"
+assert_on_host "$VM_B" "$HOST_B_ID" "$HOST_B"
+assert_on_host "$VM_C" "$HOST_A_ID" "$HOST_A"
+forget_host_key "$VM_A_IP"
+forget_host_key "$VM_C_IP"
 
-step "Creating two managed networks in the same VPC"
-run qarax network create --name "$NETWORK_A" --subnet "$SUBNET_A" --gateway "$GATEWAY_A" --vpc "$VPC_NAME"
-run qarax network create --name "$NETWORK_B" --subnet "$SUBNET_B" --gateway "$GATEWAY_B" --vpc "$VPC_NAME"
+step "Same VPC: ${VM_A} (${VM_A_IP}) reaches ${VM_B} (${VM_B_IP})"
+expect_ping ping_ok "$VM_A_IP" "$VM_B_IP"
 
-step "Attaching both networks to the same host"
-run qarax network attach-host --network "$NETWORK_A" --host "$HOST_NAME" --bridge-name "$BRIDGE_A"
-run qarax network attach-host --network "$NETWORK_B" --host "$HOST_NAME" --bridge-name "$BRIDGE_B"
+step "Different VPC: ${VM_A} cannot reach ${VM_C} (${VM_C_IP})"
+wait_until 60 guest "$VM_C_IP" true || die "${VM_C} is not answering SSH from ${HOST_A}: ${GUEST_OUT}"
+ok "${VM_C} is up and answers SSH from its host"
+expect_ping ping_blocked "$VM_A_IP" "$VM_C_IP"
 
-step "Inspecting the managed networks and their shared VPC"
-run qarax network get "$NETWORK_A"
-echo
-run qarax network get "$NETWORK_B"
-echo
+step "Attaching an empty security group to ${VM_B}"
+run qarax security-group create --name "$SG" --description "default-deny ingress until ICMP is allowed"
+run qarax vm attach-security-group "$VM_B" --security-group "$SG"
+expect_ping ping_blocked "$VM_A_IP" "$VM_B_IP"
 
-step "Creating one VM on each subnet"
-run qarax vm create --name "$VM_A" --vcpus 1 --memory "$MEMORY_BYTES" --network "$NETWORK_A" --ip "$VM_A_IP"
-run qarax vm create --name "$VM_B" --vcpus 1 --memory "$MEMORY_BYTES" --network "$NETWORK_B" --ip "$VM_B_IP"
-
-step "Starting both VMs"
-run qarax vm start "$VM_A"
-run qarax vm start "$VM_B"
-
-step "Waiting for both VMs to report running"
-wait_for_vm_status "$VM_A" running 90
-wait_for_vm_status "$VM_B" running 90
-clear_known_host
-
-step "Showing same-VPC cross-subnet routing before security groups"
-info "VM ${VM_A} will SSH from the node container and ping ${VM_B_IP}"
-wait_for_ping_state allowed 20 2
-
-step "Creating a security group and attaching it to ${VM_B}"
-run qarax security-group create --name "$SG_NAME" --description "default-deny ingress until ICMP is allowed"
-run qarax vm attach-security-group "$VM_B" --security-group "$SG_NAME"
-SG_ATTACHED=true
-run qarax vm list-security-groups "$VM_B"
-echo
-
-step "Demonstrating default-deny ingress from the empty security group"
-info "A timeout or non-zero exit counts as blocked behavior here."
-wait_for_ping_state blocked 15 2
-
-step "Adding an ICMP ingress rule for subnet ${SUBNET_A}"
-run qarax security-group add-rule \
-	--security-group "$SG_NAME" \
-	--direction ingress \
-	--protocol icmp \
-	--cidr "$SUBNET_A" \
-	--description "allow pings from subnet A"
-RULE_ID="$(qarax security-group list-rules "$SG_NAME" -o json | jq -r '.[-1].id // empty')"
-[[ -n "$RULE_ID" ]] && info "Rule ID: ${RULE_ID}"
-run qarax security-group list-rules "$SG_NAME"
-echo
-
-step "Showing live firewall sync after the rule update"
-info "The VMs are not restarted here; the rule is applied live on the host."
-wait_for_ping_state allowed 20 2
+step "Allowing ICMP from ${SUBNET_A} (applied live, no VM restart)"
+run qarax security-group add-rule --security-group "$SG" --direction ingress --protocol icmp \
+	--cidr "$SUBNET_A" --description "allow pings from subnet A"
+run qarax security-group list-rules "$SG"
+expect_ping ping_ok "$VM_A_IP" "$VM_B_IP"
 
 banner "Demo Complete"
-info "Same-VPC routing worked across two managed subnets on one host."
-info "Attaching an empty security group blocked ingress to ${VM_B}."
-info "Adding one ICMP rule restored connectivity immediately."
+ok "Same-VPC routing worked from ${NET_A} on ${HOST_A} to ${NET_B} on ${HOST_B}"
+ok "${NET_C}, in another VPC on the same host as ${NET_A}, was unreachable from it"
+ok "An empty security group blocked ingress to ${VM_B}; one ICMP rule restored it live"

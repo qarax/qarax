@@ -2,50 +2,50 @@
 #
 # Demo: qarax SSE event stream
 #
-# Demonstrates the GET /events endpoint which streams VM status-change events
-# via Server-Sent Events (SSE) in real-time. Opens two SSE subscriptions:
-#   1. Full stream  — captures every vm.status_changed event
-#   2. Filtered     — captures only transitions TO "running"
-#
-# Then runs a VM through its lifecycle (create → start → stop → delete) and
-# prints each received event, showing status transitions as they happen.
+# GET /events streams VM status changes as Server-Sent Events. The demo opens
+# two subscriptions before touching the VM:
+#   1. the full stream: every vm.status_changed event
+#   2. a filtered stream (?status=running): only transitions to "running"
+# then starts, pauses, resumes and stops a VM, printing each event as it
+# arrives and checking that both streams delivered exactly the transitions
+# they should.
 #
 # Prerequisites:
-#   - qarax stack running (make run-local)
-#   - qarax CLI on PATH or built (cargo build -p cli)
-#   - curl and jq installed
+#   - qarax stack running (make run-local; started automatically if not up)
+#   - curl and jq
 #
 # Usage:
-#   ./demos/sse-events/run.sh
-#   ./demos/sse-events/run.sh --server http://localhost:8000
+#   ./demos/sse-events/run.sh [--server URL]
+#   ./demos/sse-events/run.sh --cleanup   # delete what an earlier run left behind
+#   KEEP=1 ./demos/sse-events/run.sh      # leave the VM in place
 #
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+# shellcheck source=demos/lib.sh
 source "${REPO_ROOT}/demos/lib.sh"
 
-SERVER="${QARAX_SERVER:-http://localhost:8000}"
-VM_NAME="sse-demo-$$"
-VCPUS=1
-MEMORY_MIB=256
-MEMORY_BYTES=$((MEMORY_MIB * 1024 * 1024))
-VM_ID=""
-SSE_ALL_PID=""
-SSE_FILTERED_PID=""
-SSE_ALL_LOG=""
-SSE_FILTERED_LOG=""
+PREFIX="demo-sse-"
+VM_NAME="${PREFIX}vm"
+CLEANUP_ONLY=0
 
-# Parse arguments
 while [[ $# -gt 0 ]]; do
 	case $1 in
 	--server)
 		SERVER="$2"
 		shift 2
 		;;
+	--cleanup)
+		CLEANUP_ONLY=1
+		shift
+		;;
 	--help | -h)
 		echo "Usage: $0 [OPTIONS]"
 		echo "  --server URL   qarax API URL (default: \$QARAX_SERVER or http://localhost:8000)"
+		echo "  --cleanup      Delete the demo's VM, then exit"
+		echo ""
+		echo "KEEP=1 leaves the VM in place at exit."
 		exit 0
 		;;
 	*)
@@ -54,171 +54,147 @@ while [[ $# -gt 0 ]]; do
 	esac
 done
 
-banner() {
-	echo -e "\n${BOLD}${CYAN}══════════════════════════════════════════════════════════════${NC}"
-	echo -e "${BOLD}${CYAN}  $1${NC}"
-	echo -e "${BOLD}${CYAN}══════════════════════════════════════════════════════════════${NC}\n"
-}
-step() { echo -e "${GREEN}▸${NC} ${BOLD}$1${NC}"; }
-info() { echo -e "  ${DIM}$1${NC}"; }
-run() {
-	echo -e "  ${DIM}\$ $*${NC}"
-	"$@"
+# open_stream NAME QUERY: subscribe to /events in the background and write the
+# event stream to $WORK/NAME. The server subscribes the client before it sends
+# the 200, so every later event reaches it. The headers go to a file of their
+# own (-D), which curl writes as they arrive; with -i they'd sit in the
+# buffered stdout until the first event. curl runs directly (not through
+# api_curl) so $! is its PID.
+open_stream() {
+	local log="${WORK}/$1" url="${SERVER}/events$2"
+	echo -e "  ${DIM}\$ curl -N -H \"Authorization: Bearer \$QARAX_TOKEN\" '${url}'${NC}"
+	curl -sN -D "${log}.headers" -H "Authorization: Bearer ${QARAX_TOKEN}" "$url" >"$log" &
+	STREAM_PIDS+=("$!")
+	wait_until 5 grep -q '^HTTP/[0-9.]* 200' "${log}.headers" ||
+		die "GET ${url} did not open: $(cat "${log}.headers" 2>/dev/null)"
 }
 
-# Poll until the VM reaches the expected status; fail with the last status seen.
-wait_for_status() {
-	local expected="$1" timeout="$2" status=""
-	local deadline=$((SECONDS + timeout))
-	while ((SECONDS < deadline)); do
-		status=$($QARAX vm get "$VM_ID" -o json | jq -r '.status') || true
-		[[ "$status" == "$expected" ]] && return 0
-		sleep 1
+# transitions NAME: the demo VM's transitions received on stream NAME so far,
+# one "previous→new<TAB>time" per line. A data line still being written
+# fails fromjson? and is read whole on the next call.
+transitions() {
+	sed -n 's/^data: //p' "${WORK}/$1" |
+		jq -rR --arg vm "$VM_NAME" \
+			'fromjson? | select(.vm_name == $vm) | "\(.previous_status)→\(.new_status)\t\(.timestamp[11:23])"'
+}
+
+# stream_has NAME TRANSITION...: stream NAME holds exactly these transitions.
+stream_has() {
+	local name="$1"
+	shift
+	[[ "$(transitions "$name" | cut -f1)" == "$(printf '%s\n' "$@")" ]]
+}
+
+streams_caught_up() {
+	stream_has all "${ALL_WANT[@]}" && stream_has running "${RUNNING_WANT[@]}"
+}
+
+# print_events NAME LABEL SKIP: print the events on stream NAME after the first SKIP.
+print_events() {
+	local transition ts
+	while IFS=$'\t' read -r transition ts; do
+		echo -e "  ${YELLOW}$2${NC} [${DIM}${ts}${NC}] ${BOLD}${VM_NAME}${NC}: ${BOLD}${transition}${NC}"
+	done < <(transitions "$1" | tail -n "+$(($3 + 1))")
+}
+
+# expect_events TRANSITION...: the VM's next transitions. All of them must
+# arrive on the full stream, and those to "running" on the filtered stream
+# too. Waits for both streams to catch up, then prints what each received.
+ALL_WANT=()
+RUNNING_WANT=()
+expect_events() {
+	local all_seen=${#ALL_WANT[@]} running_seen=${#RUNNING_WANT[@]} transition
+	for transition in "$@"; do
+		ALL_WANT+=("$transition")
+		if [[ "$transition" == *→running ]]; then
+			RUNNING_WANT+=("$transition")
+		fi
 	done
-	die "VM '$VM_NAME' did not reach '$expected' within ${timeout}s (last status: ${status:-unknown})"
+	if ! wait_until 10 streams_caught_up; then
+		warn "full stream:     expected ${ALL_WANT[*]}, got $(transitions all | cut -f1 | paste -sd' ')"
+		warn "?status=running: expected ${RUNNING_WANT[*]}, got $(transitions running | cut -f1 | paste -sd' ')"
+		die "The SSE streams did not deliver the expected events"
+	fi
+	print_events all "ALL    " "$all_seen"
+	print_events running "RUNNING" "$running_seen"
 }
 
 command -v jq >/dev/null 2>&1 || die "jq is required"
 
-# Find the qarax binary, building if necessary
-if [[ -z "$(find_qarax_bin)" ]]; then
-	echo "qarax CLI not found — building..."
-	cargo build -p cli
+ensure_stack
+require_cli
+
+if ((CLEANUP_ONLY)); then
+	sweep vm "$PREFIX"
+	ok "Removed the SSE demo's VM"
+	exit 0
 fi
-QARAX_BIN="$(find_qarax_bin)"
-[[ -n "$QARAX_BIN" ]] || die "qarax CLI not found even after build"
-QARAX="$QARAX_BIN --server $SERVER"
 
-ensure_stack "$SERVER"
+banner "SSE Event Stream Demo"
 
-# Pretty-print captured SSE events.
-# Reads from a log file and renders each data: line as a formatted transition.
-print_events() {
-	local label="$1"
-	local log_file="$2"
-	local count=0
+step "Removing leftovers from earlier runs..."
+sweep vm "$PREFIX"
 
-	while IFS= read -r line; do
-		if [[ "$line" == data:* ]]; then
-			local payload="${line#data: }"
-			local vm_name prev_status new_status ts
-			vm_name=$(echo "$payload" | jq -r '.vm_name // "?"')
-			prev_status=$(echo "$payload" | jq -r '.previous_status // "?"')
-			new_status=$(echo "$payload" | jq -r '.new_status // "?"')
-			ts=$(echo "$payload" | jq -r '.timestamp // "?"' | sed 's/T/ /; s/\..*//')
-			echo -e "  ${YELLOW}${label}${NC} [${DIM}${ts}${NC}] ${BOLD}${vm_name}${NC}: ${DIM}${prev_status}${NC} → ${BOLD}${new_status}${NC}"
-			count=$((count + 1))
-		fi
-	done <"$log_file"
-	echo -e "  ${DIM}(${count} event(s) received)${NC}"
-}
+WORK=$(mktemp -d)
+STREAM_PIDS=()
 
 cleanup() {
 	echo
+	if ((${#STREAM_PIDS[@]})); then
+		# A stream has ended on its own if the server went away.
+		kill "${STREAM_PIDS[@]}" 2>/dev/null || true
+	fi
+	rm -rf "$WORK"
+	if [[ "$KEEP" == 1 ]]; then
+		info "KEEP=1: leaving VM '${VM_NAME}' in place (remove it with: $0 --cleanup)"
+		return
+	fi
 	step "Cleaning up..."
-	if [[ -n "${SSE_ALL_PID:-}" ]]; then
-		kill "$SSE_ALL_PID" 2>/dev/null || true
-		wait "$SSE_ALL_PID" 2>/dev/null || true
-	fi
-	if [[ -n "${SSE_FILTERED_PID:-}" ]]; then
-		kill "$SSE_FILTERED_PID" 2>/dev/null || true
-		wait "$SSE_FILTERED_PID" 2>/dev/null || true
-	fi
-	[[ -n "${SSE_ALL_LOG:-}" ]] && rm -f "$SSE_ALL_LOG"
-	[[ -n "${SSE_FILTERED_LOG:-}" ]] && rm -f "$SSE_FILTERED_LOG"
-	if [[ -n "${VM_ID:-}" ]]; then
-		$QARAX vm delete "$VM_ID" 2>/dev/null || true
-	fi
+	sweep vm "$PREFIX"
 	info "Done."
 }
 trap cleanup EXIT
 
-banner "SSE Event Stream Demo"
-
-# Open SSE subscriptions
 banner "Opening SSE Subscriptions"
 
-SSE_ALL_LOG=$(mktemp "${TMPDIR:-/tmp}/sse-all-XXXXXX")
-SSE_FILTERED_LOG=$(mktemp "${TMPDIR:-/tmp}/sse-filtered-XXXXXX")
+step "Full stream: every vm.status_changed event"
+open_stream all ""
+step "Filtered stream: only transitions to 'running'"
+open_stream running "?status=running"
 
-# /events requires the bearer token like every other API route. curl is invoked
-# directly (not via api_curl) so that $! is the curl PID and cleanup can kill it.
-step "Opening unfiltered SSE stream  →  GET ${SERVER}/events"
-curl -sN --no-buffer -H "Authorization: Bearer ${QARAX_TOKEN}" "${SERVER}/events" >>"$SSE_ALL_LOG" 2>&1 &
-SSE_ALL_PID=$!
-info "Background PID: $SSE_ALL_PID  |  log: $SSE_ALL_LOG"
-
-step "Opening filtered SSE stream    →  GET ${SERVER}/events?status=running"
-curl -sN --no-buffer -H "Authorization: Bearer ${QARAX_TOKEN}" "${SERVER}/events?status=running" >>"$SSE_FILTERED_LOG" 2>&1 &
-SSE_FILTERED_PID=$!
-info "Background PID: $SSE_FILTERED_PID  |  log: $SSE_FILTERED_LOG"
-
-# Give curl connections time to establish
-sleep 1
-kill -0 "$SSE_ALL_PID" 2>/dev/null || die "Unfiltered SSE stream exited early: $(cat "$SSE_ALL_LOG")"
-kill -0 "$SSE_FILTERED_PID" 2>/dev/null || die "Filtered SSE stream exited early: $(cat "$SSE_FILTERED_LOG")"
-
-# VM lifecycle
 banner "Running VM Lifecycle"
 
-step "Creating VM '$VM_NAME' (${VCPUS} vCPU, ${MEMORY_MIB} MiB)..."
-run $QARAX vm create --name "$VM_NAME" --vcpus "$VCPUS" --memory "$MEMORY_BYTES"
-echo
-
-VM_ID=$($QARAX vm list -o json |
-	jq -r ".[] | select(.name == \"$VM_NAME\") | .id")
-[[ -n "$VM_ID" ]] || die "VM '$VM_NAME' not found after create"
-info "VM ID: $VM_ID"
+step "Creating VM '${VM_NAME}' (creation is not a status change, so no event)..."
+run qarax vm create --name "$VM_NAME" --vcpus 1 --memory 256MiB
 
 step "Starting VM..."
-run $QARAX vm start "$VM_NAME"
-info "Waiting for VM to reach 'running'..."
-wait_for_status running 60
-echo
+run qarax vm start "$VM_NAME"
+expect_events "created→pending" "pending→running"
+
+step "Pausing VM..."
+run qarax vm pause "$VM_NAME"
+expect_events "running→paused"
+
+step "Resuming VM..."
+run qarax vm resume "$VM_NAME"
+expect_events "paused→running"
 
 step "Stopping VM..."
-run $QARAX vm stop "$VM_NAME"
-info "Waiting for VM to reach 'shutdown'..."
-wait_for_status shutdown 60
-echo
+run qarax vm stop "$VM_NAME"
+expect_events "running→shutdown"
 
-step "Deleting VM..."
-run $QARAX vm delete "$VM_NAME"
-VM_ID="" # prevent double-delete in cleanup
-echo
+banner "Raw SSE Wire Format"
 
-# Brief pause to allow any final events to be written to the log files
-sleep 1
-
-# Display captured events
-banner "Captured SSE Events"
-
-step "All events (unfiltered stream):"
-echo
-print_events "ALL   " "$SSE_ALL_LOG"
-echo
-
-step "Filtered stream  (?status=running  — only transitions TO 'running'):"
-echo
-print_events "RUNNING" "$SSE_FILTERED_LOG"
-echo
-
-# Raw log sample
-banner "Raw SSE Wire Format (first 20 lines)"
-
-info "The SSE protocol sends events as:"
-info "  event: <event-type>"
-info "  id: <vm-uuid>"
-info "  data: <json-payload>"
-echo
-head -20 "$SSE_ALL_LOG" 2>/dev/null || true
+info "The first event as the full stream received it:"
+awk '/^event:/ { p = 1 } p { print "    " $0 } p && /^$/ { exit }' "${WORK}/all"
 
 banner "Demo Complete"
 
-AUTH_HEADER='-H "Authorization: Bearer $QARAX_TOKEN"'
-echo -e "  Try it yourself:"
-echo -e "  ${DIM}\$ curl -N ${AUTH_HEADER} '${SERVER}/events'${NC}"
-echo -e "  ${DIM}\$ curl -N ${AUTH_HEADER} '${SERVER}/events?status=running'${NC}"
-echo -e "  ${DIM}\$ curl -N ${AUTH_HEADER} '${SERVER}/events?vm_id=<uuid>'${NC}"
-echo -e "  ${DIM}\$ curl -N ${AUTH_HEADER} '${SERVER}/events?tag=<tag>'${NC}"
+ok "The full stream delivered all ${#ALL_WANT[@]} transitions; ?status=running delivered only its ${#RUNNING_WANT[@]}"
+info "Deleting a VM emits no SSE event (lifecycle hooks do get a 'deleted' delivery)."
 echo
+echo -e "  Try it yourself:"
+echo -e "  ${DIM}\$ curl -N -H \"Authorization: Bearer \$QARAX_TOKEN\" '${SERVER}/events'${NC}"
+echo -e "  ${DIM}\$ curl -N -H \"Authorization: Bearer \$QARAX_TOKEN\" '${SERVER}/events?status=running'${NC}"
+echo -e "  ${DIM}\$ curl -N -H \"Authorization: Bearer \$QARAX_TOKEN\" '${SERVER}/events?vm_id=<uuid>'${NC}"
+echo -e "  ${DIM}\$ curl -N -H \"Authorization: Bearer \$QARAX_TOKEN\" '${SERVER}/events?tag=<tag>'${NC}"

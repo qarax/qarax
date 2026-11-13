@@ -1,7 +1,7 @@
 # Adds a LIO iSCSI target container to the qarax e2e stack for the BLOCK
 # storage demo. Merge this on top of e2e/docker-compose.yml:
 #
-#   docker compose -f e2e/docker-compose.yml -f demos/block-storage/compose.yml up -d iscsi-target
+#   docker compose -f e2e/docker-compose.yml -f demos/block-storage/compose.yml up -d --wait iscsi-target
 #
 # The target listens on port 3260 inside the compose network only; qarax-node
 # reaches it as hostname `iscsi-target`. demos/block-storage/run.sh relies on
@@ -19,11 +19,15 @@ services:
     environment:
       TARGET_IQN: iqn.2024-01.io.qarax:demo
       LUN_SIZE: "1073741824"
+    # `up --wait` returns once this passes: probed every second while the
+    # target starts, unhealthy after ~45 s.
     healthcheck:
       test: ["CMD", "sh", "-c", "ss -ltn | grep -q :3260"]
+      start_period: 30s
+      start_interval: 1s
       interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 3
 
 volumes:
   block_demo_storage:

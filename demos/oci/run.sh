@@ -2,24 +2,27 @@
 #
 # Demo: Run a VM from an OCI container image
 #
-# This script demonstrates the "OCI disk-first" workflow:
-#   1. Import an OCI image into an OverlayBD storage pool
-#   2. Create a VM
-#   3. Attach the imported image as a boot disk
-#   4. Start the VM
+# The "OCI disk-first" workflow:
+#   1. Import an OCI image into the shared OverlayBD storage pool
+#   2. Create a VM with the imported image as its boot disk (guest agent enabled)
+#   3. Start the VM
+#   4. Read /etc/os-release inside the guest to show it booted from the image
+#
+# The VM (demo-oci-vm) is left running. A re-run replaces it and reuses the
+# imported image; --cleanup deletes both.
 #
 # Prerequisites:
-#   - qarax stack running (make run-local), or let the script start it
-#   - qarax CLI on PATH or built under target/ (make build)
-#   - Host registered and initialized (run-local.sh does this automatically)
-#   - OverlayBD storage pool created (run-local.sh does this automatically)
+#   - qarax stack running (make run-local), or let the script start it.
+#     make run-local registers the host and creates overlaybd-pool.
+#   - cargo (to build the qarax CLI) or a qarax CLI on PATH
+#   - jq
 #
 # Usage:
-#   ./demos/oci/run.sh                                          # defaults: Alpine, 1 vCPU, 256 MiB
+#   ./demos/oci/run.sh                                          # Alpine, 1 vCPU, 256 MiB
 #   ./demos/oci/run.sh --image docker.io/library/ubuntu:latest  # custom image
-#   ./demos/oci/run.sh --name my-vm --vcpus 2 --memory 512      # custom VM config
-#   ./demos/oci/run.sh --pool my-pool                           # specify storage pool
-#   ./demos/oci/run.sh --cleanup                                # delete demo VM + imported object
+#   ./demos/oci/run.sh --vcpus 2 --memory 512                   # more resources
+#   ./demos/oci/run.sh --pool my-pool                           # another OverlayBD pool
+#   ./demos/oci/run.sh --cleanup                                # delete the VM and imported object
 #
 
 set -euo pipefail
@@ -27,23 +30,33 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 source "${REPO_ROOT}/demos/lib.sh"
 
-# Defaults
-VM_NAME="demo-oci-vm"
+PREFIX="demo-oci-"
+VM_NAME="${PREFIX}vm"
 IMAGE_REF="public.ecr.aws/docker/library/alpine:latest"
 OBJECT_NAME=""
 POOL_NAME="overlaybd-pool"
 VCPUS=1
 MEMORY_MIB=256
-SERVER="${QARAX_SERVER:-http://localhost:8000}"
 CLEANUP=0
+GUEST_AGENT_TIMEOUT=60
 
-# Parse arguments
+usage() {
+	cat <<EOF
+Usage: $0 [OPTIONS]
+
+Options:
+  --image REF          OCI image reference (default: public.ecr.aws/docker/library/alpine:latest)
+  --object-name NAME   Storage object name (default: derived from the image, e.g. alpine-latest-obd)
+  --pool NAME          OverlayBD storage pool name or ID (default: overlaybd-pool)
+  --vcpus N            Number of vCPUs (default: 1)
+  --memory MiB         Memory in MiB (default: 256)
+  --server URL         qarax API URL (default: \$QARAX_SERVER or http://localhost:8000)
+  --cleanup            Delete the demo VM and the imported storage object, then exit
+EOF
+}
+
 while [[ $# -gt 0 ]]; do
 	case $1 in
-	--name)
-		VM_NAME="$2"
-		shift 2
-		;;
 	--image)
 		IMAGE_REF="$2"
 		shift 2
@@ -73,107 +86,78 @@ while [[ $# -gt 0 ]]; do
 		shift
 		;;
 	--help | -h)
-		echo "Usage: $0 [OPTIONS]"
-		echo ""
-		echo "Options:"
-		echo "  --name NAME          VM name (default: demo-oci-vm)"
-		echo "  --image REF          OCI image reference (default: public.ecr.aws/docker/library/alpine:latest)"
-		echo "  --object-name NAME   Storage object name (default: derived from image)"
-		echo "  --pool NAME          Storage pool name or ID (default: overlaybd-pool)"
-		echo "  --vcpus N            Number of vCPUs (default: 1)"
-		echo "  --memory MiB         Memory in MiB (default: 256)"
-		echo "  --server URL         qarax API URL (default: \$QARAX_SERVER or http://localhost:8000)"
-		echo "  --cleanup            Delete the demo VM and imported storage object, then exit"
+		usage
 		exit 0
 		;;
 	*)
-		echo "Unknown option: $1" >&2
-		exit 1
+		usage >&2
+		die "Unknown option: $1"
 		;;
 	esac
 done
 
-# Derive object name from image ref if not specified
 if [[ -z "$OBJECT_NAME" ]]; then
-	# e.g. "public.ecr.aws/docker/library/alpine:latest" -> "alpine-latest-obd"
-	OBJECT_NAME="$(echo "$IMAGE_REF" | sed 's|.*/||; s/[:@]/-/g')-obd"
+	# e.g. public.ecr.aws/docker/library/alpine:latest -> alpine-latest-obd
+	OBJECT_NAME="$(sed 's|.*/||; s/[:@]/-/g' <<<"$IMAGE_REF")-obd"
 fi
 
-MEMORY_BYTES=$((MEMORY_MIB * 1024 * 1024))
-
-QARAX_BIN="$(find_qarax_bin)"
-[[ -n "$QARAX_BIN" ]] || die "qarax CLI not found. Run 'make build' or add it to PATH."
-QARAX="$QARAX_BIN --server $SERVER"
-
-if [[ "$CLEANUP" -eq 1 ]]; then
-	if ! curl -sf --max-time 3 "${SERVER}/" >/dev/null 2>&1; then
-		echo "Stack not running — nothing to clean up."
+if ((CLEANUP)); then
+	if ! server_reachable; then
+		info "qarax server not reachable at ${SERVER}: nothing to clean up."
 		exit 0
 	fi
-	require_auth "$SERVER"
-	echo "=== Cleaning up OCI demo resources ==="
-	timeout 60 $QARAX vm force-stop --wait "$VM_NAME" >/dev/null 2>&1 || true
-	$QARAX vm delete "$VM_NAME" 2>/dev/null || true
-	$QARAX storage-object delete "$OBJECT_NAME" 2>/dev/null || true
-	echo "Done."
+	require_auth
+	require_cli
+	step "Deleting OCI demo resources"
+	sweep vm "$PREFIX"
+	if exists storage-object "$OBJECT_NAME"; then
+		run qarax storage-object delete "$OBJECT_NAME"
+	fi
+	ok "Done"
 	exit 0
 fi
 
-ensure_stack "$SERVER"
+ensure_stack
+require_cli
 
-echo "=== qarax OCI VM Demo ==="
-echo ""
-echo "Image:   $IMAGE_REF"
-echo "Object:  $OBJECT_NAME"
-echo "VM:      $VM_NAME"
-echo "Pool:    $POOL_NAME"
-echo "vCPUs:   $VCPUS"
-echo "Memory:  ${MEMORY_MIB} MiB"
-echo ""
+banner "qarax OCI VM Demo"
+info "Image:   ${IMAGE_REF}"
+info "Object:  ${OBJECT_NAME}"
+info "Pool:    ${POOL_NAME}"
+info "VM:      ${VM_NAME} (${VCPUS} vCPU, ${MEMORY_MIB} MiB)"
 
-$QARAX storage-pool get "$POOL_NAME" >/dev/null 2>&1 ||
-	die "Storage pool '$POOL_NAME' not found. Run 'make run-local' (creates overlaybd-pool) or pass --pool."
-if $QARAX vm get "$VM_NAME" >/dev/null 2>&1; then
-	die "VM '$VM_NAME' already exists. Run '$0 --cleanup' first or pass --name."
-fi
+exists storage-pool "$POOL_NAME" ||
+	die "Storage pool '${POOL_NAME}' not found. Run 'make run-local' (it creates overlaybd-pool) or pass --pool."
 
-# Step 1: Import OCI image into the storage pool (skipped if already imported)
-echo "--- Step 1: Import OCI image into storage pool ---"
-if $QARAX storage-object get "$OBJECT_NAME" >/dev/null 2>&1; then
-	echo "(storage object '$OBJECT_NAME' already exists, reusing it)"
+# The VM name belongs to this demo: replace the VM from a previous run.
+sweep vm "$PREFIX"
+
+step "1. Import the OCI image into ${POOL_NAME}"
+if exists storage-object "$OBJECT_NAME"; then
+	ok "${OBJECT_NAME} is already imported, reusing it"
 else
-	echo "\$ qarax storage-pool import --pool $POOL_NAME --image-ref $IMAGE_REF --name $OBJECT_NAME"
-	$QARAX storage-pool import --pool "$POOL_NAME" --image-ref "$IMAGE_REF" --name "$OBJECT_NAME"
+	run qarax storage-pool import --pool "$POOL_NAME" --image-ref "$IMAGE_REF" --name "$OBJECT_NAME"
 fi
-echo ""
 
-# Step 2: Create the VM
-echo "--- Step 2: Create VM ---"
-echo "\$ qarax vm create --name $VM_NAME --vcpus $VCPUS --memory $MEMORY_BYTES"
-$QARAX vm create --name "$VM_NAME" --vcpus "$VCPUS" --memory "$MEMORY_BYTES"
-echo ""
+step "2. Create the VM with the imported image as its boot disk"
+# --root-disk lets the scheduler pick a host that has the image's pool; the
+# guest agent lets the demo look inside the VM.
+run qarax vm create --name "$VM_NAME" --vcpus "$VCPUS" --memory "${MEMORY_MIB}MiB" \
+	--root-disk "$OBJECT_NAME" --guest-agent
 
-# Step 3: Attach the imported disk
-echo "--- Step 3: Attach OCI disk to VM ---"
-echo "\$ qarax vm attach-disk $VM_NAME --object $OBJECT_NAME"
-$QARAX vm attach-disk "$VM_NAME" --object "$OBJECT_NAME"
-echo ""
+step "3. Start the VM"
+run qarax vm start "$VM_NAME"
+run qarax vm get "$VM_NAME"
 
-# Step 4: Start the VM (the CLI waits for the start job to finish)
-echo "--- Step 4: Start VM ---"
-echo "\$ qarax vm start $VM_NAME"
-$QARAX vm start "$VM_NAME"
-echo ""
+step "4. Look inside the guest"
+wait_until "$GUEST_AGENT_TIMEOUT" guest_agent_ready "$VM_NAME" ||
+	die "The guest agent in ${VM_NAME} did not answer within ${GUEST_AGENT_TIMEOUT}s.\nWatch the boot with: qarax vm attach ${VM_NAME}"
+run qarax vm exec "$VM_NAME" -- cat /etc/os-release
+ok "${VM_NAME} booted from ${IMAGE_REF}"
 
-# Show result
-echo "--- VM Status ---"
-$QARAX vm get "$VM_NAME"
-echo ""
-
-echo "=== Done ==="
-echo ""
-echo "Useful commands:"
-echo "  qarax vm console $VM_NAME       # view boot log"
-echo "  qarax vm attach $VM_NAME        # interactive console"
-echo "  qarax vm stop $VM_NAME          # stop the VM"
-echo "  $0 --cleanup        # delete the VM and imported object"
+banner "Done"
+echo "VM ${VM_NAME} is running. Useful commands:"
+echo "  qarax vm exec ${VM_NAME} -- ps   # run a command in the guest"
+echo "  qarax vm attach ${VM_NAME}       # interactive serial console (Ctrl+] detaches)"
+echo "  qarax vm stop ${VM_NAME}         # stop the VM"
+echo "  $0 --cleanup   # delete the VM and the imported image"

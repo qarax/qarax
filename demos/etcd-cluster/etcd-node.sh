@@ -1,58 +1,44 @@
 #!/usr/bin/env bash
-# etcd-node.sh — started by etcd-node.service
+# etcd-node.sh: the image's CMD. qarax boots the image from OverlayBD with
+# qarax-init as PID 1, which runs this script with the image's ENV.
 #
-# Reads the IP address assigned to eth0 (set by the kernel via the ip= cmdline
-# parameter that qarax injects for managed networks), maps it to the etcd node
-# name, and starts etcd with the correct peer/client URLs.
-#
-# Fixed cluster layout — must match the IPs assigned via qarax --ip:
-#   etcd-0  10.100.0.10
-#   etcd-1  10.100.0.11
-#   etcd-2  10.100.0.12
+# CLUSTER_MEMBERS lists every member as name=peer-url, comma-separated. run.sh
+# bakes it into the image from its node list, so the layout is defined there
+# only. This node is the member whose peer URL holds the IP qarax gave eth0
+# (through the kernel's ip= parameter, so it is set before init runs).
 
 set -euo pipefail
 
-CLUSTER_SUBNET="10.100.0"
-CLUSTER_TOKEN="etcd-demo-cluster"
-CLUSTER_PEERS="etcd-0=http://10.100.0.10:2380,etcd-1=http://10.100.0.11:2380,etcd-2=http://10.100.0.12:2380"
+: "${CLUSTER_MEMBERS:?not set: build the image with demos/etcd-cluster/run.sh}"
 
-# Wait up to 30s for eth0 to get an IP
-NODE_IP=""
-for i in $(seq 1 30); do
-	NODE_IP=$(ip -4 addr show eth0 2>/dev/null | grep -oP 'inet \K[^/]+' || true)
-	if [[ -n "$NODE_IP" ]]; then
-		break
+addr=$(ip -4 -o addr show dev eth0)
+if [[ ! "$addr" =~ inet\ ([0-9.]+)/ ]]; then
+	echo "etcd-node: eth0 has no IPv4 address" >&2
+	exit 1
+fi
+node_ip="${BASH_REMATCH[1]}"
+
+name=""
+IFS=, read -ra members <<<"$CLUSTER_MEMBERS"
+for member in "${members[@]}"; do
+	if [[ "$member" == *"//${node_ip}:"* ]]; then
+		name="${member%%=*}"
 	fi
-	echo "etcd-node: waiting for eth0 IP (attempt $i)..."
-	sleep 1
 done
-
-if [[ -z "$NODE_IP" ]]; then
-	echo "etcd-node: ERROR — could not determine IP address on eth0" >&2
+if [[ -z "$name" ]]; then
+	echo "etcd-node: ${node_ip} is not a member of ${CLUSTER_MEMBERS}" >&2
 	exit 1
 fi
 
-# Map IP to etcd node name
-case "$NODE_IP" in
-"${CLUSTER_SUBNET}.10") ETCD_NAME="etcd-0" ;;
-"${CLUSTER_SUBNET}.11") ETCD_NAME="etcd-1" ;;
-"${CLUSTER_SUBNET}.12") ETCD_NAME="etcd-2" ;;
-*)
-	echo "etcd-node: ERROR — IP $NODE_IP not in cluster range (${CLUSTER_SUBNET}.10-12)" >&2
-	exit 1
-	;;
-esac
-
-echo "etcd-node: starting $ETCD_NAME at $NODE_IP"
-echo "etcd-node: cluster peers: $CLUSTER_PEERS"
+echo "etcd-node: starting ${name} at ${node_ip}"
 
 exec /usr/local/bin/etcd \
-	--name "$ETCD_NAME" \
+	--name "$name" \
 	--data-dir /var/lib/etcd \
-	--listen-peer-urls "http://${NODE_IP}:2380" \
-	--listen-client-urls "http://${NODE_IP}:2379,http://127.0.0.1:2379" \
-	--advertise-client-urls "http://${NODE_IP}:2379" \
-	--initial-advertise-peer-urls "http://${NODE_IP}:2380" \
-	--initial-cluster "$CLUSTER_PEERS" \
+	--listen-peer-urls "http://${node_ip}:2380" \
+	--listen-client-urls "http://${node_ip}:2379,http://127.0.0.1:2379" \
+	--advertise-client-urls "http://${node_ip}:2379" \
+	--initial-advertise-peer-urls "http://${node_ip}:2380" \
+	--initial-cluster "$CLUSTER_MEMBERS" \
 	--initial-cluster-state new \
-	--initial-cluster-token "$CLUSTER_TOKEN"
+	--initial-cluster-token etcd-demo-cluster

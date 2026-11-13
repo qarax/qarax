@@ -2,19 +2,24 @@
 #
 # Demo: GPU passthrough with VFIO
 #
-# This script demonstrates GPU passthrough using qarax with an OCI container
-# image (e.g. NVIDIA CUDA). qarax pulls the image, unpacks the rootfs, and
-# boots it via OverlayBD with the GPU passed through as a VFIO device.
+# Boots a VM from an OCI container image (e.g. NVIDIA CUDA) with GPUs passed
+# through as VFIO devices. qarax imports the image via OverlayBD and attaches
+# the GPUs when the VM starts.
 #
-#   1. List available GPUs on the host
+#   1. List the GPUs on a host
 #   2. Create a VM with --image-ref and GPU scheduling flags
-#   3. Start the VM — image is imported via OverlayBD, VFIO devices attached
+#   3. Start the VM
+#   4. Check the VM holds the requested GPUs on the host the scheduler picked
+#
+# The VM (demo-gpu-vm) is deleted at exit, releasing its GPUs; KEEP=1 leaves
+# it running.
 #
 # Prerequisites:
-#   - qarax stack running (make run-local)
-#   - qarax CLI on PATH or built under target/ (make build)
-#   - Host registered and initialized with at least one GPU bound to vfio-pci
-#   - IOMMU enabled (intel_iommu=on iommu=pt in kernel cmdline)
+#   - qarax stack running (make run-local) with a host that has at least one
+#     GPU bound to vfio-pci
+#   - cargo (to build the qarax CLI) or a qarax CLI on PATH
+#   - jq
+#   - IOMMU enabled (intel_iommu=on iommu=pt in the host kernel cmdline)
 #
 # To enable IOMMU (Intel):
 #   Add "intel_iommu=on iommu=pt" to GRUB_CMDLINE_LINUX in /etc/default/grub
@@ -36,15 +41,16 @@
 #   ./demos/gpu-passthrough/run.sh --gpu-count 2                # request 2 GPUs
 #   ./demos/gpu-passthrough/run.sh --gpu-vendor nvidia          # filter by vendor
 #   ./demos/gpu-passthrough/run.sh --image-ref nvcr.io/nvidia/cuda:12.6.3-devel-ubuntu24.04
-#   ./demos/gpu-passthrough/run.sh --host my-node               # specify host
+#   ./demos/gpu-passthrough/run.sh --host my-node               # inspect GPUs on this host
+#   KEEP=1 ./demos/gpu-passthrough/run.sh                       # leave the VM running
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 source "${REPO_ROOT}/demos/lib.sh"
 
-# Defaults
-VM_NAME="demo-gpu-vm"
+PREFIX="demo-gpu-"
+VM_NAME="${PREFIX}vm"
 IMAGE_REF="docker.io/nvidia/cuda:12.6.3-base-ubuntu24.04"
 GPU_COUNT=1
 GPU_VENDOR=""
@@ -53,15 +59,29 @@ MIN_VRAM=""
 VCPUS=4
 MEMORY_MIB=4096
 HOST_NAME=""
-SERVER="${QARAX_SERVER:-http://localhost:8000}"
 
-# Parse arguments
+usage() {
+	cat <<EOF
+Usage: $0 [OPTIONS]
+
+Options:
+  --image-ref REF        OCI image reference (default: docker.io/nvidia/cuda:12.6.3-base-ubuntu24.04)
+  --gpu-count N          Number of GPUs to request (default: 1)
+  --gpu-vendor VENDOR    GPU vendor filter (e.g. nvidia, amd)
+  --gpu-model MODEL      GPU model filter
+  --min-vram BYTES       Minimum GPU VRAM in bytes
+  --vcpus N              Number of vCPUs (default: 4)
+  --memory MiB           Memory in MiB (default: 4096)
+  --host NAME            Host to list GPUs on (default: the first UP host)
+  --server URL           qarax API URL (default: \$QARAX_SERVER or http://localhost:8000)
+
+Environment:
+  KEEP=1                 Leave the VM running at exit (it holds its GPUs until deleted)
+EOF
+}
+
 while [[ $# -gt 0 ]]; do
 	case $1 in
-	--name)
-		VM_NAME="$2"
-		shift 2
-		;;
 	--image-ref)
 		IMAGE_REF="$2"
 		shift 2
@@ -99,71 +119,63 @@ while [[ $# -gt 0 ]]; do
 		shift 2
 		;;
 	--help | -h)
-		echo "Usage: $0 [OPTIONS]"
-		echo ""
-		echo "Options:"
-		echo "  --name NAME            VM name (default: demo-gpu-vm)"
-		echo "  --image-ref REF        OCI image reference (default: docker.io/nvidia/cuda:12.6.3-base-ubuntu24.04)"
-		echo "  --gpu-count N          Number of GPUs to request (default: 1)"
-		echo "  --gpu-vendor VENDOR    GPU vendor filter (e.g. nvidia, amd)"
-		echo "  --gpu-model MODEL      GPU model filter"
-		echo "  --min-vram BYTES       Minimum GPU VRAM in bytes"
-		echo "  --vcpus N              Number of vCPUs (default: 4)"
-		echo "  --memory MiB           Memory in MiB (default: 4096)"
-		echo "  --host NAME            Host name to inspect GPUs on (default: first host that is up)"
-		echo "  --server URL           qarax API URL (default: \$QARAX_SERVER or http://localhost:8000)"
+		usage
 		exit 0
 		;;
 	*)
-		echo "Unknown option: $1" >&2
-		exit 1
+		usage >&2
+		die "Unknown option: $1"
 		;;
 	esac
 done
 
-MEMORY_BYTES=$((MEMORY_MIB * 1024 * 1024))
+# delete_image_vm VM: delete an --image-ref VM and the OverlayBD image object
+# qarax created for it (overlaybd-<vm id>), which VM deletion leaves behind.
+# Deleting the VM releases its GPUs.
+delete_image_vm() {
+	local id
+	id="$(qarax vm get "$1" -o json | jq -r '.id')"
+	qarax vm delete "$id" >/dev/null
+	if exists storage-object "overlaybd-${id}"; then
+		qarax storage-object delete "overlaybd-${id}" >/dev/null
+	fi
+}
 
-QARAX_BIN="$(find_qarax_bin)"
-[[ -n "$QARAX_BIN" ]] || die "qarax CLI not found. Run 'make build' or add it to PATH."
-QARAX="$QARAX_BIN --server $SERVER"
+cleanup() {
+	if ((KEEP)); then
+		echo ""
+		info "KEEP=1: ${VM_NAME} keeps running and holds its GPUs. Delete it with: qarax vm delete ${VM_NAME}"
+		return
+	fi
+	if exists vm "$VM_NAME"; then
+		step "Deleting ${VM_NAME} (releases its GPUs)"
+		delete_image_vm "$VM_NAME"
+	fi
+}
 
-require_server "$SERVER"
+require_server
+require_cli
 
-if $QARAX vm get "$VM_NAME" >/dev/null 2>&1; then
-	die "VM '$VM_NAME' already exists. Delete it first ('qarax vm delete $VM_NAME') or pass --name."
+banner "qarax GPU Passthrough Demo"
+info "VM:         ${VM_NAME} (${VCPUS} vCPU, ${MEMORY_MIB} MiB)"
+info "Image:      ${IMAGE_REF}"
+info "GPU count:  ${GPU_COUNT}${GPU_VENDOR:+, vendor ${GPU_VENDOR}}${GPU_MODEL:+, model ${GPU_MODEL}}"
+
+# A VM left by an interrupted or KEEP=1 run holds GPUs: delete it first.
+if exists vm "$VM_NAME"; then
+	delete_image_vm "$VM_NAME"
 fi
+trap cleanup EXIT
 
-echo "=== qarax GPU Passthrough Demo ==="
-echo ""
-echo "VM:         $VM_NAME"
-echo "Image:      $IMAGE_REF"
-echo "GPU count:  $GPU_COUNT"
-if [[ -n "$GPU_VENDOR" ]]; then
-	echo "GPU vendor: $GPU_VENDOR"
-fi
-if [[ -n "$GPU_MODEL" ]]; then
-	echo "GPU model:  $GPU_MODEL"
-fi
-echo "vCPUs:      $VCPUS"
-echo "Memory:     ${MEMORY_MIB} MiB"
-echo ""
-
-# Find a host with GPUs
-echo "--- Available GPUs ---"
-if [[ -z "$HOST_NAME" ]]; then
-	HOST_NAME=$($QARAX host list -o json | python3 -c "import json,sys; hosts=[h for h in json.load(sys.stdin) if h.get('status','').lower() == 'up']; print(hosts[0]['name'] if hosts else '')")
-	[[ -n "$HOST_NAME" ]] || die "No host in 'up' state — register and initialize a host first."
-fi
-echo "\$ qarax host gpus $HOST_NAME"
-$QARAX host gpus "$HOST_NAME"
-FREE_GPUS=$($QARAX host gpus "$HOST_NAME" -o json | python3 -c "import json,sys; print(sum(1 for g in json.load(sys.stdin) if not g.get('vm_id')))")
+step "1. GPUs on the host"
+[[ -n "$HOST_NAME" ]] || HOST_NAME="$(first_up_host)"
+run qarax host gpus "$HOST_NAME"
+FREE_GPUS="$(qarax host gpus "$HOST_NAME" -o json | jq '[.[] | select(.vm_id == null)] | length')"
 if ((FREE_GPUS < GPU_COUNT)); then
-	echo -e "${YELLOW}Warning: host '$HOST_NAME' reports ${FREE_GPUS} free GPU(s), ${GPU_COUNT} requested.${NC}"
-	echo -e "${YELLOW}Scheduling will fail unless another host has enough vfio-pci bound GPUs.${NC}"
+	warn "Host '${HOST_NAME}' has ${FREE_GPUS} free GPU(s), ${GPU_COUNT} requested."
+	warn "Scheduling fails unless another host has enough vfio-pci bound GPUs."
 fi
-echo ""
 
-# Build GPU flags
 GPU_FLAGS=(--gpu-count "$GPU_COUNT")
 if [[ -n "$GPU_VENDOR" ]]; then
 	GPU_FLAGS+=(--gpu-vendor "$GPU_VENDOR")
@@ -175,39 +187,20 @@ if [[ -n "$MIN_VRAM" ]]; then
 	GPU_FLAGS+=(--min-vram "$MIN_VRAM")
 fi
 
-# Create VM with OCI image + GPU passthrough (the CLI waits for the async create job)
-echo "--- Create GPU VM ---"
-echo "\$ qarax vm create --name $VM_NAME --vcpus $VCPUS --memory $MEMORY_BYTES --image-ref $IMAGE_REF ${GPU_FLAGS[*]}"
-$QARAX vm create --name "$VM_NAME" \
-	--vcpus "$VCPUS" --memory "$MEMORY_BYTES" \
-	--image-ref "$IMAGE_REF" \
-	"${GPU_FLAGS[@]}"
-echo ""
+step "2. Create the GPU VM (the CLI waits for the image import)"
+run qarax vm create --name "$VM_NAME" --vcpus "$VCPUS" --memory "${MEMORY_MIB}MiB" \
+	--image-ref "$IMAGE_REF" "${GPU_FLAGS[@]}"
 
-# Start the VM
-echo "--- Start the VM ---"
-echo "\$ qarax vm start $VM_NAME"
-$QARAX vm start "$VM_NAME"
-echo ""
+step "3. Start the VM"
+run qarax vm start "$VM_NAME"
+run qarax vm get "$VM_NAME"
 
-# Show result
-echo "--- VM Status ---"
-$QARAX vm get "$VM_NAME"
-echo ""
-
-# Show GPUs on the host the scheduler actually picked
-VM_HOST_ID=$($QARAX vm get "$VM_NAME" -o json | python3 -c "import json,sys; print(json.load(sys.stdin).get('host_id') or '')")
-echo "--- GPU Allocation ---"
-$QARAX host gpus "${VM_HOST_ID:-$HOST_NAME}"
-echo ""
-
-echo "=== Done ==="
-echo ""
-echo "The VM is running with $GPU_COUNT GPU(s) passed through via VFIO."
-echo "Inside the guest, 'lspci' will show the GPU as a PCI device."
-echo ""
-echo "Useful commands:"
-echo "  qarax vm get $VM_NAME            # check VM status"
-echo "  qarax host gpus ${VM_HOST_ID:-$HOST_NAME}       # check GPU allocation"
-echo "  qarax vm stop $VM_NAME           # stop the VM (releases GPUs)"
-echo "  qarax vm delete $VM_NAME         # delete the VM"
+step "4. GPU allocation on the host the scheduler picked"
+VM_JSON="$(qarax vm get "$VM_NAME" -o json)"
+VM_ID="$(jq -r '.id' <<<"$VM_JSON")"
+VM_HOST="$(qarax host get "$(jq -r '.host_id' <<<"$VM_JSON")" -o json | jq -r '.name')"
+run qarax host gpus "$VM_HOST"
+HELD="$(qarax host gpus "$VM_HOST" -o json | jq --arg id "$VM_ID" '[.[] | select(.vm_id == $id)] | length')"
+((HELD == GPU_COUNT)) || die "${VM_NAME} holds ${HELD} GPU(s), ${GPU_COUNT} requested"
+ok "${VM_NAME} is running on ${VM_HOST} with ${HELD} GPU(s) passed through via VFIO"
+info "Inside the guest (KEEP=1 keeps it running), lspci lists them as PCI devices."

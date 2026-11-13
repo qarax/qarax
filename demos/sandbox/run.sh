@@ -1,665 +1,305 @@
 #!/usr/bin/env bash
 #
-# Demo: qarax sandbox feature
+# Demo: qarax sandboxes
 #
-# Sandboxes are ephemeral VMs spun up from a VM template and automatically
-# reaped after an idle timeout.  This demo shows the full lifecycle:
+# Sandboxes are ephemeral VMs created from a VM template and reaped once they
+# have been idle for longer than their idle timeout. The demo:
 #
-#   1. Create Firecracker + Cloud Hypervisor templates backed by one boot source
-#   2. Create one sandbox from each template and measure time-to-ready
-#   3. Configure a prewarmed sandbox pool for the Firecracker template
-#   4. Inspect the Firecracker sandbox (default managed backend)
-#   5. Execute a command inside the Firecracker sandbox
-#   6. Claim a second Firecracker sandbox from the prewarmed pool
-#   7. Delete one sandbox manually
-#   8. Watch the remaining sandbox auto-expire after its short idle timeout
+#   1. Gets or creates a Firecracker and a Cloud Hypervisor template
+#   2. Creates a sandbox from each and times how long each takes to be ready
+#   3. Configures a prewarmed sandbox pool for the Firecracker template
+#   4. Inspects the Firecracker sandbox and runs a command inside it
+#   5. Claims a second sandbox from the pool
+#   6. Deletes the first sandbox by hand
+#   7. Waits for the second sandbox to be reaped after its idle timeout
 #
-# With --template, the demo-managed templates and the Firecracker vs Cloud
-# Hypervisor benchmark are skipped and the caller's template is used instead.
+# With --template, the demo uses the caller's template instead and skips the
+# Cloud Hypervisor comparison.
 #
-# Each sandbox creates its own underlying VM automatically; no manual VM
-# lifecycle management is required.
-#
-# Prerequisites:
-#   - qarax stack (started automatically via hack/run-local.sh if not running)
-#   - python3 (JSON parsing); the qarax CLI is built with cargo unless SKIP_BUILD=1
-#   - QARAX_TOKEN for the API (defaults to the local stack's e2e-test-token)
+# The templates have no boot source: their VMs boot the control plane's
+# default kernel and initramfs (VM_KERNEL / VM_INITRAMFS on the local stack),
+# whose qarax-init runs the guest agent that `sandbox exec` talks to.
 #
 # Usage:
-#   ./demos/sandbox/run.sh
-#   ./demos/sandbox/run.sh --server http://localhost:8000
-#   ./demos/sandbox/run.sh --template my-template     # reuse an existing template
-#   ./demos/sandbox/run.sh --idle-timeout 60          # custom idle timeout in seconds
-#   ./demos/sandbox/run.sh --cleanup                  # remove leftover demo resources
-#   SANDBOX_INITRAMFS_PATH=/path/to/initramfs ./demos/sandbox/run.sh
+#   ./demos/sandbox/run.sh [--server URL] [--template NAME] [--idle-timeout SECS]
+#   ./demos/sandbox/run.sh --cleanup   # remove the demo's sandboxes, pools and templates
+#   KEEP=1 ./demos/sandbox/run.sh      # leave the sandboxes and the pool in place at exit
 #
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+# shellcheck source=demos/lib.sh
 source "${REPO_ROOT}/demos/lib.sh"
 
-SERVER="${QARAX_SERVER:-http://localhost:8000}"
-IDLE_TIMEOUT="${SANDBOX_IDLE_TIMEOUT:-90}"
+PREFIX="sandbox-demo-"
+FC_TEMPLATE="${PREFIX}fc"
+CH_TEMPLATE="${PREFIX}ch"
+SANDBOX1="${PREFIX}1"
+CH_SANDBOX="${PREFIX}ch-1"
+SANDBOX2="${PREFIX}2"
+IDLE_TIMEOUT="${SANDBOX_IDLE_TIMEOUT:-30}"
 POOL_MIN_READY="${SANDBOX_POOL_MIN_READY:-1}"
 READY_TIMEOUT="${SANDBOX_READY_TIMEOUT:-300}"
-HOST_NAME="${QARAX_HOST:-local-node}"
-POOL_NAME="sandbox-demo-pool"
-POOL_PATH="/var/lib/qarax/images"
-KERNEL_PATH="/var/lib/qarax/images/vmlinux"
-INITRAMFS_PATH="${SANDBOX_INITRAMFS_PATH:-/var/lib/qarax/images/test-initramfs.gz}"
-SANDBOX_NAME_PREFIX="sandbox-demo"
-# Demo-managed names get a per-run suffix; the prefixes let --cleanup and the
-# pre-run sweep find leftovers from interrupted runs. Note that the Cloud
-# Hypervisor template prefix also matches MANAGED_TEMPLATE_PREFIX.
-MANAGED_TEMPLATE_PREFIX="sandbox-demo-template"
-MANAGED_BOOT_SOURCE_PREFIX="sandbox-demo-boot"
-MANAGED_KERNEL_PREFIX="sandbox-demo-kernel"
-MANAGED_INITRAMFS_PREFIX="sandbox-demo-initramfs"
-
-SANDBOX1_ID=""
-SANDBOX2_ID=""
-CLOUDHV_SANDBOX_ID=""
-TEMPLATE_ID=""
-CLOUDHV_TEMPLATE_ID=""
-TEMPLATE_CREATED=0
-CLOUDHV_TEMPLATE_CREATED=0
-BOOT_SOURCE_CREATED=0
-KERNEL_CREATED=0
-INITRAMFS_CREATED=0
-POOL_CONFIGURED=0
-ORIG_POOL_MIN_READY=""
-MANAGE_TEMPLATE_ASSETS=1
+GUEST_AGENT_TIMEOUT=30
+TEMPLATE="$FC_TEMPLATE"
+MANAGED_TEMPLATES=1
 CLEANUP_ONLY=0
-STEP_NO=0
-COLD_READY_MS=""
-CH_READY_MS=""
-WARM_READY_MS=""
-RUN_SUFFIX="$(date +%s)-$$"
 
-TEMPLATE_NAME="${MANAGED_TEMPLATE_PREFIX}-${RUN_SUFFIX}"
-CLOUDHV_TEMPLATE_NAME="${MANAGED_TEMPLATE_PREFIX}-cloudhv-${RUN_SUFFIX}"
-BOOT_SOURCE_NAME="${MANAGED_BOOT_SOURCE_PREFIX}-${RUN_SUFFIX}"
-KERNEL_NAME="${MANAGED_KERNEL_PREFIX}-${RUN_SUFFIX}"
-INITRAMFS_NAME="${MANAGED_INITRAMFS_PREFIX}-${RUN_SUFFIX}"
-SANDBOX1_NAME="${SANDBOX_NAME_PREFIX}-1-${RUN_SUFFIX}"
-SANDBOX2_NAME="${SANDBOX_NAME_PREFIX}-2-${RUN_SUFFIX}"
-CLOUDHV_SANDBOX_NAME="${SANDBOX_NAME_PREFIX}-ch-${RUN_SUFFIX}"
+usage() {
+	cat <<EOF
+Usage: $0 [OPTIONS]
 
-# Parse arguments
+Options:
+  --server URL         qarax API URL (default: \$QARAX_SERVER or http://localhost:8000)
+  --template NAME      Use an existing VM template instead of the demo's Firecracker and
+                       Cloud Hypervisor templates (skips the comparison)
+  --idle-timeout SECS  Idle timeout of the sandbox claimed from the pool, which the demo
+                       waits to see reaped (default: \$SANDBOX_IDLE_TIMEOUT or 30)
+  --cleanup            Remove the demo's sandboxes, sandbox pools and templates, then exit
+
+Environment: QARAX_TOKEN, KEEP=1 (leave sandboxes and the pool at exit),
+             SANDBOX_POOL_MIN_READY (default 1), SANDBOX_READY_TIMEOUT (default 300)
+EOF
+}
+
 while [[ $# -gt 0 ]]; do
-	case $1 in
+	case "$1" in
 	--server)
 		SERVER="$2"
 		shift 2
 		;;
 	--template)
-		TEMPLATE_NAME="$2"
-		MANAGE_TEMPLATE_ASSETS=0
+		TEMPLATE="$2"
+		MANAGED_TEMPLATES=0
 		shift 2
 		;;
 	--idle-timeout)
 		IDLE_TIMEOUT="$2"
 		shift 2
 		;;
-	--initramfs)
-		INITRAMFS_PATH="$2"
-		shift 2
-		;;
 	--cleanup)
 		CLEANUP_ONLY=1
-		shift 1
+		shift
 		;;
-	--help | -h)
-		echo "Usage: $0 [OPTIONS]"
-		echo ""
-		echo "Options:"
-		echo "  --server URL          qarax API URL (default: \$QARAX_SERVER or http://localhost:8000)"
-		echo "  --template NAME       Reuse an existing VM template (skips the managed templates and benchmark)"
-		echo "  --idle-timeout SECS   Idle timeout for sandboxes in seconds (default: 90)"
-		echo "  --initramfs PATH      Initramfs path on the host running qarax-node"
-		echo "  --cleanup             Remove demo-managed sandboxes, VMs, and template assets, then exit"
-		echo ""
-		echo "Environment: QARAX_TOKEN, QARAX_HOST, SANDBOX_IDLE_TIMEOUT, SANDBOX_POOL_MIN_READY,"
-		echo "             SANDBOX_READY_TIMEOUT, SANDBOX_INITRAMFS_PATH, SKIP_BUILD=1"
+	-h | --help)
+		usage
 		exit 0
 		;;
 	*)
-		die "Unknown option: $1 (see --help)"
+		die "unknown option: $1 (see --help)"
 		;;
 	esac
 done
 
-[[ -n "$INITRAMFS_PATH" ]] || die "sandbox demo requires an initramfs with qarax-init; set SANDBOX_INITRAMFS_PATH or pass --initramfs"
-
-banner() {
-	echo -e "\n${BOLD}${CYAN}══════════════════════════════════════════════════════════════${NC}"
-	echo -e "${BOLD}${CYAN}  $1${NC}"
-	echo -e "${BOLD}${CYAN}══════════════════════════════════════════════════════════════${NC}\n"
-}
-next_step() {
-	STEP_NO=$((STEP_NO + 1))
-	banner "Step ${STEP_NO} — $1"
-}
-step() { echo -e "${GREEN}▸${NC} ${BOLD}$1${NC}"; }
-info() { echo -e "  ${DIM}$1${NC}"; }
-run() {
-	echo -e "  ${DIM}\$ $*${NC}"
-	"$@"
-}
-
-if [[ -z "${SKIP_BUILD:-}" ]]; then
-	step "Building qarax CLI..."
-	cargo build -p cli
-fi
-
-QARAX_BIN="$(find_qarax_bin)"
-[[ -n "$QARAX_BIN" ]] || die "qarax CLI not found even after build"
-QARAX=("$QARAX_BIN" --server "$SERVER")
-
-cleanup() {
-	echo
-	step "Cleaning up..."
+# Delete the sandbox pools of the demo's templates. A pool keeps standby VMs
+# running, a template with a pool can't be deleted, and a leftover pool would
+# turn the cold-start measurement into a claim.
+sweep_pools() {
 	local id
-	for id in "$SANDBOX1_ID" "$SANDBOX2_ID" "$CLOUDHV_SANDBOX_ID"; do
-		if [[ -n "$id" ]]; then
-			"${QARAX[@]}" sandbox delete "$id" 2>/dev/null || true
-		fi
-	done
-	# Sandbox and pool deletion are synchronous, so the template assets below
-	# are no longer referenced by any VM once these return.
-	if [[ "$POOL_CONFIGURED" -eq 1 ]]; then
-		if [[ -n "$ORIG_POOL_MIN_READY" ]]; then
-			# Caller-managed template already had a pool: restore its setting.
-			"${QARAX[@]}" sandbox pool set --template "$TEMPLATE_NAME" --min-ready "$ORIG_POOL_MIN_READY" >/dev/null 2>&1 || true
-		else
-			"${QARAX[@]}" sandbox pool delete --template "$TEMPLATE_NAME" 2>/dev/null || true
-		fi
-	fi
-	if [[ "$TEMPLATE_CREATED" -eq 1 ]]; then
-		"${QARAX[@]}" vm-template delete "$TEMPLATE_NAME" 2>/dev/null || true
-	fi
-	if [[ "$CLOUDHV_TEMPLATE_CREATED" -eq 1 ]]; then
-		"${QARAX[@]}" vm-template delete "$CLOUDHV_TEMPLATE_NAME" 2>/dev/null || true
-	fi
-	if [[ "$BOOT_SOURCE_CREATED" -eq 1 ]]; then
-		"${QARAX[@]}" boot-source delete "$BOOT_SOURCE_NAME" 2>/dev/null || true
-	fi
-	if [[ "$INITRAMFS_CREATED" -eq 1 ]]; then
-		"${QARAX[@]}" storage-object delete "$INITRAMFS_NAME" 2>/dev/null || true
-	fi
-	if [[ "$KERNEL_CREATED" -eq 1 ]]; then
-		"${QARAX[@]}" storage-object delete "$KERNEL_NAME" 2>/dev/null || true
-	fi
-	info "Done."
-}
-
-json_field() {
-	local field="$1"
-	python3 -c 'import json, sys; print(json.load(sys.stdin)[sys.argv[1]])' "$field"
-}
-
-# Print FIELD (name or id) of every KIND resource whose name starts with PREFIX.
-list_with_prefix() {
-	local kind="$1"
-	local prefix="$2"
-	local field="$3"
-	"${QARAX[@]}" "$kind" list -o json 2>/dev/null | python3 -c '
-import json, sys
-prefix, field = sys.argv[1], sys.argv[2]
-for item in json.load(sys.stdin):
-    name = item.get("name") or ""
-    if name.startswith(prefix):
-        print(item[field])
-' "$prefix" "$field" 2>/dev/null || true
-}
-
-sandbox_status() {
-	local sandbox_id="$1"
-	"${QARAX[@]}" sandbox list -o json 2>/dev/null | python3 -c '
-import json, sys
-target = sys.argv[1]
-for sandbox in json.load(sys.stdin):
-    if sandbox.get("id") == target:
-        print(sandbox.get("status", "unknown"))
-        break
-else:
-    print("gone")
-' "$sandbox_id" 2>/dev/null || echo "gone"
-}
-
-sandbox_pool_ready_count() {
-	local template_name="$1"
-	"${QARAX[@]}" sandbox pool get --template "$template_name" -o json 2>/dev/null | python3 -c '
-import json, sys
-data = json.load(sys.stdin)
-print(data.get("current_ready", 0))
-' 2>/dev/null || echo "0"
-}
-
-wait_for_sandbox_pool_ready() {
-	local template_name="$1"
-	local target_ready="$2"
-	local timeout="$3"
-	local elapsed=0
-	local ready=0
-	while ((elapsed < timeout)); do
-		ready=$(sandbox_pool_ready_count "$template_name")
-		if ((ready >= target_ready)); then
-			echo ""
-			return 0
-		fi
-		echo -ne "\r[pool ready=${ready}/${target_ready}]   "
-		sleep 2
-		elapsed=$((elapsed + 2))
-	done
-	echo ""
-	return 1
-}
-
-delete_matching_names() {
-	local kind="$1"
-	local prefix="$2"
-	local names
-	names=$(list_with_prefix "$kind" "$prefix" name)
-	for name in $names; do
-		"${QARAX[@]}" "$kind" delete "$name" >/dev/null 2>&1 || true
+	for id in $(qarax sandbox pool list -o json |
+		jq -r --arg p "$PREFIX" '.[] | select(.vm_template_name | startswith($p)) | .vm_template_id'); do
+		qarax sandbox pool delete --template "$id" >/dev/null
 	done
 }
 
-wait_for_no_matching_ids() {
-	local kind="$1"
-	local prefix="$2"
-	local timeout="$3"
-	local elapsed=0
-	local ids
-	while ((elapsed < timeout)); do
-		ids=$(list_with_prefix "$kind" "$prefix" id)
-		[[ -z "$ids" ]] && return 0
-		sleep 2
-		elapsed=$((elapsed + 2))
-	done
-	return 1
-}
-
-wait_for_sandbox_status() {
-	local sandbox_id="$1"
-	local target="$2"
-	local timeout="${3:-$READY_TIMEOUT}"
-	local elapsed=0
-	local status
-	while ((elapsed < timeout)); do
-		status=$(sandbox_status "$sandbox_id")
-		case "$status" in
-		"$target")
-			echo ""
-			return 0
-			;;
-		error)
-			echo ""
-			"${QARAX[@]}" sandbox get "$sandbox_id" >&2 || true
-			return 1
-			;;
-		esac
-		echo -ne "\r[${status}]   "
-		sleep 2
-		elapsed=$((elapsed + 2))
-	done
-	echo ""
-	echo -e "${YELLOW}Timed out after ${timeout}s waiting for sandbox ${sandbox_id} to become ${target} (last status: ${status}).${NC}" >&2
-	return 1
-}
-
-ensure_clean_demo_state() {
-	local sandbox_id vm_id template
-	for sandbox_id in $(list_with_prefix sandbox "$SANDBOX_NAME_PREFIX-" id); do
-		"${QARAX[@]}" sandbox delete "$sandbox_id" >/dev/null 2>&1 || true
-	done
-	for vm_id in $(list_with_prefix vm "$SANDBOX_NAME_PREFIX-" id); do
-		"${QARAX[@]}" vm delete "$vm_id" >/dev/null 2>&1 || true
-	done
-	if ! wait_for_no_matching_ids sandbox "$SANDBOX_NAME_PREFIX-" 30; then
-		info "Some prior demo sandboxes are still terminating; continuing with fresh run suffixes."
-	fi
-	if ! wait_for_no_matching_ids vm "$SANDBOX_NAME_PREFIX-" 30; then
-		info "Some prior demo VMs are still terminating; continuing with fresh run suffixes."
-	fi
-	if [[ "$MANAGE_TEMPLATE_ASSETS" -eq 1 ]]; then
-		# A template with a sandbox pool cannot be deleted until the pool (and
-		# its standby VMs) is gone. This prefix also covers the CH templates.
-		for template in $(list_with_prefix vm-template "$MANAGED_TEMPLATE_PREFIX-" name); do
-			"${QARAX[@]}" sandbox pool delete --template "$template" >/dev/null 2>&1 || true
-			"${QARAX[@]}" vm-template delete "$template" >/dev/null 2>&1 || true
-		done
-		delete_matching_names boot-source "$MANAGED_BOOT_SOURCE_PREFIX-"
-		delete_matching_names storage-object "$MANAGED_KERNEL_PREFIX-"
-		delete_matching_names storage-object "$MANAGED_INITRAMFS_PREFIX-"
+# Get or create a 1 vCPU / 256 MiB template for HYPERVISOR.
+ensure_template() {
+	local name="$1" hypervisor="$2"
+	if exists vm-template "$name"; then
+		ok "Template ${name} exists"
+	else
+		run qarax vm-template create --name "$name" --hypervisor "$hypervisor" \
+			--vcpus 1 --memory 268435456
 	fi
 }
 
-cleanup_demo_resources() {
-	step "Cleaning prior demo resources..."
-	ensure_clean_demo_state
-	info "Demo resources removed (if any)."
-}
-
+# Milliseconds since the epoch. EPOCHREALTIME's decimal separator follows the
+# locale, so drop whatever it is.
 now_ms() {
-	python3 -c 'import time; print(time.perf_counter_ns() // 1_000_000)'
+	local us="${EPOCHREALTIME//[!0-9]/}"
+	echo $((us / 1000))
 }
 
-create_sandbox() {
-	local template_name="$1"
-	local name="$2"
-	local output
-	if ! output=$("${QARAX[@]}" sandbox create \
-		--template "$template_name" \
-		--name "$name" \
-		--idle-timeout "$IDLE_TIMEOUT" -o json); then
-		return 1
-	fi
-	printf '  %s\n' "$output" >&2
-	printf '%s' "$output" | json_field "id"
+# sandbox_ready ID: true once the sandbox is ready; dies if it failed to start.
+sandbox_ready() {
+	local json
+	json=$(qarax sandbox get "$1" -o json) || die "could not read sandbox $1"
+	case "$(jq -r .status <<<"$json")" in
+	ready) return 0 ;;
+	error) die "sandbox $1 failed to start: $(jq -r .error_message <<<"$json")" ;;
+	*) return 1 ;;
+	esac
+}
+
+# create_timed TEMPLATE NAME [ARGS...]: create a sandbox and poll it every
+# 0.1 s until it is ready. Sets SANDBOX_ID, SANDBOX_JOB and READY_MS.
+# (`sandbox create --wait` backs off to 2 s between polls: fine for waiting,
+# too coarse for comparing boot times.)
+create_timed() {
+	local template="$1" name="$2" start deadline json
+	shift 2
+	info "\$ qarax sandbox create --template ${template} --name ${name}${*:+ $*}"
+	start=$(now_ms)
+	json=$(qarax sandbox create --template "$template" --name "$name" "$@" -o json)
+	SANDBOX_ID=$(jq -r .id <<<"$json")
+	SANDBOX_JOB=$(jq -r .job_id <<<"$json")
+	deadline=$((SECONDS + READY_TIMEOUT))
+	until sandbox_ready "$SANDBOX_ID"; do
+		((SECONDS < deadline)) || die "sandbox ${name} not ready after ${READY_TIMEOUT}s"
+		sleep 0.1
+	done
+	READY_MS=$(($(now_ms) - start))
+}
+
+# READY means the sandbox VM is running, not that the guest has booted far
+# enough for its agent to listen: `sandbox exec` fails until then, so errors
+# are expected here.
+sandbox_agent_ready() {
+	qarax sandbox exec "$1" -- true >/dev/null 2>&1
+}
+
+pool_filled() {
+	local ready
+	ready=$(qarax sandbox pool get --template "$TEMPLATE_ID" -o json | jq .current_ready) ||
+		die "could not read the sandbox pool of ${TEMPLATE}"
+	((ready >= POOL_MIN_READY))
+}
+
+# sandbox_gone ID: true once GET /sandboxes/ID is a 404. (The CLI can't tell a
+# 404 from other errors, hence curl.) Any other status fails the demo, so an
+# API error isn't mistaken for a reap.
+sandbox_gone() {
+	local code
+	code=$(api_curl -s -o /dev/null -w '%{http_code}' "${SERVER}/sandboxes/$1")
+	case "$code" in
+	404) return 0 ;;
+	200) return 1 ;;
+	*) die "GET /sandboxes/$1 returned HTTP ${code}" ;;
+	esac
 }
 
 banner "Sandbox Demo"
 
-step "Checking qarax API..."
-if [[ "$CLEANUP_ONLY" -eq 1 ]]; then
-	require_server "$SERVER"
-else
-	ensure_stack "$SERVER"
-fi
-info "API reachable at $SERVER"
-
-if [[ "$CLEANUP_ONLY" -eq 1 ]]; then
-	banner "Cleanup"
-	cleanup_demo_resources
+if ((CLEANUP_ONLY)); then
+	require_server
+	require_cli
+	step "Removing the demo's sandboxes, sandbox pools and templates"
+	sweep sandbox "$PREFIX"
+	sweep vm "$PREFIX"
+	sweep_pools
+	sweep vm-template "$PREFIX"
+	ok "Done"
 	exit 0
 fi
 
+ensure_stack
+require_cli
+
+step "Clearing what an earlier run left behind"
+sweep sandbox "$PREFIX"
+sweep vm "$PREFIX"
+sweep_pools
+
+POOL_SET=0
+cleanup() {
+	if [[ "$KEEP" == 1 ]]; then
+		info "KEEP=1: leaving the ${PREFIX}* sandboxes and the sandbox pool in place ($0 --cleanup removes them)."
+		return
+	fi
+	step "Cleaning up"
+	sweep sandbox "$PREFIX"
+	if ((POOL_SET)); then
+		if [[ -n "$ORIG_MIN_READY" ]]; then
+			qarax sandbox pool set --template "$TEMPLATE_ID" --min-ready "$ORIG_MIN_READY" >/dev/null
+		else
+			qarax sandbox pool delete --template "$TEMPLATE_ID" >/dev/null
+		fi
+	fi
+	ok "Done"
+}
 trap cleanup EXIT
 
-if [[ "$MANAGE_TEMPLATE_ASSETS" -eq 1 ]]; then
-	info "Using demo-managed template assets ('$MANAGED_TEMPLATE_PREFIX-*')."
-else
-	info "Using caller-managed template '$TEMPLATE_NAME'."
+if ((MANAGED_TEMPLATES)); then
+	step "Templates (kept between runs)"
+	ensure_template "$FC_TEMPLATE" firecracker
+	ensure_template "$CH_TEMPLATE" cloud_hv
+fi
+TEMPLATE_ID=$(qarax vm-template get "$TEMPLATE" -o json | jq -r .id)
+# A caller's template may already have a pool; its min_ready is restored at exit.
+ORIG_MIN_READY=$(qarax sandbox pool list -o json |
+	jq -r --arg id "$TEMPLATE_ID" '.[] | select(.vm_template_id == $id) | .min_ready')
+
+step "Cold start: create ${SANDBOX1} from ${TEMPLATE}"
+create_timed "$TEMPLATE" "$SANDBOX1"
+COLD_MS="$READY_MS"
+ok "${SANDBOX1} ready in ${COLD_MS} ms"
+
+if ((MANAGED_TEMPLATES)); then
+	step "The same guest on Cloud Hypervisor, for comparison"
+	create_timed "$CH_TEMPLATE" "$CH_SANDBOX"
+	CH_MS="$READY_MS"
+	ok "${CH_SANDBOX} ready in ${CH_MS} ms"
+	run qarax sandbox delete "$CH_SANDBOX"
 fi
 
-next_step "VM Templates"
-
-cleanup_demo_resources
-echo ""
-
-if [[ "$MANAGE_TEMPLATE_ASSETS" -eq 1 ]]; then
-	step "Creating storage pool and boot source for the sandbox templates..."
-
-	if ! "${QARAX[@]}" storage-pool get "$POOL_NAME" >/dev/null 2>&1; then
-		run "${QARAX[@]}" storage-pool create \
-			--name "$POOL_NAME" \
-			--pool-type local \
-			--config "{\"path\":\"$POOL_PATH\"}" \
-			--host "$HOST_NAME"
-		echo ""
-	else
-		info "Storage pool '$POOL_NAME' already exists."
-		run "${QARAX[@]}" storage-pool attach-host "$POOL_NAME" --all
-	fi
-
-	# Kernel, initramfs, and boot source names carry this run's suffix, so they
-	# never exist yet (leftovers were swept by cleanup_demo_resources above).
-	run "${QARAX[@]}" transfer create \
-		--pool "$POOL_NAME" \
-		--name "$KERNEL_NAME" \
-		--source "$KERNEL_PATH" \
-		--object-type kernel \
-		--wait
-	KERNEL_CREATED=1
-	echo ""
-
-	run "${QARAX[@]}" transfer create \
-		--pool "$POOL_NAME" \
-		--name "$INITRAMFS_NAME" \
-		--source "$INITRAMFS_PATH" \
-		--object-type initrd \
-		--wait
-	INITRAMFS_CREATED=1
-	echo ""
-
-	run "${QARAX[@]}" boot-source create \
-		--name "$BOOT_SOURCE_NAME" \
-		--kernel "$KERNEL_NAME" \
-		--initrd "$INITRAMFS_NAME" \
-		--params "console=ttyS0"
-	BOOT_SOURCE_CREATED=1
-	echo ""
-
-	step "Creating Firecracker default sandbox template '$TEMPLATE_NAME'..."
-	echo ""
-	run "${QARAX[@]}" vm-template create \
-		--name "$TEMPLATE_NAME" \
-		--hypervisor firecracker \
-		--boot-source "$BOOT_SOURCE_NAME" \
-		--vcpus 1 \
-		--memory 268435456 \
-		--boot-mode kernel
-	TEMPLATE_CREATED=1
-	echo ""
-	TEMPLATE_ID=$("${QARAX[@]}" vm-template get "$TEMPLATE_NAME" -o json | json_field "id")
-	info "Firecracker template '$TEMPLATE_NAME' created (id=${TEMPLATE_ID})"
-
-	step "Creating Cloud Hypervisor comparison template '$CLOUDHV_TEMPLATE_NAME'..."
-	echo ""
-	run "${QARAX[@]}" vm-template create \
-		--name "$CLOUDHV_TEMPLATE_NAME" \
-		--hypervisor cloud_hv \
-		--boot-source "$BOOT_SOURCE_NAME" \
-		--vcpus 1 \
-		--memory 268435456 \
-		--boot-mode kernel
-	CLOUDHV_TEMPLATE_CREATED=1
-	echo ""
-	CLOUDHV_TEMPLATE_ID=$("${QARAX[@]}" vm-template get "$CLOUDHV_TEMPLATE_NAME" -o json | json_field "id")
-	info "Cloud Hypervisor comparison template '$CLOUDHV_TEMPLATE_NAME' created (id=${CLOUDHV_TEMPLATE_ID})"
-else
-	TEMPLATE_ID=$("${QARAX[@]}" vm-template get "$TEMPLATE_NAME" -o json 2>/dev/null | json_field "id") ||
-		die "Template '$TEMPLATE_NAME' not found"
-	info "Using caller-managed template '$TEMPLATE_NAME' (id=${TEMPLATE_ID})."
+step "Prewarm a pool of ${POOL_MIN_READY} standby sandbox(es) for ${TEMPLATE}"
+if [[ -n "$ORIG_MIN_READY" ]]; then
+	info "${TEMPLATE} already has a pool (min_ready=${ORIG_MIN_READY}); it is restored at exit."
 fi
+POOL_SET=1
+run qarax sandbox pool set --template "$TEMPLATE" --min-ready "$POOL_MIN_READY"
+info "The pool manager boots the standby in the background while the demo goes on."
 
-# Configure a prewarmed pool for TEMPLATE_NAME and wait until it has
-# POOL_MIN_READY standby sandboxes. A pre-existing pool on a caller-managed
-# template is restored to its original min_ready by the cleanup trap.
-configure_sandbox_pool() {
-	if ORIG_POOL_MIN_READY=$("${QARAX[@]}" sandbox pool get --template "$TEMPLATE_NAME" -o json 2>/dev/null | json_field "min_ready"); then
-		info "Template already has a sandbox pool (min_ready=${ORIG_POOL_MIN_READY}); it will be restored on exit."
-	else
-		ORIG_POOL_MIN_READY=""
-	fi
-	POOL_CONFIGURED=1
-	run "${QARAX[@]}" sandbox pool set --template "$TEMPLATE_NAME" --min-ready "$POOL_MIN_READY"
-	wait_for_sandbox_pool_ready "$TEMPLATE_NAME" "$POOL_MIN_READY" 120 ||
-		die "Sandbox pool for '$TEMPLATE_NAME' did not become ready"
-	echo ""
-	step "Current sandbox pool status:"
-	run "${QARAX[@]}" sandbox pool get --template "$TEMPLATE_NAME"
-	echo ""
-}
+step "Inspect ${SANDBOX1}"
+run qarax sandbox get "$SANDBOX1"
 
-if [[ "$MANAGE_TEMPLATE_ASSETS" -eq 1 ]]; then
-	next_step "Provisioning Benchmark"
-	info "Benchmarking time-to-ready with identical guest artifacts."
-	echo ""
+step "Run a command inside ${SANDBOX1}"
+info "exec and keepalive reset a sandbox's idle clock; get does not."
+run qarax sandbox keepalive "$SANDBOX1"
+wait_until "$GUEST_AGENT_TIMEOUT" sandbox_agent_ready "$SANDBOX1" ||
+	die "the guest agent in ${SANDBOX1} did not answer within ${GUEST_AGENT_TIMEOUT}s"
+run qarax sandbox exec "$SANDBOX1" -- uname -a
 
-	step "Creating Firecracker sandbox #1 (default backend)..."
-	echo ""
-	start_ms=$(now_ms)
-	SANDBOX1_ID=$(create_sandbox "$TEMPLATE_NAME" "$SANDBOX1_NAME")
-	wait_for_sandbox_status "$SANDBOX1_ID" ready || die "Sandbox $SANDBOX1_ID failed to become ready"
-	COLD_READY_MS=$(($(now_ms) - start_ms))
-	echo ""
-	info "Firecracker sandbox ready in ${COLD_READY_MS} ms"
-	echo ""
-
-	step "Creating Cloud Hypervisor comparison sandbox..."
-	echo ""
-	start_ms=$(now_ms)
-	CLOUDHV_SANDBOX_ID=$(create_sandbox "$CLOUDHV_TEMPLATE_NAME" "$CLOUDHV_SANDBOX_NAME")
-	wait_for_sandbox_status "$CLOUDHV_SANDBOX_ID" ready || die "Sandbox $CLOUDHV_SANDBOX_ID failed to become ready"
-	CH_READY_MS=$(($(now_ms) - start_ms))
-	echo ""
-	info "Cloud Hypervisor sandbox ready in ${CH_READY_MS} ms"
-	echo ""
-
-	if ((COLD_READY_MS < CH_READY_MS)); then
-		info "In this run, Firecracker reached READY $((CH_READY_MS - COLD_READY_MS)) ms faster than Cloud Hypervisor."
-	elif ((CH_READY_MS < COLD_READY_MS)); then
-		info "In this run, Cloud Hypervisor reached READY $((COLD_READY_MS - CH_READY_MS)) ms faster than Firecracker."
-	else
-		info "In this run, Firecracker and Cloud Hypervisor reached READY in the same time."
-	fi
-
-	next_step "Configure Prewarmed Sandbox Pool"
-	step "Keeping ${POOL_MIN_READY} Firecracker sandbox(es) ready for instant claims..."
-	echo ""
-	configure_sandbox_pool
-
-	next_step "Inspect Firecracker Sandbox"
-else
-	next_step "Create Sandbox"
-	step "Creating sandbox from template '$TEMPLATE_NAME' (idle timeout: ${IDLE_TIMEOUT}s)..."
-	echo ""
-	start_ms=$(now_ms)
-	SANDBOX1_ID=$(create_sandbox "$TEMPLATE_NAME" "$SANDBOX1_NAME")
-	wait_for_sandbox_status "$SANDBOX1_ID" ready || die "Sandbox $SANDBOX1_ID failed to become ready"
-	COLD_READY_MS=$(($(now_ms) - start_ms))
-	echo ""
-	info "Sandbox ready in ${COLD_READY_MS} ms"
-	echo ""
-
-	next_step "Configure Prewarmed Sandbox Pool"
-	step "Keeping ${POOL_MIN_READY} sandbox(es) ready for instant claims..."
-	echo ""
-	configure_sandbox_pool
-
-	next_step "Inspect Sandbox"
+step "Wait for the pool's standby sandbox"
+if ! wait_until "$READY_TIMEOUT" pool_filled; then
+	qarax sandbox pool get --template "$TEMPLATE"
+	die "the sandbox pool of ${TEMPLATE} did not fill within ${READY_TIMEOUT}s"
 fi
+run qarax sandbox pool get --template "$TEMPLATE"
 
-info "Sandbox 1 ID: $SANDBOX1_ID"
-echo ""
+step "Claim ${SANDBOX2} from the pool (idle timeout ${IDLE_TIMEOUT}s)"
+create_timed "$TEMPLATE" "$SANDBOX2" --idle-timeout "$IDLE_TIMEOUT"
+SANDBOX2_ID="$SANDBOX_ID"
+WARM_MS="$READY_MS"
+CLAIMED_AT=$SECONDS
+[[ "$(qarax job get "$SANDBOX_JOB" -o json | jq -r .job_type)" == sandbox_claim ]] ||
+	die "${SANDBOX2} was booted, not claimed from the pool"
+ok "${SANDBOX2} claimed from the pool, ready in ${WARM_MS} ms"
+info "The pool refills in the background:"
+run qarax sandbox pool get --template "$TEMPLATE"
 
-step "Sandbox 1 details:"
-run "${QARAX[@]}" sandbox get "$SANDBOX1_ID"
-echo ""
+step "Delete ${SANDBOX1} by hand"
+run qarax sandbox delete "$SANDBOX1"
+run qarax sandbox list
 
-next_step "Execute Inside Sandbox"
-step "Running a command inside sandbox #1..."
-echo ""
-run "${QARAX[@]}" sandbox exec "$SANDBOX1_ID" -- /bin/sh -c 'printf sandbox-demo && uname -s'
-echo ""
-
-if [[ -n "$CLOUDHV_SANDBOX_ID" ]]; then
-	step "Deleting the Cloud Hypervisor comparison sandbox..."
-	echo ""
-	run "${QARAX[@]}" sandbox delete "$CLOUDHV_SANDBOX_ID"
-	CLOUDHV_SANDBOX_ID=""
-	echo ""
-fi
-
-next_step "Claim a Prewarmed Sandbox"
-info "The second sandbox should claim the already-running standby VM from the pool."
-echo ""
-
-step "Creating sandbox #2 from the prewarmed pool..."
-echo ""
-start_ms=$(now_ms)
-SANDBOX2_ID=$(create_sandbox "$TEMPLATE_NAME" "$SANDBOX2_NAME")
-wait_for_sandbox_status "$SANDBOX2_ID" ready || die "Sandbox $SANDBOX2_ID failed to become ready"
-WARM_READY_MS=$(($(now_ms) - start_ms))
-echo ""
-info "Prewarmed sandbox ready in ${WARM_READY_MS} ms"
-info "Sandbox 2 ID: $SANDBOX2_ID"
-echo ""
-
-step "Sandbox pool after the claim:"
-run "${QARAX[@]}" sandbox pool get --template "$TEMPLATE_NAME"
-echo ""
-
-step "All sandboxes:"
-run "${QARAX[@]}" sandbox list
-echo ""
-
-next_step "Manual Delete"
-
-step "Deleting sandbox #1 (${SANDBOX1_ID::8}...) manually..."
-echo ""
-run "${QARAX[@]}" sandbox delete "$SANDBOX1_ID"
-SANDBOX1_ID=""
-echo ""
-
-step "Remaining sandboxes:"
-run "${QARAX[@]}" sandbox list
-echo ""
-
-next_step "Auto-Reap via Idle Timeout"
-
-max_wait=$((IDLE_TIMEOUT + 60))
-info "Sandbox #2 has an idle timeout of ${IDLE_TIMEOUT}s."
-info "The sandbox reaper runs periodically (every 10s by default) and destroys it once the timeout expires."
-info "Waiting for sandbox #2 to disappear (up to ${max_wait}s)..."
-echo ""
-
-elapsed=0
-while true; do
-	status=$(sandbox_status "$SANDBOX2_ID")
-	case "$status" in
-	gone | destroying)
-		echo -e "  ${GREEN}✓ Sandbox reaped (${elapsed}s)${NC}"
-		SANDBOX2_ID=""
-		break
-		;;
-	esac
-	[[ $elapsed -ge $max_wait ]] && {
-		echo -e "  ${YELLOW}⚠ Sandbox still alive after ${max_wait}s — leaving cleanup to the trap${NC}"
-		break
-	}
-	sleep 5
-	elapsed=$((elapsed + 5))
-	echo -ne "  \r  ${DIM}${status} … ${elapsed}s / ${max_wait}s${NC}   "
-done
-echo ""
+step "Wait for the reaper to remove ${SANDBOX2}"
+info "The reaper runs every 10s (sandbox.reaper_interval_secs) and deletes sandboxes idle for longer than their timeout."
+wait_until $((IDLE_TIMEOUT + 30)) sandbox_gone "$SANDBOX2_ID" ||
+	die "${SANDBOX2} still exists $((SECONDS - CLAIMED_AT))s after it was claimed"
+ok "${SANDBOX2} reaped $((SECONDS - CLAIMED_AT))s after it was claimed"
 
 banner "Demo Complete"
-
-echo -e "${GREEN}What we demonstrated:${NC}"
-if [[ "$MANAGE_TEMPLATE_ASSETS" -eq 1 ]]; then
-	echo "  ✓ Create sandbox templates from a shared boot source"
-	echo "  ✓ Default managed sandboxes to Firecracker"
-	echo "  ✓ Benchmark Firecracker vs Cloud Hypervisor time-to-ready"
-else
-	echo "  ✓ Create a sandbox from an existing template"
+echo "Time from 'sandbox create' to ready in this run:"
+printf '  %-30s %6s ms\n' "${TEMPLATE}, booted" "$COLD_MS"
+if ((MANAGED_TEMPLATES)); then
+	printf '  %-30s %6s ms\n' "${CH_TEMPLATE}, booted" "$CH_MS"
 fi
-echo "  ✓ Prewarm a sandbox pool"
-echo "  ✓ Inspect a running sandbox"
-echo "  ✓ Execute a command inside the sandbox over the guest agent"
-echo "  ✓ Claim a second sandbox from the prewarmed pool"
-echo "  ✓ Delete a sandbox manually"
-echo "  ✓ Watch idle-timeout auto-reap kick in"
+printf '  %-30s %6s ms\n' "${TEMPLATE}, claimed from pool" "$WARM_MS"
 echo ""
-echo "Measured performance in this run:"
-if [[ -n "$CH_READY_MS" ]]; then
-	echo "  Firecracker ready time:      ${COLD_READY_MS} ms"
-	echo "  Cloud Hypervisor ready time: ${CH_READY_MS} ms"
-else
-	echo "  Cold sandbox ready time:     ${COLD_READY_MS} ms"
-fi
-echo "  Prewarmed claim ready time:  ${WARM_READY_MS} ms"
-echo ""
-echo "Useful commands (export QARAX_TOKEN first):"
-echo "  qarax sandbox list                  # list all sandboxes"
-echo "  qarax sandbox get <id>              # inspect a sandbox"
-echo "  qarax sandbox create --template T   # create a new sandbox"
-echo "  qarax sandbox pool get --template T # inspect the prewarmed pool"
-echo "  qarax sandbox exec <id> -- cmd      # run a command inside a sandbox"
-echo "  qarax sandbox keepalive <id>        # reset the idle timer"
-echo "  qarax sandbox delete <id>           # delete a sandbox immediately"
-echo "  qarax vm-template list              # list all VM templates"
+echo "Useful commands:"
+echo "  qarax sandbox create --template T --wait   # create a sandbox and wait until it is ready"
+echo "  qarax sandbox exec <name> -- cmd           # run a command inside a sandbox"
+echo "  qarax sandbox keepalive <name>             # reset the idle clock"
+echo "  qarax sandbox pool get --template T        # inspect a prewarmed pool"
+echo "  $0 --cleanup        # remove the demo's templates too"

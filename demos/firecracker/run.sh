@@ -1,41 +1,42 @@
 #!/usr/bin/env bash
 #
-# Demo: Firecracker backend integration
+# Demo: Firecracker backend
 #
-# Exercises a real Firecracker VM lifecycle end-to-end:
-#   1) Create VM with --hypervisor firecracker
-#   2) Start VM
-#   3) Pause VM
-#   4) Resume VM
-#   5) Stop VM
-#   6) Delete VM (cleanup)
+# Runs a VM under Firecracker (--hypervisor firecracker) through its
+# lifecycle: create, start, pause, resume, stop. Shows the VM's hypervisor
+# and the guest's boot output from Firecracker's serial console.
 #
 # Prerequisites:
-#   - qarax stack running (make run-local), or let the script start it
+#   - qarax stack running (make run-local; started automatically if not up)
 #   - Firecracker on qarax-node (the local qarax-node image ships it)
+#   - jq
 #
-# The script builds the qarax CLI first; set SKIP_BUILD=1 to use an existing
-# binary (target/ or PATH).
+# Usage:
+#   ./demos/firecracker/run.sh [--server URL] [--vcpus N] [--memory MiB]
+#   ./demos/firecracker/run.sh --cleanup   # delete what an earlier run left behind
+#   KEEP=1 ./demos/firecracker/run.sh      # leave the VM in place
+#   SKIP_BUILD=1 ./demos/firecracker/run.sh  # use an existing qarax CLI build
+#
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+# shellcheck source=demos/lib.sh
 source "${REPO_ROOT}/demos/lib.sh"
 
-SERVER="${QARAX_SERVER:-http://localhost:8000}"
-VM_NAME="fc-demo-$(date +%s)-$$"
+PREFIX="demo-firecracker-"
+VM_NAME="${PREFIX}vm"
 VCPUS=1
 MEMORY_MIB=128
-NO_CLEANUP=0
+# qarax-node's --runtime-dir default, where Firecracker's log (with the
+# guest's serial console) lives.
+NODE_RUNTIME_DIR="/var/lib/qarax/vms"
+CLEANUP_ONLY=0
 
 while [[ $# -gt 0 ]]; do
 	case "$1" in
 	--server)
 		SERVER="$2"
-		shift 2
-		;;
-	--name)
-		VM_NAME="$2"
 		shift 2
 		;;
 	--vcpus)
@@ -46,8 +47,8 @@ while [[ $# -gt 0 ]]; do
 		MEMORY_MIB="$2"
 		shift 2
 		;;
-	--no-cleanup)
-		NO_CLEANUP=1
+	--cleanup)
+		CLEANUP_ONLY=1
 		shift
 		;;
 	--help | -h)
@@ -55,112 +56,106 @@ while [[ $# -gt 0 ]]; do
 		echo ""
 		echo "Options:"
 		echo "  --server URL      qarax API URL (default: \$QARAX_SERVER or http://localhost:8000)"
-		echo "  --name NAME       VM name (default: fc-demo-<timestamp>)"
 		echo "  --vcpus N         vCPU count (default: 1)"
 		echo "  --memory MiB      memory in MiB (default: 128)"
-		echo "  --no-cleanup      leave VM after demo"
+		echo "  --cleanup         Delete the demo's VM, then exit"
+		echo ""
+		echo "KEEP=1 leaves the VM in place at exit."
 		exit 0
 		;;
 	*)
-		echo "Unknown option: $1" >&2
-		exit 1
+		die "Unknown option: $1"
 		;;
 	esac
 done
 
-MEMORY_BYTES=$((MEMORY_MIB * 1024 * 1024))
+expect_status() {
+	local status
+	status=$(vm_status "$VM_NAME")
+	[[ "$status" == "$1" ]] || die "VM '${VM_NAME}' is '${status}', expected '$1'"
+	ok "status: ${status}"
+}
 
-if [[ -z "${SKIP_BUILD:-}" ]]; then
-	echo -e "${GREEN}▸${NC} Building qarax CLI..."
-	cargo build -p cli >/dev/null
-fi
-
-QARAX_BIN="$(find_qarax_bin)"
-[[ -n "$QARAX_BIN" ]] || die "qarax CLI not found"
-QARAX="$QARAX_BIN --server $SERVER"
-
-cleanup() {
-	if [[ "$NO_CLEANUP" -eq 1 ]]; then
+# `qarax vm console` reads Cloud Hypervisor's console log. Firecracker writes
+# the guest's serial console into its own log in the node's runtime dir, so
+# read that from the node container (local stack only).
+show_guest_console() {
+	local address service log
+	address=$(qarax host get "$(jq -r '.host_id' <<<"$VM_JSON")" -o json | jq -r '.address')
+	if ! service=$(node_service_for_address "$address"); then
+		warn "Host ${address} is not a local compose node; skipping the guest console."
 		return 0
 	fi
-	$QARAX vm force-stop "$VM_NAME" >/dev/null 2>&1 || true
-	$QARAX vm delete "$VM_NAME" >/dev/null 2>&1 || true
+	log="${NODE_RUNTIME_DIR}/$(jq -r '.id' <<<"$VM_JSON").fc.log"
+	info "${service}:${log}"
+	wait_until 30 node_exec "$service" grep -q 'qarax-init: starting' "$log" ||
+		die "The guest did not reach qarax-init within 30s; see ${log} in the ${service} container"
+	node_exec "$service" sh -c 'grep -m1 "Linux version" "$1"; grep -m1 "qarax-init: starting" "$1"' _ "$log" |
+		tr -d '\r' | sed 's/^/    /'
+}
+
+command -v jq >/dev/null 2>&1 || die "jq is required"
+
+ensure_stack
+require_cli
+
+if ((CLEANUP_ONLY)); then
+	sweep vm "$PREFIX"
+	ok "Removed the Firecracker demo's VM"
+	exit 0
+fi
+
+banner "Firecracker Demo"
+
+step "Removing leftovers from earlier runs..."
+sweep vm "$PREFIX"
+
+cleanup() {
+	echo
+	if [[ "$KEEP" == 1 ]]; then
+		info "KEEP=1: leaving VM '${VM_NAME}' in place (remove it with: $0 --cleanup)"
+		return
+	fi
+	step "Cleaning up..."
+	sweep vm "$PREFIX"
+	info "Done."
 }
 trap cleanup EXIT
 
-json_status() {
-	python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))'
-}
+step "Checking for a Firecracker-capable host..."
+qarax host list -o json |
+	jq -r '.[] | select(.status == "up") | "  \(.name): Firecracker \(.firecracker_version // "not installed")"'
+qarax host list -o json | jq -e 'any(.[]; .status == "up" and .firecracker_version != null)' >/dev/null ||
+	die "No UP host reports a Firecracker version; qarax-node needs /usr/local/bin/firecracker and /dev/kvm"
 
-wait_for_status() {
-	local vm="$1"
-	local target="$2"
-	local timeout="${3:-60}"
-	local elapsed=0
-	local current
-
-	while ((elapsed < timeout)); do
-		if ! current=$($QARAX vm get "$vm" -o json 2>/dev/null | json_status); then
-			current="unknown"
-		fi
-		if [[ "$current" == "$target" ]]; then
-			echo -e "  ${GREEN}✓${NC} status=${current}"
-			return 0
-		fi
-		echo -ne "  ${DIM}waiting for ${target} (current=${current}, ${elapsed}s/${timeout}s)${NC}\r"
-		sleep 2
-		elapsed=$((elapsed + 2))
-	done
-	echo ""
-	$QARAX vm get "$vm" >&2 || true
-	die "Timed out waiting for VM '${vm}' to reach status '${target}' (last status: ${current}).\nCheck the node logs: docker compose -f e2e/docker-compose.yml logs qarax-node"
-}
-
-echo -e "${BOLD}${CYAN}=== Firecracker Integration Demo ===${NC}"
-ensure_stack "$SERVER"
-
-echo -e "${GREEN}▸${NC} Checking for a Firecracker-capable host..."
-FC_HOSTS=$($QARAX host list -o json | python3 -c 'import json,sys; print(sum(1 for h in json.load(sys.stdin) if h.get("status","").lower() == "up" and h.get("firecracker_version")))')
-if [[ "$FC_HOSTS" -eq 0 ]]; then
-	echo -e "  ${YELLOW}No 'up' host reports a Firecracker version; VM creation may fail.${NC}"
-fi
-
-echo -e "${GREEN}▸${NC} Creating Firecracker VM: ${BOLD}${VM_NAME}${NC}"
-if ! $QARAX vm create \
+step "Creating a Firecracker VM..."
+run qarax vm create \
 	--name "$VM_NAME" \
 	--hypervisor firecracker \
 	--vcpus "$VCPUS" \
-	--memory "$MEMORY_BYTES" >/dev/null; then
-	die "Failed to create Firecracker VM. Ensure qarax-node has /usr/local/bin/firecracker and KVM access."
-fi
+	--memory "${MEMORY_MIB}MiB"
 
-wait_for_status "$VM_NAME" "created" 30
+step "Starting the VM..."
+run qarax vm start "$VM_NAME"
+run qarax vm get "$VM_NAME"
+VM_JSON=$(qarax vm get "$VM_NAME" -o json)
+[[ "$(jq -r '.hypervisor' <<<"$VM_JSON")" == "firecracker" ]] ||
+	die "VM '${VM_NAME}' is not a Firecracker VM"
 
-echo -e "${GREEN}▸${NC} Starting VM"
-$QARAX vm start "$VM_NAME" >/dev/null
-wait_for_status "$VM_NAME" "running" 60
+step "Guest boot output from Firecracker's serial console..."
+show_guest_console
 
-echo -e "${GREEN}▸${NC} Pausing VM"
-$QARAX vm pause "$VM_NAME" >/dev/null
-wait_for_status "$VM_NAME" "paused" 30
+step "Pausing the VM..."
+run qarax vm pause "$VM_NAME"
+expect_status paused
 
-echo -e "${GREEN}▸${NC} Resuming VM"
-$QARAX vm resume "$VM_NAME" >/dev/null
-wait_for_status "$VM_NAME" "running" 30
+step "Resuming the VM..."
+run qarax vm resume "$VM_NAME"
+expect_status running
 
-echo -e "${GREEN}▸${NC} Stopping VM"
-$QARAX vm stop "$VM_NAME" >/dev/null
-wait_for_status "$VM_NAME" "shutdown" 60
+step "Stopping the VM..."
+run qarax vm stop "$VM_NAME"
+expect_status shutdown
 
-echo -e "${GREEN}▸${NC} Final VM state"
-$QARAX vm get "$VM_NAME"
-
-if [[ "$NO_CLEANUP" -eq 1 ]]; then
-	echo -e "${YELLOW}Leaving VM '${VM_NAME}' as requested (--no-cleanup).${NC}"
-else
-	echo -e "${GREEN}▸${NC} Cleaning up VM"
-	$QARAX vm delete "$VM_NAME" >/dev/null || true
-	trap - EXIT
-fi
-
-echo -e "${GREEN}Demo complete.${NC}"
+banner "Demo Complete"
+ok "Created, started, paused, resumed and stopped a Firecracker VM"

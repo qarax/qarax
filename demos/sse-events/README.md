@@ -1,22 +1,36 @@
 # SSE Event Stream Demo
 
-Demonstrates the `GET /events` endpoint which streams VM status-change events
-via Server-Sent Events (SSE).
+Demonstrates the `GET /events` endpoint, which streams VM status changes as
+Server-Sent Events (SSE).
 
 ## What it shows
 
-1. Opens two background SSE subscriptions before any VM activity:
-   - An unfiltered stream that captures every `vm.status_changed` event
-   - A filtered stream (`?status=running`) that captures only transitions to `running`
-2. Runs a VM through a full lifecycle: create → start → stop → delete
-3. Displays the captured events, showing status transitions with timestamps
-4. Prints the raw SSE wire format so you can see the exact protocol framing
+1. Opens two SSE subscriptions before any VM activity:
+   - the full stream, which receives every `vm.status_changed` event
+   - a filtered stream (`?status=running`), which receives only transitions to `running`
+2. Creates a VM, then starts, pauses, resumes and stops it, printing each event
+   as it arrives on each stream:
+
+   | Step | Full stream | `?status=running` |
+   |------|-------------|-------------------|
+   | create | (no event: creation is not a status change) | |
+   | start | `created→pending`, `pending→running` | `pending→running` |
+   | pause | `running→paused` | |
+   | resume | `paused→running` | `paused→running` |
+   | stop | `running→shutdown` | |
+
+3. Checks that each stream delivered exactly those transitions for the demo VM
+   (the demo fails otherwise), then prints one event in its raw wire format.
+
+Deleting a VM emits no SSE event (lifecycle hooks do receive a `deleted`
+delivery; see `demos/hooks`), so the VM is deleted on exit rather than as a
+lifecycle step.
 
 ## Prerequisites
 
 - qarax stack running: `make run-local` (the script starts it via `./hack/run-local.sh` if it is not up)
-- `curl` and `jq` installed
-- `qarax` CLI on PATH (or it will be built automatically)
+- `curl` and `jq`
+- `qarax` CLI: built from this checkout when cargo is available, else taken from `PATH`
 
 If your server uses a token other than the local default, export `QARAX_TOKEN`.
 
@@ -25,7 +39,15 @@ If your server uses a token other than the local default, export `QARAX_TOKEN`.
 ```bash
 ./demos/sse-events/run.sh
 ./demos/sse-events/run.sh --server http://localhost:8000
+
+# Leave the VM (demo-sse-vm) in place
+KEEP=1 ./demos/sse-events/run.sh
+
+# Remove what an earlier run left behind
+./demos/sse-events/run.sh --cleanup
 ```
+
+Each run first deletes VMs left by an earlier run (names start with `demo-sse-`).
 
 ## Query parameter filters
 
@@ -45,7 +67,7 @@ Examples:
 # All events
 curl -N -H "Authorization: Bearer $QARAX_TOKEN" http://localhost:8000/events
 
-# Only start events
+# Only transitions to running
 curl -N -H "Authorization: Bearer $QARAX_TOKEN" 'http://localhost:8000/events?status=running'
 
 # Events for a single VM
@@ -60,8 +82,8 @@ curl -N -H "Authorization: Bearer $QARAX_TOKEN" 'http://localhost:8000/events?vm
 ```
 event: vm.status_changed
 id: <vm-uuid>
-data: {"event":"vm.status_changed","timestamp":"2026-03-26T12:00:00Z","vm_id":"...","vm_name":"...","previous_status":"created","new_status":"running","host_id":"...","tags":[]}
+data: {"event":"vm.status_changed","timestamp":"2026-03-26T12:00:00.123456789+00:00","vm_id":"...","vm_name":"...","previous_status":"pending","new_status":"running","host_id":"...","tags":[]}
 ```
 
-The server sends a keep-alive comment (`: keep-alive`) every 15 seconds to
-prevent proxy timeouts on idle streams.
+The server sends a keep-alive comment every 15 seconds to prevent proxy
+timeouts on idle streams.

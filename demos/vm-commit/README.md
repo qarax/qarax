@@ -6,21 +6,23 @@ Demonstrates the `vm commit` workflow: converting an OCI image-backed VM
 ## What it does
 
 1. Ensures the qarax stack is running (starts it via `./hack/run-local.sh` if not)
-2. Uses an UP host, or registers and initialises qarax-node if there is none
-3. Creates an OverlayBD storage pool backed by the local test registry
-4. Creates a Local storage pool for the committed raw disk
-5. Attaches both pools to the host
-6. Pushes `busybox:latest` to the local registry
-7. Creates a VM with `--image-ref` pointing at the pushed image (async job)
-8. Runs `vm commit` to byte-copy the OverlayBD block device to a raw disk
-9. Verifies that `image_ref` is cleared and the committed disk object exists
+2. Creates a Local storage pool `demo-commit-local` on the first UP host for the
+   committed raw disk (reused on later runs)
+3. Creates a VM with `--image-ref public.ecr.aws/docker/library/busybox:latest`;
+   qarax imports the image into the shared `overlaybd-pool`
+4. Runs `vm commit` to byte-copy the OverlayBD block device to a 1 GiB raw disk
+5. Verifies that `image_ref` is cleared and that the committed disk object exists
+6. Starts the committed VM and checks it is running
+
+Each check stops the demo with an error if it fails.
 
 ## Prerequisites
 
-- Linux host with `/dev/kvm` (KVM virtualisation)
-- Docker (the demo pushes to the stack's local registry on `localhost:5001`)
-- `jq`, `curl`
-- `qarax` CLI (built automatically with `cargo` if missing)
+- qarax stack running: `make run-local` (the script starts it if it is not running).
+  It registers the host and creates `overlaybd-pool`, which this demo uses and
+  never deletes.
+- `cargo` (the script builds the `qarax` CLI) or a `qarax` CLI on PATH
+- `jq`
 
 If your server uses a token other than the local default, export `QARAX_TOKEN`.
 
@@ -33,13 +35,15 @@ If your server uses a token other than the local default, export `QARAX_TOKEN`.
 # Custom server URL
 QARAX_SERVER=http://localhost:8000 ./demos/vm-commit/run.sh
 
-# Tear down the VM, storage objects and pools left by a previous run
+# Delete the VM, the committed disk and the local pool
 ./demos/vm-commit/run.sh --cleanup
 ```
 
-The demo leaves its resources in place so you can explore them, and it is safe
-to re-run: existing pools and the VM are reused, and the commit step is skipped
-if the VM was already committed.
+The demo leaves the VM running and the pool in place so you can explore them. A
+re-run deletes the previous VM and its committed disk first, so every run commits a
+fresh VM. Both the re-run and `--cleanup` also remove a `demo-commit-obd` OverlayBD
+pool if one exists: qarax serves `--image-ref` VMs from the first OverlayBD pool by
+name, so that pool would take over every other demo's OCI VMs.
 
 ## Environment variables
 
@@ -47,7 +51,3 @@ if the VM was already committed.
 |---|---|---|
 | `QARAX_SERVER` | `http://localhost:8000` | qarax API URL |
 | `QARAX_TOKEN` | `e2e-test-token` | API bearer token |
-| `REGISTRY_PUSH_URL` | `localhost:5001` | Registry URL for docker push (host-side) |
-| `REGISTRY_INTERNAL_URL` | `registry:5000` | Registry URL as seen inside Docker network |
-| `QARAX_NODE_ADDRESS` | `qarax-node` | Node hostname (inside Docker network) |
-| `QARAX_NODE_PORT` | `50051` | Node gRPC port |

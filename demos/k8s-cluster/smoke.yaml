@@ -20,7 +20,7 @@ spec:
     spec:
       containers:
       - name: hello
-        image: 10.101.0.1:5000/nginxdemos/hello:plain-text
+        image: docker.io/nginxdemos/hello:plain-text
         imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 80

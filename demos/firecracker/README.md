@@ -1,17 +1,31 @@
 # Firecracker Demo
 
-Run a VM on Qarax using the **Firecracker** backend and exercise the full lifecycle:
-create → start → pause → resume → stop → delete.
+Run a VM on qarax with the **Firecracker** backend and exercise its lifecycle:
+create → start → pause → resume → stop.
+
+The demo shows:
+
+- each UP host's Firecracker version (it fails if none has Firecracker)
+- `qarax vm get`, whose `Hypervisor:` line reads `firecracker`
+- the guest's boot output (the kernel's `Linux version` line and `qarax-init`
+  starting), read from Firecracker's log on the node, which carries the guest
+  serial console. `qarax vm console` only reads Cloud Hypervisor's console log,
+  so the demo reads `/var/lib/qarax/vms/<vm-id>.fc.log` in the node container.
+  On a stack whose node isn't a local compose container (`make run-local VM=1`)
+  this step is skipped with a warning.
+- the VM's status after pause, resume and stop (the demo fails if it isn't
+  `paused`, `running`, `shutdown`)
 
 ## Prerequisites
 
-- qarax stack running (`make run-local`) or let the script auto-start it
-- Rust toolchain: the script runs `cargo build -p cli` first. Set `SKIP_BUILD=1`
-  to use an existing `qarax` binary (under `target/` or on PATH) instead.
+- qarax stack running (`make run-local`), or let the script start it
+- `jq`
 - Firecracker available on qarax-node (`/usr/local/bin/firecracker`; the local
-  qarax-node image ships it). The script warns if no `up` host reports a
-  Firecracker version.
-- If your server uses a token other than the local default, export `QARAX_TOKEN`
+  qarax-node image ships it)
+- `qarax` CLI: built from this checkout when cargo is available, else taken
+  from `PATH`. Set `SKIP_BUILD=1` to use an existing build.
+
+If your server uses a token other than the local default, export `QARAX_TOKEN`.
 
 ## Usage
 
@@ -21,11 +35,11 @@ create → start → pause → resume → stop → delete.
 # Custom API endpoint
 ./demos/firecracker/run.sh --server http://localhost:8000
 
-# Keep VM for inspection
-./demos/firecracker/run.sh --no-cleanup
+# Keep the VM (demo-firecracker-vm) for inspection
+KEEP=1 ./demos/firecracker/run.sh
 
-# Skip the CLI build
-SKIP_BUILD=1 ./demos/firecracker/run.sh
+# Remove what an earlier run left behind
+./demos/firecracker/run.sh --cleanup
 ```
 
 ## Options
@@ -33,15 +47,12 @@ SKIP_BUILD=1 ./demos/firecracker/run.sh
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--server URL` | `$QARAX_SERVER` or `http://localhost:8000` | qarax API URL |
-| `--name NAME` | `fc-demo-<timestamp>-<pid>` | VM name |
 | `--vcpus N` | `1` | vCPU count |
 | `--memory MiB` | `128` | Memory in MiB |
-| `--no-cleanup` | off | Leave VM after demo (also on failure) |
+| `--cleanup` | | Delete the demo's VM, then exit |
 
-## Notes
+## Cleanup
 
-- This demo explicitly uses `--hypervisor firecracker`.
-- It waits for each lifecycle state transition before continuing and prints the
-  VM details if a transition times out.
-- Unless `--no-cleanup` is set, the VM is force-stopped and deleted on exit,
-  including when a step fails.
+Each run first deletes VMs left by an earlier run (names start with
+`demo-firecracker-`), and deletes its VM on exit, including when a step
+fails, unless `KEEP=1` is set.
