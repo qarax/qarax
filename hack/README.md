@@ -1,112 +1,122 @@
-# Qarax Local Testing Scripts
+# Local Stack Scripts
 
-Quick reference for running qarax locally with VMs.
+`hack/run-local.sh` runs the qarax stack locally in Docker: the control plane,
+qarax-node with KVM passthrough, Postgres and an OCI registry. It is the compose
+stack the e2e tests use (`e2e/docker-compose.yml`, project `e2e`).
 
 ## Quick Start
 
 ```bash
-# Start the stack only (registers host, no VM)
-./hack/run-local.sh
-
-# Start the stack and create an example VM with SSH access
-./hack/run-local.sh --with-vm
-
-# Cleanup everything
-./hack/run-local.sh --cleanup
+make run-local        # build, start, register host local-node, create overlaybd-pool
+make run-local VM=1   # same, but qarax-node runs in a libvirt VM (see below)
+make stop-local       # remove the stack and its volumes
 ```
 
-## Host Deploy Test (libvirt VM)
+Re-running `make run-local` is cheap: cargo and the image builds are no-ops when
+nothing changed, and Compose only recreates containers whose image or config
+changed, so running VMs survive.
 
-To test `POST /hosts/{host_id}/deploy` against a real VM, use:
+Then try the CLI or a demo (`demos/README.md`):
 
 ```bash
-# Start stack automatically if needed
-bash ./hack/test-host-deploy-libvirt.sh --start-stack
-
-# Keep the VM running for debugging
-bash ./hack/test-host-deploy-libvirt.sh --start-stack --keep-vm
-
-# Cleanup VM created by the script
-bash ./hack/test-host-deploy-libvirt.sh --cleanup
+export QARAX_TOKEN=e2e-test-token
+qarax vm create --name alpine --image-ref public.ecr.aws/docker/library/alpine:latest
+qarax vm start alpine
+./demos/vm-exec/run.sh
 ```
 
-This test provisions an Ubuntu cloud VM via libvirt + cloud-init, configures SSH,
-adds a `bootc` stub command, exposes a qarax-node stub on port `50051`, triggers
-`/hosts/{host_id}/deploy` with `reboot=true`, and waits until host status becomes `up`.
-
-Prerequisites for this script:
-- libvirt + QEMU (`virsh`, `virt-install`, `qemu-img`)
-- cloud-init tooling (`cloud-localds`, usually package `cloud-image-utils`)
-- local Docker stack access (the script validates connectivity from qarax container)
-
-## Flags
-
-- `--with-vm`: Create and start an example Alpine Linux VM with SSH. Builds a rootfs on first run (takes a few minutes).
-- `--cleanup`: Stop and remove the Docker stack, volumes, and cached boot images.
+The default stack runs one node. Two-host demos start the second node
+container (`qarax-node-2`, compose profile `multi-node`) themselves.
 
 ## Environment Variables
 
-- `REBUILD=1`: Force rebuild of Docker images and qarax-node binary.
-- `SKIP_BUILD=1`: Skip building the qarax-node binary (use existing).
+- `SKIP_BUILD=1`: use the existing release binaries instead of running cargo.
+- `REBUILD=1`: rebuild the Docker images without cache.
+- `QARAX_TOKEN` / `QARAX_TEST_TOKEN`: API token (default `e2e-test-token`).
+
+## Host Deploy Test (libvirt VM)
+
+`hack/test-host-deploy-libvirt.sh` runs qarax-node in a libvirt VM and registers
+it through the real host-deploy flow: `qarax host deploy` SSHes into the VM,
+runs `bootc switch` to the node appliance image (`deployments/Containerfile.qarax-vmm`
+plus a thin test layer) and reboots it, then the host `libvirt-node` comes back `up`.
+`make run-local VM=1` (`./hack/run-local.sh --vm`) runs it with `--keep-vm` to
+put the local stack's node in a VM instead of a container.
+
+```bash
+# Full deploy test on a new VM, destroyed on exit (stack must be running)
+bash ./hack/test-host-deploy-libvirt.sh
+
+# Same, starting registry/postgres/qarax (vm-mode overlay) if they aren't up
+bash ./hack/test-host-deploy-libvirt.sh --start-stack
+
+# Leave the node running; a re-run reuses it and skips the deploy when its image is current
+bash ./hack/test-host-deploy-libvirt.sh --keep-vm
+bash ./hack/test-host-deploy-libvirt.sh --keep-vm --fresh   # recreate it instead
+
+# Destroy the VM and delete host libvirt-node
+bash ./hack/test-host-deploy-libvirt.sh --cleanup
+```
+
+Prerequisites:
+- libvirt + QEMU (`virsh`, `virt-install`, `qemu-img`) with the `default` NAT
+  network, usable by your user on `qemu:///system`
+- rootful podman through `sudo` (image builds and bootc-image-builder)
+- Docker with Compose, `jq`, `curl`, `ssh-keygen`
+- release binaries (`cargo build --release -p qarax -p qarax-node -p qarax-init -p cli`;
+  `make run-local` and `--start-stack` build them)
+
+Disks and the generated test layer are cached in `/var/lib/libvirt/images/qarax-dev`.
+See [docs/DEVELOPMENT.md](../docs/DEVELOPMENT.md#host-deploy-testing-with-libvirt)
+for how the images, the cache and VM reuse work, and the environment variables.
 
 ## Networking
 
-TAP devices are created and managed automatically by qarax-node. When a VM with a network interface is created, qarax-node creates a TAP device named `qt<vm-id-prefix>n<nic-index>` (e.g. `qt24b6061en0`). The device is deleted when the VM is deleted.
+qarax-node creates a TAP device per NIC, named `qt<vm-id-prefix>n<nic-index>`
+(e.g. `qt24b6061en0`), and deletes it with the VM:
 
-You can verify with:
 ```bash
 docker compose -f e2e/docker-compose.yml exec qarax-node ip link show type tun
-
-VM_ID=<your-vm-id>
-docker compose -f e2e/docker-compose.yml exec qarax-node \
-  curl -s --unix-socket /var/lib/qarax/vms/${VM_ID}.sock \
-  http://localhost/api/v1/vm.info | jq '.config.net'
 ```
+
+The node container uses the nft backend of iptables, so firewall rules don't
+depend on the host's legacy `ip_tables` module.
 
 ## Common Issues
 
 ### `/dev/net/tun` not found
+
 ```bash
 sudo modprobe tun
 sudo mkdir -p /dev/net
 sudo mknod /dev/net/tun c 10 200
 sudo chmod 0666 /dev/net/tun
 ```
-Then restart the stack: `./hack/run-local.sh --cleanup && ./hack/run-local.sh`
+
+Then recreate the node: `make stop-local && make run-local`.
+
+### Kernel modules fail to load
+
+qarax-node loads host modules such as `target_core_user` and `tcm_loop` on
+demand. If `uname -r` has no matching `/lib/modules/` directory (the kernel was
+upgraded without a reboot), anything not already loaded fails. Reboot.
 
 ### VM won't start
+
 ```bash
 docker compose -f e2e/docker-compose.yml logs qarax-node
-curl -s http://localhost:8000/hosts | jq
+qarax host list
+qarax vm get <vm>
 ```
 
 ### Services won't start
-```bash
-./hack/run-local.sh --cleanup
-REBUILD=1 ./hack/run-local.sh
-```
-
-## Useful Commands
 
 ```bash
-# View VM console output
-docker compose -f e2e/docker-compose.yml exec qarax-node \
-  tail -f /var/lib/qarax/vms/<vm-id>.console.log
-
-# List VMs
-curl -s http://localhost:8000/vms | jq
-
-# Stop / delete a VM
-curl -X POST http://localhost:8000/vms/<vm-id>/stop
-curl -X DELETE http://localhost:8000/vms/<vm-id>
-
-# Follow logs
-docker compose -f e2e/docker-compose.yml logs -f qarax-node
-docker compose -f e2e/docker-compose.yml logs -f qarax
+make stop-local
+REBUILD=1 make run-local
 ```
 
 ## API Documentation
 
-Once the stack is running:
-- **Swagger UI**: http://localhost:8000/swagger-ui
-- **OpenAPI JSON**: http://localhost:8000/api-docs/openapi.json
+- Swagger UI: http://localhost:8000/swagger-ui
+- OpenAPI JSON: http://localhost:8000/api-docs/openapi.json

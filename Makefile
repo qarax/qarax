@@ -102,7 +102,7 @@ ruff-fmt:
 	@cd python-sdk && ruff format .
 
 appliance-build:
-	cargo build --release -p qarax-node --target $(APPLIANCE_TARGET)
+	cargo build --release -p qarax-node -p qarax-init --target $(APPLIANCE_TARGET)
 	$(CONTAINER_ENGINE) build \
 		-f deployments/Containerfile.qarax-vmm \
 		--build-arg CLOUD_HYPERVISOR_VERSION=$(CLOUD_HYPERVISOR_VERSION) \

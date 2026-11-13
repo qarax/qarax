@@ -91,12 +91,23 @@ cleanup_stack() {
 		warn "docker compose down reported an error; removing leftovers directly"
 	force_remove_nfs_container
 
+	# Demos can add services and volumes to the project from compose files of
+	# their own (demos/block-storage), which the down above doesn't know about.
 	local label="label=com.docker.compose.project=e2e" leftovers
 	leftovers=$(docker ps -aq --filter "$label")
 	if [[ -n "$leftovers" ]]; then
 		# shellcheck disable=SC2086 # one container ID per word
 		docker rm -f $leftovers >/dev/null
-		(cd "$E2E_DIR" && docker compose --profile '*' down -v --remove-orphans)
+	fi
+	leftovers=$(docker volume ls -q --filter "$label")
+	if [[ -n "$leftovers" ]]; then
+		# shellcheck disable=SC2086 # one volume name per word
+		docker volume rm $leftovers >/dev/null
+	fi
+	leftovers=$(docker network ls -q --filter "$label")
+	if [[ -n "$leftovers" ]]; then
+		# shellcheck disable=SC2086 # one network ID per word
+		docker network rm $leftovers >/dev/null
 	fi
 	leftovers="$(docker ps -aq --filter "$label")$(docker network ls -q --filter "$label")$(docker volume ls -q --filter "$label")"
 	[[ -z "$leftovers" ]] || die "cleanup incomplete; inspect: docker ps -a / network ls / volume ls --filter ${label}"
@@ -162,7 +173,7 @@ start_services() {
 ensure_overlaybd_pool() {
 	local registry_url="$1" existing_url
 	existing_url=$(qarax storage-pool list -o json |
-		jq -r '.[] | select(.name == "overlaybd-pool") | .config.url // ""')
+		jq -r '.[] | select(.name == "overlaybd-pool") | .config.url')
 	if [[ -z "$existing_url" ]]; then
 		qarax storage-pool create --name overlaybd-pool --pool-type overlaybd --url "$registry_url" >/dev/null
 	elif [[ "$existing_url" != "$registry_url" ]]; then
@@ -236,8 +247,19 @@ if [[ "$VM_MODE" -eq 1 ]]; then
 	# the Compose DNS name "registry".
 	ensure_overlaybd_pool "http://${LIBVIRT_BRIDGE_IP:-192.168.122.1}:5001"
 else
-	start_services registry postgres qarax-node qarax
+	services=(registry postgres qarax-node qarax)
+	# A two-host demo may have started qarax-node-2 (profile multi-node); keep
+	# it on the same images as the first node.
+	if [[ -n "$("${COMPOSE[@]}" --profile multi-node ps -q qarax-node-2 2>/dev/null)" ]]; then
+		COMPOSE+=(--profile multi-node)
+		services+=(qarax-node-2)
+	fi
+	start_services "${services[@]}"
 	bash "${E2E_DIR}/setup_host.sh" "$SERVER" qarax-node 50051 local-node
+	if [[ " ${services[*]} " == *" qarax-node-2 "* ]]; then
+		# Init re-creates the networks and pools a recreated container lost.
+		bash "${E2E_DIR}/setup_host.sh" "$SERVER" qarax-node-2 50051 local-node-2
+	fi
 	ensure_overlaybd_pool "http://registry:5000"
 fi
 

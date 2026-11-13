@@ -1,630 +1,434 @@
 #!/usr/bin/env bash
 #
-# Run a real local host-deploy test using a libvirt VM.
+# Run qarax-node in a libvirt VM, registered with the local control plane
+# through the real host-deploy flow: `qarax host deploy` SSHes into the VM,
+# runs `bootc switch` to the node image and reboots it.
 #
-# What this does:
-#   1) Builds a bootc container image with test fixtures (SSH, qarax-node stub)
-#   2) Uses bootc-image-builder to create a qcow2 disk from that image
-#   3) Creates a libvirt VM from the disk
-#   4) Registers the VM as a host in qarax
-#   5) Calls POST /hosts/{host_id}/deploy with reboot=true
-#   6) Waits for host status to become UP
+# The node image is the appliance (deployments/Containerfile.qarax-vmm) plus a
+# thin test layer: a password SSH login for the deploy, a fixed SSH host key,
+# and plain-HTTP access to the compose registry it is pulled from. The VM
+# first boots a disk that bootc-image-builder made from that image (cached),
+# and is registered as host "libvirt-node".
 #
 # Usage:
-#   bash hack/test-host-deploy-libvirt.sh
-#   bash hack/test-host-deploy-libvirt.sh --start-stack
-#   bash hack/test-host-deploy-libvirt.sh --keep-vm
-#   bash hack/test-host-deploy-libvirt.sh --cleanup
+#   test-host-deploy-libvirt.sh                    full deploy test on a new VM, destroyed on exit
+#   test-host-deploy-libvirt.sh --keep-vm          leave the node running (make run-local VM=1)
+#   test-host-deploy-libvirt.sh --keep-vm --fresh  recreate the kept VM instead of reusing it
+#   test-host-deploy-libvirt.sh --start-stack      also start registry, postgres and qarax
+#   test-host-deploy-libvirt.sh --cleanup          destroy the VM and delete its host record
 #
+# A kept VM is reused by the next run: if it already runs the current image,
+# the run only makes sure its host is registered and UP; otherwise it
+# redeploys onto it. Without --keep-vm a run replaces any kept VM.
+#
+# Needs libvirt (qemu:///system, network "default"), rootful podman through
+# sudo, Docker Compose, jq, curl and ssh-keygen. Environment: API_URL,
+# VM_NAME, VM_MEMORY_MB, VM_VCPUS, VM_DISK_SIZE, VM_MAC, HOST_NAME, SSH_USER,
+# SSH_PASSWORD, LIBVIRT_BRIDGE_IP, LOCAL_REGISTRY_PORT, STATE_DIR, BIB_IMAGE
+# (see docs/DEVELOPMENT.md).
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-CH_VERSION_FILE="${REPO_ROOT}/versions/cloud-hypervisor-version"
-export CLOUD_HYPERVISOR_VERSION="${CLOUD_HYPERVISOR_VERSION:-$(tr -d '\n' <"$CH_VERSION_FILE")}"
+# shellcheck source=demos/lib.sh
+source "${REPO_ROOT}/demos/lib.sh"
 
-API_URL="${API_URL:-http://localhost:8000}"
+SERVER="${API_URL:-$SERVER}"
+RELEASE_DIR="${REPO_ROOT}/target/${MUSL_TARGET}/release"
+
 VM_NAME="${VM_NAME:-qarax-deploy-test}"
 VM_MEMORY_MB="${VM_MEMORY_MB:-3072}"
 VM_VCPUS="${VM_VCPUS:-2}"
 VM_DISK_SIZE="${VM_DISK_SIZE:-20G}"
-
+# A fixed MAC, so libvirt's DHCP hands a recreated VM the address its host
+# record was registered with (qarax can't change a host's address).
+VM_MAC="${VM_MAC:-52:54:00:71:a8:01}"
+HOST_NAME="${HOST_NAME:-libvirt-node}"
 SSH_USER="${SSH_USER:-qarax}"
 SSH_PASSWORD="${SSH_PASSWORD:-qarax}"
-SSH_PORT="${SSH_PORT:-22}"
-NODE_PORT="${NODE_PORT:-50051}"
-
-# Bridge IP of the libvirt default network — reachable from the VM
-LIBVIRT_BRIDGE_IP="${LIBVIRT_BRIDGE_IP:-192.168.122.1}"
-# Local registry port (matches the e2e compose stack: registry exposed on host port 5001)
+# deployments/qarax-node.service
+NODE_PORT=50051
+# The compose registry's published port (e2e/docker-compose.yml).
 LOCAL_REGISTRY_PORT="${LOCAL_REGISTRY_PORT:-5001}"
-LOCAL_REGISTRY="${LIBVIRT_BRIDGE_IP}:${LOCAL_REGISTRY_PORT}"
 
-# Default deploy image: push the locally-built test image to the local registry
-# so the VM can pull it without hitting public registries (avoids rate limits).
-DEPLOY_IMAGE="${DEPLOY_IMAGE:-${LOCAL_REGISTRY}/qarax-test-host:latest}"
-VM_BOOTC_IMAGE="${VM_BOOTC_IMAGE:-quay.io/centos-bootc/centos-bootc:stream10}"
-TEST_HOST_TAG="${TEST_HOST_TAG:-localhost/qarax-test-host}"
+# On disk rather than in /tmp (tmpfs on many systems: the base disk and the
+# VM's overlay would sit in RAM, and vanish under a kept VM on reboot), and
+# under libvirt's image directory, which the qemu:///system emulator user can
+# reach and which carries the right SELinux/AppArmor labels; a $HOME path is
+# usually not traversable by that user.
+STATE_DIR="${STATE_DIR:-/var/lib/libvirt/images/qarax-dev}"
+BUILD_DIR="${STATE_DIR}/build"
+VM_DISK="${STATE_DIR}/${VM_NAME}.qcow2"
+# The image the VM runs, written after a successful deploy.
+DEPLOYED_FILE="${STATE_DIR}/deployed-image"
+
+APPLIANCE_REF="localhost/qarax-vmm-host:dev"
+TEST_HOST_TAG="localhost/qarax-test-host:latest"
+# Only "latest" is published (no version tags); this is the digest it pointed
+# at from 2026-11-02 to 2026-11-09. Older digests stay pullable. To bump:
+#   skopeo inspect --format '{{.Digest}}' docker://quay.io/centos-bootc/bootc-image-builder:latest
+BIB_IMAGE="${BIB_IMAGE:-quay.io/centos-bootc/bootc-image-builder@sha256:4d8a0d9d173a9f450ff42d70777e1e0a6681a68f5c0f5084b65222eceb1f4d05}"
 
 export LIBVIRT_DEFAULT_URI="${LIBVIRT_DEFAULT_URI:-qemu:///system}"
 
-COMPOSE_FILE="${REPO_ROOT}/e2e/docker-compose.yml"
-LIBVIRT_OVERLAY="${REPO_ROOT}/e2e/docker-compose.libvirt.yml"
-
-STATE_DIR="${STATE_DIR:-/tmp/qarax-libvirt-deploy}"
-BASE_IMAGE="${STATE_DIR}/base-bootc.qcow2"
-VM_DISK="${STATE_DIR}/${VM_NAME}.qcow2"
-
-START_STACK=0
-KEEP_VM=0
-CLEANUP_ONLY=0
-
-while [[ $# -gt 0 ]]; do
-	case "$1" in
-	--start-stack)
-		START_STACK=1
-		shift
-		;;
-	--keep-vm)
-		KEEP_VM=1
-		shift
-		;;
-	--cleanup)
-		CLEANUP_ONLY=1
-		shift
-		;;
-	*)
-		echo "Unknown argument: $1" >&2
-		exit 1
-		;;
-	esac
-done
+usage() {
+	awk 'NR > 2 && /^#/ { sub(/^# ?/, ""); print; next } NR > 2 { exit }' "$0"
+}
 
 require_cmd() {
-	if ! command -v "$1" >/dev/null 2>&1; then
-		echo "Missing required command: $1" >&2
-		exit 1
-	fi
-}
-
-# The local stack enables API token auth (see e2e/docker-compose.yml).
-: "${QARAX_TOKEN:=${QARAX_TEST_TOKEN:-e2e-test-token}}"
-
-qarax_curl() {
-	curl -H "Authorization: Bearer ${QARAX_TOKEN}" "$@"
-}
-
-wait_for_http() {
-	local url="$1"
-	local timeout_s="${2:-60}"
-	local start_ts
-	start_ts="$(date +%s)"
-	while true; do
-		if curl -fsS "${url}" >/dev/null 2>&1; then
-			return 0
-		fi
-		if (("$(date +%s)" - start_ts >= timeout_s)); then
-			echo "Timed out waiting for ${url}" >&2
-			return 1
-		fi
-		sleep 2
+	local cmd
+	for cmd in "$@"; do
+		command -v "$cmd" >/dev/null || die "missing required command: ${cmd}"
 	done
 }
 
-ensure_stack() {
-	if ! wait_for_http "${API_URL}/" 2; then
-		if [[ "${START_STACK}" -ne 1 ]]; then
-			echo "qarax API is not reachable at ${API_URL}." >&2
-			echo "Start it first (e.g. ./hack/run-local.sh) or re-run with --start-stack." >&2
-			exit 1
-		fi
+# ── Stack ────────────────────────────────────────────────────────────────────
 
-		echo "Starting local qarax stack..."
-		bash "${REPO_ROOT}/hack/run-local.sh"
-		wait_for_http "${API_URL}/" 120
-	fi
-
-	# Apply host-network overlay so the qarax container can reach the libvirt VM bridge.
-	# Only force-recreate the services that the overlay actually changes (postgres, qarax).
-	# Recreating nfs-server is avoided because its kernel nfsd threads cannot be stopped
-	# by Docker once the container is running.
-	echo "Applying host-network overlay for libvirt connectivity..."
-	docker compose -f "${COMPOSE_FILE}" -f "${LIBVIRT_OVERLAY}" \
-		up -d --force-recreate --no-build postgres qarax
-	wait_for_http "${API_URL}/" 60
+ensure_release_binaries() {
+	local bin missing=()
+	for bin in qarax-server qarax-node qarax-init qarax; do
+		[[ -x "${RELEASE_DIR}/${bin}" ]] || missing+=("$bin")
+	done
+	((${#missing[@]} == 0)) && return 0
+	[[ "$START_STACK" -eq 1 ]] ||
+		die "missing release binaries in ${RELEASE_DIR}: ${missing[*]}\nBuild them with: cargo build --release -p qarax -p qarax-node -p qarax-init -p cli (or re-run with --start-stack)"
+	step "Building release binaries"
+	(cd "$REPO_ROOT" && run cargo build --release -p qarax -p qarax-node -p qarax-init -p cli)
 }
+
+# qarax must run on host networking to reach the VM: libvirt's NAT network
+# only accepts connections from the host itself, not from a Docker bridge.
+ensure_vm_stack() {
+	local build_flag=--no-build
+	if ! server_reachable; then
+		[[ "$START_STACK" -eq 1 ]] ||
+			die "qarax API not reachable at ${SERVER}.\nStart it with 'make run-local VM=1', or re-run with --start-stack."
+		build_flag=--build
+	fi
+	ensure_release_binaries
+	step "Starting registry, postgres and qarax with the vm-mode overlay"
+	# Compose recreates only services whose configuration changed, so this is
+	# a no-op after 'make run-local VM=1'.
+	run docker compose -f "${REPO_ROOT}/e2e/docker-compose.yml" -f "${REPO_ROOT}/e2e/docker-compose.vm-mode.yml" \
+		up -d --wait "$build_flag" registry postgres qarax
+	require_server
+}
+
+use_cli() {
+	QARAX_BIN="$(find_qarax_bin)"
+	[[ -n "$QARAX_BIN" ]] || die "qarax CLI not found: cargo build --release -p cli"
+}
+
+# ── libvirt ──────────────────────────────────────────────────────────────────
 
 ensure_libvirt_network() {
-	if ! virsh net-info default >/dev/null 2>&1; then
-		echo "libvirt network 'default' not found. Configure libvirt networking first." >&2
-		exit 1
-	fi
-	virsh net-start default >/dev/null 2>&1 || true
-	virsh net-autostart default >/dev/null 2>&1 || true
+	local active
+	active=$(virsh net-info default | awk '/^Active:/ { print $2 }') ||
+		die "libvirt network 'default' not found on ${LIBVIRT_DEFAULT_URI}"
+	[[ "$active" == yes ]] || run virsh net-start default
 }
 
-cleanup_vm() {
-	if virsh dominfo "${VM_NAME}" >/dev/null 2>&1; then
-		virsh destroy "${VM_NAME}" >/dev/null 2>&1 || true
-		virsh undefine "${VM_NAME}" --nvram >/dev/null 2>&1 || virsh undefine "${VM_NAME}" >/dev/null 2>&1 || true
-	fi
-	rm -f "${VM_DISK}"
+libvirt_bridge_ip() {
+	local xml re="<ip [^>]*address='([0-9.]+)'"
+	xml=$(virsh net-dumpxml default)
+	[[ "$xml" =~ $re ]] || die "libvirt network 'default' has no IPv4 address; set LIBVIRT_BRIDGE_IP"
+	echo "${BASH_REMATCH[1]}"
 }
 
-build_test_host_image() {
-	local build_dir="${STATE_DIR}/build"
-	mkdir -p "${build_dir}"
+# grep without -q reads all of virsh's output, so pipefail can't see a SIGPIPE.
+domain_exists() { virsh list --all --name | grep -xF "$VM_NAME" >/dev/null; }
+domain_running() { virsh list --state-running --name | grep -xF "$VM_NAME" >/dev/null; }
 
-	# Copy real binaries into the build context
-	local node_bin="${REPO_ROOT}/target/x86_64-unknown-linux-musl/release/qarax-node"
-	local init_bin="${REPO_ROOT}/target/x86_64-unknown-linux-musl/release/qarax-init"
-	if [[ ! -f "${node_bin}" ]]; then
-		echo "qarax-node binary not found at ${node_bin}." >&2
-		echo "Build it first: cargo build --release -p qarax-node" >&2
-		exit 1
+destroy_vm() {
+	if domain_exists; then
+		if domain_running; then
+			virsh destroy "$VM_NAME" >/dev/null
+		fi
+		virsh undefine "$VM_NAME" --nvram >/dev/null
 	fi
-	if [[ ! -f "${init_bin}" ]]; then
-		echo "qarax-init binary not found at ${init_bin}." >&2
-		echo "Build it first: cargo build --release -p qarax-init" >&2
-		exit 1
-	fi
-	cp "${node_bin}" "${build_dir}/qarax-node"
-	cp "${init_bin}" "${build_dir}/qarax-init"
-
-	# Copy systemd service files
-	cp "${REPO_ROOT}/deployments/qarax-node.service" "${build_dir}/qarax-node.service"
-	cp "${REPO_ROOT}/deployments/overlaybd-tcmu.service" "${build_dir}/overlaybd-tcmu.service"
-
-	local overlaybd_ver="${OVERLAYBD_VERSION:-1.0.16}"
-	local overlaybd_rpm_suffix="${OVERLAYBD_RPM_SUFFIX:-20250818.4601fb2}"
-	local overlaybd_rpm_dist="${OVERLAYBD_RPM_DIST:-azurelinux.3.0}"
-	local aci_ver="${ACI_VERSION:-1.4.1}"
-	local aci_rpm_suffix="${ACI_RPM_SUFFIX:-20260114025326.c6ba42c}"
-
-	cat >"${build_dir}/Containerfile" <<DOCKERFILE
-FROM ${VM_BOOTC_IMAGE}
-
-ARG OVERLAYBD_VERSION=${overlaybd_ver}
-ARG OVERLAYBD_RPM_SUFFIX=${overlaybd_rpm_suffix}
-ARG OVERLAYBD_RPM_DIST=${overlaybd_rpm_dist}
-ARG ACI_VERSION=${aci_ver}
-ARG ACI_RPM_SUFFIX=${aci_rpm_suffix}
-
-RUN dnf install -y \
-    qemu-guest-agent \
-    e2fsprogs \
-    cpio \
-    curl \
-    && dnf clean all
-
-RUN useradd -m -G wheel -s /bin/bash ${SSH_USER} && \
-    echo '${SSH_USER}:${SSH_PASSWORD}' | chpasswd && \
-    echo '${SSH_USER} ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/${SSH_USER}
-
-RUN mkdir -p /etc/ssh/sshd_config.d && \
-    echo 'PasswordAuthentication yes' > /etc/ssh/sshd_config.d/01-qarax-test.conf
-
-# Allow pulling from insecure (HTTP) registries for local testing
-RUN mkdir -p /etc/containers/registries.conf.d && \
-    printf '%s\n' \
-      '[[registry]]' \
-      'location = "192.168.122.1:5001"' \
-      'insecure = true' \
-      > /etc/containers/registries.conf.d/01-local-test.conf
-
-# Install overlaybd-tcmu
-RUN curl -fsSL \
-    "https://github.com/containerd/overlaybd/releases/download/v\${OVERLAYBD_VERSION}/overlaybd-\${OVERLAYBD_VERSION}-\${OVERLAYBD_RPM_SUFFIX}.\${OVERLAYBD_RPM_DIST}.x86_64.rpm" \
-    -o /tmp/overlaybd.rpm && \
-    cd / && rpm2cpio /tmp/overlaybd.rpm | cpio -idm --no-absolute-filenames 2>/dev/null && \
-    rm /tmp/overlaybd.rpm
-
-# Patch overlaybd config to use writable paths under /var (bootc makes /opt read-only).
-RUN sed -i \
-    -e 's|/opt/overlaybd/registry_cache|/var/lib/overlaybd/registry_cache|g' \
-    -e 's|/opt/overlaybd/gzip_cache|/var/lib/overlaybd/gzip_cache|g' \
-    -e 's|/opt/overlaybd/cred.json|/etc/overlaybd/cred.json|g' \
-    /etc/overlaybd/overlaybd.json && \
-    cp /opt/overlaybd/cred.json /etc/overlaybd/cred.json 2>/dev/null || \
-    echo '{"auths":{}}' > /etc/overlaybd/cred.json
-
-# Install the overlaybd-snapshotter convertor
-RUN curl -fsSL \
-    "https://github.com/containerd/accelerated-container-image/releases/download/v\${ACI_VERSION}/overlaybd-snapshotter-\${ACI_VERSION}-\${ACI_RPM_SUFFIX}.x86_64.rpm" \
-    -o /tmp/aci.rpm && \
-    cd / && rpm2cpio /tmp/aci.rpm | cpio -idm --no-absolute-filenames 2>/dev/null && \
-    rm /tmp/aci.rpm
-
-# Install Cloud Hypervisor (static binary)
-RUN curl -fsSL \
-    "https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/${CLOUD_HYPERVISOR_VERSION}/cloud-hypervisor-static" \
-    -o /usr/local/bin/cloud-hypervisor && \
-    chmod +x /usr/local/bin/cloud-hypervisor && \
-    cloud-hypervisor --version
-
-# Download Cloud Hypervisor guest kernel (used by qarax-node to boot VMs)
-RUN mkdir -p /var/lib/qarax/images && \
-    curl -fsSL \
-    "https://github.com/cloud-hypervisor/linux/releases/download/ch-release-v6.16.9-20251112/vmlinux-x86_64" \
-    -o /var/lib/qarax/images/vmlinux && \
-    chmod 644 /var/lib/qarax/images/vmlinux
-
-# Load TCMU kernel modules at boot
-RUN printf '%s\n' target_core_user tcm_loop uio \
-    >> /etc/modules-load.d/overlaybd.conf
-
-# Cache-buster: changes when qarax-node binary changes
-ARG CACHE_BUST=none
-
-# Copy qarax binaries
-COPY qarax-node /usr/local/bin/qarax-node
-COPY qarax-init /usr/local/bin/qarax-init
-RUN chmod +x /usr/local/bin/qarax-node /usr/local/bin/qarax-init
-
-# Create runtime directories via tmpfiles.d (bootc preserves /var across
-# image switches, so RUN mkdir only works on first boot — tmpfiles.d
-# ensures directories exist on every boot).
-RUN printf '%s\n' \
-    'd /var/lib/qarax      0755 root root -' \
-    'd /var/lib/qarax/vms  0755 root root -' \
-    'd /var/lib/qarax/images 0755 root root -' \
-    'd /var/lib/qarax/disks 0755 root root -' \
-    'd /var/lib/qarax/overlaybd 0755 root root -' \
-    'd /var/lib/overlaybd 0755 root root -' \
-    'd /var/lib/overlaybd/registry_cache 0755 root root -' \
-    'd /var/lib/overlaybd/gzip_cache 0755 root root -' \
-    > /etc/tmpfiles.d/qarax.conf && \
-    mkdir -p /etc/qarax-node
-
-COPY overlaybd-tcmu.service /etc/systemd/system/
-COPY qarax-node.service /etc/systemd/system/
-RUN systemctl enable overlaybd-tcmu.service qarax-node.service sshd.service qemu-guest-agent.service
-DOCKERFILE
-
-	echo "Building test host container image..."
-	# Use binary checksum as a cache-buster so COPY layers are invalidated when
-	# the qarax-node binary changes (podman's layer cache may not detect it).
-	local node_hash
-	node_hash="$(sha256sum "${build_dir}/qarax-node" | cut -d' ' -f1)"
-	sudo podman build \
-		--build-arg "CACHE_BUST=${node_hash}" \
-		-t "${TEST_HOST_TAG}" -f "${build_dir}/Containerfile" "${build_dir}"
-	# Re-tagging leaves the previous image dangling (untagged). Prune them now
-	# so they don't accumulate across repeated builds. Layer cache is preserved.
-	sudo podman image prune -f
-	echo "Pushing test host image to local registry ${LOCAL_REGISTRY}..."
-	sudo podman push "${TEST_HOST_TAG}" "${DEPLOY_IMAGE}" --tls-verify=false
+	rm -f "$VM_DISK" "$DEPLOYED_FILE"
 }
 
-build_disk_image() {
-	if [[ -f "${BASE_IMAGE}" ]]; then
-		echo "Using cached disk image: ${BASE_IMAGE}"
-		# Still need to ensure the test image is in the local registry for bootc switch
-		ensure_test_image_in_local_registry
+tcp_open() {
+	# Connection refused/timed out is the expected answer while the VM boots.
+	timeout 2 bash -c ": >/dev/tcp/$1/$2" 2>/dev/null
+}
+
+# Set VM_IP to the VM's DHCP lease that answers on SSH. A recreated VM keeps
+# its MAC, so a lease of its previous incarnation can still be listed.
+find_vm_ip() {
+	local ip
+	for ip in $(virsh domifaddr "$VM_NAME" --source lease | awk '$3 == "ipv4" { sub("/.*", "", $4); print $4 }'); do
+		if tcp_open "$ip" 22; then
+			VM_IP="$ip"
+			return 0
+		fi
+	done
+	return 1
+}
+
+# ── Images ───────────────────────────────────────────────────────────────────
+
+# Print the ID of a rootful podman image, or nothing if it doesn't exist.
+image_id() {
+	if sudo podman image exists "$1"; then
+		sudo podman image inspect --format '{{.Id}}' "$1"
+	fi
+}
+
+# Remove the image TAG pointed at before this build, if the build replaced
+# it (podman also drops its now-unused intermediate layers). Only this
+# script's images: `podman image prune` would take every dangling root image.
+remove_replaced_image() {
+	local old="$1" tag="$2"
+	[[ -n "$old" && "$old" != "$(image_id "$tag")" ]] || return 0
+	# Housekeeping only; e.g. a container still using the old image keeps it.
+	sudo podman rmi "$old" >/dev/null || warn "could not remove the previous ${tag} image ${old:0:12}"
+}
+
+write_test_layer() {
+	mkdir -p "$BUILD_DIR"
+	if [[ ! -f "${BUILD_DIR}/ssh_host_ed25519_key" ]]; then
+		ssh-keygen -q -t ed25519 -N '' -C "$VM_NAME" -f "${BUILD_DIR}/ssh_host_ed25519_key"
+	fi
+	cat >"${BUILD_DIR}/Containerfile" <<EOF
+# Generated by hack/test-host-deploy-libvirt.sh: what the libvirt test host
+# needs on top of the node appliance.
+FROM ${APPLIANCE_REF}
+
+# Password SSH login with passwordless sudo for 'qarax host deploy'.
+RUN useradd -m -G wheel -s /bin/bash ${SSH_USER} && \\
+    echo '${SSH_USER}:${SSH_PASSWORD}' | chpasswd && \\
+    echo '${SSH_USER} ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/${SSH_USER} && \\
+    systemctl enable sshd
+
+# One host key (generated once, next to this file) for every VM the script
+# creates: a recreated VM gets the same address, and a new key there would
+# fail the control plane's known_hosts check.
+COPY ssh_host_ed25519_key ssh_host_ed25519_key.pub /etc/ssh/
+RUN chmod 0600 /etc/ssh/ssh_host_ed25519_key && \\
+    printf '%s\n' 'PasswordAuthentication yes' 'HostKey /etc/ssh/ssh_host_ed25519_key' \\
+      > /etc/ssh/sshd_config.d/01-qarax-test.conf
+
+# bootc pulls the deploy image from the compose registry over plain HTTP.
+RUN mkdir -p /etc/containers/registries.conf.d && \\
+    printf '%s\n' '[[registry]]' 'location = "${LOCAL_REGISTRY}"' 'insecure = true' \\
+      > /etc/containers/registries.conf.d/01-qarax-test.conf
+EOF
+}
+
+# Build the appliance (same build args as `make appliance-build`, which isn't
+# used because its cargo step builds qarax-node on its own, with different
+# feature unification than run-local's build, and so relinks it every time)
+# and the test image on top. Sets DEPLOY_IMAGE, tagged by image ID: bootc
+# switch to the ref a host already runs is a no-op, so every new image needs
+# a new ref.
+build_images() {
+	local old_appliance old_test test_id
+	old_appliance=$(image_id "$APPLIANCE_REF")
+	old_test=$(image_id "$TEST_HOST_TAG")
+
+	step "Building the node appliance image ${APPLIANCE_REF}"
+	run sudo podman build -f "${REPO_ROOT}/deployments/Containerfile.qarax-vmm" \
+		--build-arg "CLOUD_HYPERVISOR_VERSION=${CLOUD_HYPERVISOR_VERSION}" \
+		--build-arg "FIRECRACKER_VERSION=${FIRECRACKER_VERSION}" \
+		--build-arg QARAX_VERSION=dev \
+		-t "$APPLIANCE_REF" "$REPO_ROOT"
+
+	step "Building the test host image ${TEST_HOST_TAG}"
+	write_test_layer
+	run sudo podman build -t "$TEST_HOST_TAG" "$BUILD_DIR"
+
+	remove_replaced_image "$old_test" "$TEST_HOST_TAG"
+	remove_replaced_image "$old_appliance" "$APPLIANCE_REF"
+	test_id=$(image_id "$TEST_HOST_TAG")
+	DEPLOY_IMAGE="${LOCAL_REGISTRY}/qarax-test-host:${test_id:0:12}"
+}
+
+# The base disk only has to boot and provide /var, which `bootc switch` never
+# touches; the deploy replaces the rest. So it is keyed by the image recipe and
+# pins, not by the binaries: a code change doesn't rerun bootc-image-builder.
+base_image_key() {
+	{
+		cat "${REPO_ROOT}/deployments/Containerfile.qarax-vmm" \
+			"${REPO_ROOT}/versions/node-artifacts.env" \
+			"${BUILD_DIR}/Containerfile" \
+			"${BUILD_DIR}/ssh_host_ed25519_key.pub"
+		echo "${CLOUD_HYPERVISOR_VERSION} ${FIRECRACKER_VERSION}"
+	} | sha256sum | cut -c1-16
+}
+
+ensure_base_image() {
+	BASE_IMAGE="${STATE_DIR}/base-$(base_image_key).qcow2"
+	if [[ -f "$BASE_IMAGE" ]]; then
+		info "Using the cached base disk ${BASE_IMAGE}"
 		return 0
 	fi
 
-	build_test_host_image
-
-	local bib_output="${STATE_DIR}/bib-output"
-	mkdir -p "${bib_output}"
-
-	echo "Building disk image with bootc-image-builder..."
-	sudo podman run --rm --privileged \
-		--security-opt label=type:unconfined_t \
+	step "Building the base disk with bootc-image-builder (a few minutes)"
+	local out="${STATE_DIR}/bib-output"
+	sudo rm -rf "$out"
+	mkdir -p "$out"
+	run sudo podman run --rm --privileged --security-opt label=type:unconfined_t \
 		-v /var/lib/containers/storage:/var/lib/containers/storage \
-		-v "${bib_output}:/output" \
-		quay.io/centos-bootc/bootc-image-builder:latest \
-		--type qcow2 \
-		--local \
-		"${TEST_HOST_TAG}"
-
-	sudo mv "${bib_output}/qcow2/disk.qcow2" "${BASE_IMAGE}"
-	sudo chown "$(id -u):$(id -g)" "${BASE_IMAGE}"
-	sudo rm -rf "${bib_output}"
-	echo "Disk image ready: ${BASE_IMAGE}"
-}
-
-ensure_test_image_in_local_registry() {
-	# Always rebuild to pick up binary changes (podman layer cache handles
-	# the COPY layer efficiently — only re-layers when the file content differs).
-	build_test_host_image
+		-v "${out}:/output" \
+		"$BIB_IMAGE" build --type qcow2 "$TEST_HOST_TAG"
+	# Base disks of older recipes: the only VM that could use one was just destroyed.
+	find "$STATE_DIR" -maxdepth 1 -name 'base-*.qcow2' -delete
+	sudo mv "${out}/qcow2/disk.qcow2" "$BASE_IMAGE"
+	sudo chown "$(id -u):$(id -g)" "$BASE_IMAGE"
+	sudo rm -rf "$out"
 }
 
 create_vm() {
-	mkdir -p "${STATE_DIR}"
-	build_disk_image
-
-	qemu-img create -f qcow2 -F qcow2 -b "${BASE_IMAGE}" "${VM_DISK}" "${VM_DISK_SIZE}" >/dev/null
-
-	virt-install \
-		--name "${VM_NAME}" \
-		--memory "${VM_MEMORY_MB}" \
-		--vcpus "${VM_VCPUS}" \
+	ensure_base_image
+	step "Creating libvirt VM ${VM_NAME}"
+	qemu-img create -q -f qcow2 -F qcow2 -b "$BASE_IMAGE" "$VM_DISK" "$VM_DISK_SIZE"
+	run virt-install \
+		--name "$VM_NAME" \
+		--memory "$VM_MEMORY_MB" \
+		--vcpus "$VM_VCPUS" \
 		--cpu host-passthrough \
 		--import \
 		--disk "path=${VM_DISK},format=qcow2,bus=virtio" \
-		--network "network=default,model=virtio" \
+		--network "network=default,model=virtio,mac=${VM_MAC}" \
 		--os-variant centos-stream10 \
 		--graphics none \
 		--noautoconsole \
 		--rng /dev/urandom
 }
 
-wait_for_vm_ip() {
-	local timeout_s="${1:-240}"
-	local start_ts ip
-	start_ts="$(date +%s)"
+# ── Host ─────────────────────────────────────────────────────────────────────
 
-	while true; do
-		ip="$(
-			virsh domifaddr "${VM_NAME}" --source lease 2>/dev/null |
-				awk '/ipv4/ {print $4}' |
-				cut -d/ -f1 |
-				head -n1
-		)"
-		if [[ -n "${ip}" ]]; then
-			echo "${ip}"
-			return 0
-		fi
-
-		if (("$(date +%s)" - start_ts >= timeout_s)); then
-			echo "Timed out waiting for VM IP address" >&2
-			return 1
-		fi
-		sleep 2
-	done
+# Print FIELD of the host record, or nothing if it isn't registered.
+host_field() {
+	qarax host list -o json | jq -r --arg n "$HOST_NAME" --arg f "$1" '.[] | select(.name == $n) | .[$f] // empty'
 }
 
-wait_for_ssh_auth() {
-	local host="$1"
-	local timeout_s="${2:-90}"
-	local start_ts
-	start_ts="$(date +%s)"
-	while true; do
-		if sshpass -p "${SSH_PASSWORD}" ssh \
-			-o StrictHostKeyChecking=no \
-			-o UserKnownHostsFile=/dev/null \
-			-o ConnectTimeout=5 \
-			-o BatchMode=no \
-			-p "${SSH_PORT}" \
-			"${SSH_USER}@${host}" true >/dev/null 2>&1; then
-			return 0
-		fi
-		if (("$(date +%s)" - start_ts >= timeout_s)); then
-			echo "Timed out waiting for SSH auth at ${host}" >&2
-			echo "" >&2
-			echo "--- Diagnostic: one SSH attempt with verbose output ---" >&2
-			sshpass -p "${SSH_PASSWORD}" ssh \
-				-vv \
-				-o StrictHostKeyChecking=no \
-				-o UserKnownHostsFile=/dev/null \
-				-o ConnectTimeout=5 \
-				-p "${SSH_PORT}" \
-				"${SSH_USER}@${host}" true 2>&1 || true
-			echo "--- End diagnostic ---" >&2
-			echo "" >&2
-			echo "Retry manually: sshpass -p '${SSH_PASSWORD}' ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p ${SSH_PORT} ${SSH_USER}@${host}" >&2
-			return 1
-		fi
-		sleep 2
-	done
-}
+host_settled() { [[ "$(host_field status)" != installing ]]; }
 
-wait_for_tcp() {
-	local host="$1"
-	local port="$2"
-	local timeout_s="$3"
-	local start_ts
-	start_ts="$(date +%s)"
-	while true; do
-		if nc -z "${host}" "${port}" >/dev/null 2>&1; then
-			return 0
-		fi
-		if (("$(date +%s)" - start_ts >= timeout_s)); then
-			echo "Timed out waiting for ${host}:${port}" >&2
-			return 1
-		fi
-		sleep 2
-	done
-}
-
-lookup_host_id_by_address() {
-	local address="$1"
-	qarax_curl -sS "${API_URL}/hosts" | python3 -c "
-import json, sys
-address = '$address'
-for host in json.load(sys.stdin):
-    if host.get('address') == address:
-        print(host['id'])
-        break
-"
-}
-
-lookup_host_status() {
-	local host_id="$1"
-	qarax_curl -sS "${API_URL}/hosts" | python3 -c "
-import json, sys
-host_id = '$host_id'
-for host in json.load(sys.stdin):
-    if host.get('id') == host_id:
-        print(host.get('status', ''))
-        break
-"
-}
-
-register_host() {
-	local vm_ip="$1"
-	local host_name="libvirt-${VM_NAME}-$(date +%s)"
-	local payload
-	payload="$(jq -n \
-		--arg name "${host_name}" \
-		--arg address "${vm_ip}" \
-		--arg host_user "${SSH_USER}" \
-		--argjson port "${NODE_PORT}" \
-		'{name:$name,address:$address,port:$port,host_user:$host_user}')"
-
-	local body_file code host_id
-	body_file="$(mktemp)"
-	code="$(
-		qarax_curl -sS -o "${body_file}" -w "%{http_code}" \
-			-X POST "${API_URL}/hosts" \
-			-H "Content-Type: application/json" \
-			-d "${payload}"
-	)"
-
-	if [[ "${code}" != "201" ]]; then
-		echo "Failed to register host (HTTP ${code}):" >&2
-		cat "${body_file}" >&2
-		rm -f "${body_file}"
-		exit 1
-	fi
-
-	host_id="$(tr -d '"' <"${body_file}")"
-	rm -f "${body_file}"
-	echo "${host_id}"
-}
-
-trigger_deploy() {
-	local host_id="$1"
-	local payload body_file code
-	payload="$(jq -n \
-		--arg image "${DEPLOY_IMAGE}" \
-		--arg ssh_user "${SSH_USER}" \
-		--arg ssh_password "${SSH_PASSWORD}" \
-		--argjson ssh_port "${SSH_PORT}" \
-		'{
-      image:$image,
-      ssh_port:$ssh_port,
-      ssh_user:$ssh_user,
-      ssh_password:$ssh_password,
-      install_bootc:false,
-      reboot:true
-    }')"
-
-	body_file="$(mktemp)"
-	code="$(
-		qarax_curl -sS -o "${body_file}" -w "%{http_code}" \
-			-X POST "${API_URL}/hosts/${host_id}/deploy" \
-			-H "Content-Type: application/json" \
-			-d "${payload}"
-	)"
-
-	if [[ "${code}" != "202" ]]; then
-		echo "Deploy request failed (HTTP ${code}):" >&2
-		cat "${body_file}" >&2
-		rm -f "${body_file}"
-		exit 1
-	fi
-	rm -f "${body_file}"
-}
-
-wait_for_deploy_success() {
-	local host_id="$1"
-	local vm_ip="$2"
-	local timeout_s="${3:-420}"
-	local start_ts status saw_installing
-	start_ts="$(date +%s)"
-	saw_installing=0
-
-	while true; do
-		status="$(lookup_host_status "${host_id}")"
-		case "${status}" in
-		installing)
-			saw_installing=1
-			;;
-		up)
-			if [[ "${saw_installing}" -eq 1 ]]; then
-				return 0
-			fi
-			;;
-		installation_failed)
-			echo "Host deployment failed (status=installation_failed)." >&2
-			echo "" >&2
-			echo "  Logs: docker logs e2e-qarax-1"
-			if [[ -n "${vm_ip}" ]]; then
-				echo "  sshpass -p '${SSH_PASSWORD}' ssh -o StrictHostKeyChecking=no ${SSH_USER}@${vm_ip}" >&2
-				echo "  Re-run with --keep-vm to preserve the VM after failure" >&2
-			fi
-			return 1
-			;;
-		"")
-			echo "Host ${host_id} not found while polling status." >&2
-			return 1
-			;;
-		esac
-
-		if (("$(date +%s)" - start_ts >= timeout_s)); then
-			echo "Timed out waiting for host deployment to finish. Last status=${status}" >&2
-			return 1
-		fi
-		sleep 5
-	done
-}
-
-run_connectivity_probe_from_qarax_container() {
-	# With network_mode: host the container shares the host's network namespace,
-	# so a host-side nc check is equivalent to checking from inside the container.
-	local vm_ip="$1"
-	if ! nc -zw3 "${vm_ip}" "${SSH_PORT}" >/dev/null 2>&1; then
-		echo "Cannot reach ${vm_ip}:${SSH_PORT} - libvirt VM not reachable." >&2
-		exit 1
+ensure_host() {
+	local address
+	address=$(host_field address)
+	if [[ -z "$address" ]]; then
+		run qarax host add --name "$HOST_NAME" --address "$VM_IP" --port "$NODE_PORT" --user "$SSH_USER" -o json
+	elif [[ "$address" != "$VM_IP" ]]; then
+		die "host ${HOST_NAME} is registered at ${address}, but VM ${VM_NAME} is at ${VM_IP}.\nqarax can neither change a host's address nor delete a host: reset the stack with 'make stop-local' and re-run."
 	fi
 }
 
-main() {
-	require_cmd virsh
-	require_cmd virt-install
-	require_cmd qemu-img
-	require_cmd podman
-	require_cmd curl
-	require_cmd jq
-	require_cmd nc
-	require_cmd python3
-	require_cmd sshpass
+deploy_node() {
+	step "Deploying ${DEPLOY_IMAGE} to ${HOST_NAME} (${VM_IP})"
+	run sudo podman push --tls-verify=false "$TEST_HOST_TAG" "$DEPLOY_IMAGE"
+	run qarax host deploy "$HOST_NAME" --image "$DEPLOY_IMAGE" --ssh-password "$SSH_PASSWORD"
+	info "bootc switch, reboot, wait for qarax-node: a few minutes"
+	wait_until 600 host_settled ||
+		die "host ${HOST_NAME} still installing after 600 s.\nLogs: docker compose -f e2e/docker-compose.yml logs qarax"
 
-	ensure_libvirt_network
+	local status
+	status=$(host_field status)
+	if [[ "$status" != up ]]; then
+		warn "Deploy failed (status ${status}): $(host_field installation_error)"
+		warn "Logs:  docker compose -f e2e/docker-compose.yml logs qarax"
+		warn "VM:    ssh ${SSH_USER}@${VM_IP} (password ${SSH_PASSWORD}), virsh console ${VM_NAME}"
+		[[ "$KEEP_VM" -eq 1 ]] || warn "Re-run with --keep-vm to keep the VM after a failure."
+		die "host deploy failed"
+	fi
+	echo "$DEPLOY_IMAGE" >"$DEPLOYED_FILE"
+}
 
-	if [[ "${CLEANUP_ONLY}" -eq 1 ]]; then
-		cleanup_vm
-		echo "Cleanup complete for VM ${VM_NAME}."
+# Remove the host record with its VM; a later run registers it again. The
+# server refuses while VMs are still placed on the host and says which.
+delete_host() {
+	[[ -n "$(host_field id)" ]] || return 0
+	qarax host delete "$HOST_NAME" >/dev/null ||
+		warn "kept host ${HOST_NAME}: delete its VMs, then: qarax host delete ${HOST_NAME}"
+}
+
+cleanup() {
+	destroy_vm
+	info "Destroyed VM ${VM_NAME} (base disks stay cached in ${STATE_DIR})"
+	# The stack may already be gone when cleaning up.
+	if server_reachable; then
+		use_cli
+		delete_host
+	fi
+}
+
+# ── Main ─────────────────────────────────────────────────────────────────────
+
+START_STACK=0
+KEEP_VM=0
+FRESH=0
+CLEANUP_ONLY=0
+for arg in "$@"; do
+	case "$arg" in
+	--start-stack) START_STACK=1 ;;
+	--keep-vm) KEEP_VM=1 ;;
+	--fresh) FRESH=1 ;;
+	--cleanup) CLEANUP_ONLY=1 ;;
+	-h | --help)
+		usage
 		exit 0
-	fi
+		;;
+	*) die "unknown option: ${arg} (see --help)" ;;
+	esac
+done
+# Without --keep-vm a run is a full deploy test, so it always starts from a new VM.
+[[ "$KEEP_VM" -eq 1 ]] || FRESH=1
 
-	ensure_stack
+require_cmd virsh virt-install qemu-img podman sudo docker jq curl ssh-keygen timeout
 
-	cleanup_vm
+if [[ "$CLEANUP_ONLY" -eq 1 ]]; then
+	cleanup
+	exit 0
+fi
+
+banner "qarax-node in libvirt VM ${VM_NAME}"
+ensure_libvirt_network
+LIBVIRT_BRIDGE_IP="${LIBVIRT_BRIDGE_IP:-$(libvirt_bridge_ip)}"
+LOCAL_REGISTRY="${LIBVIRT_BRIDGE_IP}:${LOCAL_REGISTRY_PORT}"
+ensure_vm_stack
+use_cli
+
+sudo install -d -o "$(id -u)" -g "$(id -g)" -m 0755 "$STATE_DIR"
+build_images
+
+if [[ "$KEEP_VM" -eq 0 ]]; then
+	trap cleanup EXIT
+fi
+# A domain without its disk in STATE_DIR lost it, or was made by an older
+# version of this script (disk in /tmp): recreate it.
+if [[ "$FRESH" -eq 1 ]] || ! domain_exists || [[ ! -f "$VM_DISK" ]]; then
+	destroy_vm
 	create_vm
+elif ! domain_running; then
+	run virsh start "$VM_NAME"
+fi
 
-	if [[ "${KEEP_VM}" -ne 1 ]]; then
-		trap cleanup_vm EXIT
-	fi
+step "Waiting for ${VM_NAME} to answer on SSH"
+wait_until 300 find_vm_ip || die "VM ${VM_NAME} has no DHCP lease answering on SSH after 300 s.\nCheck: virsh domifaddr ${VM_NAME} --source lease; virsh console ${VM_NAME}"
+ok "VM address ${VM_IP}"
+ensure_host
 
-	local vm_ip host_id
-	vm_ip="$(wait_for_vm_ip 120)"
-	echo "VM IP: ${vm_ip}"
+if [[ -f "$DEPLOYED_FILE" && "$(<"$DEPLOYED_FILE")" == "$DEPLOY_IMAGE" ]]; then
+	step "VM already runs ${DEPLOY_IMAGE}: skipping the deploy (--fresh redoes it)"
+	wait_until 120 tcp_open "$VM_IP" "$NODE_PORT" ||
+		die "qarax-node isn't listening on ${VM_IP}:${NODE_PORT}; check 'sudo journalctl -u qarax-node' in the VM, or re-run with --fresh"
+else
+	deploy_node
+fi
 
-	wait_for_tcp "${vm_ip}" "${SSH_PORT}" 120
-	wait_for_tcp "${vm_ip}" "${NODE_PORT}" 120
-	run_connectivity_probe_from_qarax_container "${vm_ip}"
-	echo "Waiting for SSH auth to succeed on ${vm_ip}..."
-	wait_for_ssh_auth "${vm_ip}" 90
+# Connects over gRPC, records the node's versions and marks the host UP.
+run qarax host init "$HOST_NAME"
+[[ "$(host_field status)" == up ]] || die "host ${HOST_NAME} is not UP after init"
 
-	host_id="$(register_host "${vm_ip}")"
-	echo "Registered host id: ${host_id}"
-
-	trigger_deploy "${host_id}"
-	echo "Deploy triggered. Waiting for host to become UP..."
-
-	wait_for_deploy_success "${host_id}" "${vm_ip}" 420
-
-	echo ""
-	echo "SUCCESS: deploy flow completed against real libvirt VM."
-	echo "Host ${host_id} is UP."
-	echo "VM ${VM_NAME} (${vm_ip})"
-	if [[ "${KEEP_VM}" -eq 1 ]]; then
-		echo "VM was kept because --keep-vm was set."
-	fi
-}
-
-main "$@"
+echo
+ok "Host ${HOST_NAME} is UP: qarax-node in VM ${VM_NAME} (${VM_IP}), image ${DEPLOY_IMAGE}"
+info "SSH:      ssh ${SSH_USER}@${VM_IP}   (password ${SSH_PASSWORD})"
+info "Console:  virsh -c ${LIBVIRT_DEFAULT_URI} console ${VM_NAME}"
+if [[ "$KEEP_VM" -eq 1 ]]; then
+	info "Remove:   bash hack/test-host-deploy-libvirt.sh --cleanup"
+else
+	info "The VM is destroyed on exit; --keep-vm keeps it."
+fi

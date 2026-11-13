@@ -174,6 +174,26 @@ jobs:
           DOCKER_BUILDX: 1
           DOCKER_BUILD_CACHE_FROM: type=gha
           DOCKER_BUILD_CACHE_TO: type=gha,mode=max
+          # Leave the stack up for the demo smoke step; Cleanup removes it.
+          KEEP: 1
+
+      # Nothing else runs the demos, so a few fast ones run against the e2e
+      # stack (two UP hosts) to catch a demo the code has broken.
+      - name: Demo smoke
+        run: |
+          set -e
+          run_demo() {
+            echo "::group::demos/$*"
+            bash "demos/$1/run.sh" "${@:2}"
+            echo "::endgroup::"
+          }
+          run_demo vm-exec
+          run_demo firecracker
+          run_demo sse-events
+          run_demo hooks
+          run_demo network-isolation --cross-host
+        env:
+          SKIP_BUILD: 1
 
       - name: Cleanup
         if: always()

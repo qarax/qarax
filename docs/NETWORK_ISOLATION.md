@@ -45,14 +45,21 @@ qarax network create \
   --name app-a \
   --subnet 10.10.1.0/24 \
   --gateway 10.10.1.1 \
-  --vpc demo
+  --vpc demo \
+  --network-type isolated
 
 qarax network create \
   --name app-b \
   --subnet 10.10.2.0/24 \
   --gateway 10.10.2.1 \
-  --vpc demo
+  --vpc demo \
+  --network-type isolated
 ```
+
+Use `--network-type isolated` for networks in a VPC that spans hosts: only
+isolated networks exempt same-VPC traffic from NAT. With the default `bridge`
+type, traffic between hosts is masqueraded to the overlay address, so a
+security-group rule matching the source subnet (step 4) never matches it.
 
 ### 2. Attach the networks to hosts
 

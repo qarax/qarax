@@ -13,7 +13,10 @@ RUN dnf install -y \
     qemu-img \
     iproute-tc \
     socat \
-    iptables \
+    # The nft backend, as on the CentOS Stream appliance. Fedora's plain
+    # iptables package is the legacy backend, which needs the host's ip_tables
+    # module and fails after a kernel upgrade without a reboot.
+    iptables-nft \
     nftables \
     tcpdump \
     passt \

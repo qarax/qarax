@@ -58,7 +58,8 @@ PostgreSQL 16+ with SQLx (compile-time verified queries).
 Qarax supports two deployment modes — understand which one is in use before debugging:
 
 - **Docker Compose (e2e / local dev):** `qarax` (control plane), `qarax-node`, and `postgres` run as separate containers. `qarax-node` runs privileged with `/dev/kvm` passthrough for real VMs.
-- **Hyperconverged (libvirt demo):** A single Cloud Hypervisor VM hosts both the control plane and the node. `qarax-node` runs *inside* the VM alongside `qarax`. The VM itself runs on the developer's host via libvirt. `hack/run-local.sh --vm` and `hack/test-host-deploy-libvirt.sh` manage this mode.
+- **Libvirt node (`make run-local VM=1`):** `qarax`, Postgres and the registry run in Docker (qarax on host networking, `e2e/docker-compose.vm-mode.yml`), and `qarax-node` runs in a bootc libvirt VM built from the appliance image. `hack/run-local.sh --vm` and `hack/test-host-deploy-libvirt.sh` manage this mode.
+- **Hyperconverged (`demos/hyperconverged`):** a single Cloud Hypervisor VM hosts both the control plane and the node, on the developer's host.
 
 Always confirm the deployment mode before debugging. Many issues (networking, storage mount paths, device availability) differ between the two modes.
 
@@ -72,7 +73,7 @@ Follow this order before touching code:
    - Hyperconverged mode: `systemctl status qarax-node`, `ps aux | grep cloud-hypervisor`
    - Verify Postgres: `docker compose ps postgres` or `docker compose exec postgres pg_isready -U qarax`
    - Verify API auth: `curl -H "Authorization: Bearer $QARAX_TOKEN" localhost:8000/hosts`. A 401 means a wrong/missing token, not a down stack (`/` is public, so it can't tell you).
-   - Verify host kernel modules: qarax-node (even in a container) loads `target_core_user`, `tcm_loop` and `ip_tables` from the host kernel on demand. If `uname -r` has no matching `/lib/modules/` dir (kernel upgraded without reboot), VM start fails with TCMU configfs `ENOENT` or iptables "do you need to insmod?" errors. Reboot; it is not a code bug.
+   - Verify host kernel modules: qarax-node (even in a container) loads `target_core_user` and `tcm_loop` (and nftables modules for its iptables-nft rules) from the host kernel on demand. If `uname -r` has no matching `/lib/modules/` dir (kernel upgraded without reboot), anything not already loaded fails, e.g. TCMU configfs `ENOENT`. Reboot; it is not a code bug.
 3. **Read service logs** before grep-ing source files. Most runtime failures are infrastructure, not code.
 4. **Only after confirming infrastructure is healthy**, investigate code-level issues.
 
