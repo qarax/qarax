@@ -375,9 +375,8 @@ async def test_vm_commit_converts_oci_to_raw_disk(client, oci_image_ref):
 
         vm_id = None
         try:
-            await _attach_pools_to_hosts(
-                c, hosts, [overlaybd_pool_id, commit_pool_id]
-            )
+            await _attach_pools_to_hosts(c, hosts, [commit_pool_id])
+            await _attach_overlaybd_pool(c, hosts, overlaybd_pool_id)
 
             # Create the OCI-backed VM
             new_vm = NewVm(
