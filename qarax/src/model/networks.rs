@@ -418,51 +418,88 @@ ORDER BY hn.host_id
 
 // IPAM
 
-pub async fn allocate_ip(
-    pool: &PgPool,
-    network_id: Uuid,
-    ip_address: &str,
-    vm_id: Option<Uuid>,
-) -> Result<IpAllocation, sqlx::Error> {
-    let row = sqlx::query_as!(
-        IpAllocationRow,
-        r#"
-INSERT INTO ip_allocations (network_id, ip_address, vm_id)
-VALUES ($1, $2::text::inet, $3)
-ON CONFLICT (network_id, ip_address) DO UPDATE
-    SET vm_id = EXCLUDED.vm_id, allocated_at = now()
-RETURNING id, network_id, ip_address::text AS "ip_address!", vm_id, allocated_at
-        "#,
-        network_id,
-        ip_address,
-        vm_id
-    )
-    .fetch_one(pool)
-    .await?;
-
-    Ok(row.into())
-}
-
-pub async fn try_allocate_ip_tx(
+/// Allocate an IP on a network to a VM: `requested` when it's free, otherwise
+/// the lowest free host address (never the network, broadcast or gateway
+/// address). Returns None when `requested` is taken or the network is full.
+///
+/// Allocations on one network are serialized by locking its row for the rest
+/// of the transaction, so a concurrent allocation waits instead of racing, and
+/// a second allocation in the same transaction sees the first.
+pub async fn allocate_ip_tx(
     tx: &mut PgTransaction<'_>,
     network_id: Uuid,
-    ip_address: &str,
-    vm_id: Option<Uuid>,
+    requested: Option<&str>,
+    vm_id: Uuid,
 ) -> Result<Option<IpAllocation>, sqlx::Error> {
-    let row = sqlx::query_as!(
-        IpAllocationRow,
-        r#"
+    sqlx::query_scalar!(
+        "SELECT id FROM networks WHERE id = $1 FOR NO KEY UPDATE",
+        network_id
+    )
+    .fetch_one(tx.as_mut())
+    .await?;
+
+    let row = match requested {
+        Some(ip_address) => {
+            sqlx::query_as!(
+                IpAllocationRow,
+                r#"
 INSERT INTO ip_allocations (network_id, ip_address, vm_id)
 VALUES ($1, $2::text::inet, $3)
 ON CONFLICT (network_id, ip_address) DO NOTHING
 RETURNING id, network_id, ip_address::text AS "ip_address!", vm_id, allocated_at
-        "#,
-        network_id,
-        ip_address,
-        vm_id
-    )
-    .fetch_optional(tx.as_mut())
-    .await?;
+                "#,
+                network_id,
+                ip_address,
+                vm_id
+            )
+            .fetch_optional(tx.as_mut())
+            .await?
+        }
+        // The lowest free address follows the network address, an allocated
+        // address or the gateway, so those are the only candidates to check.
+        None => {
+            sqlx::query_as!(
+                IpAllocationRow,
+                r#"
+WITH net AS (
+    SELECT id, subnet,
+           host(network(subnet))::inet AS first,
+           host(broadcast(subnet))::inet AS last,
+           host(gateway)::inet AS gateway
+    FROM networks
+    WHERE id = $1 AND family(subnet) = 4
+),
+taken AS (
+    SELECT host(a.ip_address)::inet AS ip
+    FROM ip_allocations a, net
+    WHERE a.network_id = net.id
+),
+candidate AS (
+    SELECT c.ip
+    FROM net, LATERAL (
+        SELECT net.first + 1 AS ip
+        UNION SELECT ip + 1 FROM taken
+        UNION SELECT net.gateway + 1 WHERE net.gateway IS NOT NULL
+    ) c
+    WHERE c.ip << net.subnet
+      AND c.ip > net.first
+      AND c.ip < net.last
+      AND c.ip IS DISTINCT FROM net.gateway
+      AND c.ip NOT IN (SELECT ip FROM taken)
+    ORDER BY c.ip
+    LIMIT 1
+)
+INSERT INTO ip_allocations (network_id, ip_address, vm_id)
+SELECT $1, ip, $2 FROM candidate
+RETURNING id, network_id, ip_address::text AS "ip_address!", vm_id, allocated_at
+                "#,
+                network_id,
+                vm_id
+            )
+            .fetch_optional(tx.as_mut())
+            .await?
+        }
+    };
 
     Ok(row.map(Into::into))
 }
@@ -567,78 +604,115 @@ ORDER BY ip_address
     Ok(rows.into_iter().map(|r| r.into()).collect())
 }
 
-/// Find the next available IP in the network's subnet.
-/// Skips .0 (network), the gateway, and the broadcast address.
-pub async fn next_available_ip(
-    pool: &PgPool,
-    network_id: Uuid,
-) -> Result<Option<String>, sqlx::Error> {
-    let network = get(pool, network_id).await?;
 
-    // Parse subnet CIDR
-    let (base, prefix_len) = match network.subnet.split_once('/') {
-        Some((ip, prefix)) => (ip.to_string(), prefix.parse::<u32>().unwrap_or(24)),
-        None => return Ok(None),
+#[cfg(test)]
+mod tests {
+    use uuid::Uuid;
+
+    use super::{NewNetwork, allocate_ip_tx, release_ip_by_network_and_address};
+    use crate::{
+        model::vms,
+        test_support::{TestDatabase, resolved_vm},
     };
 
-    let octets: Vec<u8> = base.split('.').filter_map(|o| o.parse().ok()).collect();
-    if octets.len() != 4 {
-        return Ok(None);
+    async fn add_network(db: &TestDatabase, subnet: &str, gateway: Option<&str>) -> Uuid {
+        super::create(
+            &db.pool,
+            NewNetwork {
+                name: format!("net-{}", Uuid::new_v4()),
+                subnet: subnet.to_string(),
+                gateway: gateway.map(str::to_string),
+                dns: None,
+                vpc_name: None,
+                network_type: None,
+            },
+        )
+        .await
+        .expect("Failed to create network")
     }
 
-    let base_u32 = (octets[0] as u32) << 24
-        | (octets[1] as u32) << 16
-        | (octets[2] as u32) << 8
-        | octets[3] as u32;
-    let host_bits = 32 - prefix_len;
-    let network_addr = base_u32 & (u32::MAX << host_bits);
-    let broadcast_addr = network_addr | ((1u32 << host_bits) - 1);
+    async fn add_vm(db: &TestDatabase) -> Uuid {
+        let mut tx = db.pool.begin().await.unwrap();
+        let vm_id = vms::create_tx(&mut tx, &resolved_vm(&Uuid::new_v4().to_string()), None)
+            .await
+            .expect("Failed to create VM");
+        tx.commit().await.unwrap();
+        vm_id
+    }
 
-    // Get gateway IP as u32 for comparison
-    let gateway_u32 = network.gateway.as_deref().and_then(|gw| {
-        let parts: Vec<u8> = gw.split('.').filter_map(|o| o.parse().ok()).collect();
-        if parts.len() == 4 {
-            Some(
-                (parts[0] as u32) << 24
-                    | (parts[1] as u32) << 16
-                    | (parts[2] as u32) << 8
-                    | parts[3] as u32,
-            )
-        } else {
-            None
+    fn host(allocation: Option<super::IpAllocation>) -> Option<String> {
+        allocation.map(|a| a.ip_address.trim_end_matches("/32").to_string())
+    }
+
+    /// Allocate without a requested address in a transaction of its own.
+    async fn allocate(db: &TestDatabase, network_id: Uuid, vm_id: Uuid) -> Option<String> {
+        let mut tx = db.pool.begin().await.unwrap();
+        let allocation = allocate_ip_tx(&mut tx, network_id, None, vm_id)
+            .await
+            .expect("allocation failed");
+        tx.commit().await.unwrap();
+        host(allocation)
+    }
+
+    #[tokio::test]
+    async fn allocation_takes_the_lowest_free_address_around_the_gateway() {
+        let db = TestDatabase::new().await;
+        // Hosts .1 to .6, with the gateway in the middle.
+        let network_id = add_network(&db, "10.9.0.0/29", Some("10.9.0.3")).await;
+        let vm_id = add_vm(&db).await;
+
+        let mut allocated = Vec::new();
+        while let Some(ip) = allocate(&db, network_id, vm_id).await {
+            allocated.push(ip);
         }
-    });
-
-    // Get already-allocated IPs
-    let allocated_set: std::collections::HashSet<String> = sqlx::query_scalar!(
-        "SELECT ip_address::text AS \"ip_address!\" FROM ip_allocations WHERE network_id = $1",
-        network_id
-    )
-    .fetch_all(pool)
-    .await?
-    .into_iter()
-    .collect();
-
-    // Iterate from network+1 to broadcast-1
-    for addr in (network_addr + 1)..broadcast_addr {
-        // Skip gateway
-        if Some(addr) == gateway_u32 {
-            continue;
-        }
-
-        let ip = format!(
-            "{}.{}.{}.{}",
-            (addr >> 24) & 0xFF,
-            (addr >> 16) & 0xFF,
-            (addr >> 8) & 0xFF,
-            addr & 0xFF
+        assert_eq!(
+            allocated,
+            ["10.9.0.1", "10.9.0.2", "10.9.0.4", "10.9.0.5", "10.9.0.6"]
         );
 
-        // PostgreSQL INET may include /32 suffix — check both forms
-        if !allocated_set.contains(&ip) && !allocated_set.contains(&format!("{}/32", ip)) {
-            return Ok(Some(ip));
-        }
+        release_ip_by_network_and_address(&db.pool, network_id, "10.9.0.2")
+            .await
+            .unwrap();
+        assert_eq!(
+            allocate(&db, network_id, vm_id).await.as_deref(),
+            Some("10.9.0.2")
+        );
     }
 
-    Ok(None)
+    #[tokio::test]
+    async fn allocations_in_one_transaction_see_each_other() {
+        // VM create registers a requested address and then allocates the
+        // managed NIC's in the same transaction.
+        let db = TestDatabase::new().await;
+        let network_id = add_network(&db, "10.9.1.0/24", Some("10.9.1.254")).await;
+        let vm_id = add_vm(&db).await;
+
+        let mut tx = db.pool.begin().await.unwrap();
+        let requested = allocate_ip_tx(&mut tx, network_id, Some("10.9.1.1"), vm_id)
+            .await
+            .unwrap();
+        let managed = allocate_ip_tx(&mut tx, network_id, None, vm_id)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+
+        assert_eq!(host(requested).as_deref(), Some("10.9.1.1"));
+        assert_eq!(host(managed).as_deref(), Some("10.9.1.2"));
+    }
+
+    #[tokio::test]
+    async fn a_requested_address_that_is_taken_is_not_allocated() {
+        let db = TestDatabase::new().await;
+        let network_id = add_network(&db, "10.9.2.0/24", None).await;
+        let (first, second) = (add_vm(&db).await, add_vm(&db).await);
+
+        for (vm_id, expected) in [(first, Some("10.9.2.7")), (second, None)] {
+            let mut tx = db.pool.begin().await.unwrap();
+            let allocation = allocate_ip_tx(&mut tx, network_id, Some("10.9.2.7"), vm_id)
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+            assert_eq!(host(allocation).as_deref(), expected);
+        }
+    }
 }
