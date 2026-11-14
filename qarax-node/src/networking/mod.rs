@@ -7,6 +7,7 @@ use sha2::{Digest, Sha256};
 pub mod bridge;
 pub mod dhcp;
 pub mod dns;
+pub mod firewall;
 pub mod iptables;
 pub mod vxlan;
 
@@ -41,7 +42,11 @@ pub struct Ipv4Cidr {
 
 impl Ipv4Cidr {
     pub fn netmask(&self) -> Ipv4Addr {
-        Ipv4Addr::from(u32::MAX.checked_shl(32 - u32::from(self.prefix)).unwrap_or(0))
+        Ipv4Addr::from(
+            u32::MAX
+                .checked_shl(32 - u32::from(self.prefix))
+                .unwrap_or(0),
+        )
     }
 }
 
@@ -112,7 +117,10 @@ mod tests {
         let cidr: Ipv4Cidr = "10.1.2.3/23".parse().unwrap();
         assert_eq!(cidr.addr, Ipv4Addr::new(10, 1, 2, 3));
         assert_eq!(cidr.netmask(), Ipv4Addr::new(255, 255, 254, 0));
-        assert_eq!("0.0.0.0/0".parse::<Ipv4Cidr>().unwrap().netmask(), Ipv4Addr::UNSPECIFIED);
+        assert_eq!(
+            "0.0.0.0/0".parse::<Ipv4Cidr>().unwrap().netmask(),
+            Ipv4Addr::UNSPECIFIED
+        );
         for bad in ["10.0.0.0", "10.0.0.0/33", "10.0.0/24", "10.0.0.0/x"] {
             assert!(bad.parse::<Ipv4Cidr>().is_err(), "{bad} parsed");
         }

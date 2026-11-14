@@ -148,7 +148,6 @@ async fn find_bridge_member(handle: &Handle, bridge_name: &str) -> Result<String
 
 use super::validate_iface_name;
 
-
 /// Create a Linux bridge device and bring it up.
 pub async fn create_bridge(name: &str) -> Result<()> {
     info!("Creating bridge: {name}");
@@ -176,17 +175,57 @@ pub async fn create_bridge(name: &str) -> Result<()> {
 
 /// Assign an IP address to the bridge (gateway for the subnet).
 /// Whether a network interface with this name exists.
-/// The first IPv4 address on an interface: the gateway on an isolated
+/// The host's IPv4 addresses on an interface: the gateway on an isolated
 /// network's bridge, the host's own address on a bridged one.
-pub async fn first_ipv4(name: &str) -> Result<Ipv4Addr> {
+pub async fn ipv4_addrs_of(name: &str) -> Result<Vec<Ipv4Addr>> {
     let handle = netlink_handle().await?;
     let idx = link_index(&handle, name).await?;
-    ipv4_addrs(&handle, idx)
+    Ok(ipv4_addrs(&handle, idx)
+        .await?
+        .into_iter()
+        .map(|(ip, _)| ip)
+        .collect())
+}
+
+/// The first of the host's IPv4 addresses on an interface.
+pub async fn first_ipv4(name: &str) -> Result<Ipv4Addr> {
+    ipv4_addrs_of(name)
         .await?
         .into_iter()
         .next()
-        .map(|(ip, _)| ip)
         .ok_or_else(|| anyhow::anyhow!("{name} has no IPv4 address"))
+}
+
+/// The MTU of the interface that holds `ip`.
+pub async fn mtu_of_interface_with(ip: Ipv4Addr) -> Result<u32> {
+    let handle = netlink_handle().await?;
+    let mut addresses = handle.address().get().execute();
+    while let Some(msg) = addresses.try_next().await? {
+        let holds_ip = msg
+            .attributes
+            .iter()
+            .any(|attr| matches!(attr, AddressAttribute::Address(IpAddr::V4(a)) if *a == ip));
+        if !holds_ip {
+            continue;
+        }
+        let link = handle
+            .link()
+            .get()
+            .match_index(msg.header.index)
+            .execute()
+            .try_next()
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("The interface holding {ip} is gone"))?;
+        return link
+            .attributes
+            .iter()
+            .find_map(|attr| match attr {
+                LinkAttribute::Mtu(mtu) => Some(*mtu),
+                _ => None,
+            })
+            .ok_or_else(|| anyhow::anyhow!("The interface holding {ip} reports no MTU"));
+    }
+    anyhow::bail!("No interface holds {ip}")
 }
 
 pub async fn link_exists(name: &str) -> Result<bool> {

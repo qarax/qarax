@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use futures::future::try_join_all;
+use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::{
@@ -385,23 +386,18 @@ async fn resolve_underlay_ip(
     Ok(resolved)
 }
 
+/// The VM's NICs to filter on `host_id` (where it runs, or is migrating to),
+/// with its security-group rules; none when it has no security groups.
 async fn firewall_interfaces_for_vm(
-    env: &App,
+    pool: &PgPool,
     vm_id: Uuid,
+    host_id: Uuid,
 ) -> Result<Vec<VmFirewallInterface>, Error> {
-    let vm = vms::get(env.pool(), vm_id).await?;
-    let Some(host_id) = vm.host_id else {
-        return Ok(Vec::new());
-    };
-
-    if security_groups::list_by_vm(env.pool(), vm_id)
-        .await?
-        .is_empty()
-    {
+    if security_groups::list_by_vm(pool, vm_id).await?.is_empty() {
         return Ok(Vec::new());
     }
 
-    let rules = security_groups::rule_set_for_vm(env.pool(), vm_id).await?;
+    let rules = security_groups::rule_set_for_vm(pool, vm_id).await?;
 
     let proto_rules: Vec<VmFirewallRule> = rules
         .into_iter()
@@ -414,7 +410,7 @@ async fn firewall_interfaces_for_vm(
         })
         .collect();
 
-    let nics = network_interfaces::list_by_vm(env.pool(), vm_id).await?;
+    let nics = network_interfaces::list_by_vm(pool, vm_id).await?;
     let mut interfaces = Vec::new();
     for nic in nics {
         let Some(network_id) = nic.network_id else {
@@ -424,13 +420,12 @@ async fn firewall_interfaces_for_vm(
             continue;
         };
 
-        let network = networks::get(env.pool(), network_id).await?;
+        let network = networks::get(pool, network_id).await?;
         if network.network_type.as_deref() == Some("passt") {
             continue;
         }
 
-        let Some(bridge_name) = networks::get_host_bridge(env.pool(), host_id, network_id).await?
-        else {
+        let Some(bridge_name) = networks::get_host_bridge(pool, host_id, network_id).await? else {
             return Err(Error::UnprocessableEntity(format!(
                 "Network {} is not attached to host {}. Run 'network attach-host' first.",
                 network_id, host_id
@@ -451,10 +446,15 @@ async fn firewall_interfaces_for_vm(
     Ok(interfaces)
 }
 
-pub async fn sync_vm_firewall_on_host(env: &App, vm_id: Uuid, host_id: Uuid) -> Result<(), Error> {
-    let host = hosts::require_by_id(env.pool(), host_id).await?;
+/// Send the VM's security groups to `host_id`, where it runs or is about to.
+pub async fn sync_vm_firewall_on_host(
+    pool: &PgPool,
+    vm_id: Uuid,
+    host_id: Uuid,
+) -> Result<(), Error> {
+    let host = hosts::require_by_id(pool, host_id).await?;
     let node_client = NodeClient::new(&host.address, host.port as u16);
-    let interfaces = firewall_interfaces_for_vm(env, vm_id).await?;
+    let interfaces = firewall_interfaces_for_vm(pool, vm_id, host_id).await?;
 
     node_client
         .sync_vm_firewall(vm_id, &interfaces)
@@ -477,7 +477,7 @@ pub async fn sync_vm_firewall(env: &App, vm_id: Uuid) -> Result<(), Error> {
         return Ok(());
     }
 
-    sync_vm_firewall_on_host(env, vm_id, host_id).await
+    sync_vm_firewall_on_host(env.pool(), vm_id, host_id).await
 }
 
 pub async fn sync_security_group_members(env: &App, security_group_id: Uuid) -> Result<(), Error> {

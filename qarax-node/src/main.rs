@@ -4,7 +4,7 @@ use std::sync::Arc;
 use tonic::transport::Server;
 #[cfg(not(feature = "otel"))]
 use tracing::Level;
-use tracing::info;
+use tracing::{error, info};
 
 #[cfg(feature = "dhat-heap")]
 #[global_allocator]
@@ -208,6 +208,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create the VM service with all available backends
     let vm_service = VmServiceImpl::new(vm_manager, fc_manager);
+    // Without it, recovered VMs run unfiltered until their next change; new
+    // VMs and NICs fail to come up rather than run unfiltered.
+    if let Err(e) = vm_service.init_firewall().await {
+        error!("Failed to set up the VM NIC firewall: {e:#}");
+    }
 
     info!("Starting gRPC server with available hypervisor backends");
 

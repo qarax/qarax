@@ -5,10 +5,11 @@ use crate::{
     model::{
         hosts,
         hosts::HostStatus,
-        networks::{self, IpAllocation, Network, NetworkHost, NewNetwork},
+        networks::{self, IpAllocation, Ipv4Subnet, Network, NetworkHost, NewNetwork},
     },
     network_policy,
 };
+use anyhow::Context;
 use axum::{Extension, Json, extract::Path};
 use http::StatusCode;
 use serde::Deserialize;
@@ -252,12 +253,17 @@ async fn attach_on_node(
     bridge_name: &str,
     parent_interface: Option<&str>,
 ) -> anyhow::Result<()> {
+    let subnet = Ipv4Subnet::parse(&network.subnet)
+        .with_context(|| format!("Network subnet {} is not IPv4", network.subnet))?;
+    let gateway = match network.gateway.as_deref() {
+        Some(gateway) => gateway
+            .parse()
+            .with_context(|| format!("Network gateway {gateway} is not IPv4"))?,
+        None => subnet.first_host(),
+    };
     // Only nodes from before DHCP reservations use the range.
-    let (dhcp_start, dhcp_end) = compute_dhcp_range(&network.subnet, network.gateway.as_deref());
-    let gateway = network
-        .gateway
-        .clone()
-        .unwrap_or_else(|| default_gateway(&network.subnet));
+    let (dhcp_start, dhcp_end) = dhcp_range(subnet, gateway);
+    let gateway = gateway.to_string();
     let dns = network.dns.clone().unwrap_or_else(|| gateway.clone());
 
     NodeClient::new(&host.address, host.port as u16)
@@ -383,74 +389,16 @@ pub async fn list_ips(
     })
 }
 
-/// Compute a default gateway from a CIDR (first usable address).
-fn default_gateway(subnet: &str) -> String {
-    if let Some((base, _prefix)) = subnet.split_once('/') {
-        let octets: Vec<u8> = base.split('.').filter_map(|o| o.parse().ok()).collect();
-        if octets.len() == 4 {
-            return format!(
-                "{}.{}.{}.{}",
-                octets[0],
-                octets[1],
-                octets[2],
-                octets[3] + 1
-            );
-        }
-    }
-    "10.0.0.1".to_string()
-}
-
 /// The DHCP range sent to nodes: the first host address (after the gateway, if
 /// that comes first) to broadcast-1. Current nodes ignore it and answer only
 /// their VM NICs, each with its IPAM address; older nodes hand out leases from
 /// it, and need it to attach a network at all.
-fn compute_dhcp_range(subnet: &str, gateway: Option<&str>) -> (String, String) {
-    if let Some((base, prefix_str)) = subnet.split_once('/') {
-        let octets: Vec<u8> = base.split('.').filter_map(|o| o.parse().ok()).collect();
-        let prefix_len: u32 = prefix_str.parse().unwrap_or(24);
-        if octets.len() == 4 {
-            let base_u32 = (octets[0] as u32) << 24
-                | (octets[1] as u32) << 16
-                | (octets[2] as u32) << 8
-                | octets[3] as u32;
-            let host_bits = 32 - prefix_len;
-            let network_addr = base_u32 & (u32::MAX << host_bits);
-            let broadcast_addr = network_addr | ((1u32 << host_bits) - 1);
-
-            // Parse the gateway IP so we can skip it when selecting the range start.
-            let gw_u32: Option<u32> = gateway.and_then(|gw| {
-                let parts: Vec<u8> = gw.split('.').filter_map(|o| o.parse().ok()).collect();
-                if parts.len() == 4 {
-                    Some(
-                        (parts[0] as u32) << 24
-                            | (parts[1] as u32) << 16
-                            | (parts[2] as u32) << 8
-                            | parts[3] as u32,
-                    )
-                } else {
-                    None
-                }
-            });
-
-            // Start at network_addr+1, skipping the gateway.
-            let mut start = network_addr + 1;
-            if gw_u32 == Some(start) {
-                start += 1;
-            }
-            let end = broadcast_addr - 1; // .254 for /24
-
-            let fmt = |addr: u32| {
-                format!(
-                    "{}.{}.{}.{}",
-                    (addr >> 24) & 0xFF,
-                    (addr >> 16) & 0xFF,
-                    (addr >> 8) & 0xFF,
-                    addr & 0xFF
-                )
-            };
-
-            return (fmt(start), fmt(end));
-        }
-    }
-    ("10.0.0.10".to_string(), "10.0.0.254".to_string())
+fn dhcp_range(subnet: Ipv4Subnet, gateway: std::net::Ipv4Addr) -> (String, String) {
+    let first = subnet.first_host();
+    let start = if first == gateway {
+        std::net::Ipv4Addr::from(u32::from(first) + 1)
+    } else {
+        first
+    };
+    (start.to_string(), subnet.last_host().to_string())
 }

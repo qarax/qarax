@@ -6,6 +6,10 @@ use crate::rpc::node::VpcOverlayConfig;
 
 const QARAX_VXLAN_PREFIX: &str = "qvx";
 const VXLAN_FDB_MAC: &str = "00:00:00:00:00:00";
+const VXLAN_PORT: u16 = 4789;
+/// What VXLAN over IPv4 adds to a packet: the outer IP (20) and UDP (8)
+/// headers, the VXLAN header (8) and the inner Ethernet header (14).
+const VXLAN_OVERHEAD: u32 = 50;
 
 pub async fn sync_vpc_overlays(overlays: &[VpcOverlayConfig]) -> Result<()> {
     let desired_ifaces: HashSet<&str> = overlays
@@ -23,7 +27,38 @@ pub async fn sync_vpc_overlays(overlays: &[VpcOverlayConfig]) -> Result<()> {
         }
     }
 
-    Ok(())
+    sync_underlay_filter(overlays).await
+}
+
+/// Accept VXLAN traffic only from overlay peers. The overlays carry VPC
+/// traffic unauthenticated, so a packet from anyone else on the underlay with
+/// a VPC's VNI would land in it. Without overlays there's nothing to filter,
+/// and the table goes (VXLAN on this port may then belong to someone else).
+async fn sync_underlay_filter(overlays: &[VpcOverlayConfig]) -> Result<()> {
+    let peers: BTreeSet<&str> = overlays
+        .iter()
+        .flat_map(|overlay| overlay.peer_underlay_ips.iter().map(String::as_str))
+        .collect();
+    let table = "inet qarax_vxlan";
+    let mut script = format!("add table {table}\n");
+    if overlays.is_empty() {
+        script += &format!("delete table {table}\n");
+    } else {
+        script += &format!(
+            "add set {table} peers {{ type ipv4_addr; }}\n\
+             flush set {table} peers\n\
+             add chain {table} input {{ type filter hook input priority filter; policy accept; }}\n\
+             flush chain {table} input\n\
+             add rule {table} input udp dport {VXLAN_PORT} ip saddr != @peers drop\n"
+        );
+        if !peers.is_empty() {
+            let peers = peers.into_iter().collect::<Vec<_>>().join(", ");
+            script += &format!("add element {table} peers {{ {peers} }}\n");
+        }
+    }
+    super::firewall::run_nft(&script)
+        .await
+        .context("Failed to sync the VXLAN underlay filter")
 }
 
 async fn reconcile_overlay(overlay: &VpcOverlayConfig) -> Result<()> {
@@ -46,9 +81,28 @@ async fn reconcile_overlay(overlay: &VpcOverlayConfig) -> Result<()> {
 
     sync_interface_address(&overlay.interface_name, &overlay.local_overlay_cidr).await?;
 
-    run_cmd("ip", &["link", "set", "dev", &overlay.interface_name, "up"])
+    // Sized so an encapsulated packet fits the underlay unfragmented; the
+    // overlay is routed, so guests sending larger packets get told to shrink
+    // them (or, without DF, have them fragmented here, before encapsulation).
+    let underlay_ip = overlay.local_underlay_ip.parse()?;
+    let mtu = super::bridge::mtu_of_interface_with(underlay_ip)
         .await
-        .with_context(|| format!("Failed to bring up {}", overlay.interface_name))?;
+        .context("Failed to read the underlay MTU")?
+        - VXLAN_OVERHEAD;
+    run_cmd(
+        "ip",
+        &[
+            "link",
+            "set",
+            "dev",
+            &overlay.interface_name,
+            "mtu",
+            &mtu.to_string(),
+            "up",
+        ],
+    )
+    .await
+    .with_context(|| format!("Failed to bring up {}", overlay.interface_name))?;
 
     sync_fdb_entries(&overlay.interface_name, &overlay.peer_underlay_ips).await?;
     sync_routes(&overlay.interface_name, &overlay.routes).await?;
@@ -106,7 +160,7 @@ async fn overlay_needs_recreate(overlay: &VpcOverlayConfig) -> Result<bool> {
     let expected_local = format!("local {}", overlay.local_underlay_ip);
     Ok(!(output.contains(&expected_vni)
         && output.contains(&expected_local)
-        && output.contains("dstport 4789")
+        && output.contains(&format!("dstport {VXLAN_PORT}"))
         && output.contains("nolearning")))
 }
 
@@ -123,7 +177,7 @@ async fn create_interface(overlay: &VpcOverlayConfig) -> Result<()> {
             "id",
             &overlay.vni.to_string(),
             "dstport",
-            "4789",
+            &VXLAN_PORT.to_string(),
             "local",
             &overlay.local_underlay_ip,
             "nolearning",

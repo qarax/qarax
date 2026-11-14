@@ -186,9 +186,7 @@ async fn run_dhcp_loop(
         let Some(action) = options.process(&request) else {
             continue;
         };
-        let reserved = reservations
-            .reserved_ip(bridge, client_mac(&action))
-            .await;
+        let reserved = reservations.reserved_ip(bridge, client_mac(&action)).await;
 
         let mut opt_buf = Options::buf();
         let Some(reply) = reply(&options, &request, &action, reserved, &mut opt_buf) else {
@@ -293,7 +291,10 @@ mod tests {
             ]
         };
         let ack = answer(&request(RESERVED), Some(RESERVED));
-        assert_eq!(ack.map(|(t, ip, _)| (t, ip)), Some((MessageType::Ack, RESERVED)));
+        assert_eq!(
+            ack.map(|(t, ip, _)| (t, ip)),
+            Some((MessageType::Ack, RESERVED))
+        );
 
         let stale = answer(&request(Ipv4Addr::new(10, 0, 0, 9)), Some(RESERVED));
         assert_eq!(stale.map(|(t, ..)| t), Some(MessageType::Nak));

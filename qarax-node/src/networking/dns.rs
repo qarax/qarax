@@ -33,11 +33,15 @@ static FORWARDERS: LazyLock<Mutex<HashMap<String, Vec<JoinHandle<()>>>>> =
 /// bridge's gateway address.
 pub async fn start_dns_forwarder(bridge: &str, listen: Ipv4Addr) -> Result<()> {
     info!("Starting DNS forwarder on {bridge} ({listen}:{DNS_PORT})");
+    // A re-attach restarts the forwarder: the old one's listener must be closed
+    // before the port can be bound again.
+    stop_dns_forwarder(bridge).await;
     let addr = SocketAddr::from((listen, DNS_PORT));
     let udp = bind(bridge, addr, socket2::Type::DGRAM)?;
     let udp = Arc::new(UdpSocket::from_std(udp.into()).context("Failed to wrap UDP socket")?);
     let tcp = bind(bridge, addr, socket2::Type::STREAM)?;
-    tcp.listen(128).context("Failed to listen for DNS over TCP")?;
+    tcp.listen(128)
+        .context("Failed to listen for DNS over TCP")?;
     let tcp = TcpListener::from_std(tcp.into()).context("Failed to wrap TCP listener")?;
 
     let name = bridge.to_string();
@@ -45,21 +49,23 @@ pub async fn start_dns_forwarder(bridge: &str, listen: Ipv4Addr) -> Result<()> {
         tokio::spawn(serve_udp(udp, name.clone())),
         tokio::spawn(serve_tcp(tcp, name)),
     ];
-    if let Some(old) = FORWARDERS
+    FORWARDERS
         .lock()
         .unwrap()
-        .insert(bridge.to_string(), handles)
-    {
-        old.iter().for_each(JoinHandle::abort);
-    }
+        .insert(bridge.to_string(), handles);
     Ok(())
 }
 
-/// Stop the forwarder for a bridge.
-pub fn stop_dns_forwarder(bridge: &str) {
-    if let Some(handles) = FORWARDERS.lock().unwrap().remove(bridge) {
-        info!("Stopping DNS forwarder for bridge {bridge}");
-        handles.iter().for_each(JoinHandle::abort);
+/// Stop the forwarder for a bridge, returning once its sockets are closed.
+pub async fn stop_dns_forwarder(bridge: &str) {
+    let Some(handles) = FORWARDERS.lock().unwrap().remove(bridge) else {
+        return;
+    };
+    info!("Stopping DNS forwarder for bridge {bridge}");
+    for handle in handles {
+        handle.abort();
+        // Cancelled, as asked: the task and its socket are gone.
+        let _ = handle.await;
     }
 }
 
@@ -163,7 +169,8 @@ async fn serve_tcp(listener: TcpListener, bridge: String) {
         };
         tokio::spawn(async move {
             for upstream in upstreams().await {
-                let Ok(Ok(mut server)) = timeout(UPSTREAM_TIMEOUT, TcpStream::connect(upstream)).await
+                let Ok(Ok(mut server)) =
+                    timeout(UPSTREAM_TIMEOUT, TcpStream::connect(upstream)).await
                 else {
                     continue;
                 };

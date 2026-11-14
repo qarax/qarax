@@ -41,7 +41,7 @@ Env vars: `RUST_LOG` (tracing filter), `INSECURE_REGISTRIES` (comma-separated ho
 | `qarax-init` | No | PID 1 init injected into OCI VMs |
 | `overlaybd-tcmu` | No | TCMU daemon for lazy block-level image loading |
 | `convertor` | No | OCI to OverlayBD format conversion |
-| `iptables`, `ip` | For networking | NAT rules and TAP device management |
+| `iptables`, `nft`, `ip` | For networking | NAT, VPC isolation and VM firewall rules; TAP and VXLAN devices |
 
 Kernel modules: `kvm`, `kvm_intel` (or `kvm_amd`), `vhost_net`, `tap`, `tun`. For OverlayBD: `target_core_user`, `tcm_loop`.
 
@@ -56,9 +56,22 @@ Three pool types, each implementing attach/detach/map/unmap:
 ## Networking
 
 - Creates Linux bridges via rtnetlink (isolated or bridged to a physical NIC)
-- Runs an in-process DHCP server per bridge (12h leases, up to 256 clients)
+- TAP devices are created per VM NIC and attached to the bridge, also for NICs
+  hotplugged into a running VM. A NIC without a configured MAC gets one derived
+  from the VM and device IDs.
+- Runs an in-process DHCP server per bridge that answers only this node's VM
+  NICs, each with its IPAM address and the network's mask; other clients (on a
+  LAN the bridge is attached to) get no reply
+- Runs a DNS forwarder on each isolated bridge's gateway address, relaying to
+  the resolvers in the host's `/etc/resolv.conf`
 - Sets up NAT via iptables MASQUERADE + FORWARD rules
-- TAP devices are created per VM NIC and attached to the bridge
+- Filters every VM NIC at its bridge port, in the nftables table `bridge
+  qarax`: the NIC may only send from its MAC and address, and the VM's
+  security groups apply to all of its traffic, including traffic from VMs on
+  the same bridge. Traffic to and from the host itself (DHCP, DNS, the node's
+  own connections) isn't filtered by security groups.
+- Sizes VPC overlay (VXLAN) devices from the underlay MTU, and accepts VXLAN
+  traffic only from overlay peers (table `inet qarax_vxlan`)
 
 ## Deployment
 

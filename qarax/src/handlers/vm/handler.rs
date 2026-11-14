@@ -1475,16 +1475,16 @@ pub(crate) async fn start_vm_internal(env: &App, vm_id: Uuid) -> Result<Uuid> {
             return;
         }
 
-        if let Err(e) = node_client.start_vm(vm_id).await {
-            fail(format!("start_vm failed: {:#}", e)).await;
+        // Before boot, so the guest never runs without its security groups.
+        if let Err(e) =
+            network_policy::sync_vm_firewall_on_host(env_for_start.pool(), vm_id, host.id).await
+        {
+            fail(format!("sync_vm_firewall failed: {e}")).await;
             return;
         }
 
-        if let Err(e) =
-            network_policy::sync_vm_firewall_on_host(&env_for_start, vm_id, host.id).await
-        {
-            let _ = node_client.force_stop_vm(vm_id).await;
-            fail(format!("sync_vm_firewall failed: {e}")).await;
+        if let Err(e) = node_client.start_vm(vm_id).await {
+            fail(format!("start_vm failed: {:#}", e)).await;
             return;
         }
 
@@ -2355,24 +2355,7 @@ async fn handle_console_websocket(ws: WebSocket, vm_id: Uuid, host: crate::model
 }
 
 fn subnet_mask_from_cidr(subnet: &str) -> Option<String> {
-    let prefix = subnet
-        .split_once('/')
-        .and_then(|(_, p)| p.parse::<u32>().ok())?;
-    if prefix > 32 {
-        return None;
-    }
-    let mask = if prefix == 0 {
-        0
-    } else {
-        u32::MAX << (32 - prefix)
-    };
-    Some(format!(
-        "{}.{}.{}.{}",
-        (mask >> 24) & 0xFF,
-        (mask >> 16) & 0xFF,
-        (mask >> 8) & 0xFF,
-        mask & 0xFF
-    ))
+    networks::Ipv4Subnet::parse(subnet).map(|subnet| subnet.netmask().to_string())
 }
 
 /// Build a `CreateVmRequest` from DB state — called at `vm start` for lazily-provisioned VMs.
@@ -3723,6 +3706,11 @@ pub(crate) async fn execute_planned_vm_migration(
         .receive_migration(vm_id, vm_config, 0)
         .await
         .map_err(|e| format!("receive_migration failed: {:#}", e))?;
+
+    // The destination filters the VM from its first packet there.
+    network_policy::sync_vm_firewall_on_host(db_pool, vm_id, target_host.id)
+        .await
+        .map_err(|e| format!("sync_vm_firewall on the destination failed: {e}"))?;
 
     if let Some(job_id) = job_id {
         let _ = jobs::update_progress(db_pool, job_id, 25).await;

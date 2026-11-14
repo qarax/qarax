@@ -121,6 +121,45 @@ impl From<IpAllocationRow> for IpAllocation {
 
 pub type PgTransaction<'a> = Transaction<'a, Postgres>;
 
+/// A network's subnet. Networks are IPv4 (nodes' bridges, DHCP and firewall
+/// are), and the subnet column is a normalized CIDR such as "10.0.0.0/24".
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Ipv4Subnet {
+    network: u32,
+    prefix: u32,
+}
+
+impl Ipv4Subnet {
+    pub fn parse(cidr: &str) -> Option<Self> {
+        let (base, prefix) = cidr.split_once('/')?;
+        let base: std::net::Ipv4Addr = base.parse().ok()?;
+        let prefix = prefix.parse().ok().filter(|prefix| *prefix <= 32)?;
+        let subnet = Self { network: 0, prefix };
+        Some(Self {
+            network: u32::from(base) & subnet.mask(),
+            prefix,
+        })
+    }
+
+    fn mask(&self) -> u32 {
+        u32::MAX.checked_shl(32 - self.prefix).unwrap_or(0)
+    }
+
+    pub fn netmask(&self) -> std::net::Ipv4Addr {
+        self.mask().into()
+    }
+
+    /// The address after the network address: the default gateway.
+    pub fn first_host(&self) -> std::net::Ipv4Addr {
+        self.network.wrapping_add(1).into()
+    }
+
+    /// The address before the broadcast address.
+    pub fn last_host(&self) -> std::net::Ipv4Addr {
+        (self.network | !self.mask()).wrapping_sub(1).into()
+    }
+}
+
 // CRUD
 
 pub async fn list(pool: &PgPool, name_filter: Option<&str>) -> Result<Vec<Network>, sqlx::Error> {
@@ -604,12 +643,11 @@ ORDER BY ip_address
     Ok(rows.into_iter().map(|r| r.into()).collect())
 }
 
-
 #[cfg(test)]
 mod tests {
     use uuid::Uuid;
 
-    use super::{NewNetwork, allocate_ip_tx, release_ip_by_network_and_address};
+    use super::{Ipv4Subnet, NewNetwork, allocate_ip_tx, release_ip_by_network_and_address};
     use crate::{
         model::vms,
         test_support::{TestDatabase, resolved_vm},
@@ -652,6 +690,24 @@ mod tests {
             .expect("allocation failed");
         tx.commit().await.unwrap();
         host(allocation)
+    }
+
+    #[test]
+    fn ipv4_subnets_give_their_mask_and_host_range() {
+        let subnet = Ipv4Subnet::parse("10.1.2.0/23").unwrap();
+        assert_eq!(subnet.netmask().to_string(), "255.255.254.0");
+        assert_eq!(subnet.first_host().to_string(), "10.1.2.1");
+        assert_eq!(subnet.last_host().to_string(), "10.1.3.254");
+        assert_eq!(
+            Ipv4Subnet::parse("10.0.0.0/0")
+                .unwrap()
+                .netmask()
+                .to_string(),
+            "0.0.0.0"
+        );
+        for not_ipv4 in ["fd00::/64", "10.0.0.0", "10.0.0.0/33"] {
+            assert_eq!(Ipv4Subnet::parse(not_ipv4), None, "{not_ipv4}");
+        }
     }
 
     #[tokio::test]

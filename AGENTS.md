@@ -73,7 +73,7 @@ Follow this order before touching code:
    - Hyperconverged mode: `systemctl status qarax-node`, `ps aux | grep cloud-hypervisor`
    - Verify Postgres: `docker compose ps postgres` or `docker compose exec postgres pg_isready -U qarax`
    - Verify API auth: `curl -H "Authorization: Bearer $QARAX_TOKEN" localhost:8000/hosts`. A 401 means a wrong/missing token, not a down stack (`/` is public, so it can't tell you).
-   - Verify host kernel modules: qarax-node (even in a container) loads `target_core_user` and `tcm_loop` (and nftables modules for its iptables-nft rules) from the host kernel on demand. If `uname -r` has no matching `/lib/modules/` dir (kernel upgraded without reboot), anything not already loaded fails, e.g. TCMU configfs `ENOENT`. Reboot; it is not a code bug.
+   - Verify host kernel modules: qarax-node (even in a container) loads `target_core_user` and `tcm_loop` (and nftables modules for its firewall and iptables-nft rules, e.g. `nf_conntrack_bridge`) from the host kernel on demand. If `uname -r` has no matching `/lib/modules/` dir (kernel upgraded without reboot), anything not already loaded fails, e.g. TCMU configfs `ENOENT`. Reboot; it is not a code bug.
 3. **Read service logs** before grep-ing source files. Most runtime failures are infrastructure, not code.
 4. **Only after confirming infrastructure is healthy**, investigate code-level issues.
 
@@ -105,7 +105,7 @@ Do not jump to code investigation when services may not be running or the wrong 
 - `qarax-node/src/cloud_hypervisor/manager.rs` — Cloud Hypervisor process management
 - `qarax-node/src/firecracker/` — Firecracker backend
 - `qarax-node/src/overlaybd/manager.rs` — OverlayBD TCMU block device management
-- `qarax-node/src/networking/` — Network management (bridge creation, DHCP allocation, nftables rules)
+- `qarax-node/src/networking/` — Network management: bridges, DHCP from IPAM reservations, the DNS forwarder, the per-NIC nftables firewall (`firewall.rs`), NAT and VPC isolation (iptables), VXLAN overlays
 
 ### OpenAPI
 
