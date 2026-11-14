@@ -1,7 +1,7 @@
-from enum import Enum
+from enum import StrEnum
 
 
-class HookExecutionStatus(str, Enum):
+class HookExecutionStatus(StrEnum):
     DELIVERED = "delivered"
     FAILED = "failed"
     PENDING = "pending"

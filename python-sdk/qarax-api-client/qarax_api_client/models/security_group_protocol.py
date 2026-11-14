@@ -1,7 +1,7 @@
-from enum import Enum
+from enum import StrEnum
 
 
-class SecurityGroupProtocol(str, Enum):
+class SecurityGroupProtocol(StrEnum):
     ANY = "any"
     ICMP = "icmp"
     TCP = "tcp"

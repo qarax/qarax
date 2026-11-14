@@ -1,7 +1,7 @@
-from enum import Enum
+from enum import StrEnum
 
 
-class HostStatus(str, Enum):
+class HostStatus(StrEnum):
     DOWN = "down"
     INITIALIZING = "initializing"
     INSTALLATION_FAILED = "installation_failed"

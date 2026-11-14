@@ -1,7 +1,7 @@
-from enum import Enum
+from enum import StrEnum
 
 
-class BackupType(str, Enum):
+class BackupType(StrEnum):
     DATABASE = "database"
     VM = "vm"
 

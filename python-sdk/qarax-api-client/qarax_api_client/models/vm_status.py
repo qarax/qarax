@@ -1,7 +1,7 @@
-from enum import Enum
+from enum import StrEnum
 
 
-class VmStatus(str, Enum):
+class VmStatus(StrEnum):
     COMMITTING = "committing"
     CREATED = "created"
     MIGRATING = "migrating"

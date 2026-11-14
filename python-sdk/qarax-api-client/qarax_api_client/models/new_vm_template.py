@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 from uuid import UUID
 
@@ -289,8 +290,8 @@ class NewVmTemplate:
         return field_dict
 
     @classmethod
-    def from_dict(cls: type[T], src_dict: Any) -> T:
-        from ..models.new_vm_network import NewVmNetwork
+    def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
+        from ..models.new_vm_network import NewVmNetwork  # noqa: PLC0415
 
         d = dict(src_dict)
         name = d.pop("name")

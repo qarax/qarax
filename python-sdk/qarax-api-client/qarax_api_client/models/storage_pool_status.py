@@ -1,7 +1,7 @@
-from enum import Enum
+from enum import StrEnum
 
 
-class StoragePoolStatus(str, Enum):
+class StoragePoolStatus(StrEnum):
     ACTIVE = "active"
     ERROR = "error"
     INACTIVE = "inactive"

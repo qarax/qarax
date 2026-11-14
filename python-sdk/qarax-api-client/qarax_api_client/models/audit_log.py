@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import datetime
+from collections.abc import Mapping
 from typing import Any, TypeVar, cast
 from uuid import UUID
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
-from dateutil.parser import isoparse
 
 from ..models.audit_action import AuditAction
 from ..models.audit_resource_type import AuditResourceType
@@ -75,11 +75,11 @@ class AuditLog:
         return field_dict
 
     @classmethod
-    def from_dict(cls: type[T], src_dict: Any) -> T:
+    def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         d = dict(src_dict)
         action = AuditAction(d.pop("action"))
 
-        created_at = isoparse(d.pop("created_at"))
+        created_at = datetime.datetime.fromisoformat(d.pop("created_at"))
 
         id = UUID(d.pop("id"))
 

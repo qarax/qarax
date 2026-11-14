@@ -1,7 +1,7 @@
-from enum import Enum
+from enum import StrEnum
 
 
-class TransferStatus(str, Enum):
+class TransferStatus(StrEnum):
     COMPLETED = "completed"
     FAILED = "failed"
     PENDING = "pending"

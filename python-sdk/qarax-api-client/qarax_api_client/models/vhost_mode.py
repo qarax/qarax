@@ -1,7 +1,7 @@
-from enum import Enum
+from enum import StrEnum
 
 
-class VhostMode(str, Enum):
+class VhostMode(StrEnum):
     CLIENT = "client"
     SERVER = "server"
 

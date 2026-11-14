@@ -1,7 +1,7 @@
-from enum import Enum
+from enum import StrEnum
 
 
-class BootMode(str, Enum):
+class BootMode(StrEnum):
     FIRMWARE = "firmware"
     KERNEL = "kernel"
 

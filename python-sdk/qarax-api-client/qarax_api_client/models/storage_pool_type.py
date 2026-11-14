@@ -1,7 +1,7 @@
-from enum import Enum
+from enum import StrEnum
 
 
-class StoragePoolType(str, Enum):
+class StoragePoolType(StrEnum):
     BLOCK = "block"
     LOCAL = "local"
     NFS = "nfs"

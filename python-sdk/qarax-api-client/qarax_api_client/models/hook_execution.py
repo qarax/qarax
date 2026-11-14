@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import datetime
+from collections.abc import Mapping
 from typing import Any, TypeVar, cast
 from uuid import UUID
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
-from dateutil.parser import isoparse
 
 from ..models.hook_execution_status import HookExecutionStatus
 from ..types import UNSET, Unset
@@ -130,11 +130,11 @@ class HookExecution:
         return field_dict
 
     @classmethod
-    def from_dict(cls: type[T], src_dict: Any) -> T:
+    def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         d = dict(src_dict)
         attempt_count = d.pop("attempt_count")
 
-        created_at = isoparse(d.pop("created_at"))
+        created_at = datetime.datetime.fromisoformat(d.pop("created_at"))
 
         hook_id = UUID(d.pop("hook_id"))
 
@@ -144,7 +144,7 @@ class HookExecution:
 
         new_status = d.pop("new_status")
 
-        next_retry_at = isoparse(d.pop("next_retry_at"))
+        next_retry_at = datetime.datetime.fromisoformat(d.pop("next_retry_at"))
 
         payload = d.pop("payload")
 
@@ -162,7 +162,7 @@ class HookExecution:
             try:
                 if not isinstance(data, str):
                     raise TypeError()
-                delivered_at_type_0 = isoparse(data)
+                delivered_at_type_0 = datetime.datetime.fromisoformat(data)
 
                 return delivered_at_type_0
             except (TypeError, ValueError, AttributeError, KeyError):

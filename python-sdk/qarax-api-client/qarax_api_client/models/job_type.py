@@ -1,7 +1,7 @@
-from enum import Enum
+from enum import StrEnum
 
 
-class JobType(str, Enum):
+class JobType(StrEnum):
     DISK_CREATE = "disk_create"
     HOST_EVACUATE = "host_evacuate"
     IMAGE_PULL = "image_pull"

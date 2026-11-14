@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 from uuid import UUID
 
@@ -67,7 +68,7 @@ class NewVmNetwork:
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        from ..models.rate_limiter_config import RateLimiterConfig
+        from ..models.rate_limiter_config import RateLimiterConfig  # noqa: PLC0415
 
         id = self.id
 
@@ -242,8 +243,8 @@ class NewVmNetwork:
         return field_dict
 
     @classmethod
-    def from_dict(cls: type[T], src_dict: Any) -> T:
-        from ..models.rate_limiter_config import RateLimiterConfig
+    def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
+        from ..models.rate_limiter_config import RateLimiterConfig  # noqa: PLC0415
 
         d = dict(src_dict)
         id = d.pop("id")

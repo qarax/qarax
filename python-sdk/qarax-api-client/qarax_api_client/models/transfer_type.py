@@ -1,7 +1,7 @@
-from enum import Enum
+from enum import StrEnum
 
 
-class TransferType(str, Enum):
+class TransferType(StrEnum):
     DOWNLOAD = "download"
     LOCAL_COPY = "local_copy"
 

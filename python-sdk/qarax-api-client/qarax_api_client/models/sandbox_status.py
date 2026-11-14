@@ -1,7 +1,7 @@
-from enum import Enum
+from enum import StrEnum
 
 
-class SandboxStatus(str, Enum):
+class SandboxStatus(StrEnum):
     DESTROYING = "destroying"
     ERROR = "error"
     PROVISIONING = "provisioning"

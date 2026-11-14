@@ -6,14 +6,14 @@ build-backend = "setuptools.build_meta"
 name = "qarax-api-client"
 version = "0.1.0"
 description = "Python SDK for Qarax API"
-requires-python = ">=3.8"
+requires-python = ">=3.11"
 dependencies = [
-    "httpx",
-    "pydantic",
+    "httpx2",
+    "attrs",
 ]
 
 [dependency-groups]
 dev = [
-    "openapi-python-client<0.29",  # custom templates break on 0.29+ (UntrustedString, safe_docstring removed)
+    "openapi-python-client",
     "ruff==0.17.5",
 ]

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 from uuid import UUID
 
@@ -120,7 +121,7 @@ class NewVm:
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        from ..models.placement_policy import PlacementPolicy
+        from ..models.placement_policy import PlacementPolicy  # noqa: PLC0415
 
         name = self.name
 
@@ -429,9 +430,9 @@ class NewVm:
         return field_dict
 
     @classmethod
-    def from_dict(cls: type[T], src_dict: Any) -> T:
-        from ..models.new_vm_network import NewVmNetwork
-        from ..models.placement_policy import PlacementPolicy
+    def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
+        from ..models.new_vm_network import NewVmNetwork  # noqa: PLC0415
+        from ..models.placement_policy import PlacementPolicy  # noqa: PLC0415
 
         d = dict(src_dict)
         name = d.pop("name")

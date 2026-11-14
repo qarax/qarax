@@ -48,7 +48,7 @@ openapi:
 	cargo run $(CARGO_TARGET) -p qarax --bin generate-openapi
 
 sdk: openapi
-	cd python-sdk && uv run openapi-python-client generate --path ../openapi.yaml --meta setup --overwrite --custom-template-path templates
+	cd python-sdk && uv run openapi-python-client generate --path ../openapi.yaml --meta setup --overwrite
 	cd python-sdk && uv run ruff format .
 	cd python-sdk && uv run ruff check --fix .
 	cd python-sdk && uvx ty check .
