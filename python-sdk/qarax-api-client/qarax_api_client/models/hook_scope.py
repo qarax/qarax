@@ -1,7 +1,7 @@
-from enum import Enum
+from enum import StrEnum
 
 
-class HookScope(str, Enum):
+class HookScope(StrEnum):
     GLOBAL = "global"
     TAG = "tag"
     VM = "vm"

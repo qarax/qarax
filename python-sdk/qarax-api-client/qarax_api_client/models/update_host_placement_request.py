@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from attrs import define as _attrs_define
@@ -49,8 +50,8 @@ class UpdateHostPlacementRequest:
         return field_dict
 
     @classmethod
-    def from_dict(cls: type[T], src_dict: Any) -> T:
-        from ..models.update_host_placement_request_placement_labels import UpdateHostPlacementRequestPlacementLabels
+    def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
+        from ..models.update_host_placement_request_placement_labels import UpdateHostPlacementRequestPlacementLabels  # noqa: PLC0415
 
         d = dict(src_dict)
         _placement_labels = d.pop("placement_labels", UNSET)

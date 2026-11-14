@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, TypeVar
 from uuid import UUID
 
@@ -65,8 +66,8 @@ class VmImagePreflightResponse:
         return field_dict
 
     @classmethod
-    def from_dict(cls: type[T], src_dict: Any) -> T:
-        from ..models.vm_image_preflight_check import VmImagePreflightCheck
+    def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
+        from ..models.vm_image_preflight_check import VmImagePreflightCheck  # noqa: PLC0415
 
         d = dict(src_dict)
         architecture = d.pop("architecture")

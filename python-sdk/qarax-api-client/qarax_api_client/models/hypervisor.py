@@ -1,7 +1,7 @@
-from enum import Enum
+from enum import StrEnum
 
 
-class Hypervisor(str, Enum):
+class Hypervisor(StrEnum):
     CLOUD_HV = "cloud_hv"
     FIRECRACKER = "firecracker"
 

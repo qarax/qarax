@@ -1,7 +1,7 @@
-from enum import Enum
+from enum import StrEnum
 
 
-class SnapshotStatus(str, Enum):
+class SnapshotStatus(StrEnum):
     CREATING = "creating"
     FAILED = "failed"
     READY = "ready"

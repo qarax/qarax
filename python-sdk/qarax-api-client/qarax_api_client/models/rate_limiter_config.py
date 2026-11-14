@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from attrs import define as _attrs_define
@@ -27,7 +28,7 @@ class RateLimiterConfig:
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        from ..models.token_bucket import TokenBucket
+        from ..models.token_bucket import TokenBucket  # noqa: PLC0415
 
         bandwidth: dict[str, Any] | None | Unset
         if isinstance(self.bandwidth, Unset):
@@ -56,8 +57,8 @@ class RateLimiterConfig:
         return field_dict
 
     @classmethod
-    def from_dict(cls: type[T], src_dict: Any) -> T:
-        from ..models.token_bucket import TokenBucket
+    def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
+        from ..models.token_bucket import TokenBucket  # noqa: PLC0415
 
         d = dict(src_dict)
 

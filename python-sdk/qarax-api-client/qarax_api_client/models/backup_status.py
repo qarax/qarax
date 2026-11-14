@@ -1,7 +1,7 @@
-from enum import Enum
+from enum import StrEnum
 
 
-class BackupStatus(str, Enum):
+class BackupStatus(StrEnum):
     CREATING = "creating"
     FAILED = "failed"
     READY = "ready"

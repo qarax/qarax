@@ -1,7 +1,7 @@
 import asyncio
 import subprocess
 
-import httpx
+import httpx2
 import pytest
 from qarax_api_client import Client
 from qarax_api_client.api.hosts import init as init_host
@@ -70,7 +70,7 @@ async def _attempt(label, step):
     """
     try:
         await step
-    except (AssertionError, httpx.HTTPError) as exc:
+    except (AssertionError, httpx2.HTTPError) as exc:
         return [f"{label}: {exc}"]
     return []
 

@@ -1,7 +1,7 @@
-from enum import Enum
+from enum import StrEnum
 
 
-class AuditResourceType(str, Enum):
+class AuditResourceType(StrEnum):
     BACKUP = "backup"
     BOOT_SOURCE = "boot_source"
     HOST = "host"

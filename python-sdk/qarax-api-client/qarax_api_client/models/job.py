@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import datetime
+from collections.abc import Mapping
 from typing import Any, TypeVar, cast
 from uuid import UUID
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
-from dateutil.parser import isoparse
 
 from ..models.job_status import JobStatus
 from ..models.job_type import JobType
@@ -141,9 +141,9 @@ class Job:
         return field_dict
 
     @classmethod
-    def from_dict(cls: type[T], src_dict: Any) -> T:
+    def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         d = dict(src_dict)
-        created_at = isoparse(d.pop("created_at"))
+        created_at = datetime.datetime.fromisoformat(d.pop("created_at"))
 
         id = UUID(d.pop("id"))
 
@@ -151,7 +151,7 @@ class Job:
 
         status = JobStatus(d.pop("status"))
 
-        updated_at = isoparse(d.pop("updated_at"))
+        updated_at = datetime.datetime.fromisoformat(d.pop("updated_at"))
 
         def _parse_completed_at(data: object) -> datetime.datetime | None | Unset:
             if data is None:
@@ -161,7 +161,7 @@ class Job:
             try:
                 if not isinstance(data, str):
                     raise TypeError()
-                completed_at_type_0 = isoparse(data)
+                completed_at_type_0 = datetime.datetime.fromisoformat(data)
 
                 return completed_at_type_0
             except (TypeError, ValueError, AttributeError, KeyError):
@@ -233,7 +233,7 @@ class Job:
             try:
                 if not isinstance(data, str):
                     raise TypeError()
-                started_at_type_0 = isoparse(data)
+                started_at_type_0 = datetime.datetime.fromisoformat(data)
 
                 return started_at_type_0
             except (TypeError, ValueError, AttributeError, KeyError):

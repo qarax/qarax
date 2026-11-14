@@ -1,7 +1,7 @@
-from enum import Enum
+from enum import StrEnum
 
 
-class NetworkStatus(str, Enum):
+class NetworkStatus(StrEnum):
     ACTIVE = "active"
     INACTIVE = "inactive"
 

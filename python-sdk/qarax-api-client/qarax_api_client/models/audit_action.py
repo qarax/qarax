@@ -1,7 +1,7 @@
-from enum import Enum
+from enum import StrEnum
 
 
-class AuditAction(str, Enum):
+class AuditAction(StrEnum):
     ADD_NIC = "add_nic"
     ATTACH_DISK = "attach_disk"
     COMMIT = "commit"

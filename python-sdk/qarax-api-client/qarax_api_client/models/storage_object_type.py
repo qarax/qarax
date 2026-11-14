@@ -1,7 +1,7 @@
-from enum import Enum
+from enum import StrEnum
 
 
-class StorageObjectType(str, Enum):
+class StorageObjectType(StrEnum):
     DATABASE_BACKUP = "database_backup"
     DISK = "disk"
     INITRD = "initrd"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from attrs import define as _attrs_define
@@ -83,9 +84,9 @@ class PlacementPolicy:
         return field_dict
 
     @classmethod
-    def from_dict(cls: type[T], src_dict: Any) -> T:
-        from ..models.placement_policy_preferred_host_labels import PlacementPolicyPreferredHostLabels
-        from ..models.placement_policy_required_host_labels import PlacementPolicyRequiredHostLabels
+    def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
+        from ..models.placement_policy_preferred_host_labels import PlacementPolicyPreferredHostLabels  # noqa: PLC0415
+        from ..models.placement_policy_required_host_labels import PlacementPolicyRequiredHostLabels  # noqa: PLC0415
 
         d = dict(src_dict)
         affinity_tags = cast(list[str], d.pop("affinity_tags", UNSET))
