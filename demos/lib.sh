@@ -112,24 +112,31 @@ compose() {
 	docker compose -f "${REPO_ROOT}/e2e/docker-compose.yml" "$@"
 }
 
-# Run a command inside a local-stack container (e.g. qarax-node). The
-# container ID is looked up once per service, not per call (calls from the
-# top-level shell share the cache; calls inside $(...) look it up again).
+# node_exec SERVICE CMD...: run CMD inside a local-stack container (e.g.
+# qarax-node), or for bootc-vm inside the node microVM it boots. The container
+# ID is looked up once per service, not per call (calls from the top-level
+# shell share the cache; calls inside $(...) look it up again).
 declare -A NODE_CONTAINERS=()
 node_exec() {
-	local service="$1"
+	local service="$1" cmd
 	shift
 	if [[ -z "${NODE_CONTAINERS[$service]:-}" ]]; then
 		NODE_CONTAINERS[$service]=$(compose ps -q "$service")
 		[[ -n "${NODE_CONTAINERS[$service]}" ]] || die "compose service ${service} is not running"
 	fi
+	if [[ "$service" == bootc-vm ]]; then
+		# ssh hands the guest's shell a single command line.
+		printf -v cmd '%q ' "$@"
+		set -- node-ssh "$cmd"
+	fi
 	docker exec "${NODE_CONTAINERS[$service]}" "$@"
 }
 
-# Map a registered host's address to the compose service running it.
+# Map a registered host's address to the compose service running it: a node
+# container, or bootc-vm (make run-local VM=1).
 node_service_for_address() {
 	case "$1" in
-	qarax-node | qarax-node-2) echo "$1" ;;
+	qarax-node | qarax-node-2 | bootc-vm) echo "$1" ;;
 	*) return 1 ;;
 	esac
 }

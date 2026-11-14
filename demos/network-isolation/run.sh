@@ -103,20 +103,14 @@ cleanup() {
 	sweep_all
 }
 
-# guest IP CMD...: run CMD in the guest at IP over SSH from the node container
-# that hosts it (guest subnets are only routable from there). The output lands
-# in GUEST_OUT so a polling caller can show the last attempt.
+# guest IP CMD...: run CMD in the guest at IP over SSH from the node that
+# hosts it (guest subnets are only routable from there). The output lands in
+# GUEST_OUT so a polling caller can show the last attempt.
 GUEST_OUT=""
 guest() {
 	local ip="$1"
 	shift
-	GUEST_OUT=$(node_exec "$NODE_A" timeout 20 dbclient -y -i /root/.ssh/id_rsa "root@${ip}" "$@" 2>&1)
-}
-
-# Each boot gives a guest new SSH host keys; forget the ones an earlier run
-# recorded for the same IP.
-forget_host_key() {
-	node_exec "$NODE_A" sh -c 'f=/root/.ssh/known_hosts; [ ! -f "$f" ] || sed -i "/$1/d" "$f"' sh "${1//./\\.}"
+	GUEST_OUT=$(node_exec "$NODE_A" timeout 20 guest-ssh "root@${ip}" "$@" 2>&1)
 }
 
 # ping_ok FROM TO / ping_blocked FROM TO: ping TO from inside the guest at FROM.
@@ -171,7 +165,7 @@ mapfile -t UP_HOSTS < <(qarax host list -o json |
 IFS=$'\t' read -r HOST_A_ID HOST_A HOST_A_ADDR <<<"${UP_HOSTS[0]}"
 IFS=$'\t' read -r HOST_B_ID HOST_B _ <<<"${UP_HOSTS[HOST_COUNT - 1]}"
 NODE_A=$(node_service_for_address "$HOST_A_ADDR") ||
-	die "host ${HOST_A} (${HOST_A_ADDR}) is not a local compose node: this demo reaches guests through the qarax-node container"
+	die "host ${HOST_A} (${HOST_A_ADDR}) is not a local compose node: this demo reaches guests through the node"
 info "Host A: ${HOST_A} (networks ${NET_A}, ${NET_C})"
 info "Host B: ${HOST_B} (network ${NET_B})"
 
@@ -204,8 +198,6 @@ start_vms "$VM_A" "$VM_B" "$VM_C"
 assert_on_host "$VM_A" "$HOST_A_ID" "$HOST_A"
 assert_on_host "$VM_B" "$HOST_B_ID" "$HOST_B"
 assert_on_host "$VM_C" "$HOST_A_ID" "$HOST_A"
-forget_host_key "$VM_A_IP"
-forget_host_key "$VM_C_IP"
 
 step "Same VPC: ${VM_A} (${VM_A_IP}) reaches ${VM_B} (${VM_B_IP})"
 expect_ping ping_ok "$VM_A_IP" "$VM_B_IP"
