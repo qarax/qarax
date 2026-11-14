@@ -13,6 +13,7 @@ from ...types import Response
 def _get_kwargs(
     boot_source_id: UUID,
 ) -> dict[str, Any]:
+
     _kwargs: dict[str, Any] = {
         "method": "delete",
         "url": "/boot-sources/{boot_source_id}".format(

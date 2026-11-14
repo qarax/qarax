@@ -95,12 +95,14 @@ import asyncio
 from qarax_api_client import Client
 from qarax_api_client.api.vms import list_ as list_vms
 
+
 async def main():
     client = Client(base_url="http://localhost:8000")
     async with client as c:
         vms = await list_vms.asyncio(client=c)
         for vm in vms:
             print(f"VM: {vm.name} - Status: {vm.status}")
+
 
 asyncio.run(main())
 ```

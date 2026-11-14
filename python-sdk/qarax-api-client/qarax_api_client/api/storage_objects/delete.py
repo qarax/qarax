@@ -13,6 +13,7 @@ from ...types import Response
 def _get_kwargs(
     object_id: UUID,
 ) -> dict[str, Any]:
+
     _kwargs: dict[str, Any] = {
         "method": "delete",
         "url": "/storage-objects/{object_id}".format(

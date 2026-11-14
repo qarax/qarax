@@ -17,7 +17,7 @@ Every contract has one primary owner: the strongest boundary that runs on every 
 
 | Layer | Where | Runs | Owns |
 |---|---|---|---|
-| Pure unit | `#[cfg(test)] mod tests` in `*/src/**` | every PR (Dagger `Test`) | parsing, planning, pure mapping (cpu lists, disk names, cloud-init, VMM config) |
+| Pure unit | `#[cfg(test)] mod tests` in `*/src/**` | every PR (CI `Test` job) | parsing, planning, pure mapping (cpu lists, disk names, cloud-init, VMM config) |
 | DB-backed unit | `TestDatabase` helpers, e.g. `qarax/src/model/hosts.rs`, `qarax/src/ha_monitor.rs` | every PR, needs Postgres | SQL semantics, placement queries, monitor decisions over real rows |
 | HTTP integration | `qarax/tests/*.rs` (`spawn_app`: real Axum server, fresh Postgres DB) | every PR, needs Postgres | REST contract: status codes, error bodies, auth, persistence through the API, behaviour with an unreachable node |
 | Node unit | `qarax-node/src/**` tests | every PR | VMM config building, preflight, file transfer, sysfs parsing over temp dirs |

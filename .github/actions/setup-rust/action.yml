@@ -1,0 +1,28 @@
+name: Set up Rust
+description: >-
+  Stable Rust with the musl target the workspace builds for, protoc, and a
+  cache of target/ and the cargo registry. The cache is one archive per key,
+  saved after the job, so warm runs only rebuild what changed.
+inputs:
+  cache-key:
+    description: Cache key, shared by the jobs that build the same way.
+    required: true
+  components:
+    description: Extra rustup components, comma-separated.
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: Install build dependencies
+      shell: bash
+      run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools protobuf-compiler libprotobuf-dev
+
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: x86_64-unknown-linux-musl
+        components: ${{ inputs.components }}
+
+    - uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: ${{ inputs.cache-key }}

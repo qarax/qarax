@@ -8,94 +8,89 @@ on:
     types: [opened, synchronize, reopened]
   workflow_dispatch:
 
-env:
-  DAGGER_VERSION: v0.21.10
-
+# Each check is a Makefile target (make ci-checks runs them all locally).
 jobs:
-  check:
-    name: CI Checks (fmt + lint + test)
+  fmt:
+    name: Format
     runs-on: ubuntu-latest
-    env:
-      DAGGER_CLOUD_TOKEN: ${{ secrets.DAGGER_CLOUD_TOKEN }}
     steps:
       - uses: actions/checkout@v6
-
-      - name: Cache Dagger engine image
-        uses: actions/cache@v4
+      - uses: dtolnay/rust-toolchain@nightly
         with:
-          path: /tmp/dagger-engine.tar
-          key: dagger-engine-${{ env.DAGGER_VERSION }}
+          components: rustfmt
+      - run: make check-fmt
 
-      - name: Install Dagger CLI
-        run: curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=${{ env.DAGGER_VERSION }} BIN_DIR=/usr/local/bin sh
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: clippy
+          components: clippy
+      - run: make check-clippy
 
-      - name: Load or pull Dagger engine image
-        run: |
-          if [ -f /tmp/dagger-engine.tar ]; then
-            docker load < /tmp/dagger-engine.tar
-          else
-            docker pull registry.dagger.io/engine:${{ env.DAGGER_VERSION }}
-            docker save registry.dagger.io/engine:${{ env.DAGGER_VERSION }} -o /tmp/dagger-engine.tar
-          fi
+  # Tests, then the checks that need the same debug build or the database:
+  # the offline query cache, and the generated OpenAPI spec and Python SDK.
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: qarax
+          POSTGRES_PASSWORD: qarax
+          POSTGRES_DB: qarax
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U qarax"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: test
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest,sqlx-cli
+      - uses: astral-sh/setup-uv@v8.0.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: python-sdk/uv.lock
+      - run: make check-test
+      - run: make check-sqlx
+      - run: make check-openapi
+      - run: make check-sdk
 
-      - name: Create Dagger data volume
-        run: |
-          docker volume create dagger-data
-
-      - name: Start Dagger engine
-        run: |
-          docker run --name dagger-engine-${{ env.DAGGER_VERSION }} \
-            -d --init --restart always \
-            -v dagger-data:/var/lib/dagger \
-            --privileged \
-            registry.dagger.io/engine:${{ env.DAGGER_VERSION }} --debug
-
-      - name: Run CI checks
-        run: dagger call --mod ./ci all --src=.
+  audit-and-shell:
+    name: Audit and shell lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit,shfmt
+      # shellcheck comes with the runner image.
+      - run: make check-audit
+      - run: make check-shell
 
   build:
     name: Build
     runs-on: ubuntu-latest
-    env:
-      DAGGER_CLOUD_TOKEN: ${{ secrets.DAGGER_CLOUD_TOKEN }}
     steps:
       - uses: actions/checkout@v6
 
-      - name: Cache Dagger engine image
-        uses: actions/cache@v4
+      - uses: ./.github/actions/setup-rust
         with:
-          path: /tmp/dagger-engine.tar
-          key: dagger-engine-${{ env.DAGGER_VERSION }}
-
-      - name: Install Dagger CLI
-        run: curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=${{ env.DAGGER_VERSION }} BIN_DIR=/usr/local/bin sh
-
-      - name: Load or pull Dagger engine image
-        run: |
-          if [ -f /tmp/dagger-engine.tar ]; then
-            docker load < /tmp/dagger-engine.tar
-          else
-            docker pull registry.dagger.io/engine:${{ env.DAGGER_VERSION }}
-            docker save registry.dagger.io/engine:${{ env.DAGGER_VERSION }} -o /tmp/dagger-engine.tar
-          fi
-
-      - name: Create Dagger data volume
-        run: |
-          docker volume create dagger-data
-
-      - name: Start Dagger engine
-        run: |
-          docker run --name dagger-engine-${{ env.DAGGER_VERSION }} \
-            -d --init --restart always \
-            -v dagger-data:/var/lib/dagger \
-            --privileged \
-            registry.dagger.io/engine:${{ env.DAGGER_VERSION }} --debug
+          cache-key: release
 
       - name: Build release binaries
-        run: |
-          mkdir -p target/x86_64-unknown-linux-musl/release
-          dagger call --mod ./ci build --src=. export \
-            --path=./target/x86_64-unknown-linux-musl/release
+        run: make build-release
 
       - name: Upload binaries
         uses: actions/upload-artifact@v6

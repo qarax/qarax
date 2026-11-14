@@ -19,6 +19,7 @@ def _get_kwargs(
     action: AuditAction | None | Unset = UNSET,
     limit: int | None | Unset = UNSET,
 ) -> dict[str, Any]:
+
     params: dict[str, Any] = {}
 
     json_resource_type: None | str | Unset

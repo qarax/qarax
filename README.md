@@ -23,7 +23,7 @@ Communication flow: control plane -> gRPC (`proto/node.proto`) -> qarax-node -> 
 make build       # build all packages and generate OpenAPI spec
 make test        # run tests (auto-starts Postgres via Docker)
 make lint        # cargo clippy --workspace -- -D warnings
-make ci-checks   # run the same Dagger validation path as GitHub CI Checks
+make ci-checks   # run every CI check (make test-deps first)
 ```
 
 ## Running locally

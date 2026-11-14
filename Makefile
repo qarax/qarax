@@ -1,4 +1,4 @@
-.PHONY: build test test-deps clean openapi sdk help lint fmt shfmt shellcheck ruff-check ruff-fmt ci-checks appliance-build appliance-push run-local stop-local
+.PHONY: build build-release test test-deps clean openapi sdk help lint fmt shfmt shellcheck ruff-check ruff-fmt ci-checks check-fmt check-clippy check-test check-sqlx check-openapi check-sdk check-audit check-shell appliance-build appliance-push run-local stop-local
 
 # On macOS, override default musl target (linker fails cross-compiling from Mac)
 UNAME_S := $(shell uname -s)
@@ -27,7 +27,7 @@ help:
 	@echo "  make clean      - Clean build artifacts"
 	@echo "  make lint       - Run cargo clippy (lint)"
 	@echo "  make fmt        - Run cargo fmt + shfmt (format)"
-	@echo "  make ci-checks  - Run the same Dagger validation path as the GitHub CI Checks job"
+	@echo "  make ci-checks  - Run every CI check (CI jobs run the check-* targets; needs make test-deps)"
 	@echo "  make ruff-check - Run ruff check on Python SDK"
 	@echo "  make ruff-fmt   - Run ruff format on Python SDK"
 	@echo "  make appliance-build - Build bootc appliance image locally"
@@ -40,21 +40,27 @@ build:
 	cargo build --workspace $(CARGO_TARGET)
 	cargo run $(CARGO_TARGET) -p qarax --bin generate-openapi
 
+# The release binaries CI hands to the e2e job (musl, with OpenTelemetry).
+build-release:
+	SQLX_OFFLINE=true cargo build --workspace --release $(OTEL_FEATURES) $(CARGO_TARGET)
+
 openapi:
 	cargo run $(CARGO_TARGET) -p qarax --bin generate-openapi
 
 sdk: openapi
 	cd python-sdk && uv run openapi-python-client generate --path ../openapi.yaml --meta setup --overwrite --custom-template-path templates
-	cd python-sdk && ruff format .
-	cd python-sdk && ruff check --fix .
+	cd python-sdk && uv run ruff format .
+	cd python-sdk && uv run ruff check --fix .
 	cd python-sdk && uvx ty check .
 
 # Database env vars point config to localhost (overrides local.yaml's host: postgres)
 # Credentials match both the standalone start_db.sh postgres and the E2E compose postgres.
+DB_ENV = DATABASE_HOST=localhost DATABASE_PORT=5432 \
+	DATABASE_USERNAME=qarax DATABASE_PASSWORD=qarax DATABASE_NAME=qarax
+DATABASE_URL ?= postgres://qarax:qarax@localhost:5432/qarax
+
 test: test-deps
-	DATABASE_HOST=localhost DATABASE_PORT=5432 \
-	DATABASE_USERNAME=qarax DATABASE_PASSWORD=qarax DATABASE_NAME=qarax \
-	cargo nextest run $(CARGO_TARGET)
+	$(DB_ENV) cargo nextest run $(CARGO_TARGET)
 
 # Start Postgres in Docker for integration tests. Run before 'make test' if needed.
 # Skip with SKIP_DOCKER=1 if Postgres is already running (e.g. via Docker Compose).
@@ -75,15 +81,46 @@ clean:
 # Linting and formatting
 lint: ruff-check
 	cargo clippy --workspace -- -D warnings
-	@cd ci && test -z "$$(gofmt -l .)" || (echo "Go files need formatting:"; gofmt -l .; exit 1)
-	@cd ci && go vet ./...
 
 fmt: ruff-fmt shfmt
 	cargo fmt
-	cd ci && gofmt -w .
 
-ci-checks:
-	CI=1 dagger --progress plain call --mod ./ci all --src=.
+# The CI checks. The GitHub Actions jobs run these targets, so a failing job
+# is reproduced by running its target. check-test and check-sqlx need
+# Postgres (make test-deps). CI builds with the OpenTelemetry features.
+OTEL_FEATURES = --features qarax/otel,qarax-node/otel
+
+ci-checks: check-fmt check-clippy check-test check-sqlx check-openapi check-sdk check-audit check-shell
+
+check-fmt:
+	cargo +nightly fmt --all -- --check
+
+check-clippy:
+	SQLX_OFFLINE=true cargo clippy --workspace $(OTEL_FEATURES) $(CARGO_TARGET) -- -D warnings
+
+check-test:
+	SQLX_OFFLINE=true $(DB_ENV) cargo nextest run --workspace $(OTEL_FEATURES) $(CARGO_TARGET)
+
+# The committed offline query cache (.sqlx) matches the queries in the source.
+check-sqlx:
+	DATABASE_URL=$(DATABASE_URL) cargo sqlx migrate run
+	DATABASE_URL=$(DATABASE_URL) cargo sqlx prepare --workspace --check
+
+# The committed spec and Python SDK are what the source generates.
+check-openapi: openapi
+	@git diff --exit-code -- openapi.yaml || \
+		(echo "openapi.yaml is out of date: run 'make openapi' and commit it"; exit 1)
+
+check-sdk: sdk
+	@git diff --exit-code -- python-sdk || \
+		(echo "python-sdk is out of date: run 'make sdk' and commit it"; exit 1)
+
+check-audit:
+	cargo audit
+
+check-shell:
+	shellcheck --severity=warning $(SHELL_SCRIPTS)
+	@shfmt -d -i 0 $(SHELL_SCRIPTS) || (echo "shell scripts need formatting: run 'make shfmt'"; exit 1)
 
 # Tracked and new shell scripts that still exist (a deleted file stays in the
 # index until it's staged).
@@ -96,10 +133,10 @@ shellcheck:
 	shellcheck -x $(SHELL_SCRIPTS)
 
 ruff-check:
-	@cd python-sdk && ruff check .
+	@cd python-sdk && uv run ruff check .
 
 ruff-fmt:
-	@cd python-sdk && ruff format .
+	@cd python-sdk && uv run ruff format .
 
 appliance-build:
 	cargo build --release -p qarax-node -p qarax-init --target $(APPLIANCE_TARGET)

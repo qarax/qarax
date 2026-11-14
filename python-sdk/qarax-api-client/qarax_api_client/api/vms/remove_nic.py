@@ -14,6 +14,7 @@ def _get_kwargs(
     vm_id: UUID,
     device_id: str,
 ) -> dict[str, Any]:
+
     _kwargs: dict[str, Any] = {
         "method": "delete",
         "url": "/vms/{vm_id}/nics/{device_id}".format(
