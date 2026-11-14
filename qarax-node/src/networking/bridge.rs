@@ -148,20 +148,6 @@ async fn find_bridge_member(handle: &Handle, bridge_name: &str) -> Result<String
 
 use super::validate_iface_name;
 
-fn parse_cidr(cidr: &str) -> Result<(Ipv4Addr, u8)> {
-    let (ip_str, prefix_str) = cidr
-        .split_once('/')
-        .ok_or_else(|| anyhow::anyhow!("Invalid CIDR: {cidr}"))?;
-    Ok((
-        ip_str
-            .parse()
-            .with_context(|| format!("Invalid IP in CIDR: {cidr}"))?,
-        prefix_str
-            .parse()
-            .with_context(|| format!("Invalid prefix in CIDR: {cidr}"))?,
-    ))
-}
-
 /// Create a Linux bridge device and bring it up.
 pub async fn create_bridge(name: &str) -> Result<()> {
     info!("Creating bridge: {name}");
@@ -189,15 +175,68 @@ pub async fn create_bridge(name: &str) -> Result<()> {
 
 /// Assign an IP address to the bridge (gateway for the subnet).
 /// Whether a network interface with this name exists.
+/// The host's IPv4 addresses on an interface: the gateway on an isolated
+/// network's bridge, the host's own address on a bridged one.
+pub async fn ipv4_addrs_of(name: &str) -> Result<Vec<Ipv4Addr>> {
+    let handle = netlink_handle().await?;
+    let idx = link_index(&handle, name).await?;
+    Ok(ipv4_addrs(&handle, idx)
+        .await?
+        .into_iter()
+        .map(|(ip, _)| ip)
+        .collect())
+}
+
+/// The first of the host's IPv4 addresses on an interface.
+pub async fn first_ipv4(name: &str) -> Result<Ipv4Addr> {
+    ipv4_addrs_of(name)
+        .await?
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("{name} has no IPv4 address"))
+}
+
+/// The MTU of the interface that holds `ip`.
+pub async fn mtu_of_interface_with(ip: Ipv4Addr) -> Result<u32> {
+    let handle = netlink_handle().await?;
+    let mut addresses = handle.address().get().execute();
+    while let Some(msg) = addresses.try_next().await? {
+        let holds_ip = msg
+            .attributes
+            .iter()
+            .any(|attr| matches!(attr, AddressAttribute::Address(IpAddr::V4(a)) if *a == ip));
+        if !holds_ip {
+            continue;
+        }
+        let link = handle
+            .link()
+            .get()
+            .match_index(msg.header.index)
+            .execute()
+            .try_next()
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("The interface holding {ip} is gone"))?;
+        return link
+            .attributes
+            .iter()
+            .find_map(|attr| match attr {
+                LinkAttribute::Mtu(mtu) => Some(*mtu),
+                _ => None,
+            })
+            .ok_or_else(|| anyhow::anyhow!("The interface holding {ip} reports no MTU"));
+    }
+    anyhow::bail!("No interface holds {ip}")
+}
+
 pub async fn link_exists(name: &str) -> Result<bool> {
     let handle = netlink_handle().await?;
     Ok(link_message(&handle, name).await.is_ok())
 }
 
 /// Assign the gateway address to a bridge; a no-op if it already has it.
-pub async fn set_bridge_ip(name: &str, gateway_cidr: &str) -> Result<()> {
+pub async fn set_bridge_ip(name: &str, gateway_cidr: super::Ipv4Cidr) -> Result<()> {
     info!("Setting bridge {name} IP to {gateway_cidr}");
-    let (ip, prefix) = parse_cidr(gateway_cidr)?;
+    let super::Ipv4Cidr { addr: ip, prefix } = gateway_cidr;
     let handle = netlink_handle().await?;
     let idx = link_index(&handle, name).await?;
     if ipv4_addrs(&handle, idx).await?.contains(&(ip, prefix)) {

@@ -4,12 +4,15 @@ E2E tests for disk and NIC hotplug / hotunplug against real Cloud Hypervisor VMs
 Covers:
   - Attaching / removing a disk on a Shutdown VM (applied to CH via gRPC)
   - Hotplugging a disk into a running VM, then hotunplugging it
-  - Hotplugging a NIC into a running VM (isolated network), then hotunplugging it
+  - Hotplugging a NIC into a running VM (isolated network), reaching the
+    network through it, then hotunplugging it
 
 Each disk test uses its own sparse file, created on every node, as the raw
 block device.
 """
 
+import asyncio
+import time
 import uuid
 from uuid import UUID
 
@@ -50,6 +53,9 @@ from qarax_api_client.api.vms import (
     remove_nic,
 )
 from qarax_api_client.api.vms import (
+    exec_ as exec_vm,
+)
+from qarax_api_client.api.vms import (
     create as create_vm,
 )
 from qarax_api_client.api.vms import (
@@ -79,10 +85,13 @@ from qarax_api_client.models.new_storage_object import NewStorageObject
 from qarax_api_client.models.new_vm_network import NewVmNetwork
 from qarax_api_client.models.storage_object_type import StorageObjectType
 
+from qarax_api_client.models.exec_vm_request import ExecVmRequest
+
 from helpers import (
     AUTH_HEADERS,
     QARAX_URL,
     call_api,
+    call_api_detailed,
     create_sparse_file_on_nodes,
     remove_file_from_nodes,
     wait_for_status,
@@ -98,7 +107,7 @@ def client():
 
 
 async def _make_vm(c, test_id):
-    """Create a minimal VM and return its UUID."""
+    """Create a minimal VM, with the guest agent, and return its UUID."""
     vm_id_raw = await call_api(
         create_vm,
         client=c,
@@ -108,6 +117,7 @@ async def _make_vm(c, test_id):
             boot_vcpus=1,
             max_vcpus=1,
             memory_size=256 * 1024 * 1024,
+            guest_agent=True,
         ),
     )
     return UUID(str(vm_id_raw).strip('"'))
@@ -164,7 +174,9 @@ async def test_attach_remove_disk_shutdown_vm(client):
         assert hosts, "No UP hosts available"
         pool_id = disk_id = vm_id = disk_path = None
         try:
-            pool_id, disk_id, disk_path = await _make_local_disk(c, test_id, hosts, "hp-sd")
+            pool_id, disk_id, disk_path = await _make_local_disk(
+                c, test_id, hosts, "hp-sd"
+            )
             vm_id = await _make_vm(c, test_id)
 
             # Start then stop so status = SHUTDOWN
@@ -224,7 +236,9 @@ async def test_disk_hotplug_running_vm(client):
         try:
             hosts = _up_hosts(await call_api(list_hosts, client=c))
             assert hosts, "No UP hosts available"
-            pool_id, disk_id, disk_path = await _make_local_disk(c, test_id, hosts, "hp")
+            pool_id, disk_id, disk_path = await _make_local_disk(
+                c, test_id, hosts, "hp"
+            )
 
             vm_id = await _make_vm(c, test_id)
 
@@ -268,6 +282,20 @@ async def test_disk_hotplug_running_vm(client):
                 await call_api(delete_pool, client=c, pool_id=pool_id)
             if disk_path:
                 remove_file_from_nodes(disk_path)
+
+
+async def _exec_when_ready(c, vm_id, script):
+    """Run a shell script in the guest once its agent answers."""
+    request = ExecVmRequest(command=["/bin/sh", "-c", script], timeout_secs=20)
+    deadline = time.monotonic() + 60
+    while True:
+        response = await call_api_detailed(exec_vm, client=c, vm_id=vm_id, body=request)
+        if response.status_code == 200:
+            return response.parsed
+        # 422 until the guest agent is up.
+        assert response.status_code == 422, response.content.decode()
+        assert time.monotonic() < deadline, "the guest agent never answered"
+        await asyncio.sleep(1)
 
 
 @pytest.mark.asyncio
@@ -330,6 +358,19 @@ async def test_nic_hotplug_running_vm(client):
             vm = await call_api(get_vm, client=c, vm_id=vm_id)
             assert vm.status == VmStatus.RUNNING, (
                 "VM should still be running after NIC hotplug"
+            )
+
+            # The NIC is on its network: up in the guest with its address, it
+            # reaches the gateway.
+            address = nic.ip_address.split("/")[0]
+            result = await _exec_when_ready(
+                c,
+                vm_id,
+                f"ip addr add {address}/24 dev eth0 && ip link set eth0 up && "
+                "ping -c 3 -W 1 10.97.0.1",
+            )
+            assert ", 0% packet loss" in result.stdout, (
+                f"exit={result.exit_code} stdout={result.stdout!r} stderr={result.stderr!r}"
             )
 
             # Hotunplug

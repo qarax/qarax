@@ -1,0 +1,47 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nWITH net AS (\n    SELECT id, subnet,\n           host(network(subnet))::inet AS first,\n           host(broadcast(subnet))::inet AS last,\n           host(gateway)::inet AS gateway\n    FROM networks\n    WHERE id = $1 AND family(subnet) = 4\n),\ntaken AS (\n    SELECT host(a.ip_address)::inet AS ip\n    FROM ip_allocations a, net\n    WHERE a.network_id = net.id\n),\ncandidate AS (\n    SELECT c.ip\n    FROM net, LATERAL (\n        SELECT net.first + 1 AS ip\n        UNION SELECT ip + 1 FROM taken\n        UNION SELECT net.gateway + 1 WHERE net.gateway IS NOT NULL\n    ) c\n    WHERE c.ip << net.subnet\n      AND c.ip > net.first\n      AND c.ip < net.last\n      AND c.ip IS DISTINCT FROM net.gateway\n      AND c.ip NOT IN (SELECT ip FROM taken)\n    ORDER BY c.ip\n    LIMIT 1\n)\nINSERT INTO ip_allocations (network_id, ip_address, vm_id)\nSELECT $1, ip, $2 FROM candidate\nRETURNING id, network_id, ip_address::text AS \"ip_address!\", vm_id, allocated_at\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "network_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "ip_address!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "vm_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 4,
+        "name": "allocated_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null,
+      true,
+      false
+    ]
+  },
+  "hash": "3ce126a2571c5efec933e5d7e66617fd430fd8ab90446b32a0b3a613a538ef7a"
+}

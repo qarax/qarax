@@ -989,15 +989,12 @@ impl NodeClient {
     /// If `parent_interface` is non-empty, bridges that NIC instead of creating
     /// an isolated bridge (skips NAT).
     #[instrument(skip(self))]
-    #[allow(clippy::too_many_arguments)]
     pub async fn attach_network(
         &self,
         bridge_name: &str,
         subnet: &str,
         gateway: &str,
         dns: &str,
-        dhcp_range_start: &str,
-        dhcp_range_end: &str,
         parent_interface: &str,
     ) -> Result<()> {
         debug!(
@@ -1013,8 +1010,6 @@ impl NodeClient {
                 subnet: subnet.to_string(),
                 gateway: gateway.to_string(),
                 dns: dns.to_string(),
-                dhcp_range_start: dhcp_range_start.to_string(),
-                dhcp_range_end: dhcp_range_end.to_string(),
                 parent_interface: parent_interface.to_string(),
             })
             .await

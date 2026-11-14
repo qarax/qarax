@@ -1,4 +1,5 @@
 use futures::Stream;
+use std::net::Ipv4Addr;
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -8,6 +9,13 @@ use tracing::{debug, error, info, instrument, warn};
 
 use crate::cloud_hypervisor::VmManager;
 use crate::firecracker::FirecrackerManager;
+use crate::networking::{
+    Ipv4Cidr,
+    dhcp::{DhcpNetwork, Reservations},
+    firewall::{self, Nic},
+    nic_mac, parse_mac,
+};
+use crate::rpc::node::NetConfig;
 use crate::rpc::node::{
     AddDeviceRequest, AddDiskDeviceRequest, AddNetworkDeviceRequest, AttachNetworkRequest,
     AttachNetworkResponse, AttachStoragePoolRequest, AttachStoragePoolResponse, ConsoleInput,
@@ -22,6 +30,87 @@ use crate::rpc::node::{
 };
 use crate::vmm::{VmmError, VmmManager};
 use common::cpu_list::expand_cpu_list;
+
+/// Give every NIC without a MAC its derived one, so the node knows the MAC of
+/// each NIC it runs (Cloud Hypervisor and Firecracker would pick random ones).
+fn assign_nic_macs(vm_id: &str, networks: &mut [NetConfig]) {
+    for net in networks {
+        net.mac.get_or_insert_with(|| nic_mac(vm_id, &net.id));
+    }
+}
+
+/// The VMs on this node, across backends. Its NICs are the DHCP servers'
+/// reservations (the address of each NIC on its bridge, by MAC) and what the
+/// per-NIC firewall covers.
+struct NodeVms {
+    ch: Arc<VmManager>,
+    fc: Option<Arc<FirecrackerManager>>,
+}
+
+impl NodeVms {
+    async fn states(&self) -> Vec<VmState> {
+        let mut vms = self.ch.list_vms().await;
+        if let Some(fc) = &self.fc {
+            vms.extend(fc.list_vms().await);
+        }
+        vms
+    }
+
+    /// Bring the per-NIC firewall in line with the node's VMs: chains for
+    /// every NIC, none for NICs that are gone.
+    async fn sync_nic_firewall(&self) -> anyhow::Result<()> {
+        let mut nics: Vec<Nic> = Vec::new();
+        for vm in self.states().await {
+            if let Some(config) = &vm.config {
+                nics.extend(Nic::from_config(&config.networks)?);
+            }
+        }
+        let mut host_addrs = std::collections::HashMap::new();
+        for bridge in nics.iter().filter_map(|nic| nic.bridge.as_deref()) {
+            if !host_addrs.contains_key(bridge) {
+                let addrs = crate::networking::bridge::ipv4_addrs_of(bridge).await?;
+                host_addrs.insert(bridge.to_string(), addrs);
+            }
+        }
+        firewall::sync_nics(&nics, &host_addrs).await
+    }
+}
+
+#[tonic::async_trait]
+impl Reservations for NodeVms {
+    async fn reserved_ip(&self, bridge: &str, mac: [u8; 6]) -> Option<Ipv4Addr> {
+        self.states()
+            .await
+            .iter()
+            .filter_map(|vm| vm.config.as_ref())
+            .flat_map(|config| &config.networks)
+            .find(|net| {
+                net.bridge.as_deref() == Some(bridge)
+                    && net.mac.as_deref().and_then(parse_mac) == Some(mac)
+            })
+            .and_then(|net| net.ip.as_deref()?.split('/').next()?.parse().ok())
+    }
+}
+
+/// After an operation that changed the node's NICs, sync their firewall. A
+/// failure fails the operation when a NIC was added (it would run unfiltered),
+/// and is only logged when NICs went away (their chains go on the next sync).
+#[allow(clippy::result_large_err)]
+fn firewall_status(result: anyhow::Result<()>, nics_added: bool) -> Result<(), Status> {
+    match result {
+        Ok(()) => Ok(()),
+        Err(e) if nics_added => {
+            error!("Failed to sync the NIC firewall: {e:#}");
+            Err(Status::internal(format!(
+                "Failed to sync the NIC firewall: {e:#}"
+            )))
+        }
+        Err(e) => {
+            warn!("Failed to sync the NIC firewall: {e:#}");
+            Ok(())
+        }
+    }
+}
 
 /// Implementation of VmService supporting multiple hypervisor backends.
 #[derive(Clone)]
@@ -48,6 +137,18 @@ impl VmServiceImpl {
             ch_manager,
             fc_manager,
         }
+    }
+
+    fn node_vms(&self) -> NodeVms {
+        NodeVms {
+            ch: self.ch_manager.clone(),
+            fc: self.fc_manager.clone(),
+        }
+    }
+
+    /// Set up the per-NIC firewall for the VMs recovered at startup.
+    pub async fn init_firewall(&self) -> anyhow::Result<()> {
+        self.node_vms().sync_nic_firewall().await
     }
 
     /// Return the correct manager for a `create_vm` call based on the
@@ -142,8 +243,9 @@ fn parse_version_output(stdout: &str) -> Option<String> {
 #[tonic::async_trait]
 impl VmService for VmServiceImpl {
     async fn create_vm(&self, request: Request<VmConfig>) -> Result<Response<VmState>, Status> {
-        let config = request.into_inner();
+        let mut config = request.into_inner();
         let vm_id = config.vm_id.clone();
+        assign_nic_macs(&vm_id, &mut config.networks);
         let hypervisor = config.hypervisor;
 
         info!("Creating VM: {} (hypervisor={})", vm_id, hypervisor);
@@ -152,6 +254,15 @@ impl VmService for VmServiceImpl {
         let manager = self.manager_for_create(hypervisor)?;
         match manager.create_vm(config).await {
             Ok(state) => {
+                // A VM whose NICs can't be filtered isn't created.
+                if let Err(status) =
+                    firewall_status(self.node_vms().sync_nic_firewall().await, true)
+                {
+                    if let Err(e) = manager.delete_vm(&vm_id).await {
+                        error!("Failed to delete VM {vm_id} after the firewall failed: {e}");
+                    }
+                    return Err(status);
+                }
                 info!("VM {} created successfully", vm_id);
                 Ok(Response::new(state))
             }
@@ -271,8 +382,11 @@ impl VmService for VmServiceImpl {
             .find_manager(&vm_id)
             .await
             .ok_or_else(|| Status::not_found(format!("VM {} not found", vm_id)))?;
-        self.run_vm_op("Delete", vm_id.clone(), || manager.delete_vm(&vm_id))
-            .await
+        let response = self
+            .run_vm_op("Delete", vm_id.clone(), || manager.delete_vm(&vm_id))
+            .await?;
+        firewall_status(self.node_vms().sync_nic_firewall().await, false)?;
+        Ok(response)
     }
 
     async fn get_vm_info(&self, request: Request<VmId>) -> Result<Response<VmState>, Status> {
@@ -295,10 +409,7 @@ impl VmService for VmServiceImpl {
     async fn list_vms(&self, _request: Request<()>) -> Result<Response<VmList>, Status> {
         info!("Listing VMs");
 
-        let mut vms = self.ch_manager.list_vms().await;
-        if let Some(fc) = &self.fc_manager {
-            vms.extend(fc.list_vms().await);
-        }
+        let vms = self.node_vms().states().await;
         info!("Found {} VMs", vms.len());
         Ok(Response::new(VmList { vms }))
     }
@@ -361,9 +472,10 @@ impl VmService for VmServiceImpl {
         let req = request.into_inner();
         info!("Adding network device to VM: {}", req.vm_id);
 
-        let config = req
+        let mut config = req
             .config
             .ok_or_else(|| Status::invalid_argument("Missing network config"))?;
+        assign_nic_macs(&req.vm_id, std::slice::from_mut(&mut config));
 
         let manager = self
             .find_manager(&req.vm_id)
@@ -371,6 +483,7 @@ impl VmService for VmServiceImpl {
             .ok_or_else(|| Status::not_found(format!("VM {} not found", req.vm_id)))?;
         match manager.add_network_device(&req.vm_id, &config).await {
             Ok(()) => {
+                firewall_status(self.node_vms().sync_nic_firewall().await, true)?;
                 info!("Network device added to VM {}", req.vm_id);
                 Ok(Response::new(()))
             }
@@ -400,6 +513,7 @@ impl VmService for VmServiceImpl {
             .await
         {
             Ok(()) => {
+                firewall_status(self.node_vms().sync_nic_firewall().await, false)?;
                 info!(
                     "Network device {} removed from VM {}",
                     req.device_id, req.vm_id
@@ -1022,6 +1136,21 @@ impl VmService for VmServiceImpl {
         info!("Attaching network bridge: {}", req.bridge_name);
 
         let bridged = !req.parent_interface.is_empty();
+        let subnet: Ipv4Cidr = req
+            .subnet
+            .parse()
+            .map_err(|e| Status::invalid_argument(format!("Invalid subnet: {e}")))?;
+        let gateway: Ipv4Addr = req
+            .gateway
+            .parse()
+            .map_err(|_| Status::invalid_argument(format!("Invalid gateway {:?}", req.gateway)))?;
+        let dns: Ipv4Addr = if req.dns.is_empty() {
+            gateway
+        } else {
+            req.dns
+                .parse()
+                .map_err(|_| Status::invalid_argument(format!("Invalid DNS {:?}", req.dns)))?
+        };
         // Attaching is idempotent: host init re-attaches every network after a
         // node restart, when the bridge may survive (a process restart) or be
         // gone (a reboot), and the in-process DHCP server always is.
@@ -1041,8 +1170,10 @@ impl VmService for VmServiceImpl {
             }
         } else {
             // Isolated mode: create a new bridge with its own gateway IP
-            let prefix = req.subnet.split_once('/').map(|(_, p)| p).unwrap_or("24");
-            let gateway_cidr = format!("{}/{}", req.gateway, prefix);
+            let gateway_cidr = Ipv4Cidr {
+                addr: gateway,
+                prefix: subnet.prefix,
+            };
 
             if !exists {
                 crate::networking::bridge::create_bridge(&req.bridge_name)
@@ -1050,32 +1181,33 @@ impl VmService for VmServiceImpl {
                     .map_err(|e| Status::internal(format!("Failed to create bridge: {}", e)))?;
             }
 
-            crate::networking::bridge::set_bridge_ip(&req.bridge_name, &gateway_cidr)
+            crate::networking::bridge::set_bridge_ip(&req.bridge_name, gateway_cidr)
                 .await
                 .map_err(|e| Status::internal(format!("Failed to set bridge IP: {}", e)))?;
         }
 
-        // Start DHCP server (both modes need DHCP for guest VMs)
-        let dns = if req.dns.is_empty() {
-            &req.gateway
-        } else {
-            &req.dns
-        };
+        // Both modes serve DHCP, to this node's VM NICs only.
         crate::networking::dhcp::start_dhcp_server(
             &req.bridge_name,
-            &req.dhcp_range_start,
-            &req.dhcp_range_end,
-            &req.gateway,
-            dns,
+            DhcpNetwork {
+                subnet,
+                gateway,
+                dns,
+            },
+            Arc::new(self.node_vms()),
         )
         .await
         .map_err(|e| Status::internal(format!("Failed to start DHCP server: {}", e)))?;
 
-        // NAT is only needed in isolated mode — bridged mode shares the upstream network
+        // NAT and DNS are only needed in isolated mode: on a bridged network
+        // the gateway is the LAN's router, which serves both.
         if !bridged {
             crate::networking::iptables::setup_nat(&req.bridge_name, &req.subnet)
                 .await
                 .map_err(|e| Status::internal(format!("Failed to setup NAT: {}", e)))?;
+            crate::networking::dns::start_dns_forwarder(&req.bridge_name, gateway)
+                .await
+                .map_err(|e| Status::internal(format!("Failed to start DNS forwarder: {e}")))?;
         }
 
         info!(
@@ -1096,6 +1228,7 @@ impl VmService for VmServiceImpl {
         if let Err(e) = crate::networking::dhcp::stop_dhcp_server(&req.bridge_name).await {
             warn!("Failed to stop DHCP server for {}: {}", req.bridge_name, e);
         }
+        crate::networking::dns::stop_dns_forwarder(&req.bridge_name).await;
 
         if let Err(e) =
             crate::networking::iptables::teardown_network_isolation(&req.bridge_name).await
@@ -1161,9 +1294,21 @@ impl VmService for VmServiceImpl {
         request: Request<SyncVmFirewallRequest>,
     ) -> Result<Response<()>, Status> {
         let req = request.into_inner();
-        crate::networking::iptables::sync_vm_firewall(&req.vm_id, &req.interfaces)
+        // From the node's own state: asking the hypervisor (get_vm_info) blocks
+        // while a VM waits for an incoming migration, which waits on this sync.
+        let config = self
+            .node_vms()
+            .states()
             .await
-            .map_err(|e| Status::internal(format!("Failed to sync VM firewall: {e}")))?;
+            .into_iter()
+            .filter_map(|vm| vm.config)
+            .find(|config| config.vm_id == req.vm_id)
+            .ok_or_else(|| Status::not_found(format!("VM {} not found", req.vm_id)))?;
+        let nics = Nic::from_config(&config.networks)
+            .map_err(|e| Status::internal(format!("Failed to sync VM firewall: {e:#}")))?;
+        firewall::sync_security_groups(&nics, &req.interfaces)
+            .await
+            .map_err(|e| Status::internal(format!("Failed to sync VM firewall: {e:#}")))?;
         Ok(Response::new(()))
     }
 
@@ -1199,9 +1344,10 @@ impl VmService for VmServiceImpl {
         let vm_id = req.vm_id.clone();
         info!("Receiving migration for VM: {}", vm_id);
 
-        let config = req
+        let mut config = req
             .config
             .ok_or_else(|| Status::invalid_argument("Missing VM config for receive_migration"))?;
+        assign_nic_macs(&vm_id, &mut config.networks);
         let port = req.migration_port as u16;
 
         match self
@@ -1210,6 +1356,7 @@ impl VmService for VmServiceImpl {
             .await
         {
             Ok(receiver_url) => {
+                firewall_status(self.node_vms().sync_nic_firewall().await, true)?;
                 info!(
                     "VM {} ready to receive migration at {}",
                     vm_id, receiver_url

@@ -308,7 +308,6 @@ impl VmManager {
         let socket_path = self.socket_path(&vm_id);
         let vsock_socket_path = Self::vsock_socket_path_from_config(&config.vsock);
         let log_path = self.log_path(&vm_id);
-        let config_path = self.config_path(&vm_id);
 
         // Remove old socket if it exists
         if socket_path.exists() {
@@ -425,11 +424,7 @@ impl VmManager {
         // vm.create completes.
         let (serial_pty, console_pty) = self.query_pty_paths(&socket_path, &config).await;
 
-        // Persist proto config (as protobuf binary) for recovery after restart
-        let config_bytes = config.encode_to_vec();
-        if let Err(e) = tokio::fs::write(&config_path, config_bytes).await {
-            warn!("Failed to persist config for VM {}: {}", vm_id, e);
-        }
+        self.persist_config(&vm_id, &config).await;
 
         // Parse VM ID as UUID for SDK
         let vm_uuid = Uuid::parse_str(&vm_id)
@@ -674,10 +669,6 @@ impl VmManager {
         // Clean up TAP devices created by qarax-node
         for tap in &instance.tap_devices {
             Self::delete_tap_device(tap).await;
-        }
-
-        if let Err(e) = crate::networking::iptables::teardown_vm_firewall(vm_id).await {
-            warn!("Failed to tear down firewall state for VM {}: {}", vm_id, e);
         }
 
         // Stop passt backends created by qarax-node

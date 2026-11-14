@@ -21,6 +21,13 @@ impl VmManager {
         self.runtime_dir.join(format!("{}.json", vm_id))
     }
 
+    /// Persist a VM's proto config for recovery after a node restart.
+    pub(super) async fn persist_config(&self, vm_id: &str, config: &ProtoVmConfig) {
+        if let Err(e) = tokio::fs::write(self.config_path(vm_id), config.encode_to_vec()).await {
+            warn!("Failed to persist config for VM {}: {}", vm_id, e);
+        }
+    }
+
     pub(super) fn next_vsock_cid() -> i64 {
         use std::sync::atomic::{AtomicI64, Ordering};
 

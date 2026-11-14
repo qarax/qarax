@@ -554,34 +554,18 @@ async fn ensure_security_groups_exist(
 
 async fn allocate_network_ip_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    pool: &sqlx::PgPool,
     vm_id: Uuid,
     network_id: Uuid,
     requested_ip: Option<&str>,
 ) -> Result<String> {
-    if let Some(ip_address) = requested_ip {
-        return networks::try_allocate_ip_tx(tx, network_id, ip_address, Some(vm_id))
-            .await?
-            .map(|allocation| allocation.ip_address)
-            .ok_or_else(|| {
-                crate::errors::Error::Conflict(format!(
-                    "IP address {ip_address} is already allocated on network {network_id}"
-                ))
-            });
-    }
-
-    loop {
-        let ip = networks::next_available_ip(pool, network_id)
-            .await?
-            .ok_or_else(|| {
-                crate::errors::Error::UnprocessableEntity("No available IPs in network".into())
-            })?;
-
-        if let Some(allocation) =
-            networks::try_allocate_ip_tx(tx, network_id, &ip, Some(vm_id)).await?
-        {
-            return Ok(allocation.ip_address);
-        }
+    match networks::allocate_ip_tx(tx, network_id, requested_ip, vm_id).await? {
+        Some(allocation) => Ok(allocation.ip_address),
+        None => Err(match requested_ip {
+            Some(ip_address) => crate::errors::Error::Conflict(format!(
+                "IP address {ip_address} is already allocated on network {network_id}"
+            )),
+            None => crate::errors::Error::UnprocessableEntity("No available IPs in network".into()),
+        }),
     }
 }
 
@@ -874,7 +858,7 @@ pub(crate) async fn create_vm_internal(env: &App, vm: ResolvedNewVm) -> Result<U
     }
 
     let id = vms::create_tx(&mut tx, &vm, Some(host.id)).await?;
-    register_static_ips_tx(&mut tx, env.pool(), id, vm.networks.as_deref()).await?;
+    register_static_ips_tx(&mut tx, id, vm.networks.as_deref()).await?;
     if let Some(root_disk_object_id) = vm.root_disk_object_id {
         create_root_disk_record(&mut tx, id, root_disk_object_id).await?;
     }
@@ -883,7 +867,7 @@ pub(crate) async fn create_vm_internal(env: &App, vm: ResolvedNewVm) -> Result<U
         network_interfaces::create(&mut tx, id, net).await?;
     }
     if let Some(network_id) = vm.network_id {
-        create_managed_network_interface_tx(&mut tx, env.pool(), id, network_id).await?;
+        create_managed_network_interface_tx(&mut tx, id, network_id).await?;
     }
     for security_group_id in vm.security_group_ids.as_deref().unwrap_or(&[]) {
         security_groups::add_to_vm(&mut tx, id, *security_group_id).await?;
@@ -1071,14 +1055,14 @@ pub(crate) async fn create_vm_with_image_internal(
 
     // Create VM row with PENDING status
     let vm_id = vms::create_tx_with_status(&mut tx, &vm, Some(host.id), VmStatus::Pending).await?;
-    register_static_ips_tx(&mut tx, env.pool(), vm_id, vm.networks.as_deref()).await?;
+    register_static_ips_tx(&mut tx, vm_id, vm.networks.as_deref()).await?;
 
     // Store network interfaces in the transaction
     for net in vm.networks.as_deref().unwrap_or(&[]) {
         network_interfaces::create(&mut tx, vm_id, net).await?;
     }
     if let Some(network_id) = vm.network_id {
-        create_managed_network_interface_tx(&mut tx, env.pool(), vm_id, network_id).await?;
+        create_managed_network_interface_tx(&mut tx, vm_id, network_id).await?;
     }
     for security_group_id in vm.security_group_ids.as_deref().unwrap_or(&[]) {
         security_groups::add_to_vm(&mut tx, vm_id, *security_group_id).await?;
@@ -1145,11 +1129,10 @@ pub(crate) async fn create_vm_with_image_internal(
 /// Allocate an IP from the given network and create the default network interface record for a VM.
 async fn create_managed_network_interface_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    pool: &sqlx::PgPool,
     vm_id: uuid::Uuid,
     network_id: uuid::Uuid,
 ) -> Result<(), crate::errors::Error> {
-    let ip = allocate_network_ip_tx(tx, pool, vm_id, network_id, None).await?;
+    let ip = allocate_network_ip_tx(tx, vm_id, network_id, None).await?;
     let net = crate::model::vms::NewVmNetwork {
         id: "net0".to_string(),
         network_id: Some(network_id),
@@ -1164,13 +1147,12 @@ async fn create_managed_network_interface_tx(
 /// Helper to register explicitly provided static IPs in IPAM during VM creation.
 async fn register_static_ips_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    pool: &sqlx::PgPool,
     vm_id: Uuid,
     networks: Option<&[crate::model::vms::NewVmNetwork]>,
 ) -> Result<()> {
     for net in networks.unwrap_or(&[]) {
         if let (Some(net_id), Some(ip)) = (net.network_id, &net.ip) {
-            allocate_network_ip_tx(tx, pool, vm_id, net_id, Some(ip)).await?;
+            allocate_network_ip_tx(tx, vm_id, net_id, Some(ip)).await?;
         }
     }
     Ok(())
@@ -1493,16 +1475,16 @@ pub(crate) async fn start_vm_internal(env: &App, vm_id: Uuid) -> Result<Uuid> {
             return;
         }
 
-        if let Err(e) = node_client.start_vm(vm_id).await {
-            fail(format!("start_vm failed: {:#}", e)).await;
+        // Before boot, so the guest never runs without its security groups.
+        if let Err(e) =
+            network_policy::sync_vm_firewall_on_host(env_for_start.pool(), vm_id, host.id).await
+        {
+            fail(format!("sync_vm_firewall failed: {e}")).await;
             return;
         }
 
-        if let Err(e) =
-            network_policy::sync_vm_firewall_on_host(&env_for_start, vm_id, host.id).await
-        {
-            let _ = node_client.force_stop_vm(vm_id).await;
-            fail(format!("sync_vm_firewall failed: {e}")).await;
+        if let Err(e) = node_client.start_vm(vm_id).await {
+            fail(format!("start_vm failed: {:#}", e)).await;
             return;
         }
 
@@ -2373,24 +2355,7 @@ async fn handle_console_websocket(ws: WebSocket, vm_id: Uuid, host: crate::model
 }
 
 fn subnet_mask_from_cidr(subnet: &str) -> Option<String> {
-    let prefix = subnet
-        .split_once('/')
-        .and_then(|(_, p)| p.parse::<u32>().ok())?;
-    if prefix > 32 {
-        return None;
-    }
-    let mask = if prefix == 0 {
-        0
-    } else {
-        u32::MAX << (32 - prefix)
-    };
-    Some(format!(
-        "{}.{}.{}.{}",
-        (mask >> 24) & 0xFF,
-        (mask >> 16) & 0xFF,
-        (mask >> 8) & 0xFF,
-        mask & 0xFF
-    ))
+    networks::Ipv4Subnet::parse(subnet).map(|subnet| subnet.netmask().to_string())
 }
 
 /// Build a `CreateVmRequest` from DB state — called at `vm start` for lazily-provisioned VMs.
@@ -2471,7 +2436,9 @@ async fn build_create_vm_request(env: &App, vm: &Vm) -> Result<CreateVmRequest> 
                     let ip = net_config.ip.as_ref().unwrap();
                     let mask = net_config.mask.as_deref().unwrap_or("");
                     let gw = network.gateway.as_deref().unwrap_or("");
-                    let dns = network.dns.as_deref().unwrap_or("");
+                    // The gateway, like DHCP's default: on an isolated
+                    // network the node forwards DNS there.
+                    let dns = network.dns.as_deref().unwrap_or(gw);
                     ip_params.push_str(&format!(
                         " ip={}::{}:{}::eth{}:off:{}",
                         ip, gw, mask, i, dns
@@ -3289,14 +3256,8 @@ pub async fn add_nic(
         let mut tx = env.pool().begin().await?;
         let requested_ip = req.ip.clone();
         let req = if let Some(network_id) = req.network_id {
-            let ip = allocate_network_ip_tx(
-                &mut tx,
-                env.pool(),
-                vm_id,
-                network_id,
-                requested_ip.as_deref(),
-            )
-            .await?;
+            let ip =
+                allocate_network_ip_tx(&mut tx, vm_id, network_id, requested_ip.as_deref()).await?;
             NewVmNetwork {
                 ip: Some(ip),
                 ..req
@@ -3745,6 +3706,11 @@ pub(crate) async fn execute_planned_vm_migration(
         .receive_migration(vm_id, vm_config, 0)
         .await
         .map_err(|e| format!("receive_migration failed: {:#}", e))?;
+
+    // The destination filters the VM from its first packet there.
+    network_policy::sync_vm_firewall_on_host(db_pool, vm_id, target_host.id)
+        .await
+        .map_err(|e| format!("sync_vm_firewall on the destination failed: {e}"))?;
 
     if let Some(job_id) = job_id {
         let _ = jobs::update_progress(db_pool, job_id, 25).await;

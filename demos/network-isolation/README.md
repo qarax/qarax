@@ -84,9 +84,11 @@ packet loss, so an SSH failure can't pass as isolation.
   forward rules on the host that drop traffic to and from the subnets of
   networks in other VPCs (or in no VPC), wherever those networks are attached.
   So VM A and VM C share a host, yet the host drops their traffic.
-- **Security groups** are enforced on the host in front of each VM's NIC. A
-  VM with a security group but no ingress rules gets default-deny ingress.
-  Rule changes are synced to the host immediately.
+- **Security groups** are enforced on the host at each VM's port on the
+  bridge, so they also apply between VMs on the same network. A VM with a
+  security group but no ingress rules gets default-deny ingress. Rule changes
+  are synced to the host immediately, and before a VM boots. Every VM NIC may
+  also only send from its own MAC and address.
 
 ### Why the networks use `--network-type isolated`
 
@@ -96,9 +98,9 @@ NAT, so VM B sees packets from VM A's own address (`10.121.1.10`). That is what
 lets the ICMP rule for `10.121.1.0/24` match. With the default type `bridge`,
 traffic leaving host A over the overlay is masqueraded to host A's overlay
 address, and VM B's security group never sees subnet A as the source. On a
-single host the rule happens to match either way (the firewall runs before
-NAT), but the demo uses `isolated` in both modes so the same rule works
-across hosts.
+single host the rule matches either way (security-group rules match the
+source from before the host's NAT), but the demo uses `isolated` in both
+modes so the same rule works across hosts.
 
 ## Cleanup
 

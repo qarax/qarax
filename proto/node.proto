@@ -677,9 +677,7 @@ message AttachNetworkRequest {
     string subnet = 2;          // CIDR e.g. "10.0.0.0/24"
     string gateway = 3;         // e.g. "10.0.0.1"
     string dns = 4;             // optional, defaults to gateway
-    string dhcp_range_start = 5;
-    string dhcp_range_end = 6;
-    string parent_interface = 7; // if set, bridge this NIC instead of isolated bridge
+    string parent_interface = 5; // if set, bridge this NIC instead of isolated bridge
 }
 
 message AttachNetworkResponse {}
