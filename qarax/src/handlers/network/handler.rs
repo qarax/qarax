@@ -253,17 +253,13 @@ async fn attach_on_node(
     bridge_name: &str,
     parent_interface: Option<&str>,
 ) -> anyhow::Result<()> {
-    let subnet = Ipv4Subnet::parse(&network.subnet)
-        .with_context(|| format!("Network subnet {} is not IPv4", network.subnet))?;
-    let gateway = match network.gateway.as_deref() {
-        Some(gateway) => gateway
-            .parse()
-            .with_context(|| format!("Network gateway {gateway} is not IPv4"))?,
-        None => subnet.first_host(),
+    let gateway = match network.gateway.clone() {
+        Some(gateway) => gateway,
+        None => Ipv4Subnet::parse(&network.subnet)
+            .with_context(|| format!("Network subnet {} is not IPv4", network.subnet))?
+            .first_host()
+            .to_string(),
     };
-    // Only nodes from before DHCP reservations use the range.
-    let (dhcp_start, dhcp_end) = dhcp_range(subnet, gateway);
-    let gateway = gateway.to_string();
     let dns = network.dns.clone().unwrap_or_else(|| gateway.clone());
 
     NodeClient::new(&host.address, host.port as u16)
@@ -272,8 +268,6 @@ async fn attach_on_node(
             &network.subnet,
             &gateway,
             &dns,
-            &dhcp_start,
-            &dhcp_end,
             parent_interface.unwrap_or_default(),
         )
         .await
@@ -387,18 +381,4 @@ pub async fn list_ips(
         data: allocations,
         code: StatusCode::OK,
     })
-}
-
-/// The DHCP range sent to nodes: the first host address (after the gateway, if
-/// that comes first) to broadcast-1. Current nodes ignore it and answer only
-/// their VM NICs, each with its IPAM address; older nodes hand out leases from
-/// it, and need it to attach a network at all.
-fn dhcp_range(subnet: Ipv4Subnet, gateway: std::net::Ipv4Addr) -> (String, String) {
-    let first = subnet.first_host();
-    let start = if first == gateway {
-        std::net::Ipv4Addr::from(u32::from(first) + 1)
-    } else {
-        first
-    };
-    (start.to_string(), subnet.last_host().to_string())
 }

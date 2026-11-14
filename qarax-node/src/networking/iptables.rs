@@ -131,34 +131,6 @@ pub async fn teardown_network_isolation(bridge: &str) -> Result<()> {
     Ok(())
 }
 
-/// Remove the per-VM iptables chains (QXVM*, QXVO*, QXVI*) of nodes from
-/// before the nftables firewall. A node upgraded without a reboot keeps its
-/// VMs, and those chains would go on filtering them by their old rules.
-pub async fn remove_legacy_vm_firewall() -> Result<()> {
-    let rules = run_cmd_capture("iptables", &["-S"]).await?;
-    let chains: Vec<&str> = rules
-        .lines()
-        .filter_map(|line| line.strip_prefix("-N "))
-        .filter(|chain| {
-            ["QXVM", "QXVO", "QXVI"]
-                .iter()
-                .any(|p| chain.starts_with(p))
-        })
-        .collect();
-    if chains.is_empty() {
-        return Ok(());
-    }
-    info!("Removing {} legacy VM firewall chains", chains.len());
-    // FORWARD jumps to the QXVM* parents, which jump to the other two.
-    for chain in chains.iter().filter(|c| c.starts_with("QXVM")) {
-        remove_forward_rules_referencing(chain).await?;
-    }
-    for chain in chains.iter().filter(|c| !c.starts_with("QXVM")) {
-        delete_chain_if_exists(chain).await?;
-    }
-    Ok(())
-}
-
 fn sanitize_suffix(input: &str, max_len: usize) -> String {
     input
         .chars()

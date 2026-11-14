@@ -153,11 +153,6 @@ impl Ipv4Subnet {
     pub fn first_host(&self) -> std::net::Ipv4Addr {
         self.network.wrapping_add(1).into()
     }
-
-    /// The address before the broadcast address.
-    pub fn last_host(&self) -> std::net::Ipv4Addr {
-        (self.network | !self.mask()).wrapping_sub(1).into()
-    }
 }
 
 // CRUD
@@ -693,11 +688,10 @@ mod tests {
     }
 
     #[test]
-    fn ipv4_subnets_give_their_mask_and_host_range() {
+    fn ipv4_subnets_give_their_mask_and_first_host() {
         let subnet = Ipv4Subnet::parse("10.1.2.0/23").unwrap();
         assert_eq!(subnet.netmask().to_string(), "255.255.254.0");
         assert_eq!(subnet.first_host().to_string(), "10.1.2.1");
-        assert_eq!(subnet.last_host().to_string(), "10.1.3.254");
         assert_eq!(
             Ipv4Subnet::parse("10.0.0.0/0")
                 .unwrap()

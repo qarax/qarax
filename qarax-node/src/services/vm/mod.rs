@@ -146,10 +146,8 @@ impl VmServiceImpl {
         }
     }
 
-    /// Clear firewall state from older nodes and set up the per-NIC firewall
-    /// for the VMs recovered at startup.
+    /// Set up the per-NIC firewall for the VMs recovered at startup.
     pub async fn init_firewall(&self) -> anyhow::Result<()> {
-        crate::networking::iptables::remove_legacy_vm_firewall().await?;
         self.node_vms().sync_nic_firewall().await
     }
 
