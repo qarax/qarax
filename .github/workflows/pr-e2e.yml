@@ -156,6 +156,8 @@ jobs:
           DOCKER_BUILD_CACHE_TO: type=gha,mode=max
           # Leave the stack up for the demo smoke step; Cleanup removes it.
           KEEP: 1
+          # Also deploy to and upgrade the appliance as a bootc microVM node.
+          ENABLE_BOOTC_UPGRADE_E2E: 1
 
       # Nothing else runs the demos, so a few fast ones run against the e2e
       # stack (two UP hosts) to catch a demo the code has broken.

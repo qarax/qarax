@@ -21,6 +21,9 @@ project) leaves them out; the runner names them, which enables them:
 - **postgres**: database (internal to the compose network)
 - **nfs-server**: shared NFS export for shared-storage tests
 - **registry**: local OCI registry for OverlayBD image tests
+- **bootc-vm** (with `ENABLE_BOOTC_UPGRADE_E2E=1`): the appliance image as a
+  Cloud Hypervisor microVM node for `test_node_upgrade.py`, built by
+  `build-bootc-node.sh` (see `docs/DEVELOPMENT.md`)
 
 VMs boot the Cloud Hypervisor test kernel with a BusyBox initramfs that runs
 `qarax-init` and dropbear, built in `Dockerfile.qarax-node`.
@@ -72,7 +75,7 @@ printed in the summary (`-rs`).
 | `test_lifecycle_hooks.py` | Webhooks fire for a VM's status transitions |
 | `test_live_migration.py` | Live migration with a shared NFS disk, host evacuation, placement policies |
 | `test_network.py` | Isolated networks, guest connectivity, cross-host VPC routing and security groups |
-| `test_node_upgrade.py` | bootc deploy and upgrade of a real node VM (opt-in) |
+| `test_node_upgrade.py` | bootc deploy and upgrade of the appliance as a Cloud Hypervisor microVM node (`ENABLE_BOOTC_UPGRADE_E2E=1`, which CI sets) |
 | `test_numa.py` | NUMA topology discovery and NUMA-pinned VM boot |
 | `test_resize.py` | vCPU and memory hotplug on a running VM |
 | `test_sandboxes.py` | Sandbox create, exec, delete, warm pools and idle reaping |

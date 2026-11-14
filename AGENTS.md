@@ -24,7 +24,7 @@ make fmt            # cargo fmt + shfmt (all tracked *.sh)
 make openapi        # Regenerate openapi.yaml
 make sdk            # Regenerate Python SDK from OpenAPI
 make run-local      # Start the Docker stack (qarax + qarax-node + Postgres + registry), register local-node, create overlaybd-pool
-make run-local VM=1 # Same, but run qarax-node in a libvirt VM
+make run-local VM=1 # Same, but the node is the appliance image as a bootc microVM (compose service bootc-vm)
 make stop-local      # Stop and remove the local Docker stack
 make appliance-build # Build bootc container image for qarax-node (hypervisor host)
 make appliance-push  # Push appliance image to registry
@@ -58,7 +58,7 @@ PostgreSQL 16+ with SQLx (compile-time verified queries).
 Qarax supports two deployment modes — understand which one is in use before debugging:
 
 - **Docker Compose (e2e / local dev):** `qarax` (control plane), `qarax-node`, and `postgres` run as separate containers. `qarax-node` runs privileged with `/dev/kvm` passthrough for real VMs.
-- **Libvirt node (`make run-local VM=1`):** `qarax`, Postgres and the registry run in Docker (qarax on host networking, `e2e/docker-compose.vm-mode.yml`), and `qarax-node` runs in a bootc libvirt VM built from the appliance image. `hack/run-local.sh --vm` and `hack/test-host-deploy-libvirt.sh` manage this mode.
+- **bootc node microVM (`make run-local VM=1`, e2e upgrade tests):** the compose stack, with the node being the appliance image installed with bootc and booted by Cloud Hypervisor in the `bootc-vm` service (guest `10.0.2.15`; `docker compose exec bootc-vm ssh root@10.0.2.15`). Built by `e2e/build-bootc-node.sh`; see `docs/DEVELOPMENT.md`.
 - **Hyperconverged (`demos/hyperconverged`):** a single Cloud Hypervisor VM hosts both the control plane and the node, on the developer's host.
 
 Always confirm the deployment mode before debugging. Many issues (networking, storage mount paths, device availability) differ between the two modes.
@@ -234,7 +234,7 @@ Cloud Hypervisor and Firecracker versions are pinned in `versions/` (the `Makefi
 - **Async fixture clients**: Pytest async fixtures that use `async with Client(...) as c:` must create their own `Client(base_url=QARAX_URL)` — never share the test's `client` fixture. httpx clients cannot be opened as a context manager more than once per instance.
 - **`docker compose` commands**: Run from `e2e/` (or pass `-f e2e/docker-compose.yml`). `make run-local` and the e2e runner share the compose project `e2e`.
 - **Compose profiles**: the default stack (`make run-local`) is registry, postgres, qarax-node and qarax. `nfs-server` (profile `e2e`), `qarax-node-2` (`multi-node`) and `bootc-vm` (`bootc`) start only when named, as `run_e2e_tests.sh` does, or on demand (`ensure_up_hosts 2` in `demos/lib.sh`). Tear down with `docker compose --profile '*' down -v`.
-- **Compose Postgres is internal-only**: the E2E stack doesn't bind Postgres to a host port, so it can run alongside the standalone test database container. VM mode (`docker-compose.vm-mode.yml`) publishes it on `127.0.0.1:15432` for the host-networked control plane.
+- **Compose Postgres is internal-only**: the E2E stack doesn't bind Postgres to a host port, so it can run alongside the standalone test database container.
 - **Pinned node artifacts**: OverlayBD, ACI, CLOUDHV.fd and guest kernel versions live in `versions/node-artifacts.env`; the node Containerfiles read it through a `RUN --mount=type=bind`, so bump them there.
 - **`call_api` raises on any status >= 400**; use `call_api_detailed` when a test expects an error status.
 - **Never `pytest.skip` on a product failure** (a VM that didn't reach RUNNING, a missing route): that turns a regression into a green run. Skip only on environment gates such as "needs two UP hosts".

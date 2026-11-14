@@ -181,26 +181,33 @@ services:
       timeout: 5s
       retries: 10
 
+  # A bootc qarax node as a Cloud Hypervisor microVM (Dockerfile.bootc-vm):
+  # the node-upgrade e2e tests deploy to it, and `make run-local VM=1` uses it
+  # as the stack's node. Its SSH and gRPC answer on this service's address.
   bootc-vm:
     profiles: [ bootc ]
     build:
       context: ..
-      dockerfile: e2e/Dockerfile.qemu-vm
+      dockerfile: e2e/Dockerfile.bootc-vm
+      args:
+        CLOUD_HYPERVISOR_VERSION: ${CLOUD_HYPERVISOR_VERSION}
     privileged: true
     devices:
       - /dev/kvm:/dev/kvm
     volumes:
       - ./bootc-vm-overlay.qcow2:/disk/bootc-vm-overlay.qcow2
-      - ./bootc-vm-base.qcow2:/disk/bootc-vm-base.qcow2
+      - ./bootc-vm-base.qcow2:/disk/bootc-vm-base.qcow2:ro
     depends_on:
       registry:
         condition: service_healthy
     healthcheck:
-      test: [ "CMD", "nc", "-z", "localhost", "50051" ]
-      interval: 10s
-      timeout: 10s
-      retries: 30
-      start_period: 120s
+      # The guest itself: the port forwards only apply to traffic arriving
+      # on the container's uplink.
+      test: [ "CMD", "nc", "-z", "10.0.2.15", "50051" ]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 20s
 
 volumes:
   postgres_data:

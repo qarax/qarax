@@ -93,6 +93,21 @@ RUN --mount=type=bind,source=versions/node-artifacts.env,target=/tmp/node-artifa
     cd / && rpm2cpio /tmp/aci.rpm | cpio -idm --no-absolute-filenames 2>/dev/null && \
     rm /tmp/aci.rpm
 
+# The guest kernel OCI-image and kernel-boot VMs start (the control plane's
+# vm_defaults.kernel), and the UEFI firmware disk-image VMs boot with. Kept in
+# /usr so bootc switch updates them; tmpfiles links the kernel into
+# /var/lib/qarax/images under both configured names.
+RUN --mount=type=bind,source=versions/node-artifacts.env,target=/tmp/node-artifacts.env \
+    . /tmp/node-artifacts.env && \
+    mkdir -p /usr/lib/qarax/images /usr/share/cloud-hypervisor && \
+    curl -fsSL \
+    "https://github.com/cloud-hypervisor/linux/releases/download/${CH_KERNEL_TAG}/vmlinux-x86_64" \
+    -o /usr/lib/qarax/images/vmlinux && \
+    curl -fsSL \
+    "https://github.com/cloud-hypervisor/edk2/releases/download/${CLOUDHV_FW_TAG}/CLOUDHV.fd" \
+    -o /usr/share/cloud-hypervisor/CLOUDHV.fd && \
+    chmod 644 /usr/lib/qarax/images/vmlinux /usr/share/cloud-hypervisor/CLOUDHV.fd
+
 # Copy qarax-node and qarax-init binaries (must be built before image build)
 # Build with: cargo build --release -p qarax-node && cargo build --release -p qarax-init
 COPY target/x86_64-unknown-linux-musl/release/qarax-node /usr/local/bin/qarax-node
@@ -119,6 +134,8 @@ RUN printf '%s\n' \
     'd /var/lib/qarax      0755 root root -' \
     'd /var/lib/qarax/vms  0755 root root -' \
     'd /var/lib/qarax/images 0755 root root -' \
+    'L /var/lib/qarax/images/vmlinux - - - - /usr/lib/qarax/images/vmlinux' \
+    'L /var/lib/qarax/images/vmlinux-production - - - - /usr/lib/qarax/images/vmlinux' \
     'd /var/lib/qarax/disks 0755 root root -' \
     'd /var/lib/qarax/overlaybd 0755 root root -' \
     'd /var/lib/overlaybd 0755 root root -' \

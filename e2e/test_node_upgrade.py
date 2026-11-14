@@ -1,14 +1,15 @@
 """
-E2E tests for real bootc node deploy and upgrade on a QEMU VM.
+E2E tests for real bootc node deploy and upgrade on a Cloud Hypervisor VM.
 
 These tests exercise the full deploy/upgrade lifecycle against a real
-bootc-managed system running inside a QEMU VM:
+bootc-managed system, the appliance image, booted as a microVM by the
+bootc-vm service:
 
   1. POST /hosts/{id}/deploy  — SSH into the VM, run real bootc switch, reboot
   2. POST /hosts/{id}/upgrade — same flow using stored credentials
 
-The bootc-vm container boots a CentOS Stream 10 bootc image (built from
-Containerfile.bootc-node) with qarax-node running as a systemd service.
+The bootc-vm container boots the appliance image plus a test layer
+(Containerfile.bootc-node) with qarax-node running as a systemd service.
 
 Version tracking works through the systemd EnvironmentFile mechanism:
   - 10.0.2.2:5000/qarax-node-test:0.1.0     sets QARAX_NODE_VERSION=0.1.0
@@ -18,39 +19,39 @@ After a real bootc switch + systemctl reboot, the VM boots the new image and
 qarax-node reports the version from the EnvironmentFile.
 
 Prerequisites (handled by run_e2e_tests.sh):
-  - bootc-vm-overlay.qcow2 built from Containerfile.bootc-node via BIB
+  - bootc-vm-overlay.qcow2 over a `bootc install to-disk` of that image
+    (build-bootc-node.sh)
   - registry:5000/qarax-node-test:0.1.0     pushed to local registry
   - registry:5000/qarax-node-test:0.2.0-test pushed to local registry
 """
 
 import os
-import socket
 import time
 import uuid
 
 import pytest
 from qarax_api_client import Client
 from qarax_api_client.api.hosts import add as add_host
+from qarax_api_client.api.hosts import delete as delete_host
 from qarax_api_client.api.hosts import deploy as deploy_host
 from qarax_api_client.api.hosts import init as init_host
 from qarax_api_client.api.hosts import list_ as list_hosts
 from qarax_api_client.api.hosts import node_upgrade
-from qarax_api_client.api.hosts import update as update_host
 from qarax_api_client.models import (
     DeployHostRequest,
     HostStatus,
     NewHost,
-    UpdateHostRequest,
 )
 
 from helpers import AUTH_HEADERS
 
 QARAX_URL = os.getenv("QARAX_URL", "http://localhost:8000")
-# bootc-vm is the QEMU container running the real bootc VM
+# bootc-vm is the container running the bootc node VM
 UPGRADE_TEST_NODE_HOST = os.getenv("UPGRADE_TEST_NODE_HOST", "bootc-vm")
 UPGRADE_TEST_NODE_PORT = int(os.getenv("UPGRADE_TEST_NODE_PORT", "50051"))
 
-# Registry address as seen from inside the QEMU VM (via SLIRP gateway + socat)
+# Registry address as seen from inside the VM (its gateway, where socat
+# proxies the compose registry)
 REGISTRY_INTERNAL = "10.0.2.2:5000"
 NODE_IMAGE_V1 = f"{REGISTRY_INTERNAL}/qarax-node-test:0.1.0"
 NODE_IMAGE_V2 = f"{REGISTRY_INTERNAL}/qarax-node-test:0.2.0-test"
@@ -71,14 +72,6 @@ pytestmark = pytest.mark.timeout(VM_BOOT_TIMEOUT_SECONDS + 2 * DEPLOY_TIMEOUT_SE
 
 def _is_truthy(value: str | None) -> bool:
     return (value or "").lower() in {"1", "true", "yes", "on"}
-
-
-def _tcp_reachable(host: str, port: int, timeout: float = 2.0) -> bool:
-    try:
-        with socket.create_connection((host, port), timeout=timeout):
-            return True
-    except OSError:
-        return False
 
 
 def get_host(client: Client, host_id: uuid.UUID):
@@ -119,18 +112,15 @@ def wait_for_host_status(
 @pytest.fixture(scope="module")
 def upgrade_host_id():
     """
-    Register a dedicated host entry pointing at the real bootc QEMU VM.
+    Register a dedicated host entry pointing at the real bootc VM.
 
-    Waits for the VM's gRPC port to become reachable (it may still be booting
-    when the test suite starts) then inits the host so node_version is populated.
+    Retries host init until the VM's gRPC port answers (it may still be booting
+    when the test suite starts), so node_version is populated. The address is
+    a compose service name that only the control plane can resolve, so there
+    is no probe from here.
     """
     if not _is_truthy(os.getenv("ENABLE_BOOTC_UPGRADE_E2E")):
         pytest.skip("bootc upgrade e2e disabled (set ENABLE_BOOTC_UPGRADE_E2E=1 to run)")
-
-    if not _tcp_reachable(UPGRADE_TEST_NODE_HOST, UPGRADE_TEST_NODE_PORT):
-        pytest.skip(
-            f"upgrade node {UPGRADE_TEST_NODE_HOST}:{UPGRADE_TEST_NODE_PORT} is not reachable"
-        )
 
     client = Client(base_url=QARAX_URL, headers=AUTH_HEADERS)
     host_name = f"bootc-vm-{uuid.uuid4().hex[:8]}"
@@ -150,7 +140,7 @@ def upgrade_host_id():
     )
     host_id = uuid.UUID(result.parsed.strip())
 
-    # The QEMU VM may still be booting — retry init until gRPC is reachable.
+    # The VM may still be booting — retry init until gRPC is reachable.
     deadline = time.time() + VM_BOOT_TIMEOUT_SECONDS
     while True:
         init_result = init_host.sync_detailed(host_id=host_id, client=client)
@@ -164,12 +154,8 @@ def upgrade_host_id():
         time.sleep(10)
 
     yield host_id
-    # Set host DOWN so it is not selected for VM scheduling in subsequent tests.
-    update_host.sync_detailed(
-        host_id=host_id,
-        client=client,
-        body=UpdateHostRequest(status=HostStatus.DOWN),
-    )
+    # Remove the host so later tests don't schedule onto it.
+    delete_host.sync_detailed(host_id=host_id, client=client)
 
 
 def test_deploy_sets_last_deployed_image_and_node_version(upgrade_host_id):
@@ -177,7 +163,7 @@ def test_deploy_sets_last_deployed_image_and_node_version(upgrade_host_id):
     Full deploy flow with v1 image using real bootc switch + systemctl reboot:
       - POST /hosts/{id}/deploy → 202 Accepted
       - bootc switch stages registry:5000/qarax-node-test:0.1.0 on the VM
-      - systemctl reboot reboots the VM; QEMU resets the guest
+      - systemctl reboot reboots the VM; Cloud Hypervisor resets the guest
       - VM boots the new ostree deployment; qarax-node starts with QARAX_NODE_VERSION=0.1.0
       - Host: installing → up
       - last_deployed_image is recorded

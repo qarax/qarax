@@ -30,7 +30,7 @@ make ci-checks   # run the same Dagger validation path as GitHub CI Checks
 
 ```bash
 make run-local           # compose mode: qarax + qarax-node + Postgres in Docker Compose
-make run-local VM=1      # VM mode: run qarax-node inside a libvirt VM
+make run-local VM=1      # VM mode: the node is the appliance image as a bootc microVM
 make stop-local          # stop the stack
 ```
 
