@@ -155,86 +155,27 @@ elif is_truthy "${ENABLE_OTEL:-}"; then
 	echo -e "${YELLOW}SKIP_BUILD=1 set; make sure existing binaries were built with ENABLE_OTEL=1${NC}"
 fi
 
-# Bootc VM disk (real bootc upgrade e2e tests)─────────
-BOOTC_BASE_DISK="${PWD}/bootc-vm-base.qcow2"
-NODE_BIN="../target/${MUSL_TARGET}/release/qarax-node"
-
+# Bootc node VM (real bootc upgrade e2e tests): the appliance image installed
+# to a disk with bootc, booted by the bootc-vm service (Cloud Hypervisor).
 build_bootc_vm() {
-	# Ensure qemu-img is available (needed for overlay creation)
-	if ! command -v qemu-img &>/dev/null; then
-		if command -v apt-get &>/dev/null; then
-			echo -e "${YELLOW}Installing qemu-utils...${NC}"
-			sudo apt-get install -y -q qemu-utils
-		else
-			echo -e "${RED}qemu-img not found. Install qemu-utils.${NC}" >&2
-			exit 1
-		fi
-	fi
+	command -v qemu-img &>/dev/null || {
+		echo -e "${RED}qemu-img not found. Install qemu-img (qemu-utils).${NC}" >&2
+		exit 1
+	}
 
-	# Start just the registry so we can push images for BIB and the test
-	echo -e "${YELLOW}Starting registry for bootc image build...${NC}"
+	# The images and the installer go through the registry.
+	echo -e "${YELLOW}Starting registry for the bootc node build...${NC}"
 	docker compose up -d --wait registry
+	bash build-bootc-node.sh
 
-	# Build base bootc image
-	echo -e "${YELLOW}Building bootc node image...${NC}"
-	local node_hash
-	node_hash=$(sha256sum "${NODE_BIN}" | cut -d' ' -f1)
-	docker_build_image "e2e-bootc-node-base" \
-		--build-arg "CACHE_BUST=${node_hash}" \
-		-f Containerfile.bootc-node \
-		-t localhost:5001/qarax-node-bootc:base \
-		..
-	docker push localhost:5001/qarax-node-bootc:base
-
-	# Push thin versioned images for bootc switch version tracking
+	# Thin versioned images the tests bootc switch between.
 	echo -e "${YELLOW}Pushing versioned bootc node images...${NC}"
-	DOCKER_BUILDKIT=0 docker build -t localhost:5001/qarax-node-test:0.1.0 - <<'VEOF'
-FROM localhost:5001/qarax-node-bootc:base
-RUN mkdir -p /etc/qarax-node && printf 'QARAX_NODE_VERSION=0.1.0\n' > /etc/qarax-node/version.env
-VEOF
-	docker push localhost:5001/qarax-node-test:0.1.0
-
-	DOCKER_BUILDKIT=0 docker build -t localhost:5001/qarax-node-test:0.2.0-test - <<'VEOF'
-FROM localhost:5001/qarax-node-bootc:base
-RUN mkdir -p /etc/qarax-node && printf 'QARAX_NODE_VERSION=0.2.0-test\n' > /etc/qarax-node/version.env
-VEOF
-	docker push localhost:5001/qarax-node-test:0.2.0-test
-
-	# Build qcow2 disk from the bootc image using bootc-image-builder
-	if [ -n "$REBUILD" ] || [ ! -f "$BOOTC_BASE_DISK" ]; then
-		echo -e "${YELLOW}Building bootc VM disk (this takes a few minutes)...${NC}"
-		local bib_output
-		bib_output="${PWD}/bib-output"
-		mkdir -p "${bib_output}"
-
-		# BIB no longer pulls images itself; pre-pull into podman's local
-		# container storage (shared with BIB via the bind-mount below).
-		echo -e "${YELLOW}Pulling bootc image into local container storage...${NC}"
-		sudo podman pull --tls-verify=false localhost:5001/qarax-node-bootc:base
-		sudo podman tag localhost:5001/qarax-node-bootc:base registry:5000/qarax-node-bootc:base
-
-		docker run --rm --privileged \
-			--network e2e_default \
-			-v "${bib_output}:/output" \
-			-v /var/lib/containers/storage:/var/lib/containers/storage \
-			quay.io/centos-bootc/bootc-image-builder:latest \
-			--type qcow2 \
-			registry:5000/qarax-node-bootc:base
-
-		sudo mv "${bib_output}/qcow2/disk.qcow2" "${BOOTC_BASE_DISK}"
-		sudo rm -rf "${bib_output}"
-		echo -e "${GREEN}Bootc disk ready: ${BOOTC_BASE_DISK}${NC}"
-	else
-		echo -e "${GREEN}Using cached bootc disk: ${BOOTC_BASE_DISK}${NC}"
-	fi
-
-	# Fresh overlay for this run (keeps base unmodified for caching)
-	# Use the basename as the backing file so the path stays valid inside
-	# the container (both disks are mounted at /disk/).
-	qemu-img create -f qcow2 -F qcow2 \
-		-b "$(basename "${BOOTC_BASE_DISK}")" \
-		"${BOOTC_OVERLAY_DISK}" >/dev/null
-	echo -e "${GREEN}Bootc VM overlay created.${NC}"
+	local version
+	for version in 0.1.0 0.2.0-test; do
+		printf 'FROM localhost:5001/qarax-node-bootc:base\nRUN mkdir -p /etc/qarax-node && printf "QARAX_NODE_VERSION=%s\\n" > /etc/qarax-node/version.env\n' "$version" |
+			docker build -q -t "localhost:5001/qarax-node-test:${version}" - >/dev/null
+		docker push -q "localhost:5001/qarax-node-test:${version}"
+	done
 }
 
 BOOTC_VM_ENABLED=0

@@ -1,135 +1,92 @@
 # Development Guide
 
-## Host Deploy Testing with libvirt
+## The bootc node microVM
 
-The script `hack/test-host-deploy-libvirt.sh` runs qarax-node in a libvirt VM
-and registers it with the local control plane through the real host-deploy
-flow: `qarax host deploy` SSHes into the VM, runs `bootc switch` to the node
-image and reboots it, and the host comes back `up`. `make run-local VM=1`
-(`hack/run-local.sh --vm`) runs it with `--keep-vm` to put the local stack's
-node in a VM instead of a container.
+`make run-local VM=1` and the e2e node-upgrade tests run qarax-node the way a
+real host does: the appliance image (`deployments/Containerfile.qarax-vmm`),
+installed with bootc and booted as a Cloud Hypervisor microVM. The compose
+service `bootc-vm` (profile `bootc`) is that VM; the rest of the stack reaches
+its SSH and gRPC on the service's address, like any other node.
 
 ### Prerequisites
 
-- libvirt + QEMU (`virsh`, `virt-install`, `qemu-img`) with the `default` NAT
-  network; your user must be able to use `qemu:///system` (usually the
-  `libvirt` group)
-- rootful podman through `sudo`, for the image builds and bootc-image-builder
-- Docker with Compose, `jq`, `curl`, `ssh-keygen`
-- Release binaries: `cargo build --release -p qarax -p qarax-node -p qarax-init -p cli`
-  (`make run-local` and `--start-stack` build them)
+- The local Docker stack's requirements (Docker with Compose, `/dev/kvm`, a
+  Rust toolchain)
+- `qemu-img`
+- Nested virtualization on the host (`cat /sys/module/kvm_intel/parameters/nested`
+  or `kvm_amd`), so the node VM can run VMs of its own
+- A kernel whose modules are loadable (after a kernel upgrade, reboot): the
+  disk is installed through a loop device
+
+No sudo, podman or bootc-image-builder: the install runs in a privileged
+container.
 
 ### Quick start
 
 ```bash
-# Full deploy test on a new VM, destroyed on exit
-./hack/test-host-deploy-libvirt.sh --start-stack
+make run-local VM=1          # stack + node VM, registered as host local-node-vm
+qarax vm create --name alpine --image-ref public.ecr.aws/docker/library/alpine:latest
+qarax vm start alpine        # boots nested inside the node VM
 
-# Leave the node running (what make run-local VM=1 does)
-./hack/test-host-deploy-libvirt.sh --keep-vm
+cd e2e && ENABLE_BOOTC_UPGRADE_E2E=1 ./run_e2e_tests.sh test_node_upgrade.py
 ```
 
-### What it does
+### How it's built
 
-1. **Stack.** Applies `e2e/docker-compose.vm-mode.yml` to registry, postgres
-   and qarax: qarax runs on host networking, because libvirt's NAT network only
-   accepts connections from the host itself. Compose recreates only what
-   changed, so this is a no-op after `make run-local VM=1`. With
-   `--start-stack` and no stack reachable it builds missing release binaries
-   and starts those three services.
-2. **Images.** Builds the node appliance `deployments/Containerfile.qarax-vmm`
-   as `localhost/qarax-vmm-host:dev` with rootful podman (the build args of
-   `make appliance-build`), then a thin test layer on top of it,
-   `localhost/qarax-test-host:latest`. The test layer's Containerfile is
-   generated into `$STATE_DIR/build/` and adds only what the test host needs:
-   a password SSH login with passwordless sudo for `SSH_USER`, a fixed SSH host
-   key, and the compose registry (`<libvirt bridge IP>:5001`) as an insecure
-   registry. Images these builds replace are removed by ID.
-3. **VM.** Boots from a qcow2 that bootc-image-builder makes from the test
-   image, with a copy-on-write overlay disk per VM. The VM has a fixed MAC, so
-   a recreated VM gets the same DHCP address.
-4. **Deploy.** Registers the VM as host `libvirt-node` (once; re-runs reuse
-   the record), pushes the test image to the registry as
-   `<bridge IP>:5001/qarax-test-host:<image ID>`, runs `qarax host deploy`
-   and waits for the host to come back `up`, then `qarax host init`.
+`e2e/build-bootc-node.sh` (run by both of the above):
 
-### Re-runs and `--keep-vm`
+1. Builds the appliance image as `localhost:5001/qarax-vmm-host:e2e` from the
+   release binaries.
+2. Adds the test layer (`e2e/Containerfile.bootc-node`): root SSH with password
+   `testpassword`, the registry trusted over HTTP, and a boot unit that names
+   the VM's gateway `registry`. It pushes the result as
+   `localhost:5001/qarax-node-bootc:base`.
+3. Installs that image to `e2e/bootc-vm-base.qcow2` with
+   `bootc install to-disk --via-loopback`, run from the image itself in a
+   privileged container. The disk is rebuilt only when the image ID changes
+   (`bootc-vm-base.qcow2.image-id`).
+4. Creates a fresh `e2e/bootc-vm-overlay.qcow2` over it, so every boot starts
+   from the installed state.
 
-With `--keep-vm` the VM stays running, and the next `--keep-vm` run reuses it:
+`e2e/Dockerfile.bootc-vm` boots the overlay with UEFI firmware and nested
+virtualization. Inside its container the guest is `10.0.2.15` on a TAP device,
+the container is its gateway `10.0.2.2` (DHCP from dnsmasq, NAT out), port
+5000 there proxies the compose registry, and the container's ports 22 and
+50051 are forwarded to the guest.
 
-- If the VM already runs the image this run built (nothing changed), the run
-  skips the deploy: it registers `libvirt-node` again if the database was
-  reset and runs `qarax host init`. This takes seconds.
-- Otherwise it redeploys the new image onto the running VM (`bootc switch` +
-  reboot).
-- `--fresh` destroys and recreates the VM, then deploys.
+Because the guest resolves `registry` to its gateway, the stack's OverlayBD
+pool (`http://registry:5000`) works on the VM node unchanged, and
+`bootc switch` pulls from `10.0.2.2:5000/...` (the upgrade tests' images).
 
-Without `--keep-vm` every run is a full test: it replaces any VM a
-`--keep-vm` run left (same `VM_NAME`), deploys, and on exit destroys the VM
-and deletes the `libvirt-node` host record.
+### What VM mode runs
 
-### Cache
+OCI-image VMs (OverlayBD) and disk-image VMs (UEFI firmware): the appliance
+ships the guest kernel and `CLOUDHV.fd`. VMs that boot the default kernel with
+the e2e test initramfs need the container node, which is the only one that has
+that initramfs.
 
-`STATE_DIR` (default `/var/lib/libvirt/images/qarax-dev`) holds the base disk,
-the VM's overlay disk, the generated test layer with its SSH host key, and the
-name of the image the VM runs. It is on disk rather than in `/tmp`, which is
-often tmpfs, and under libvirt's image directory, which the `qemu:///system`
-emulator user can reach and which has the right SELinux/AppArmor labels. The
-script creates it owned by you.
+In VM mode `run-local` stops the `qarax-node` container if it's running and
+marks `local-node` down, so new VMs land on `local-node-vm`.
 
-The base disk is cached as `base-<key>.qcow2`, keyed by the appliance
-Containerfile, `versions/node-artifacts.env`, the Cloud Hypervisor and
-Firecracker versions and the test layer, but not by the binaries: the deploy
-installs the current binaries over whatever the base booted with. A recipe
-change rebuilds the base the next time a VM is created. `/var` is the one
-thing `bootc switch` leaves alone, so content the appliance puts under `/var`
-reaches a VM only through its base disk: use `--fresh` after changing it.
-
-### Cleanup
+### Getting into the node
 
 ```bash
-./hack/test-host-deploy-libvirt.sh --cleanup
+docker compose -f e2e/docker-compose.yml logs -f bootc-vm      # serial console
+docker compose -f e2e/docker-compose.yml exec bootc-vm \
+  ssh root@10.0.2.15                                         # password: testpassword
 ```
 
-This destroys the VM and its overlay disk and deletes the `libvirt-node` host
-record. Base disks stay cached; `sudo rm -rf
-/var/lib/libvirt/images/qarax-dev` removes everything. Pushed test images stay
-in the compose registry's volume until `make stop-local`.
+`journalctl -u qarax-node` in the guest shows the node's log.
 
 ### Troubleshooting
 
-- Console: `virsh -c qemu:///system console qarax-deploy-test`
-- SSH: `ssh qarax@<VM IP>` (password `qarax`), then `sudo journalctl -u qarax-node`
-- Deploy errors: `qarax host get libvirt-node` shows the failure;
-  `docker compose -f e2e/docker-compose.yml logs qarax` has the details
-- "host libvirt-node is registered at A, but VM is at B": the VM got a new
-  DHCP address. qarax can't change a host's address, so reset the stack with
-  `make stop-local` and run again.
-
-### Script options
-
-| Flag            | Description                                                    |
-|-----------------|----------------------------------------------------------------|
-| `--keep-vm`     | Leave the VM running, and reuse a kept VM                      |
-| `--fresh`       | With `--keep-vm`: recreate the VM instead of reusing it        |
-| `--start-stack` | Start registry, postgres and qarax if the API isn't reachable  |
-| `--cleanup`     | Destroy the VM, delete its host record, and exit               |
-
-### Environment variables
-
-| Variable              | Default                                       | Description                                  |
-|-----------------------|-----------------------------------------------|----------------------------------------------|
-| `API_URL`             | `http://localhost:8000`                       | qarax API endpoint                           |
-| `QARAX_TOKEN`         | `e2e-test-token`                              | API token                                    |
-| `VM_NAME`             | `qarax-deploy-test`                           | libvirt domain name                          |
-| `VM_MEMORY_MB`        | `3072`                                        | VM memory                                    |
-| `VM_VCPUS`            | `2`                                           | VM vCPUs                                     |
-| `VM_DISK_SIZE`        | `20G`                                         | VM overlay disk size                         |
-| `VM_MAC`              | `52:54:00:71:a8:01`                           | VM MAC address                               |
-| `HOST_NAME`           | `libvirt-node`                                | qarax host name                              |
-| `SSH_USER`            | `qarax`                                       | Test VM SSH user                             |
-| `SSH_PASSWORD`        | `qarax`                                       | Test VM SSH password                         |
-| `LIBVIRT_BRIDGE_IP`   | address of the libvirt `default` network      | Address the VM reaches the registry on       |
-| `LOCAL_REGISTRY_PORT` | `5001`                                        | Compose registry's published port            |
-| `STATE_DIR`           | `/var/lib/libvirt/images/qarax-dev`           | Disk and build cache                         |
-| `BIB_IMAGE`           | `quay.io/centos-bootc/bootc-image-builder@sha256:…` | bootc-image-builder image (pinned digest) |
+- `losetup: ... failed to set up loop device`: the `loop` module can't load,
+  usually because the kernel was upgraded without a reboot.
+- `bootc-vm` never gets healthy: read its serial console (`logs bootc-vm`);
+  the guest should reach `qarax-node.service` within about 15 s.
+- A deploy fails with `Unknown server key`: the qarax container pinned the SSH
+  host key of an earlier disk at the same address. A disk rebuild generates
+  new keys; `make stop-local` (or recreating the qarax container) clears the
+  pin.
+- Workload VMs fail with `/dev/kvm` missing in the node: the host doesn't
+  allow nested virtualization.

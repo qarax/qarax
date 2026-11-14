@@ -346,7 +346,12 @@ if [[ -n "$PARENT_INTERFACE" ]]; then
 	echo "  ssh qarax@${VM_IP}"
 else
 	echo "The bridge is isolated on the host; reach the guest from the node, e.g.:"
-	echo "  docker compose -f ${REPO_ROOT}/e2e/docker-compose.yml exec qarax-node curl http://${VM_IP}:8080/"
+	if [[ "$HOST_ADDRESS" == bootc-vm ]]; then
+		# The node is the bootc microVM (make run-local VM=1); its shell is behind the runner container.
+		echo "  docker compose -f ${REPO_ROOT}/e2e/docker-compose.yml exec bootc-vm ssh root@10.0.2.15 curl http://${VM_IP}:8080/"
+	else
+		echo "  docker compose -f ${REPO_ROOT}/e2e/docker-compose.yml exec ${NODE_SERVICE:-qarax-node} curl http://${VM_IP}:8080/"
+	fi
 fi
 echo ""
 echo "Useful commands:"

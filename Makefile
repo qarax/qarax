@@ -33,7 +33,7 @@ help:
 	@echo "  make appliance-build - Build bootc appliance image locally"
 	@echo "  make appliance-push  - Push appliance image to registry"
 	@echo "  make run-local       - Run full stack locally (qarax + qarax-node + Postgres) via Docker"
-	@echo "  make run-local VM=1  - Same, but run qarax-node in a libvirt VM instead of a container"
+	@echo "  make run-local VM=1  - Same, but the node is the appliance image as a bootc microVM"
 	@echo "  make stop-local      - Stop and remove the local Docker stack and volumes"
 
 build:

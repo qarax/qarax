@@ -8,7 +8,7 @@ stack the e2e tests use (`e2e/docker-compose.yml`, project `e2e`).
 
 ```bash
 make run-local        # build, start, register host local-node, create overlaybd-pool
-make run-local VM=1   # same, but qarax-node runs in a libvirt VM (see below)
+make run-local VM=1   # same, but the node is a bootc microVM (see below)
 make stop-local       # remove the stack and its volumes
 ```
 
@@ -34,41 +34,13 @@ container (`qarax-node-2`, compose profile `multi-node`) themselves.
 - `REBUILD=1`: rebuild the Docker images without cache.
 - `QARAX_TOKEN` / `QARAX_TEST_TOKEN`: API token (default `e2e-test-token`).
 
-## Host Deploy Test (libvirt VM)
+## VM mode
 
-`hack/test-host-deploy-libvirt.sh` runs qarax-node in a libvirt VM and registers
-it through the real host-deploy flow: `qarax host deploy` SSHes into the VM,
-runs `bootc switch` to the node appliance image (`deployments/Containerfile.qarax-vmm`
-plus a thin test layer) and reboots it, then the host `libvirt-node` comes back `up`.
-`make run-local VM=1` (`./hack/run-local.sh --vm`) runs it with `--keep-vm` to
-put the local stack's node in a VM instead of a container.
-
-```bash
-# Full deploy test on a new VM, destroyed on exit (stack must be running)
-bash ./hack/test-host-deploy-libvirt.sh
-
-# Same, starting registry/postgres/qarax (vm-mode overlay) if they aren't up
-bash ./hack/test-host-deploy-libvirt.sh --start-stack
-
-# Leave the node running; a re-run reuses it and skips the deploy when its image is current
-bash ./hack/test-host-deploy-libvirt.sh --keep-vm
-bash ./hack/test-host-deploy-libvirt.sh --keep-vm --fresh   # recreate it instead
-
-# Destroy the VM and delete host libvirt-node
-bash ./hack/test-host-deploy-libvirt.sh --cleanup
-```
-
-Prerequisites:
-- libvirt + QEMU (`virsh`, `virt-install`, `qemu-img`) with the `default` NAT
-  network, usable by your user on `qemu:///system`
-- rootful podman through `sudo` (image builds and bootc-image-builder)
-- Docker with Compose, `jq`, `curl`, `ssh-keygen`
-- release binaries (`cargo build --release -p qarax -p qarax-node -p qarax-init -p cli`;
-  `make run-local` and `--start-stack` build them)
-
-Disks and the generated test layer are cached in `/var/lib/libvirt/images/qarax-dev`.
-See [docs/DEVELOPMENT.md](../docs/DEVELOPMENT.md#host-deploy-testing-with-libvirt)
-for how the images, the cache and VM reuse work, and the environment variables.
+`make run-local VM=1` runs the node the way a real host does: the appliance
+image installed with bootc, booted as a Cloud Hypervisor microVM (compose
+service `bootc-vm`, the node the e2e upgrade tests deploy to), registered as
+host `local-node-vm`. It needs `qemu-img` and nested virtualization, not sudo.
+See [docs/DEVELOPMENT.md](../docs/DEVELOPMENT.md#the-bootc-node-microvm).
 
 ## Networking
 

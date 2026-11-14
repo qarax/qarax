@@ -219,4 +219,6 @@ __pycache__
 local-test-images/
 bootc-vm-base.qcow2
 bootc-vm-overlay.qcow2
-bib-output/
+.bootc-vm-install.raw
+.bootc-vm-install-registries.conf
+bootc-vm-base.qcow2.image-id

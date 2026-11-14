@@ -1,0 +1,49 @@
+# Cloud Hypervisor runner for a bootc qarax node VM.
+#
+# Boots /disk/bootc-vm-overlay.qcow2 (a qcow2 overlay over the bootc disk) as
+# a microVM with UEFI firmware, and makes the guest look like this container
+# from the compose network: SSH (22) and qarax-node gRPC (50051) on the
+# container's address are forwarded to the guest. The guest sees the
+# container as its gateway at 10.0.2.2, where port 5000 proxies the compose
+# registry, so bootc pulls images as 10.0.2.2:5000/<repo>.
+#
+# Used by the e2e node-upgrade tests (compose service bootc-vm) and by
+# `make run-local VM=1`. The guest gets nested virtualization, so the node
+# can run VMs of its own. To get a shell in it:
+#   docker compose -f e2e/docker-compose.yml exec bootc-vm ssh root@10.0.2.15
+
+FROM fedora:43
+
+ENV CURL_RETRY_ARGS="--fail --show-error --silent --location --retry 5 --retry-delay 5 --retry-all-errors --connect-timeout 30 --max-time 1800"
+
+RUN dnf install -y \
+    iproute \
+    iptables-nft \
+    dnsmasq \
+    socat \
+    nmap-ncat \
+    curl \
+    openssh-clients \
+    && dnf clean all
+
+ARG CLOUD_HYPERVISOR_VERSION
+RUN curl ${CURL_RETRY_ARGS} \
+    "https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/${CLOUD_HYPERVISOR_VERSION:?set CLOUD_HYPERVISOR_VERSION}/cloud-hypervisor-static" \
+    -o /usr/local/bin/cloud-hypervisor && \
+    chmod +x /usr/local/bin/cloud-hypervisor && \
+    cloud-hypervisor --version
+
+# UEFI firmware that boots the disk's GRUB; pinned in versions/node-artifacts.env.
+RUN --mount=type=bind,source=versions/node-artifacts.env,target=/tmp/node-artifacts.env \
+    . /tmp/node-artifacts.env && \
+    mkdir -p /usr/share/cloud-hypervisor && \
+    curl ${CURL_RETRY_ARGS} \
+    "https://github.com/cloud-hypervisor/edk2/releases/download/${CLOUDHV_FW_TAG}/CLOUDHV.fd" \
+    -o /usr/share/cloud-hypervisor/CLOUDHV.fd
+
+COPY e2e/entrypoint-bootc-vm.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+EXPOSE 22 50051
+
+CMD ["/entrypoint.sh"]

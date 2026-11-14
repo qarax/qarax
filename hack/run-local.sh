@@ -6,7 +6,7 @@
 #
 # Usage:
 #   ./hack/run-local.sh            # build and start the stack       (make run-local)
-#   ./hack/run-local.sh --vm       # run qarax-node in a libvirt VM   (make run-local VM=1)
+#   ./hack/run-local.sh --vm       # the node as a bootc microVM      (make run-local VM=1)
 #   ./hack/run-local.sh --cleanup  # remove the stack and its volumes (make stop-local)
 #   SKIP_BUILD=1 ./hack/run-local.sh   # use the existing release binaries
 #   REBUILD=1 ./hack/run-local.sh      # rebuild the Docker images without cache
@@ -15,6 +15,13 @@
 # API is on http://localhost:8000 (token: $QARAX_TOKEN, default e2e-test-token),
 # host "local-node" is UP and the shared OverlayBD pool "overlaybd-pool" exists,
 # so the demos under demos/ run as is.
+#
+# --vm runs the node the way a real host does instead: the appliance image
+# installed with bootc, booted as a Cloud Hypervisor microVM (compose service
+# bootc-vm, the same node the e2e upgrade tests deploy to), registered as
+# "local-node-vm". Each run boots it fresh from a disk rebuilt when the image
+# changes. It needs qemu-img and nested virtualization; it runs OCI-image and
+# disk-image VMs (the e2e test initramfs isn't on it).
 
 set -euo pipefail
 
@@ -127,6 +134,9 @@ preflight() {
 		warn "/dev/net/tun not found: VMs with network interfaces will fail to start. Create it, then recreate the stack:"
 		warn "  sudo modprobe tun && sudo mkdir -p /dev/net && sudo mknod /dev/net/tun c 10 200 && sudo chmod 0666 /dev/net/tun"
 	fi
+	if [[ "$VM_MODE" -eq 1 ]]; then
+		command -v qemu-img >/dev/null || die "--vm needs qemu-img to build the node's disk."
+	fi
 }
 
 # Build the binaries the images package, plus the CLI the demos use. Cargo is
@@ -185,15 +195,17 @@ ensure_overlaybd_pool() {
 	qarax storage-pool attach-host overlaybd-pool --all >/dev/null
 }
 
-# A local-node row left from a container-mode run would look UP to the
-# scheduler but be unreachable from a VM-mode control plane.
-mark_container_node_down() {
-	local id
-	id=$(qarax host list -o json | jq -r '.[] | select(.address == "qarax-node") | .id')
+# Each mode has one node: stop the other mode's node (SERVICE) if an earlier
+# run left it up, and mark its host down so nothing gets scheduled there.
+stop_other_node() {
+	local service="$1" id
+	[[ -n "$("${COMPOSE[@]}" --profile '*' ps -q "$service" 2>/dev/null)" ]] || return 0
+	"${COMPOSE[@]}" --profile '*' stop "$service"
+	id=$(qarax host list -o json | jq -r --arg a "$service" '.[] | select(.address == $a and .status == "up") | .id')
 	[[ -n "$id" ]] || return 0
 	api_curl -fsS -X PATCH "${SERVER}/hosts/${id}" -H "Content-Type: application/json" \
 		-d '{"status":"down"}' >/dev/null
-	warn "Marked the container node (qarax-node) DOWN: it isn't running in VM mode."
+	warn "Stopped ${service} and marked its host DOWN; this mode's node is ${NODE_SERVICE}."
 }
 
 print_summary() {
@@ -212,9 +224,15 @@ Try it:
   qarax vm start alpine
   ./demos/oci/run.sh            # more in demos/README.md
 
-Logs:   docker compose -f e2e/docker-compose.yml logs -f qarax qarax-node
+Logs:   docker compose -f e2e/docker-compose.yml logs -f qarax ${NODE_SERVICE}
 Stop:   make stop-local
 EOF
+	if [[ "$VM_MODE" -eq 1 ]]; then
+		cat <<EOF
+Node:   a bootc microVM (serial console in the logs above); shell, password testpassword:
+        docker compose -f e2e/docker-compose.yml exec bootc-vm ssh root@10.0.2.15
+EOF
+	fi
 }
 
 VM_MODE=0
@@ -240,15 +258,20 @@ QARAX_BIN="$(find_qarax_bin)"
 [[ -n "$QARAX_BIN" ]] || die "qarax CLI not found after the build"
 
 if [[ "$VM_MODE" -eq 1 ]]; then
-	COMPOSE+=(-f "${E2E_DIR}/docker-compose.vm-mode.yml")
+	NODE_SERVICE=bootc-vm
 	start_services registry postgres qarax
-	echo -e "${YELLOW}Deploying qarax-node into a libvirt VM...${NC}"
-	API_URL="$SERVER" bash "${REPO_ROOT}/hack/test-host-deploy-libvirt.sh" --keep-vm
-	mark_container_node_down
-	# The VM reaches the Docker-hosted registry through the libvirt bridge, not
-	# the Compose DNS name "registry".
-	ensure_overlaybd_pool "http://${LIBVIRT_BRIDGE_IP:-192.168.122.1}:5001"
+	echo -e "${YELLOW}Building the bootc node image and disk...${NC}"
+	bash "${E2E_DIR}/build-bootc-node.sh"
+	# The build gave the disk a fresh overlay; boot a node VM on it.
+	COMPOSE+=(--profile bootc)
+	"${COMPOSE[@]}" up -d --build --force-recreate --wait --wait-timeout 300 bootc-vm
+	stop_other_node qarax-node
+	bash "${E2E_DIR}/setup_host.sh" "$SERVER" bootc-vm 50051 local-node-vm
+	# The node resolves "registry" to its gateway, which proxies the
+	# registry, so the pool URL is the same as in container mode.
+	ensure_overlaybd_pool "http://registry:5000"
 else
+	NODE_SERVICE=qarax-node
 	services=(registry postgres qarax-node qarax)
 	# A two-host demo may have started qarax-node-2 (profile multi-node); keep
 	# it on the same images as the first node.
@@ -257,6 +280,7 @@ else
 		services+=(qarax-node-2)
 	fi
 	start_services "${services[@]}"
+	stop_other_node bootc-vm
 	bash "${E2E_DIR}/setup_host.sh" "$SERVER" qarax-node 50051 local-node
 	if [[ " ${services[*]} " == *" qarax-node-2 "* ]]; then
 		# Init re-creates the networks and pools a recreated container lost.
