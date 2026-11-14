@@ -88,8 +88,9 @@ resolve_node() {
 		'[.[] | select(.status == "up" and (.name as $n | $attached | any(.host_name == $n)))][0].name // empty')
 	[[ -n "$HOST" ]] || die "no UP host has storage pool ${POOL}; run 'make run-local'"
 	address=$(qarax host get "$HOST" -o json | jq -r .address)
-	service=$(node_service_for_address "$address") ||
-		die "host ${HOST} (${address}) is not a local compose node: this demo needs the Docker Compose stack (make run-local, without VM=1)"
+	# The demo wires a veth into the node's network namespace, so the node must be a container here.
+	service=$(node_service_for_address "$address") && [[ "$service" != bootc-vm ]] ||
+		die "host ${HOST} (${address}) is not a local node container: this demo needs the Docker Compose stack (make run-local, without VM=1)"
 	NODE_CID=$(compose ps -q "$service")
 	[[ -n "$NODE_CID" ]] || die "compose service ${service} is not running"
 }

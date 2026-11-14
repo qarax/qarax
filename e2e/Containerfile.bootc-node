@@ -11,6 +11,10 @@
 # node.
 
 ARG BASE_IMAGE
+# The test-initramfs stage of Dockerfile.qarax-node, built by build-bootc-node.sh.
+ARG TEST_INITRAMFS_IMAGE
+FROM ${TEST_INITRAMFS_IMAGE} AS test-initramfs
+
 FROM ${BASE_IMAGE}
 
 # Root SSH with a password, for the deploy/upgrade tests (host_deployer).
@@ -50,3 +54,19 @@ RUN systemctl enable qarax-test-registry-host
 RUN mkdir -p /etc/systemd/system/qarax-node.service.d && \
     printf '[Service]\nEnvironmentFile=-/etc/qarax-node/version.env\n' \
         > /etc/systemd/system/qarax-node.service.d/10-version.conf
+
+# The container node's test initramfs, the default boot of VMs on the local and
+# e2e stacks (VM_INITRAMFS), and guest-ssh with the key its dropbear trusts. In
+# /usr so bootc switch carries them; the link puts the initramfs where the
+# control plane's default points, next to the appliance's vmlinux links.
+COPY --from=test-initramfs /test-initramfs.gz /usr/lib/qarax/images/test-initramfs.gz
+COPY --from=test-initramfs /root/.ssh/id_rsa.openssh /usr/lib/qarax/test-ssh/id_rsa
+RUN chmod 600 /usr/lib/qarax/test-ssh/id_rsa && \
+    echo 'L /var/lib/qarax/images/test-initramfs.gz - - - - /usr/lib/qarax/images/test-initramfs.gz' \
+        > /usr/lib/tmpfiles.d/qarax-test-initramfs.conf
+COPY --chmod=755 <<'EOF' /usr/local/bin/guest-ssh
+#!/bin/sh
+# SSH into a test-initramfs guest: guest-ssh root@IP [COMMAND...]
+exec ssh -i /usr/lib/qarax/test-ssh/id_rsa -o BatchMode=yes \
+    -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "$@"
+EOF

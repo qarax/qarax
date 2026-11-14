@@ -20,8 +20,8 @@
 # installed with bootc, booted as a Cloud Hypervisor microVM (compose service
 # bootc-vm, the same node the e2e upgrade tests deploy to), registered as
 # "local-node-vm". Each run boots it fresh from a disk rebuilt when the image
-# changes. It needs qemu-img and nested virtualization; it runs OCI-image and
-# disk-image VMs (the e2e test initramfs isn't on it).
+# changes. It needs qemu-img and nested virtualization, and runs the same VMs
+# the container node does (it ships the test initramfs too).
 
 set -euo pipefail
 
@@ -229,8 +229,8 @@ Stop:   make stop-local
 EOF
 	if [[ "$VM_MODE" -eq 1 ]]; then
 		cat <<EOF
-Node:   a bootc microVM (serial console in the logs above); shell, password testpassword:
-        docker compose -f e2e/docker-compose.yml exec bootc-vm ssh root@10.0.2.15
+Node:   a bootc microVM (serial console in the logs above); shell:
+        docker compose -f e2e/docker-compose.yml exec bootc-vm node-ssh
 EOF
 	fi
 }

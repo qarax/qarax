@@ -37,15 +37,18 @@ cd e2e && ENABLE_BOOTC_UPGRADE_E2E=1 ./run_e2e_tests.sh test_node_upgrade.py
 
 1. Builds the appliance image as `localhost:5001/qarax-vmm-host:e2e` from the
    release binaries.
-2. Adds the test layer (`e2e/Containerfile.bootc-node`): root SSH with password
-   `testpassword`, the registry trusted over HTTP, and a boot unit that names
-   the VM's gateway `registry`. It pushes the result as
+2. Builds the `test-initramfs` stage of `e2e/Dockerfile.qarax-node`, the same
+   test initramfs the container node ships.
+3. Adds the test layer (`e2e/Containerfile.bootc-node`): root SSH with password
+   `testpassword`, the registry trusted over HTTP, a boot unit that names the
+   VM's gateway `registry`, and the test initramfs with `guest-ssh` and the
+   key its guests trust. It pushes the result as
    `localhost:5001/qarax-node-bootc:base`.
-3. Installs that image to `e2e/bootc-vm-base.qcow2` with
+4. Installs that image to `e2e/bootc-vm-base.qcow2` with
    `bootc install to-disk --via-loopback`, run from the image itself in a
    privileged container. The disk is rebuilt only when the image ID changes
    (`bootc-vm-base.qcow2.image-id`).
-4. Creates a fresh `e2e/bootc-vm-overlay.qcow2` over it, so every boot starts
+5. Creates a fresh `e2e/bootc-vm-overlay.qcow2` over it, so every boot starts
    from the installed state.
 
 `e2e/Dockerfile.bootc-vm` boots the overlay with UEFI firmware and nested
@@ -60,23 +63,31 @@ pool (`http://registry:5000`) works on the VM node unchanged, and
 
 ### What VM mode runs
 
-OCI-image VMs (OverlayBD) and disk-image VMs (UEFI firmware): the appliance
-ships the guest kernel and `CLOUDHV.fd`. VMs that boot the default kernel with
-the e2e test initramfs need the container node, which is the only one that has
-that initramfs.
+The same VMs as the container node: the default kernel boot with the test
+initramfs, OCI images (OverlayBD) and disk images (UEFI firmware). The
+appliance ships the guest kernel and `CLOUDHV.fd`; the test layer adds the
+initramfs.
 
 In VM mode `run-local` stops the `qarax-node` container if it's running and
 marks `local-node` down, so new VMs land on `local-node-vm`.
 
+The demos run against it too. `node_exec` in `demos/lib.sh` runs commands for
+`bootc-vm` inside the guest, and `guest-ssh root@IP` (on both kinds of node)
+reaches a test-initramfs VM. `etcd-cluster` and `block-storage` need a node
+container on this machine and refuse VM mode. The two-host demos
+(`k8s-cluster`, `host-evacuation`, `network-isolation --cross-host`) add the
+`qarax-node-2` container next to the VM, a mix that isn't tested.
+
 ### Getting into the node
 
 ```bash
-docker compose -f e2e/docker-compose.yml logs -f bootc-vm      # serial console
+docker compose -f e2e/docker-compose.yml logs -f bootc-vm               # serial console
+docker compose -f e2e/docker-compose.yml exec bootc-vm node-ssh         # shell
 docker compose -f e2e/docker-compose.yml exec bootc-vm \
-  ssh root@10.0.2.15                                         # password: testpassword
+  node-ssh journalctl -u qarax-node                                     # the node's log
 ```
 
-`journalctl -u qarax-node` in the guest shows the node's log.
+`node-ssh` is `ssh root@10.0.2.15` with the test password (`testpassword`).
 
 ### Troubleshooting
 

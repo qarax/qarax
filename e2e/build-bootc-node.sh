@@ -2,7 +2,9 @@
 # Build the bootc test node and the disks the bootc-vm compose service boots:
 #
 #   localhost:5001/qarax-vmm-host:e2e     the appliance (deployments/Containerfile.qarax-vmm)
-#   localhost:5001/qarax-node-bootc:base  plus the test layer (e2e/Containerfile.bootc-node)
+#   qarax-test-initramfs:e2e              the container node's test initramfs stage
+#   localhost:5001/qarax-node-bootc:base  the appliance plus the test layer
+#                                         (e2e/Containerfile.bootc-node)
 #   e2e/bootc-vm-base.qcow2               `bootc install to-disk` of that image,
 #                                         rebuilt only when the image changes
 #   e2e/bootc-vm-overlay.qcow2            a fresh copy-on-write layer over it
@@ -20,6 +22,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 E2E_DIR="${REPO_ROOT}/e2e"
 REGISTRY="localhost:5001"
 APPLIANCE_IMAGE="${REGISTRY}/qarax-vmm-host:e2e"
+INITRAMFS_IMAGE="qarax-test-initramfs:e2e"
 NODE_IMAGE="${REGISTRY}/qarax-node-bootc:base"
 BASE_DISK="${E2E_DIR}/bootc-vm-base.qcow2"
 OVERLAY_DISK="${E2E_DIR}/bootc-vm-overlay.qcow2"
@@ -48,13 +51,21 @@ build_image e2e-appliance \
 	-t "$APPLIANCE_IMAGE" \
 	"$REPO_ROOT"
 
-# The test layer builds FROM the appliance image loaded above, which only the
-# daemon's own builder can see: CI's docker-container builder (buildx) would
-# try to pull it, and its localhost isn't this host's registry.
+echo "Building the test initramfs (${INITRAMFS_IMAGE})..."
+build_image e2e-test-initramfs \
+	-f "${E2E_DIR}/Dockerfile.qarax-node" \
+	--target test-initramfs \
+	-t "$INITRAMFS_IMAGE" \
+	"$REPO_ROOT"
+
+# The test layer builds FROM the images loaded above, which only the daemon's
+# own builder can see: CI's docker-container builder (buildx) would try to
+# pull them, and its localhost isn't this host's registry.
 echo "Building the test node image (${NODE_IMAGE})..."
 docker buildx build --builder default \
 	-f "${E2E_DIR}/Containerfile.bootc-node" \
 	--build-arg "BASE_IMAGE=${APPLIANCE_IMAGE}" \
+	--build-arg "TEST_INITRAMFS_IMAGE=${INITRAMFS_IMAGE}" \
 	-t "$NODE_IMAGE" \
 	"$E2E_DIR"
 docker push -q "$NODE_IMAGE"

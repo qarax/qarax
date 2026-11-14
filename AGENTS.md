@@ -58,7 +58,7 @@ PostgreSQL 16+ with SQLx (compile-time verified queries).
 Qarax supports two deployment modes — understand which one is in use before debugging:
 
 - **Docker Compose (e2e / local dev):** `qarax` (control plane), `qarax-node`, and `postgres` run as separate containers. `qarax-node` runs privileged with `/dev/kvm` passthrough for real VMs.
-- **bootc node microVM (`make run-local VM=1`, e2e upgrade tests):** the compose stack, with the node being the appliance image installed with bootc and booted by Cloud Hypervisor in the `bootc-vm` service (guest `10.0.2.15`; `docker compose exec bootc-vm ssh root@10.0.2.15`). Built by `e2e/build-bootc-node.sh`; see `docs/DEVELOPMENT.md`.
+- **bootc node microVM (`make run-local VM=1`, e2e upgrade tests):** the compose stack, with the node being the appliance image installed with bootc and booted by Cloud Hypervisor in the `bootc-vm` service (guest `10.0.2.15`; `docker compose exec bootc-vm node-ssh [CMD]`). Built by `e2e/build-bootc-node.sh`; see `docs/DEVELOPMENT.md`.
 - **Hyperconverged (`demos/hyperconverged`):** a single Cloud Hypervisor VM hosts both the control plane and the node, on the developer's host.
 
 Always confirm the deployment mode before debugging. Many issues (networking, storage mount paths, device availability) differ between the two modes.

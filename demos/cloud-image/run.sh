@@ -181,7 +181,7 @@ remove_vm() {
 }
 
 # guest_http_up SERVICE IP: whether the guest's HTTP server answers, probed
-# from inside the node container SERVICE. Fails until cloud-init starts it.
+# from the node SERVICE. Fails until cloud-init starts it.
 guest_http_up() {
 	node_exec "$1" curl -sf --max-time 2 -o /dev/null "http://$2:8080/"
 }
@@ -326,7 +326,7 @@ VM_JSON="$(qarax vm get "$VM_NAME" -o json)"
 HOST_ADDRESS="$(qarax host get "$(jq -r '.host_id' <<<"$VM_JSON")" -o json | jq -r '.address')"
 
 step "7. Wait for cloud-init"
-# The bridge lives on the host, so the guest is probed from the node container.
+# The bridge lives on the host, so the guest is probed from the node.
 if NODE_SERVICE="$(node_service_for_address "$HOST_ADDRESS")"; then
 	info "cloud-init creates the qarax user and starts an HTTP server on ${VM_IP}:8080 (up to ${BOOT_TIMEOUT}s)"
 	wait_until "$BOOT_TIMEOUT" guest_http_up "$NODE_SERVICE" "$VM_IP" ||
@@ -348,7 +348,7 @@ else
 	echo "The bridge is isolated on the host; reach the guest from the node, e.g.:"
 	if [[ "$HOST_ADDRESS" == bootc-vm ]]; then
 		# The node is the bootc microVM (make run-local VM=1); its shell is behind the runner container.
-		echo "  docker compose -f ${REPO_ROOT}/e2e/docker-compose.yml exec bootc-vm ssh root@10.0.2.15 curl http://${VM_IP}:8080/"
+		echo "  docker compose -f ${REPO_ROOT}/e2e/docker-compose.yml exec bootc-vm node-ssh curl http://${VM_IP}:8080/"
 	else
 		echo "  docker compose -f ${REPO_ROOT}/e2e/docker-compose.yml exec ${NODE_SERVICE:-qarax-node} curl http://${VM_IP}:8080/"
 	fi

@@ -122,8 +122,8 @@ fi
 # compose service.
 host=$(first_up_host)
 address=$(qarax host get "$host" -o json | jq -r '.address')
-node_service_for_address "$address" >/dev/null ||
-	die "host ${host} (${address}) is not a local compose node. This demo needs the container-mode stack ('make run-local', not VM=1): the iSCSI target is only reachable on the compose network."
+service=$(node_service_for_address "$address") && [[ "$service" != bootc-vm ]] ||
+	die "host ${host} (${address}) is not a local node container. This demo needs the container-mode stack ('make run-local', not VM=1): the iSCSI target is only reachable on the compose network."
 
 # A target left running by a KEEP=1 run is reused as is.
 step "Clearing leftovers from earlier runs"
