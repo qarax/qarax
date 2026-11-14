@@ -41,7 +41,7 @@ Build/test a single crate: `cargo build -p qarax-node` or `cargo nextest run -p 
 
 **CI uses nightly for fmt:** `cargo +nightly fmt --all -- --check`
 
-**Build dependencies:** `protobuf-compiler` (protoc) is required for gRPC code generation. `shfmt` is required by `make fmt` for shell script formatting; `make shellcheck` needs `shellcheck` (CI runs both through the `ShellLint` Dagger check).
+**Build dependencies:** `protobuf-compiler` (protoc) is required for gRPC code generation. `shfmt` is required by `make fmt` for shell script formatting; `make shellcheck` needs `shellcheck` (CI runs both through `make check-shell`).
 
 ## Database
 
@@ -169,49 +169,33 @@ Static bearer tokens, configured by `AUTH_ENABLED` / `AUTH_TOKENS` (comma-separa
 
 ## CI
 
-CI is driven by Dagger (`ci/main.go`) invoked from GitHub Actions (`.github/workflows/rust-ci.yml`).
+CI is plain GitHub Actions (`.github/workflows/rust-ci.yml`) running Makefile targets, so `make <target>` reproduces any check locally. `.github/actions/setup-rust` installs stable Rust with the musl target and protoc, and caches `target/` and the cargo registry with `Swatinem/rust-cache` (one archive per job, so warm runs only rebuild what changed).
 
 ### Pipeline structure
 
-Three jobs run on every PR and push to master:
+On every PR and push to master, in parallel:
 
-- **check** (`dagger call --mod ./ci all --src=.`): runs fmt, lint, test, sqlx-check, audit, openapi-check, python-sdk-lint and shell-lint in parallel. Lint, test, openapi-check and python-sdk-lint (through the generated spec) chain from a shared `prebuilt` container (debug build with the otel features), so the workspace compiles once per session; fmt, sqlx-check, audit and shell-lint run in their own containers.
-- **Caching:** hosted runners start with empty Dagger cache volumes, so Rust compiles start from scratch on every run (per-object caching through the Actions cache, e.g. sccache's GHA backend, gets rate-limited at this repo's ~2,400 compile outputs per run). The e2e images use BuildKit's GitHub Actions cache (`e2e/docker-compose.ci.yml`), whose entries are evicted after 7 days without use.
-- **build** (`dagger call --mod ./ci build --src=.`): release build targeting `x86_64-unknown-linux-musl`; uploads the four binaries as a workflow artifact.
-- **e2e**: downloads the build artifacts, starts a Docker Compose stack with KVM passthrough, runs pytest. Triggered on push to master inside `rust-ci.yml`, or in a dedicated PR E2E workflow when the `run-e2e` label is first added. After that, labeled PR updates run E2E from `rust-ci.yml` on `synchronize`.
-
-### Dagger checks
-
-| Function | What it does |
+| Job | Runs |
 |---|---|
-| `Fmt` | `cargo +nightly fmt --all -- --check` |
-| `Lint` | `cargo clippy --workspace --features qarax/otel,qarax-node/otel -- -D warnings` |
-| `Test` | `cargo nextest run --workspace --features qarax/otel,qarax-node/otel` against a live Postgres 16 service |
-| `SqlxCheck` | `cargo sqlx prepare --workspace --check` after running migrations |
-| `Audit` | `cargo audit` (ignores configured in `.cargo/audit.toml`) |
-| `OpenApiCheck` | Regenerates `openapi.yaml` and diffs against the committed copy |
-| `PythonSdkLint` | Regenerates the Python SDK and runs `ruff check` |
-| `ShellLint` | `shellcheck --severity=warning` and `shfmt -d` over every `*.sh` (nothing else exercises `demos/` and `hack/`) |
+| Format | `make check-fmt`: `cargo +nightly fmt --all -- --check` |
+| Clippy | `make check-clippy`: clippy with the otel features, `-D warnings` |
+| Test | against a Postgres 16 service: `make check-test` (nextest with the otel features), `make check-sqlx` (`cargo sqlx prepare --workspace --check` after migrating), `make check-openapi` and `make check-sdk` (regenerate `openapi.yaml` and the Python SDK and fail on a diff) |
+| Audit and shell lint | `make check-audit` (`cargo audit`, ignores in `.cargo/audit.toml`), `make check-shell` (`shellcheck --severity=warning` and `shfmt -d` over every `*.sh`; nothing else exercises `demos/` and `hack/`) |
+| Build | `make build-release` (musl, otel features); uploads the four binaries as a workflow artifact |
+| E2E | downloads the build artifacts, starts a Docker Compose stack with KVM passthrough, runs pytest |
+
+- **E2E** runs on push to master inside `rust-ci.yml`, or in a dedicated PR E2E workflow when the `run-e2e` label is first added. After that, labeled PR updates run E2E from `rust-ci.yml` on `synchronize`.
+- **Caching:** each Rust job has its own rust-cache key (`clippy`, `test`, `release`; the PR E2E build shares `release`). The e2e images use BuildKit's GitHub Actions cache (`e2e/docker-compose.ci.yml`), whose entries are evicted after 7 days without use.
 
 ### Running CI locally
 
 ```bash
-# Run all checks (same as CI):
-dagger call --mod ./ci all --src=.
-
-# Run a single check:
-dagger call --mod ./ci fmt --src=.
-dagger call --mod ./ci lint --src=.
-dagger call --mod ./ci test --src=.
-dagger call --mod ./ci sqlx-check --src=.
-dagger call --mod ./ci audit --src=.
-dagger call --mod ./ci open-api-check --src=.
-dagger call --mod ./ci python-sdk-lint --src=.
-dagger call --mod ./ci shell-lint --src=.
-
-# Build release binaries via Dagger:
-dagger call --mod ./ci build --src=. export --path=./target/x86_64-unknown-linux-musl/release
+make test-deps   # Postgres, for check-test and check-sqlx
+make ci-checks   # every check, in order
+make check-clippy  # or any single check-* target
 ```
+
+They need `cargo-nextest`, `sqlx-cli`, `cargo-audit`, `uv`, `ruff`, `shellcheck` and `shfmt`.
 
 ### Advisory ignores
 

@@ -26,7 +26,7 @@ Get from "CI is red" to a verified root-cause fix without guessing from secondar
    - registry or network failures
    - Docker or database startup problems
    - timeouts or obvious flakes
-4. Read `ci/main.go` before reproducing a Dagger failure. Match all inputs that can change compilation or lint behavior:
+4. Find the failing job's Makefile target in `.github/workflows/rust-ci.yml` (each check is a `make check-*` target) and read it in the `Makefile` before reproducing. Match all inputs that can change compilation or lint behavior:
    - workspace features (CI currently enables `qarax/otel,qarax-node/otel`)
    - target (`x86_64-unknown-linux-musl` via repo Cargo configuration)
    - `SQLX_OFFLINE`
