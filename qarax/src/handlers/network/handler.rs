@@ -252,8 +252,7 @@ async fn attach_on_node(
     bridge_name: &str,
     parent_interface: Option<&str>,
 ) -> anyhow::Result<()> {
-    // Both isolated and bridged modes need a DHCP range (for the DHCP server
-    // to serve VMs); bridged mode skips NAT.
+    // Only nodes from before DHCP reservations use the range.
     let (dhcp_start, dhcp_end) = compute_dhcp_range(&network.subnet, network.gateway.as_deref());
     let gateway = network
         .gateway
@@ -401,9 +400,10 @@ fn default_gateway(subnet: &str) -> String {
     "10.0.0.1".to_string()
 }
 
-/// Compute DHCP range: start at the first usable host after the gateway, end at broadcast-1.
-/// The start must align with `next_available_ip` (which also starts at network_addr+1 and
-/// skips the gateway) so the API-allocated IP matches what the DHCP server actually hands out.
+/// The DHCP range sent to nodes: the first host address (after the gateway, if
+/// that comes first) to broadcast-1. Current nodes ignore it and answer only
+/// their VM NICs, each with its IPAM address; older nodes hand out leases from
+/// it, and need it to attach a network at all.
 fn compute_dhcp_range(subnet: &str, gateway: Option<&str>) -> (String, String) {
     if let Some((base, prefix_str)) = subnet.split_once('/') {
         let octets: Vec<u8> = base.split('.').filter_map(|o| o.parse().ok()).collect();
@@ -432,7 +432,7 @@ fn compute_dhcp_range(subnet: &str, gateway: Option<&str>) -> (String, String) {
                 }
             });
 
-            // Start at network_addr+1, skip the gateway — mirrors next_available_ip logic.
+            // Start at network_addr+1, skipping the gateway.
             let mut start = network_addr + 1;
             if gw_u32 == Some(start) {
                 start += 1;

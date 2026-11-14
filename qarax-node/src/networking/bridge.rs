@@ -148,19 +148,6 @@ async fn find_bridge_member(handle: &Handle, bridge_name: &str) -> Result<String
 
 use super::validate_iface_name;
 
-fn parse_cidr(cidr: &str) -> Result<(Ipv4Addr, u8)> {
-    let (ip_str, prefix_str) = cidr
-        .split_once('/')
-        .ok_or_else(|| anyhow::anyhow!("Invalid CIDR: {cidr}"))?;
-    Ok((
-        ip_str
-            .parse()
-            .with_context(|| format!("Invalid IP in CIDR: {cidr}"))?,
-        prefix_str
-            .parse()
-            .with_context(|| format!("Invalid prefix in CIDR: {cidr}"))?,
-    ))
-}
 
 /// Create a Linux bridge device and bring it up.
 pub async fn create_bridge(name: &str) -> Result<()> {
@@ -189,15 +176,28 @@ pub async fn create_bridge(name: &str) -> Result<()> {
 
 /// Assign an IP address to the bridge (gateway for the subnet).
 /// Whether a network interface with this name exists.
+/// The first IPv4 address on an interface: the gateway on an isolated
+/// network's bridge, the host's own address on a bridged one.
+pub async fn first_ipv4(name: &str) -> Result<Ipv4Addr> {
+    let handle = netlink_handle().await?;
+    let idx = link_index(&handle, name).await?;
+    ipv4_addrs(&handle, idx)
+        .await?
+        .into_iter()
+        .next()
+        .map(|(ip, _)| ip)
+        .ok_or_else(|| anyhow::anyhow!("{name} has no IPv4 address"))
+}
+
 pub async fn link_exists(name: &str) -> Result<bool> {
     let handle = netlink_handle().await?;
     Ok(link_message(&handle, name).await.is_ok())
 }
 
 /// Assign the gateway address to a bridge; a no-op if it already has it.
-pub async fn set_bridge_ip(name: &str, gateway_cidr: &str) -> Result<()> {
+pub async fn set_bridge_ip(name: &str, gateway_cidr: super::Ipv4Cidr) -> Result<()> {
     info!("Setting bridge {name} IP to {gateway_cidr}");
-    let (ip, prefix) = parse_cidr(gateway_cidr)?;
+    let super::Ipv4Cidr { addr: ip, prefix } = gateway_cidr;
     let handle = netlink_handle().await?;
     let idx = link_index(&handle, name).await?;
     if ipv4_addrs(&handle, idx).await?.contains(&(ip, prefix)) {

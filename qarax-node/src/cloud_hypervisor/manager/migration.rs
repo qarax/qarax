@@ -367,11 +367,7 @@ impl VmManager {
 
         let receiver_url = format!("tcp:0.0.0.0:{}", port);
 
-        // Persist the config for recovery.
-        let config_bytes = mutable_config.encode_to_vec();
-        if let Err(e) = tokio::fs::write(self.config_path(vm_id), config_bytes).await {
-            warn!("Failed to persist config for incoming VM {}: {}", vm_id, e);
-        }
+        self.persist_config(vm_id, &mutable_config).await;
 
         let vm_uuid = Uuid::parse_str(vm_id)
             .map_err(|e| VmManagerError::InvalidConfig(format!("Invalid VM ID: {}", e)))?;

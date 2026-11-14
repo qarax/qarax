@@ -3,7 +3,8 @@
 
 # The test initramfs that VMs on the local/e2e stack boot by default
 # (VM_INITRAMFS): qarax-init as PID 1, busybox, and dropbear for SSH with a key
-# the node holds. Its own stage, so the bootc test node
+# the node holds. /etc/udhcpc.script prints the lease udhcpc gets, for tests of
+# the node's DHCP server. Its own stage, so the bootc test node
 # (Containerfile.bootc-node) ships the same file and key. Network is configured
 # statically by the kernel via the ip= cmdline parameter.
 FROM fedora:43 AS test-initramfs
@@ -13,7 +14,9 @@ RUN mkdir -p /opt/test-initramfs/{dev,proc,sys,sbin,bin,etc/dropbear,var/run,lib
     cd /opt/test-initramfs && \
     echo '{"cmd":["/bin/sh","-c","/sbin/dropbear -F -E -R & while true; do sleep 3600; done"]}' > .qarax-config.json && \
     cp /usr/sbin/busybox bin/busybox && \
-    for cmd in sh ping ip sleep echo uname cat ls pwd true false; do ln -s busybox bin/$cmd; done && \
+    for cmd in sh ping ip sleep echo uname cat ls pwd true false udhcpc nslookup; do ln -s busybox bin/$cmd; done && \
+    printf '#!/bin/sh\n[ "$1" = bound ] && echo "lease ip=$ip subnet=$subnet router=$router dns=$dns"\nexit 0\n' > etc/udhcpc.script && \
+    chmod +x etc/udhcpc.script && \
     cp /usr/sbin/dropbear sbin/ && \
     cp /lib64/libtomcrypt.so.1 /lib64/libtommath.so.1 /lib64/libz.so.1 \
        /lib64/libcrypt.so.2 /lib64/libc.so.6 /lib64/ld-linux-x86-64.so.2 lib64/ && \
