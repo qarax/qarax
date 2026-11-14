@@ -286,16 +286,57 @@ ON CONFLICT DO NOTHING
 }
 
 /// Detach a host from a storage pool.
+/// Forget a pool's attachment to a host. A local pool's files live on its
+/// hosts, so the ones on this host go with it: objects no longer count the
+/// host among their owners, and deletions still pending there are dropped
+/// (their allocation is released). Otherwise a pool whose host is gone could
+/// never be emptied. A shared (NFS) pool's files stay on the share, where any
+/// host attached later still cleans them up.
 pub async fn detach_host(pool: &PgPool, pool_id: Uuid, host_id: Uuid) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
     sqlx::query!(
         "DELETE FROM host_storage_pools WHERE host_id = $1 AND storage_pool_id = $2",
         host_id,
         pool_id
     )
-    .execute(pool)
+    .execute(tx.as_mut())
     .await?;
 
-    Ok(())
+    let local = sqlx::query_scalar!(
+        r#"SELECT pool_type = 'LOCAL' AS "local!" FROM storage_pools WHERE id = $1"#,
+        pool_id
+    )
+    .fetch_one(tx.as_mut())
+    .await?;
+    if local {
+        // An object left with no owner isn't managed anymore (NULL), rather
+        // than "owner unknown" (an empty array, which means every host).
+        sqlx::query!(
+            "UPDATE storage_objects
+             SET managed_host_ids = NULLIF(array_remove(managed_host_ids, $2), '{}')
+             WHERE storage_pool_id = $1 AND $2 = ANY(managed_host_ids)",
+            pool_id,
+            host_id
+        )
+        .execute(tx.as_mut())
+        .await?;
+        sqlx::query!(
+            "DELETE FROM storage_cleanup WHERE pool_id = $1 AND host_ids = ARRAY[$2::uuid]",
+            pool_id,
+            host_id
+        )
+        .execute(tx.as_mut())
+        .await?;
+        sqlx::query!(
+            "UPDATE storage_cleanup SET host_ids = array_remove(host_ids, $2)
+             WHERE pool_id = $1 AND $2 = ANY(host_ids)",
+            pool_id,
+            host_id
+        )
+        .execute(tx.as_mut())
+        .await?;
+    }
+    tx.commit().await
 }
 
 /// List all storage pools attached to a specific host.

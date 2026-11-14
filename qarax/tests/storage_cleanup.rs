@@ -371,3 +371,89 @@ async fn managed_disk_cleanup_retries_without_losing_allocation_or_deleting_regi
     );
     server.abort();
 }
+
+/// A local pool whose only host is down (or gone) can still be emptied and
+/// deleted: detaching the host drops what qarax still had to delete there.
+#[tokio::test]
+async fn a_local_pool_on_an_unreachable_host_can_be_detached_and_deleted() {
+    let app = spawn_app().await;
+    let client = reqwest::Client::new();
+    // Registered DOWN, and no node listens on its port.
+    let host_id = support::add_host(&client, &app.address, "gone-node").await;
+    let pool_id = create_test_pool(&app.pool).await;
+    storage_pools::attach_host(&app.pool, pool_id, host_id)
+        .await
+        .unwrap();
+
+    // Two disks whose files are on that host.
+    let mut disks = Vec::new();
+    for name in ["deleted-first", "deleted-after-detach"] {
+        let id = storage_objects::create(
+            &app.pool,
+            NewStorageObject {
+                name: name.to_string(),
+                storage_pool_id: Some(pool_id),
+                object_type: StorageObjectType::Disk,
+                size_bytes: 64,
+                config: json!({}),
+                parent_id: None,
+            },
+        )
+        .await
+        .unwrap();
+        sqlx::query("UPDATE storage_objects SET managed_host_ids = ARRAY[$1] WHERE id = $2")
+            .bind(host_id)
+            .bind(id)
+            .execute(&app.pool)
+            .await
+            .unwrap();
+        disks.push(id);
+    }
+    let url = |path: String| format!("{}{path}", app.address);
+
+    // The host can't delete the file, so the deletion stays pending, and the
+    // pool can't go while it is.
+    let res = client
+        .delete(url(format!("/storage-objects/{}", disks[0])))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::ACCEPTED);
+    let res = client
+        .delete(url(format!("/storage-pools/{pool_id}")))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+
+    let res = client
+        .delete(url(format!("/storage-pools/{pool_id}/hosts/{host_id}")))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::NO_CONTENT,
+        "{}",
+        res.text().await.unwrap()
+    );
+
+    // The other disk's file went with the host: nothing left to clean up.
+    let res = client
+        .delete(url(format!("/storage-objects/{}", disks[1])))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let res = client
+        .delete(url(format!("/storage-pools/{pool_id}")))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::NO_CONTENT,
+        "{}",
+        res.text().await.unwrap()
+    );
+}

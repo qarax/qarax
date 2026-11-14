@@ -73,6 +73,12 @@ impl From<sqlx::Error> for Error {
             }
             sqlx::Error::Database(ref db_err)
                 if db_err.code().as_deref() == Some("23503")
+                    && db_err.constraint() == Some("storage_objects_storage_pool_id_fkey") =>
+            {
+                Error::Conflict("Storage pool still has storage objects; delete them first".into())
+            }
+            sqlx::Error::Database(ref db_err)
+                if db_err.code().as_deref() == Some("23503")
                     && matches!(
                         db_err.constraint(),
                         Some("vm_disks_storage_object_id_fkey" | "storage_cleanup_pool_id_fkey")
