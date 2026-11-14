@@ -130,7 +130,7 @@ pub async fn create(
     responses(
         (status = 204, description = "Storage pool deleted successfully"),
         (status = 404, description = "Storage pool not found"),
-        (status = 409, description = "Storage pool has pending file cleanup"),
+        (status = 409, description = "Storage pool still has storage objects, or pending file cleanup"),
         (status = 500, description = "Internal server error")
     ),
     tag = "storage-pools"
@@ -223,8 +223,9 @@ pub async fn attach_host(
         ("host_id" = uuid::Uuid, Path, description = "Host unique identifier")
     ),
     responses(
-        (status = 204, description = "Host detached from storage pool"),
+        (status = 204, description = "Host detached from storage pool. A host that isn't up isn't contacted; for a local pool, files qarax still had to delete there are left behind."),
         (status = 404, description = "Host not found"),
+        (status = 422, description = "The node, which is up, failed to detach the pool"),
         (status = 500, description = "Internal server error")
     ),
     tag = "storage-pools"
@@ -237,17 +238,23 @@ pub async fn detach_host(
     let pool = storage_pools::get(env.pool(), pool_id).await?;
     let host = hosts::require_by_id(env.pool(), host_id).await?;
 
-    // Perform the real detachment on the node first.
-    let client = NodeClient::new(&host.address, host.port as u16);
-    client.detach_storage_pool(&pool).await.map_err(|e| {
-        tracing::error!(
-            pool_id = %pool_id,
-            host_id = %host_id,
-            error = %e,
-            "gRPC detach_storage_pool failed"
-        );
-        crate::errors::Error::UnprocessableEntity(format!("Failed to detach pool from node: {e}"))
-    })?;
+    // Detach on the node first, when there is one to ask: a host that isn't
+    // up (down, or gone for good) can't answer, and must not keep the pool,
+    // and everything in it, from being cleaned up.
+    if host.status == hosts::HostStatus::Up {
+        let client = NodeClient::new(&host.address, host.port as u16);
+        client.detach_storage_pool(&pool).await.map_err(|e| {
+            tracing::error!(
+                pool_id = %pool_id,
+                host_id = %host_id,
+                error = %e,
+                "gRPC detach_storage_pool failed"
+            );
+            crate::errors::Error::UnprocessableEntity(format!(
+                "Failed to detach pool from node: {e}"
+            ))
+        })?;
+    }
 
     // Remove the DB record.
     storage_pools::detach_host(env.pool(), pool_id, host_id).await?;

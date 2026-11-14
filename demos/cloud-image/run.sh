@@ -186,6 +186,27 @@ guest_http_up() {
 	node_exec "$1" curl -sf --max-time 2 -o /dev/null "http://$2:8080/"
 }
 
+# The pool's hosts that aren't up: their copy of the pool is out of reach.
+unreachable_pool_hosts() {
+	qarax storage-pool hosts "$POOL_NAME" -o json |
+		jq -r --argjson up "$(qarax host list -o json | jq -c '[.[] | select(.status == "up") | .name]')" \
+			'.[] | select(.host_name as $h | $up | index($h) | not) | .host_name'
+}
+
+# Delete the pool and the downloaded image in it. Hosts that aren't up are
+# detached first, which drops the files there: a deletion waiting on a host
+# that never answers would keep the pool from going.
+remove_pool() {
+	local host
+	for host in $(unreachable_pool_hosts); do
+		run qarax storage-pool detach-host "$POOL_NAME" "$host"
+	done
+	if exists storage-object "$BASE_DISK_NAME"; then
+		run qarax storage-object delete "$BASE_DISK_NAME"
+	fi
+	run qarax storage-pool delete "$POOL_NAME"
+}
+
 remove_network() {
 	if exists network "$NETWORK_NAME"; then
 		run qarax network delete "$NETWORK_NAME"
@@ -204,11 +225,8 @@ if ((CLEANUP)); then
 	remove_vm
 	remove_network
 	if ((PURGE)); then
-		if exists storage-object "$BASE_DISK_NAME"; then
-			run qarax storage-object delete "$BASE_DISK_NAME"
-		fi
 		if exists storage-pool "$POOL_NAME"; then
-			run qarax storage-pool delete "$POOL_NAME"
+			remove_pool
 		fi
 	else
 		info "Kept the downloaded image ${BASE_DISK_NAME} and pool ${POOL_NAME} (--purge deletes them)"
@@ -235,9 +253,15 @@ info "Network:    ${NETWORK_NAME} (${NETWORK_SUBNET})"
 remove_vm
 
 step "1. Storage pool"
-if exists storage-pool "$POOL_NAME"; then
+# A pool left on a host that is down now (e.g. from the other run-local mode)
+# can't serve this run: replace it.
+if exists storage-pool "$POOL_NAME" && [[ -z "$(unreachable_pool_hosts)" ]]; then
 	ok "${POOL_NAME} exists, reusing it"
 else
+	if exists storage-pool "$POOL_NAME"; then
+		info "${POOL_NAME} is on a host that isn't up; replacing it"
+		remove_pool
+	fi
 	run qarax storage-pool create --name "$POOL_NAME" --pool-type local \
 		--path "$POOL_PATH" --host "$HOST_NAME"
 fi

@@ -1614,7 +1614,7 @@ paths:
         '404':
           description: Storage pool not found
         '409':
-          description: Storage pool has pending file cleanup
+          description: Storage pool still has storage objects, or pending file cleanup
         '500':
           description: Internal server error
   /storage-pools/{pool_id}/disks:
@@ -1731,9 +1731,11 @@ paths:
           format: uuid
       responses:
         '204':
-          description: Host detached from storage pool
+          description: Host detached from storage pool. A host that isn't up isn't contacted; for a local pool, files qarax still had to delete there are left behind.
         '404':
           description: Host not found
+        '422':
+          description: The node, which is up, failed to detach the pool
         '500':
           description: Internal server error
   /storage-pools/{pool_id}/import:

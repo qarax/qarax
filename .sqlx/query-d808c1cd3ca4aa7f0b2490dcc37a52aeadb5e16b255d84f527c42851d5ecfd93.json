@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM storage_cleanup WHERE pool_id = $1 AND host_ids = ARRAY[$2::uuid]",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d808c1cd3ca4aa7f0b2490dcc37a52aeadb5e16b255d84f527c42851d5ecfd93"
+}
