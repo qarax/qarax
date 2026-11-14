@@ -49,8 +49,8 @@ openapi:
 
 sdk: openapi
 	cd python-sdk && uv run openapi-python-client generate --path ../openapi.yaml --meta setup --overwrite --custom-template-path templates
-	cd python-sdk && ruff format .
-	cd python-sdk && ruff check --fix .
+	cd python-sdk && uv run ruff format .
+	cd python-sdk && uv run ruff check --fix .
 	cd python-sdk && uvx ty check .
 
 # Database env vars point config to localhost (overrides local.yaml's host: postgres)
@@ -133,10 +133,10 @@ shellcheck:
 	shellcheck -x $(SHELL_SCRIPTS)
 
 ruff-check:
-	@cd python-sdk && ruff check .
+	@cd python-sdk && uv run ruff check .
 
 ruff-fmt:
-	@cd python-sdk && ruff format .
+	@cd python-sdk && uv run ruff format .
 
 appliance-build:
 	cargo build --release -p qarax-node -p qarax-init --target $(APPLIANCE_TARGET)

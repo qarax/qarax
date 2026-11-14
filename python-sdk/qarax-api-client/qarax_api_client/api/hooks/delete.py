@@ -13,6 +13,7 @@ from ...types import Response
 def _get_kwargs(
     hook_id: UUID,
 ) -> dict[str, Any]:
+
     _kwargs: dict[str, Any] = {
         "method": "delete",
         "url": "/hooks/{hook_id}".format(

@@ -62,8 +62,6 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: python-sdk/uv.lock
-      - name: Install ruff
-        run: uv tool install ruff
       - run: make check-test
       - run: make check-sqlx
       - run: make check-openapi
