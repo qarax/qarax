@@ -48,8 +48,11 @@ build_image e2e-appliance \
 	-t "$APPLIANCE_IMAGE" \
 	"$REPO_ROOT"
 
+# The test layer builds FROM the appliance image loaded above, which only the
+# daemon's own builder can see: CI's docker-container builder (buildx) would
+# try to pull it, and its localhost isn't this host's registry.
 echo "Building the test node image (${NODE_IMAGE})..."
-build_image e2e-bootc-node \
+docker buildx build --builder default \
 	-f "${E2E_DIR}/Containerfile.bootc-node" \
 	--build-arg "BASE_IMAGE=${APPLIANCE_IMAGE}" \
 	-t "$NODE_IMAGE" \

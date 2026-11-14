@@ -168,12 +168,13 @@ build_bootc_vm() {
 	docker compose up -d --wait registry
 	bash build-bootc-node.sh
 
-	# Thin versioned images the tests bootc switch between.
+	# Thin versioned images the tests bootc switch between, built by the
+	# daemon's builder, which sees the base image build-bootc-node.sh loaded.
 	echo -e "${YELLOW}Pushing versioned bootc node images...${NC}"
 	local version
 	for version in 0.1.0 0.2.0-test; do
 		printf 'FROM localhost:5001/qarax-node-bootc:base\nRUN mkdir -p /etc/qarax-node && printf "QARAX_NODE_VERSION=%s\\n" > /etc/qarax-node/version.env\n' "$version" |
-			docker build -q -t "localhost:5001/qarax-node-test:${version}" - >/dev/null
+			docker buildx build --builder default -q -t "localhost:5001/qarax-node-test:${version}" - >/dev/null
 		docker push -q "localhost:5001/qarax-node-test:${version}"
 	done
 }
