@@ -2453,7 +2453,9 @@ async fn build_create_vm_request(env: &App, vm: &Vm) -> Result<CreateVmRequest> 
                     let ip = net_config.ip.as_ref().unwrap();
                     let mask = net_config.mask.as_deref().unwrap_or("");
                     let gw = network.gateway.as_deref().unwrap_or("");
-                    let dns = network.dns.as_deref().unwrap_or("");
+                    // The gateway, like DHCP's default: on an isolated
+                    // network the node forwards DNS there.
+                    let dns = network.dns.as_deref().unwrap_or(gw);
                     ip_params.push_str(&format!(
                         " ip={}::{}:{}::eth{}:off:{}",
                         ip, gw, mask, i, dns

@@ -6,6 +6,7 @@ use sha2::{Digest, Sha256};
 
 pub mod bridge;
 pub mod dhcp;
+pub mod dns;
 pub mod iptables;
 pub mod vxlan;
 

@@ -1130,11 +1130,15 @@ impl VmService for VmServiceImpl {
         .await
         .map_err(|e| Status::internal(format!("Failed to start DHCP server: {}", e)))?;
 
-        // NAT is only needed in isolated mode — bridged mode shares the upstream network
+        // NAT and DNS are only needed in isolated mode: on a bridged network
+        // the gateway is the LAN's router, which serves both.
         if !bridged {
             crate::networking::iptables::setup_nat(&req.bridge_name, &req.subnet)
                 .await
                 .map_err(|e| Status::internal(format!("Failed to setup NAT: {}", e)))?;
+            crate::networking::dns::start_dns_forwarder(&req.bridge_name, gateway)
+                .await
+                .map_err(|e| Status::internal(format!("Failed to start DNS forwarder: {e}")))?;
         }
 
         info!(
@@ -1155,6 +1159,7 @@ impl VmService for VmServiceImpl {
         if let Err(e) = crate::networking::dhcp::stop_dhcp_server(&req.bridge_name).await {
             warn!("Failed to stop DHCP server for {}: {}", req.bridge_name, e);
         }
+        crate::networking::dns::stop_dns_forwarder(&req.bridge_name);
 
         if let Err(e) =
             crate::networking::iptables::teardown_network_isolation(&req.bridge_name).await
