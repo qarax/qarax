@@ -8,8 +8,9 @@ import time
 
 from qarax_api_client.api.hosts import list_ as list_hosts
 from qarax_api_client.api.jobs import get as get_job
+from qarax_api_client.api.vms import exec_ as exec_vm
 from qarax_api_client.api.vms import get as get_vm
-from qarax_api_client.models import HostStatus, VmStatus
+from qarax_api_client.models import ExecVmRequest, HostStatus, VmStatus
 
 QARAX_URL = os.getenv("QARAX_URL", "http://localhost:8000")
 QARAX_TEST_TOKEN = os.getenv("QARAX_TEST_TOKEN", "e2e-test-token")
@@ -43,6 +44,20 @@ async def call_api(endpoint_module, **kwargs):
 async def call_api_detailed(endpoint_module, **kwargs):
     """Call a generated SDK endpoint and return the full response, whatever its status."""
     return await endpoint_module.asyncio_detailed(**kwargs)
+
+
+async def exec_when_ready(client, vm_id, script):
+    """Run a shell script in the guest once its agent answers."""
+    request = ExecVmRequest(command=["/bin/sh", "-c", script], timeout_secs=20)
+    deadline = time.monotonic() + 60
+    while True:
+        response = await call_api_detailed(exec_vm, client=client, vm_id=vm_id, body=request)
+        if response.status_code == 200:
+            return response.parsed
+        # 422 until the guest agent is up.
+        assert response.status_code == 422, response.content.decode()
+        assert time.monotonic() < deadline, "the guest agent never answered"
+        await asyncio.sleep(1)
 
 
 def up_hosts(hosts):

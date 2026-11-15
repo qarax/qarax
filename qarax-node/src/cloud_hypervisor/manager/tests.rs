@@ -11,6 +11,8 @@ fn test_manager(runtime_dir: &TempDir) -> VmManager {
         StorageBackendRegistry::new(),
         None,
         None,
+        // Short, so stop_vm tests reach the forced stop quickly.
+        Duration::from_secs(1),
     )
 }
 
@@ -237,6 +239,7 @@ async fn recovered_vm_deletion_cleans_overlaybd_state_and_preserves_external_upp
             backends,
             Some(overlaybd.clone()),
             None,
+            Duration::from_secs(1),
         );
         let config = ProtoVmConfig {
             vm_id: vm_id.clone(),
@@ -316,6 +319,146 @@ async fn recovered_vm_deletion_cleans_overlaybd_state_and_preserves_external_upp
         assert!(!socket.exists());
         assert!(!manager.config_path(&vm_id).exists());
         assert_eq!(tokio::fs::read(&upper).await.unwrap(), b"guest data");
+    }
+}
+
+/// Serve the Cloud Hypervisor API calls `stop_vm` makes, for a VM in `state`
+/// whose guest powers off on its power button when `obeys_power_button`.
+/// `vmm.ping` reports `vmm_pid`. Returns the PUT endpoints called, in order.
+fn serve_fake_cloud_hypervisor(
+    listener: tokio::net::UnixListener,
+    state: models::VmState,
+    obeys_power_button: bool,
+    vmm_pid: u32,
+) -> Arc<std::sync::Mutex<Vec<String>>> {
+    let puts = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let state = Arc::new(std::sync::Mutex::new(state));
+    let served_puts = puts.clone();
+    tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let (puts, state) = (served_puts.clone(), state.clone());
+            tokio::spawn(async move {
+                let mut request = vec![0; 4096];
+                // One connection can carry several requests (the SDK handle's does).
+                while let Ok(size @ 1..) = stream.read(&mut request).await {
+                    let request = String::from_utf8_lossy(&request[..size]).into_owned();
+                    let mut parts = request.split_whitespace();
+                    let method = parts.next().unwrap();
+                    let endpoint = parts.next().unwrap().rsplit('/').next().unwrap();
+                    let body = match (method, endpoint) {
+                        ("GET", "vm.info") => serde_json::to_string(&models::VmInfo::new(
+                            VmConfig::default(),
+                            *state.lock().unwrap(),
+                        ))
+                        .unwrap(),
+                        ("GET", "vmm.ping") => {
+                            serde_json::json!({"version": "v54.0", "pid": vmm_pid}).to_string()
+                        }
+                        ("PUT", "vm.power-button" | "vm.shutdown") => {
+                            puts.lock().unwrap().push(endpoint.to_string());
+                            let mut state = state.lock().unwrap();
+                            if endpoint == "vm.shutdown" || obeys_power_button {
+                                // What vm.info reports once the guest is off.
+                                *state = models::VmState::Created;
+                            }
+                            String::new()
+                        }
+                        _ => panic!("unexpected request: {request}"),
+                    };
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    stream.write_all(response.as_bytes()).await.unwrap();
+                }
+            });
+        }
+    });
+    puts
+}
+
+#[tokio::test]
+async fn stop_vm_lets_the_guest_power_off_before_forcing_it() {
+    use models::VmState::{Paused, Running};
+
+    for (case, state, no_shutdown, obeys_power_button, expected_puts) in [
+        (
+            "guest powers off",
+            Running,
+            true,
+            true,
+            &["vm.power-button"][..],
+        ),
+        (
+            "guest ignores the button",
+            Running,
+            true,
+            false,
+            &["vm.power-button", "vm.shutdown"][..],
+        ),
+        ("paused guest", Paused, true, true, &["vm.shutdown"][..]),
+        // Started by an older qarax-node: the VMM would exit with the guest.
+        (
+            "VMM without --no-shutdown",
+            Running,
+            false,
+            true,
+            &["vm.shutdown"][..],
+        ),
+    ] {
+        let directory = TempDir::new().unwrap();
+        let manager = test_manager(&directory);
+        let vm_id = Uuid::new_v4().to_string();
+        let socket = manager.socket_path(&vm_id);
+
+        // Stands in for the Cloud Hypervisor process: stop_vm only reads its
+        // command line, and sleep runs whatever its argv[0] is.
+        let mut vmm = Command::new("sleep");
+        if no_shutdown {
+            vmm.arg0("--no-shutdown");
+        }
+        let vmm = vmm.arg("30").kill_on_drop(true).spawn().unwrap();
+        let puts = serve_fake_cloud_hypervisor(
+            tokio::net::UnixListener::bind(&socket).unwrap(),
+            state,
+            obeys_power_button,
+            vmm.id().unwrap(),
+        );
+
+        let vm = Machine::connect(MachineConfig {
+            vm_id: Uuid::parse_str(&vm_id).unwrap(),
+            socket_path: Cow::Owned(socket.clone()),
+            exec_path: Cow::Owned(PathBuf::from("unused-cloud-hypervisor")),
+        })
+        .await
+        .unwrap();
+        manager.vms.lock().await.insert(
+            vm_id.clone(),
+            VmInstance {
+                proto_config: ProtoVmConfig::default(),
+                process: None,
+                vm,
+                socket_path: socket,
+                status: VmStatus::Running,
+                tap_devices: Vec::new(),
+                passt_processes: Vec::new(),
+                serial_pty_path: None,
+                console_pty_path: None,
+                vsock_socket_path: None,
+                storage_backend_kind: None,
+            },
+        );
+
+        manager.stop_vm(&vm_id).await.unwrap();
+
+        assert_eq!(*puts.lock().unwrap(), expected_puts, "{case}");
+        assert_eq!(
+            manager.vms.lock().await[&vm_id].status,
+            VmStatus::Shutdown,
+            "{case}"
+        );
     }
 }
 

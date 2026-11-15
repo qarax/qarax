@@ -5,12 +5,14 @@ use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::sync::{
     Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
     mpsc::{self, Receiver, Sender},
 };
 use std::thread;
 use std::time::{Duration, Instant};
 
 use nix::mount::{MsFlags, mount};
+use nix::sys::signal::{Signal, kill};
 use nix::sys::socket::{
     AddressFamily, Backlog, SockFlag, SockType, VsockAddr, accept4, bind, listen, socket,
 };
@@ -22,6 +24,18 @@ const SANDBOX_EXEC_PORT: u32 = 7000;
 const MAX_EXEC_REQUEST_BYTES: u64 = 1024 * 1024;
 const MAX_COMPLETED_EXIT_RECORDS: usize = 128;
 const MAX_COMPLETED_EXIT_AGE: Duration = Duration::from_secs(30);
+
+/// How long processes get between SIGTERM and SIGKILL when the VM shuts down,
+/// as with `docker stop`. Below qarax-node's graceful stop timeout, so the
+/// guest powers itself off before the node forces it.
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(10);
+// From linux/input-event-codes.h.
+const EV_KEY: u16 = 0x01;
+const KEY_POWER: u16 = 116;
+
+/// Set once a shutdown starts. From then on the main loop keeps reaping when
+/// the workload exits, and powers off once nothing is left.
+static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
 
 #[derive(Deserialize, Default)]
 struct Config {
@@ -456,6 +470,81 @@ fn spawn_exec_server(exit_registry: ExitRegistry) {
     });
 }
 
+/// Watch the input devices for the power button. qarax-node stops a Cloud
+/// Hypervisor VM by pressing it (`vm.power-button`), and the kernel reports
+/// the ACPI button as a KEY_POWER press.
+fn spawn_power_button_watchers() {
+    let devices = match std::fs::read_dir("/dev/input") {
+        Ok(devices) => devices,
+        Err(e) => {
+            log(format!(
+                "warning: no input devices ({e}), the power button won't shut the VM down"
+            ));
+            return;
+        }
+    };
+    for device in devices.flatten() {
+        if !device.file_name().to_string_lossy().starts_with("event") {
+            continue;
+        }
+        match std::fs::File::open(device.path()) {
+            Ok(file) => {
+                thread::spawn(move || watch_power_button(file));
+            }
+            Err(e) => log(format!("warning: open {}: {e}", device.path().display())),
+        }
+    }
+}
+
+fn watch_power_button(mut device: std::fs::File) {
+    let mut event = [0u8; std::mem::size_of::<libc::input_event>()];
+    // evdev reads always return whole events.
+    while device.read_exact(&mut event).is_ok() {
+        // SAFETY: input_event is plain data, and `event` holds one in full.
+        let event: libc::input_event = unsafe { std::ptr::read_unaligned(event.as_ptr().cast()) };
+        if event.type_ == EV_KEY && event.code == KEY_POWER && event.value == 1 {
+            shut_down();
+        }
+    }
+}
+
+/// Stop every process and power the VM off. Processes get SIGTERM and
+/// SHUTDOWN_GRACE to exit before SIGKILL; the main loop powers off as soon
+/// as they all have.
+fn shut_down() {
+    // qarax-node presses the button again while it waits.
+    if SHUTTING_DOWN.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    log("power button pressed, shutting down");
+    // -1 signals every process except init itself.
+    let _ = kill(Pid::from_raw(-1), Signal::SIGTERM);
+    thread::sleep(SHUTDOWN_GRACE);
+    log(format!(
+        "processes still running after {}s, killing them",
+        SHUTDOWN_GRACE.as_secs()
+    ));
+    let _ = kill(Pid::from_raw(-1), Signal::SIGKILL);
+    power_off();
+}
+
+fn power_off() -> ! {
+    log("powering off");
+    unsafe {
+        libc::sync();
+        libc::reboot(libc::RB_POWER_OFF);
+    }
+    // reboot() only returns on failure. Exiting would panic the kernel; wait
+    // for qarax-node to force the VM off instead.
+    log(format!(
+        "power off failed: {}",
+        std::io::Error::last_os_error()
+    ));
+    loop {
+        thread::park();
+    }
+}
+
 fn main() {
     try_mount("proc", "/proc", "proc");
     try_mount("sysfs", "/sys", "sysfs");
@@ -497,6 +586,7 @@ fn main() {
         Ok(ForkResult::Parent { child }) => {
             let exit_registry: ExitRegistry = Arc::new(Mutex::new(ExitRegistryState::default()));
             spawn_exec_server(Arc::clone(&exit_registry));
+            spawn_power_button_watchers();
 
             loop {
                 match waitpid(Pid::from_raw(-1), None) {
@@ -511,11 +601,16 @@ fn main() {
                             _ => continue,
                         };
 
-                        if pid == child {
+                        if pid == child && !SHUTTING_DOWN.load(Ordering::SeqCst) {
                             std::process::exit(exit_code);
                         }
 
                         record_child_exit(&exit_registry, pid, exit_code);
+                    }
+                    // Everything exited after the power button: no need to
+                    // wait out the rest of the grace period.
+                    Err(nix::errno::Errno::ECHILD) if SHUTTING_DOWN.load(Ordering::SeqCst) => {
+                        power_off()
                     }
                     Err(nix::errno::Errno::ECHILD) => std::process::exit(0),
                     Err(e) => {

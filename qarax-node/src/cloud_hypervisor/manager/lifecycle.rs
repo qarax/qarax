@@ -330,16 +330,8 @@ impl VmManager {
             .map_err(VmManagerError::SpawnError)?
             .into_std()
             .await;
-        let stderr_file = log_file.try_clone().map_err(VmManagerError::SpawnError)?;
 
-        let process = match Command::new(&self.ch_binary)
-            .arg("--api-socket")
-            .arg(&socket_path)
-            .stdout(std::process::Stdio::from(log_file))
-            .stderr(std::process::Stdio::from(stderr_file))
-            .kill_on_drop(true)
-            .spawn()
-        {
+        let process = match self.spawn_cloud_hypervisor(&socket_path, log_file) {
             Ok(p) => p,
             Err(e) => {
                 for tap in &tap_devices {
@@ -516,7 +508,13 @@ impl VmManager {
         Ok(())
     }
 
-    /// Stop a VM
+    /// Stop a VM, letting a running guest shut itself down first.
+    ///
+    /// The guest gets the ACPI power button and `graceful_stop_timeout` to
+    /// power off. A guest that is still up then, or that can't take the button
+    /// (paused, never booted, or served by a Cloud Hypervisor that would exit
+    /// with it), is stopped with `vm.shutdown`, which halts it without telling
+    /// it. Both leave the VM defined in Cloud Hypervisor, ready for `start_vm`.
     pub async fn stop_vm(&self, vm_id: &str) -> Result<(), VmManagerError> {
         info!("Stopping VM: {}", vm_id);
 
@@ -528,15 +526,21 @@ impl VmManager {
             instance.socket_path.clone()
         };
 
-        // Best-effort: if CH is already gone (socket missing, connection refused),
-        // log a warning and continue — the VM is effectively stopped.
-        match Self::send_api_request(&socket_path, "PUT", "/api/v1/vm.shutdown", None).await {
-            Ok(_) => {}
-            Err(e) => {
-                warn!(
-                    "VM {} CH shutdown request failed (treating as already stopped): {}",
-                    vm_id, e
-                );
+        let takes_power_button = matches!(
+            Self::query_vm_state(&socket_path).await,
+            Ok(models::VmState::Running)
+        ) && Self::keeps_vm_after_guest_power_off(&socket_path).await;
+        if !(takes_power_button && self.power_off_guest(vm_id, &socket_path).await) {
+            // Best-effort: if CH is already gone (socket missing, connection refused),
+            // log a warning and continue — the VM is effectively stopped.
+            match Self::send_api_request(&socket_path, "PUT", "/api/v1/vm.shutdown", None).await {
+                Ok(_) => {}
+                Err(e) => {
+                    warn!(
+                        "VM {} CH shutdown request failed (treating as already stopped): {}",
+                        vm_id, e
+                    );
+                }
             }
         }
 
@@ -549,6 +553,63 @@ impl VmManager {
 
         info!("VM {} stopped successfully", vm_id);
         Ok(())
+    }
+
+    /// Press the guest's power button until it powers off, for up to
+    /// `graceful_stop_timeout`. Returns whether it powered off.
+    async fn power_off_guest(&self, vm_id: &str, socket_path: &PathBuf) -> bool {
+        // A guest still booting has no handler for the button yet and drops
+        // the press, so press it again while waiting.
+        const PRESS_INTERVAL: Duration = Duration::from_secs(5);
+        const POLL_INTERVAL: Duration = Duration::from_millis(250);
+
+        let deadline = tokio::time::Instant::now() + self.graceful_stop_timeout;
+        let mut next_press = tokio::time::Instant::now();
+        loop {
+            if tokio::time::Instant::now() >= next_press {
+                // Fails if the guest powered off since the last poll, which the
+                // poll below then sees.
+                if let Err(e) =
+                    Self::send_api_request(socket_path, "PUT", "/api/v1/vm.power-button", None)
+                        .await
+                {
+                    debug!("VM {} power button press failed: {}", vm_id, e);
+                }
+                next_press += PRESS_INTERVAL;
+            }
+
+            sleep(POLL_INTERVAL).await;
+            match Self::query_vm_state(socket_path).await {
+                Ok(models::VmState::Running) => {}
+                // A VM whose guest powered off is `Created` again.
+                Ok(models::VmState::Created | models::VmState::Shutdown) => {
+                    info!("VM {} guest powered off", vm_id);
+                    return true;
+                }
+                // Paused meanwhile, or Cloud Hypervisor stopped answering:
+                // leave it to vm.shutdown.
+                Ok(state @ (models::VmState::Paused | models::VmState::BreakPoint)) => {
+                    warn!(
+                        "VM {} went {:?} while waiting for it to power off",
+                        vm_id, state
+                    );
+                    return false;
+                }
+                Err(e) => {
+                    warn!("VM {} state unavailable while powering off: {}", vm_id, e);
+                    return false;
+                }
+            }
+
+            if tokio::time::Instant::now() >= deadline {
+                warn!(
+                    "VM {} did not power off within {}s of its power button; forcing it off",
+                    vm_id,
+                    self.graceful_stop_timeout.as_secs()
+                );
+                return false;
+            }
+        }
     }
 
     /// Force stop (hard power-off) a VM by killing the Cloud Hypervisor process.

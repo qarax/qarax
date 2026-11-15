@@ -57,7 +57,13 @@ def sync_detailed(
     *,
     client: AuthenticatedClient | Client,
 ) -> Response[Any]:
-    """
+    """Stop a VM, letting the guest shut down first.
+
+     A Cloud Hypervisor guest gets its ACPI power button and the node's graceful
+    stop timeout (`qarax-node --graceful-stop-timeout-secs`, 30 s by default) to
+    power off before it is forced off; a Firecracker guest gets Ctrl+Alt+Del.
+    Use force-stop to power a VM off immediately.
+
     Args:
         vm_id (UUID):
 
@@ -85,7 +91,13 @@ async def asyncio_detailed(
     *,
     client: AuthenticatedClient | Client,
 ) -> Response[Any]:
-    """
+    """Stop a VM, letting the guest shut down first.
+
+     A Cloud Hypervisor guest gets its ACPI power button and the node's graceful
+    stop timeout (`qarax-node --graceful-stop-timeout-secs`, 30 s by default) to
+    power off before it is forced off; a Firecracker guest gets Ctrl+Alt+Del.
+    Use force-stop to power a VM off immediately.
+
     Args:
         vm_id (UUID):
 

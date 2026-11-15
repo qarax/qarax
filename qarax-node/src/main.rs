@@ -61,6 +61,11 @@ pub struct Args {
     #[clap(long, default_value = "/usr/local/bin/firecracker")]
     firecracker_binary: PathBuf,
 
+    /// Seconds a Cloud Hypervisor guest gets to power off after a stop presses
+    /// its ACPI power button, before it is forced off
+    #[clap(long, default_value = "30")]
+    graceful_stop_timeout_secs: u64,
+
     /// Enable OpenTelemetry export
     #[clap(long, default_value = "false", env = "OTEL_ENABLED")]
     otel_enabled: bool,
@@ -183,6 +188,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         storage_backends,
         overlaybd_manager,
         qarax_init_binary,
+        std::time::Duration::from_secs(args.graceful_stop_timeout_secs),
     ));
     vm_manager.recover_vms().await;
 

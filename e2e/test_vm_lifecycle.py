@@ -60,6 +60,7 @@ from helpers import (
     QARAX_URL,
     call_api,
     call_api_detailed,
+    exec_when_ready,
     wait_for_status,
 )
 from test_sandboxes import (
@@ -245,9 +246,19 @@ async def test_vm_exec_runs_command(client):
                 )
 
 
+# qarax-node's --graceful-stop-timeout-secs default: how long a stop waits for
+# the guest to power off after its power button before forcing it off.
+GRACEFUL_STOP_TIMEOUT_SECS = 30
+
+
 @pytest.mark.asyncio
 async def test_vm_start_stop_cycle(client):
-    """Test starting and stopping a VM multiple times."""
+    """Stop lets the guest power itself off, and the VM starts again after it.
+
+    qarax-init (the test guest's init) powers off on the power button that a
+    stop presses. A guest that ignored it would hold the stop for the whole
+    graceful stop timeout before being forced off.
+    """
     async with client as c:
         # Create VM
         new_vm = NewVm(
@@ -269,12 +280,54 @@ async def test_vm_start_stop_cycle(client):
                 await wait_for_status(c, vm_id_str, VmStatus.RUNNING)
 
                 # Stop
+                started = time.monotonic()
                 await call_api(stop_vm, client=c, vm_id=vm_id_str)
+                elapsed = time.monotonic() - started
+                assert elapsed < GRACEFUL_STOP_TIMEOUT_SECS - 10, (
+                    f"Cycle {i}: stop took {elapsed:.1f}s; the guest did not power "
+                    "off on its power button"
+                )
                 vm = await call_api(get_vm, client=c, vm_id=vm_id_str)
                 assert vm.status == VmStatus.SHUTDOWN, (
                     f"Cycle {i}: Expected SHUTDOWN after stop"
                 )
 
+        finally:
+            await call_api(delete_vm, client=c, vm_id=vm_id_str)
+
+
+@pytest.mark.asyncio
+async def test_guest_power_off_leaves_vm_restartable(client):
+    """A guest that powers itself off reads as SHUTDOWN and starts again.
+
+    Cloud Hypervisor used to exit with such a guest, which left the VM
+    reported as RUNNING and unable to start.
+    """
+    async with client as c:
+        new_vm = NewVm(
+            name=f"test-vm-e2e-guest-power-off-{int(time.time())}",
+            hypervisor=Hypervisor.CLOUD_HV,
+            boot_vcpus=1,
+            max_vcpus=1,
+            memory_size=256 * 1024 * 1024,
+            guest_agent=True,
+        )
+        vm_id_str = str(await call_api(create_vm, client=c, body=new_vm))
+        try:
+            await call_api(start_vm, client=c, vm_id=vm_id_str)
+            await wait_for_status(c, vm_id_str, VmStatus.RUNNING)
+
+            # Detached, so the exec call returns before the guest is gone.
+            await exec_when_ready(
+                c, vm_id_str, "(sleep 1; echo o > /proc/sysrq-trigger) >/dev/null 2>&1 &"
+            )
+            # Only the VM monitor notices a guest-initiated power-off.
+            await wait_for_status(
+                c, vm_id_str, VmStatus.SHUTDOWN, timeout=VM_MONITOR_TICK_SECS + 15
+            )
+
+            await call_api(start_vm, client=c, vm_id=vm_id_str)
+            await wait_for_status(c, vm_id_str, VmStatus.RUNNING)
         finally:
             await call_api(delete_vm, client=c, vm_id=vm_id_str)
 
