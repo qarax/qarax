@@ -658,20 +658,28 @@ impl VmService for VmServiceImpl {
             req.disk_id, req.vm_id, req.path, req.new_size
         );
 
-        let manager = self
-            .find_manager(&req.vm_id)
-            .await
-            .ok_or_else(|| Status::not_found(format!("VM {} not found", req.vm_id)))?;
-        match manager
-            .resize_disk(
-                &req.vm_id,
-                &req.disk_id,
-                &req.path,
+        let result = match self.find_manager(&req.vm_id).await {
+            Some(manager) => {
+                manager
+                    .resize_disk(
+                        &req.vm_id,
+                        &req.disk_id,
+                        &req.path,
+                        req.new_size,
+                        req.image_format(),
+                    )
+                    .await
+            }
+            // Never started here, so nothing has the image open.
+            None => crate::disk_image::grow_image(
+                std::path::Path::new(&req.path),
                 req.new_size,
                 req.image_format(),
             )
             .await
-        {
+            .map_err(VmmError::StorageError),
+        };
+        match result {
             Ok(()) => {
                 info!("Disk {} resized successfully", req.disk_id);
                 Ok(Response::new(()))

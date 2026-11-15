@@ -22,6 +22,44 @@ pub fn probe_image_format(path: &Path) -> std::io::Result<ImageFormat> {
     }
 }
 
+/// `format`, or for one not recorded (sent by a control plane older than
+/// the node) the image's, by its first bytes.
+pub fn recorded_or_probed(format: ImageFormat, path: &Path) -> ImageFormat {
+    match format {
+        ImageFormat::Unspecified => match probe_image_format(path) {
+            Ok(ImageFormat::Qcow2) => ImageFormat::Qcow2,
+            _ => ImageFormat::Raw,
+        },
+        format => format,
+    }
+}
+
+/// Grow the image at `path` to `new_size` bytes in place, sparsely. Uses
+/// `qemu-img`, which also updates a qcow2 image's virtual size, kept in its
+/// header; growing the file alone would leave the disk its old size.
+pub async fn grow_image(path: &Path, new_size: i64, format: ImageFormat) -> Result<(), String> {
+    let format = match recorded_or_probed(format, path) {
+        ImageFormat::Qcow2 => "qcow2",
+        _ => "raw",
+    };
+    let output = tokio::process::Command::new("qemu-img")
+        .args(["resize", "-f", format])
+        .arg(path)
+        .arg(new_size.to_string())
+        .output()
+        .await
+        .map_err(|e| format!("failed to run qemu-img: {e}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "qemu-img resize {} failed: {}",
+            path.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
