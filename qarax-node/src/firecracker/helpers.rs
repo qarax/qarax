@@ -143,7 +143,8 @@ mod tests {
     #[test]
     fn resolve_vsock_config_sets_defaults() {
         let runtime_dir = TempDir::new().unwrap();
-        let manager = FirecrackerManager::new(runtime_dir.path(), "/bin/true");
+        let manager =
+            FirecrackerManager::new(runtime_dir.path(), "/bin/true", Duration::from_secs(1));
         let mut vsock = crate::rpc::node::VsockConfig::default();
 
         manager.resolve_vsock_config("test-vm", &mut vsock);

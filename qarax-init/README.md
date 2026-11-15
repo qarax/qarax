@@ -20,6 +20,8 @@ Logs to both `/dev/kmsg` and stderr.
 
 qarax-node stops a Cloud Hypervisor VM by pressing its ACPI power button, which the guest kernel reports as a `KEY_POWER` press on an input device. qarax-init then sends SIGTERM to every process, gives them 10 seconds to exit (like `docker stop`), sends SIGKILL to whatever is left, syncs and powers off. It powers off as soon as everything has exited.
 
+A Firecracker VM has no power button, so qarax-node asks the guest agent instead, sending `{"shutdown": {"reboot": true}}` on its vsock port. The shutdown is the same, except that it ends in a reboot: Firecracker can't power a guest off, only halt it, but its process exits when the guest reboots (`reboot=k`).
+
 The guest kernel needs `CONFIG_ACPI_BUTTON` and `CONFIG_INPUT_EVDEV` (both built into the Cloud Hypervisor guest kernel). Without them the press goes unseen and qarax-node forces the VM off after its graceful stop timeout.
 
 ## Building

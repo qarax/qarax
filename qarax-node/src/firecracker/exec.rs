@@ -12,6 +12,13 @@ const MAX_GUEST_AGENT_HANDSHAKE_BYTES: u64 = 4096;
 const MAX_GUEST_AGENT_RESPONSE_BYTES: u64 = 10 * 1024 * 1024;
 const SANDBOX_EXEC_PORT: u32 = 7000;
 
+/// The agent's answer to a request other than exec: an exec response, whose
+/// exit code is 0 when it accepted.
+#[derive(serde::Deserialize)]
+pub(super) struct GuestAgentAck {
+    pub(super) exit_code: i32,
+}
+
 #[derive(serde::Deserialize)]
 struct GuestExecResponse {
     exit_code: i32,
@@ -123,48 +130,14 @@ impl FirecrackerManager {
         Ok(())
     }
 
-    pub async fn exec_vm(
-        &self,
-        vm_id: &str,
-        command: Vec<String>,
-        timeout_secs: Option<u64>,
-    ) -> Result<crate::rpc::node::ExecVmResponse, VmmError> {
-        if command.is_empty() {
-            return Err(VmmError::ExecInvalid(
-                "command must contain at least one argument".into(),
-            ));
-        }
-
-        let (status, vsock_socket_path) = {
-            let vms = self.vms.lock().await;
-            let instance = vms
-                .get(vm_id)
-                .ok_or_else(|| VmmError::VmNotFound(vm_id.to_string()))?;
-
-            (
-                instance.status(),
-                Self::vsock_socket_path_from_config(&instance.proto_config.vsock),
-            )
-        };
-
-        if status != VmStatus::Running {
-            return Err(VmmError::ExecUnavailable(format!(
-                "VM {} is not running",
-                vm_id
-            )));
-        }
-
-        let vsock_socket_path = vsock_socket_path.ok_or_else(|| {
-            VmmError::ExecUnavailable(format!(
-                "exec guest agent is not configured for VM {}",
-                vm_id
-            ))
-        })?;
-
-        let request_json = Self::build_guest_exec_request(command, timeout_secs)?;
-        let timeout = Self::exec_timeout(timeout_secs);
-
-        let response_bytes = tokio::time::timeout(timeout, async {
+    /// Send one request line to the guest agent behind `vsock_socket_path`
+    /// and read its whole response, within `timeout`.
+    pub(super) async fn guest_agent_request(
+        vsock_socket_path: &Path,
+        request_json: &[u8],
+        timeout: Duration,
+    ) -> Result<Vec<u8>, VmmError> {
+        tokio::time::timeout(timeout, async {
             let mut stream = tokio::net::UnixStream::connect(&vsock_socket_path)
                 .await
                 .map_err(|e| {
@@ -216,7 +189,7 @@ impl FirecrackerManager {
                 )));
             }
 
-            stream.write_all(&request_json).await.map_err(|e| {
+            stream.write_all(request_json).await.map_err(|e| {
                 VmmError::ExecError(format!("failed to send exec request to guest agent: {}", e))
             })?;
 
@@ -237,7 +210,51 @@ impl FirecrackerManager {
             Ok::<_, VmmError>(response)
         })
         .await
-        .map_err(|_| VmmError::ExecTimeout(timeout.as_secs()))??;
+        .map_err(|_| VmmError::ExecTimeout(timeout.as_secs()))?
+    }
+
+    pub async fn exec_vm(
+        &self,
+        vm_id: &str,
+        command: Vec<String>,
+        timeout_secs: Option<u64>,
+    ) -> Result<crate::rpc::node::ExecVmResponse, VmmError> {
+        if command.is_empty() {
+            return Err(VmmError::ExecInvalid(
+                "command must contain at least one argument".into(),
+            ));
+        }
+
+        let (status, vsock_socket_path) = {
+            let vms = self.vms.lock().await;
+            let instance = vms
+                .get(vm_id)
+                .ok_or_else(|| VmmError::VmNotFound(vm_id.to_string()))?;
+
+            (
+                instance.status(),
+                Self::vsock_socket_path_from_config(&instance.proto_config.vsock),
+            )
+        };
+
+        if status != VmStatus::Running {
+            return Err(VmmError::ExecUnavailable(format!(
+                "VM {} is not running",
+                vm_id
+            )));
+        }
+
+        let vsock_socket_path = vsock_socket_path.ok_or_else(|| {
+            VmmError::ExecUnavailable(format!(
+                "exec guest agent is not configured for VM {}",
+                vm_id
+            ))
+        })?;
+
+        let request_json = Self::build_guest_exec_request(command, timeout_secs)?;
+        let timeout = Self::exec_timeout(timeout_secs);
+        let response_bytes =
+            Self::guest_agent_request(&vsock_socket_path, &request_json, timeout).await?;
 
         let response: GuestExecResponse = serde_json::from_slice(&response_bytes)
             .map_err(|e| VmmError::ExecError(format!("invalid guest-agent response: {}", e)))?;
@@ -259,7 +276,8 @@ mod tests {
     #[tokio::test]
     async fn exec_vm_rejects_empty_command() {
         let runtime_dir = tempfile::TempDir::new().unwrap();
-        let manager = FirecrackerManager::new(runtime_dir.path(), "/bin/true");
+        let manager =
+            FirecrackerManager::new(runtime_dir.path(), "/bin/true", Duration::from_secs(1));
 
         let err = manager
             .exec_vm("test-vm", Vec::new(), None)
