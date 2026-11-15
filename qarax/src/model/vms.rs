@@ -390,7 +390,8 @@ pub struct MigrationOptions {
     pub timeout_secs: Option<i64>,
     #[serde(default)]
     pub on_timeout: MigrationTimeoutAction,
-    /// Parallel TCP connections for the memory transfer (default 1).
+    /// Parallel TCP connections for the memory transfer (default 1). Precopy
+    /// only: postcopy uses one.
     #[validate(range(min = 1, max = 128))]
     #[schema(minimum = 1, maximum = 128)]
     pub connections: Option<i32>,

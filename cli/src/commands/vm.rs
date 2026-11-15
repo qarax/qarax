@@ -384,7 +384,8 @@ enum VmCommand {
         /// At the timeout, switch over with a longer pause instead of cancelling
         #[arg(long)]
         finish_on_timeout: bool,
-        /// Parallel TCP connections for the memory transfer (1-128, default 1)
+        /// Parallel TCP connections for the memory transfer (1-128, default 1;
+        /// precopy only)
         #[arg(long)]
         connections: Option<i32>,
         /// Switch over first and move memory afterwards: always finishes, but

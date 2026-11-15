@@ -20,7 +20,8 @@ class VmMigrateRequest:
 
     Attributes:
         target_host_id (UUID): UUID of the destination host to migrate the VM to.
-        connections (int | None | Unset): Parallel TCP connections for the memory transfer (default 1).
+        connections (int | None | Unset): Parallel TCP connections for the memory transfer (default 1). Precopy
+            only: postcopy uses one.
         max_downtime_ms (int | None | Unset): Longest pause of the guest at switch-over to aim for (default 300 ms).
         memory_mode (MigrationMemoryMode | Unset): How a live migration moves guest memory.
         on_timeout (MigrationTimeoutAction | Unset): What a live migration does when it reaches its timeout.
