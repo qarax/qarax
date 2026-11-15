@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nINSERT INTO storage_objects (id, name, storage_pool_id, object_type, size_bytes, config)\nVALUES ($1, $2, $3, 'DATABASE_BACKUP', $4, $5)\nON CONFLICT (id) DO NOTHING\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Varchar",
+        "Uuid",
+        "Int8",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d05aae724bea204a9e403f4012b8f902da76dd9412a6d6b11aadbfeb9a42e3fd"
+}

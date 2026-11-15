@@ -5,6 +5,8 @@ These tests cover:
 - VM backup create/list/get/restore through /backups
 - Control-plane database backup/restore through /backups
 - Backup deletion, including removal of the stored snapshot / dump
+- VM deletion removing the VM's backups and their snapshots
+- A database restore keeping the database backups' records
 """
 
 import uuid
@@ -208,6 +210,17 @@ async def test_database_backup_restore(client, backup_storage_pool):
             )
             assert after_id is not None
 
+            later_resp = await httpx_client.post(
+                f"{QARAX_URL}/backups",
+                json={
+                    "backup_type": "database",
+                    "storage_pool_id": str(backup_storage_pool),
+                    "name": f"e2e-db-backup-later-{uuid.uuid4().hex[:8]}",
+                },
+            )
+            assert later_resp.status_code == 201, later_resp.text
+            later = later_resp.json()
+
             restore_resp = await httpx_client.post(
                 f"{QARAX_URL}/backups/{backup['id']}/restore"
             )
@@ -227,6 +240,14 @@ async def test_database_backup_restore(client, backup_storage_pool):
                 client=c, instance_type_id=str(after_id)
             )
             assert after_resp.status_code.value == 404, after_resp.content
+
+            # The dumps are outside the database, so the restore keeps the
+            # backups' records: the restored one, which the dump predates,
+            # and a later one. Deleting them removes their dumps.
+            for kept in (backup, later):
+                dump_path = await _backup_data_path(httpx_client, kept)
+                await _assert_backup_deleted(httpx_client, kept)
+                assert not path_exists_in_any("e2e-qarax-1", dump_path)
         finally:
             await delete_instance_type.asyncio_detailed(
                 client=c, instance_type_id=str(before_id)
@@ -296,3 +317,55 @@ async def test_database_backup_delete_removes_dump(client, backup_storage_pool):
 
         await _assert_backup_deleted(httpx_client, backup)
         assert not path_exists_in_any("e2e-qarax-1", dump_path)
+
+
+@pytest.mark.asyncio
+async def test_vm_delete_removes_its_backups(client, backup_storage_pool):
+    async with client as c:
+        httpx_client = c.get_async_httpx_client()
+        new_vm = NewVm(
+            name=f"e2e-backup-vm-del-{uuid.uuid4().hex[:8]}",
+            hypervisor=Hypervisor.CLOUD_HV,
+            boot_vcpus=1,
+            max_vcpus=1,
+            memory_size=256 * 1024 * 1024,
+        )
+        vm_id = uuid.UUID(
+            str(await create_vm.asyncio(client=c, body=new_vm)).strip('"')
+        )
+        deleted = False
+        try:
+            await start_vm.asyncio_detailed(client=c, vm_id=vm_id)
+            await wait_for_status(
+                c, vm_id, VmStatus.RUNNING, timeout=VM_OPERATION_TIMEOUT
+            )
+            create_resp = await httpx_client.post(
+                f"{QARAX_URL}/backups",
+                json={
+                    "backup_type": "vm",
+                    "vm_id": str(vm_id),
+                    "storage_pool_id": str(backup_storage_pool),
+                    "name": f"e2e-vm-backup-vm-del-{uuid.uuid4().hex[:8]}",
+                },
+            )
+            assert create_resp.status_code == 201, create_resp.text
+            backup = create_resp.json()
+            snapshot_dir = await _backup_data_path(httpx_client, backup)
+            assert path_exists_in_any(NODE_CONTAINER_PREFIX, snapshot_dir)
+
+            await stop_vm.asyncio_detailed(client=c, vm_id=vm_id)
+            resp = await delete_vm.asyncio_detailed(client=c, vm_id=vm_id)
+            assert resp.status_code.value == 204, resp.content
+            deleted = True
+
+            resp = await httpx_client.get(f"{QARAX_URL}/backups/{backup['id']}")
+            assert resp.status_code == 404, resp.text
+            resp = await httpx_client.get(
+                f"{QARAX_URL}/storage-objects/{backup['storage_object_id']}"
+            )
+            assert resp.status_code == 404, resp.text
+            assert not path_exists_in_any(NODE_CONTAINER_PREFIX, snapshot_dir)
+        finally:
+            if not deleted:
+                await stop_vm.asyncio_detailed(client=c, vm_id=vm_id)
+                await delete_vm.asyncio_detailed(client=c, vm_id=vm_id)

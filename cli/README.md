@@ -301,7 +301,13 @@ qarax vm resize my-vm --ram 1073741824
 qarax vm snapshot create my-vm --name snap-1
 qarax vm snapshot list my-vm
 qarax vm snapshot restore my-vm --snapshot snap-1
+qarax vm snapshot delete my-vm --snapshot snap-1
 ```
+
+Every snapshot is also recorded as a VM backup (`qarax backup list --type vm`):
+deleting either removes both, with the snapshot's data on the node. Deleting a
+VM deletes its snapshots and VM backups too, since they can't be restored
+without it.
 
 The legacy `vm snapshot` surface remains available, but new top-level backups are
 available under `qarax backup`.
@@ -322,6 +328,10 @@ qarax backup restore nightly-db-backup
 
 Database backups currently require a **local** storage pool whose configured
 path is writable from the qarax control-plane process.
+
+Restoring a database backup rewinds everything in the control-plane database
+except the database backups themselves: their dumps are files outside it, so
+the list of database backups stays as it was before the restore.
 
 ### Live migration
 

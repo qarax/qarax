@@ -468,6 +468,14 @@ enum SnapshotCommand {
         #[arg(long)]
         snapshot: String,
     },
+    /// Delete a snapshot, its backup and its stored data
+    Delete {
+        /// VM name or ID
+        vm: String,
+        /// Snapshot name or ID to delete
+        #[arg(long)]
+        snapshot: String,
+    },
 }
 
 #[derive(Tabled)]
@@ -1164,6 +1172,13 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
                     println!("Restored VM: {}", restored.name);
                     println!("Status:      {}", restored.status);
                 }
+            }
+
+            SnapshotCommand::Delete { vm, snapshot } => {
+                let id = resolve_vm_id(client, &vm).await?;
+                let snapshot_id = super::resolve_snapshot_id(client, id, &snapshot).await?;
+                api::vms::delete_snapshot(client, id, snapshot_id).await?;
+                println!("Deleted snapshot: {snapshot_id}");
             }
         },
     }

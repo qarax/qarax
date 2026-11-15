@@ -2192,7 +2192,7 @@ paths:
           format: uuid
       responses:
         '204':
-          description: VM deleted successfully
+          description: VM deleted, with its snapshots and VM backups
         '404':
           description: VM not found
         '500':
@@ -2829,6 +2829,37 @@ paths:
                 $ref: '#/components/schemas/Snapshot'
         '404':
           description: VM not found
+        '500':
+          description: Internal server error
+  /vms/{vm_id}/snapshots/{snapshot_id}:
+    delete:
+      tags:
+      - vms
+      operationId: delete_snapshot
+      parameters:
+      - name: vm_id
+        in: path
+        description: VM unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: snapshot_id
+        in: path
+        description: Snapshot unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '204':
+          description: Snapshot, its backup record and its stored data deleted
+        '404':
+          description: VM or snapshot not found
+        '409':
+          description: Snapshot is still being created
+        '422':
+          description: No UP host can reach the snapshot's data
         '500':
           description: Internal server error
   /vms/{vm_id}/start:

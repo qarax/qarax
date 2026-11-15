@@ -1,0 +1,62 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nSELECT b.id,\n       b.name,\n       b.created_at,\n       b.storage_object_id,\n       o.name AS \"object_name!\",\n       o.storage_pool_id AS \"storage_pool_id!\",\n       o.size_bytes AS \"size_bytes!\",\n       o.config AS \"object_config!\"\nFROM backups b\nJOIN storage_objects o ON o.id = b.storage_object_id\nWHERE b.backup_type = 'DATABASE'\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 3,
+        "name": "storage_object_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 4,
+        "name": "object_name!",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "storage_pool_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 6,
+        "name": "size_bytes!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 7,
+        "name": "object_config!",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "eecb5377ca15105f2ff92e28e029901af1bfa6d510bb6b1e1b1b78c2cf07a91e"
+}

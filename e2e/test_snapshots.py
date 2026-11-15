@@ -6,6 +6,7 @@ These tests verify snapshot lifecycle against a real Cloud Hypervisor VM:
 - Listing snapshots for a VM
 - Snapshot record persists with status 'ready' after success
 - Restoring a stopped VM from a snapshot
+- Deleting a snapshot removes its backup record and its data on the node
 """
 
 import uuid
@@ -21,6 +22,7 @@ from qarax_api_client.api.vms import (
 )
 from qarax_api_client.api.vms import (
     create_snapshot,
+    delete_snapshot,
     list_snapshots,
     restore,
 )
@@ -51,7 +53,13 @@ from qarax_api_client.models.snapshot_status import SnapshotStatus
 
 VM_OPERATION_TIMEOUT = 60
 
-from helpers import AUTH_HEADERS, QARAX_URL, wait_for_status
+from helpers import (
+    AUTH_HEADERS,
+    NODE_CONTAINER_PREFIX,
+    QARAX_URL,
+    path_exists_in_any,
+    wait_for_status,
+)
 
 
 @pytest.fixture
@@ -183,4 +191,53 @@ async def test_snapshot_restore(client, snapshot_storage_pool):
             await stop_vm.asyncio_detailed(client=c, vm_id=vm_id)
 
         finally:
+            await delete_vm.asyncio_detailed(client=c, vm_id=vm_id)
+
+
+@pytest.mark.asyncio
+async def test_snapshot_delete_removes_its_data(client, snapshot_storage_pool):
+    async with client as c:
+        httpx_client = c.get_async_httpx_client()
+        new_vm = NewVm(
+            name=f"e2e-snap-delete-{uuid.uuid4().hex[:8]}",
+            hypervisor=Hypervisor.CLOUD_HV,
+            boot_vcpus=1,
+            max_vcpus=1,
+            memory_size=256 * 1024 * 1024,
+        )
+        vm_id = uuid.UUID(str(await create_vm.asyncio(client=c, body=new_vm)).strip('"'))
+
+        try:
+            await start_vm.asyncio_detailed(client=c, vm_id=vm_id)
+            await wait_for_status(c, vm_id, VmStatus.RUNNING, timeout=VM_OPERATION_TIMEOUT)
+
+            snapshot = await create_snapshot.asyncio(
+                client=c,
+                vm_id=vm_id,
+                body=CreateSnapshotRequest(storage_pool_id=snapshot_storage_pool),
+            )
+            assert snapshot is not None and snapshot.status == SnapshotStatus.READY
+            resp = await httpx_client.get(
+                f"{QARAX_URL}/storage-objects/{snapshot.storage_object_id}"
+            )
+            assert resp.status_code == 200, resp.text
+            snapshot_dir = resp.json()["config"]["path"]
+            assert path_exists_in_any(NODE_CONTAINER_PREFIX, snapshot_dir)
+
+            resp = await delete_snapshot.asyncio_detailed(
+                client=c, vm_id=vm_id, snapshot_id=snapshot.id
+            )
+            assert resp.status_code.value == 204, resp.content
+
+            assert await list_snapshots.asyncio(client=c, vm_id=vm_id) == []
+            resp = await httpx_client.get(f"{QARAX_URL}/backups", params={"backup_type": "vm"})
+            assert resp.status_code == 200, resp.text
+            assert all(b["snapshot_id"] != str(snapshot.id) for b in resp.json())
+            resp = await httpx_client.get(
+                f"{QARAX_URL}/storage-objects/{snapshot.storage_object_id}"
+            )
+            assert resp.status_code == 404, resp.text
+            assert not path_exists_in_any(NODE_CONTAINER_PREFIX, snapshot_dir)
+        finally:
+            await stop_vm.asyncio_detailed(client=c, vm_id=vm_id)
             await delete_vm.asyncio_detailed(client=c, vm_id=vm_id)
