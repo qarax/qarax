@@ -7,6 +7,7 @@ use tracing::{debug, instrument, warn};
 use uuid::Uuid;
 
 use crate::model::network_interfaces::{NetworkInterface, RateLimiterConfig, TokenBucket};
+use crate::model::vms::{MigrationMemoryMode, MigrationOptions, MigrationTimeoutAction};
 
 /// How long to wait for a TCP connection to a qarax-node. Without a limit, a
 /// host whose address drops packets holds the request for the kernel's full
@@ -1436,13 +1437,29 @@ impl NodeClient {
     /// This call blocks until Cloud Hypervisor finishes transferring all dirty
     /// pages and the VM is running on the destination.
     #[instrument(skip(self))]
-    pub async fn send_migration(&self, vm_id: Uuid, destination_url: &str) -> Result<()> {
+    pub async fn send_migration(
+        &self,
+        vm_id: Uuid,
+        destination_url: &str,
+        options: &MigrationOptions,
+    ) -> Result<()> {
         let mut client = self.connect_vm_service().await?;
 
         client
             .send_migration(SendMigrationRequest {
                 vm_id: vm_id.to_string(),
                 destination_url: destination_url.to_string(),
+                max_downtime_ms: options.max_downtime_ms,
+                timeout_secs: options.timeout_secs,
+                on_timeout: match options.on_timeout {
+                    MigrationTimeoutAction::Cancel => node::MigrationTimeoutAction::Cancel,
+                    MigrationTimeoutAction::Finish => node::MigrationTimeoutAction::Finish,
+                } as i32,
+                connections: options.connections,
+                memory_mode: match options.memory_mode {
+                    MigrationMemoryMode::Precopy => node::MigrationMemoryMode::Precopy,
+                    MigrationMemoryMode::Postcopy => node::MigrationMemoryMode::Postcopy,
+                } as i32,
             })
             .await
             .context("send_migration RPC failed")?;

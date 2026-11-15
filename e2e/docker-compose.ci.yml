@@ -7,6 +7,14 @@ services:
       cache_to:
         - type=gha,mode=max,scope=e2e-nfs-server
 
+  migration-tls:
+    image: qarax/e2e-qarax-node:ci
+    build:
+      cache_from:
+        - type=gha,scope=e2e-qarax-node
+      cache_to:
+        - type=gha,mode=max,scope=e2e-qarax-node
+
   qarax-node:
     image: qarax/e2e-qarax-node:ci
     build:

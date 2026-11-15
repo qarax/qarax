@@ -77,7 +77,13 @@ def sync_detailed(
     client: AuthenticatedClient | Client,
     body: VmMigrateRequest,
 ) -> Response[Any | VmMigrateResponse]:
-    """
+    """Live-migrate a running or paused Cloud Hypervisor VM to another host.
+
+     Its disks must be on shared storage attached to both hosts. The migration
+    runs over TLS when both hosts have migration certificates
+    (`qarax-node --migration-tls-dir`); one between a host with them and a host
+    without is refused.
+
     Args:
         vm_id (UUID):
         body (VmMigrateRequest): Request body for `POST /vms/{vm_id}/migrate`.
@@ -108,7 +114,13 @@ def sync(
     client: AuthenticatedClient | Client,
     body: VmMigrateRequest,
 ) -> Any | VmMigrateResponse | None:
-    """
+    """Live-migrate a running or paused Cloud Hypervisor VM to another host.
+
+     Its disks must be on shared storage attached to both hosts. The migration
+    runs over TLS when both hosts have migration certificates
+    (`qarax-node --migration-tls-dir`); one between a host with them and a host
+    without is refused.
+
     Args:
         vm_id (UUID):
         body (VmMigrateRequest): Request body for `POST /vms/{vm_id}/migrate`.
@@ -134,7 +146,13 @@ async def asyncio_detailed(
     client: AuthenticatedClient | Client,
     body: VmMigrateRequest,
 ) -> Response[Any | VmMigrateResponse]:
-    """
+    """Live-migrate a running or paused Cloud Hypervisor VM to another host.
+
+     Its disks must be on shared storage attached to both hosts. The migration
+    runs over TLS when both hosts have migration certificates
+    (`qarax-node --migration-tls-dir`); one between a host with them and a host
+    without is refused.
+
     Args:
         vm_id (UUID):
         body (VmMigrateRequest): Request body for `POST /vms/{vm_id}/migrate`.
@@ -163,7 +181,13 @@ async def asyncio(
     client: AuthenticatedClient | Client,
     body: VmMigrateRequest,
 ) -> Any | VmMigrateResponse | None:
-    """
+    """Live-migrate a running or paused Cloud Hypervisor VM to another host.
+
+     Its disks must be on shared storage attached to both hosts. The migration
+    runs over TLS when both hosts have migration certificates
+    (`qarax-node --migration-tls-dir`); one between a host with them and a host
+    without is refused.
+
     Args:
         vm_id (UUID):
         body (VmMigrateRequest): Request body for `POST /vms/{vm_id}/migrate`.

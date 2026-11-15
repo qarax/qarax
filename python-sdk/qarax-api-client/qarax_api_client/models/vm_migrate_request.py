@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 from uuid import UUID
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
+
+from ..models.migration_memory_mode import MigrationMemoryMode
+from ..models.migration_timeout_action import MigrationTimeoutAction
+from ..types import UNSET, Unset
 
 T = TypeVar("T", bound="VmMigrateRequest")
 
@@ -16,13 +20,49 @@ class VmMigrateRequest:
 
     Attributes:
         target_host_id (UUID): UUID of the destination host to migrate the VM to.
+        connections (int | None | Unset): Parallel TCP connections for the memory transfer (default 1).
+        max_downtime_ms (int | None | Unset): Longest pause of the guest at switch-over to aim for (default 300 ms).
+        memory_mode (MigrationMemoryMode | Unset): How a live migration moves guest memory.
+        on_timeout (MigrationTimeoutAction | Unset): What a live migration does when it reaches its timeout.
+        timeout_secs (int | None | Unset): Longest the whole migration may take (default 3600 s).
     """
 
     target_host_id: UUID
+    connections: int | None | Unset = UNSET
+    max_downtime_ms: int | None | Unset = UNSET
+    memory_mode: MigrationMemoryMode | Unset = UNSET
+    on_timeout: MigrationTimeoutAction | Unset = UNSET
+    timeout_secs: int | None | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         target_host_id = str(self.target_host_id)
+
+        connections: int | None | Unset
+        if isinstance(self.connections, Unset):
+            connections = UNSET
+        else:
+            connections = self.connections
+
+        max_downtime_ms: int | None | Unset
+        if isinstance(self.max_downtime_ms, Unset):
+            max_downtime_ms = UNSET
+        else:
+            max_downtime_ms = self.max_downtime_ms
+
+        memory_mode: str | Unset = UNSET
+        if not isinstance(self.memory_mode, Unset):
+            memory_mode = self.memory_mode.value
+
+        on_timeout: str | Unset = UNSET
+        if not isinstance(self.on_timeout, Unset):
+            on_timeout = self.on_timeout.value
+
+        timeout_secs: int | None | Unset
+        if isinstance(self.timeout_secs, Unset):
+            timeout_secs = UNSET
+        else:
+            timeout_secs = self.timeout_secs
 
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
@@ -31,6 +71,16 @@ class VmMigrateRequest:
                 "target_host_id": target_host_id,
             }
         )
+        if connections is not UNSET:
+            field_dict["connections"] = connections
+        if max_downtime_ms is not UNSET:
+            field_dict["max_downtime_ms"] = max_downtime_ms
+        if memory_mode is not UNSET:
+            field_dict["memory_mode"] = memory_mode
+        if on_timeout is not UNSET:
+            field_dict["on_timeout"] = on_timeout
+        if timeout_secs is not UNSET:
+            field_dict["timeout_secs"] = timeout_secs
 
         return field_dict
 
@@ -39,8 +89,54 @@ class VmMigrateRequest:
         d = dict(src_dict)
         target_host_id = UUID(d.pop("target_host_id"))
 
+        def _parse_connections(data: object) -> int | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(int | None | Unset, data)
+
+        connections = _parse_connections(d.pop("connections", UNSET))
+
+        def _parse_max_downtime_ms(data: object) -> int | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(int | None | Unset, data)
+
+        max_downtime_ms = _parse_max_downtime_ms(d.pop("max_downtime_ms", UNSET))
+
+        _memory_mode = d.pop("memory_mode", UNSET)
+        memory_mode: MigrationMemoryMode | Unset
+        if isinstance(_memory_mode, Unset):
+            memory_mode = UNSET
+        else:
+            memory_mode = MigrationMemoryMode(_memory_mode)
+
+        _on_timeout = d.pop("on_timeout", UNSET)
+        on_timeout: MigrationTimeoutAction | Unset
+        if isinstance(_on_timeout, Unset):
+            on_timeout = UNSET
+        else:
+            on_timeout = MigrationTimeoutAction(_on_timeout)
+
+        def _parse_timeout_secs(data: object) -> int | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(int | None | Unset, data)
+
+        timeout_secs = _parse_timeout_secs(d.pop("timeout_secs", UNSET))
+
         vm_migrate_request = cls(
             target_host_id=target_host_id,
+            connections=connections,
+            max_downtime_ms=max_downtime_ms,
+            memory_mode=memory_mode,
+            on_timeout=on_timeout,
+            timeout_secs=timeout_secs,
         )
 
         vm_migrate_request.additional_properties = d

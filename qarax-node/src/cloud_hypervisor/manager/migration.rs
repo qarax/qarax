@@ -389,7 +389,15 @@ impl VmManager {
         // vm.receive-migration blocks until the sender completes the full transfer.
         // Spawn it as a background task so we can return the receiver URL immediately;
         // the control plane will call send_migration on the source concurrently.
-        let body = format!(r#"{{"receiver_url":"{}"}}"#, receiver_url);
+        let body = serde_json::to_string(&models::ReceiveMigrationData {
+            tls_dir: self.migration_tls_dir(),
+            // Only postcopy uses it, and a postcopy migration can't finish
+            // without it: pages the guest never touches would never move,
+            // so the source would wait for them forever.
+            background_fetch_pages: Some(true),
+            ..models::ReceiveMigrationData::new(receiver_url.clone())
+        })
+        .map_err(|e| VmManagerError::InvalidConfig(e.to_string()))?;
         let socket_path_bg = socket_path.clone();
         let vm_id_bg = vm_id.to_string();
         tokio::spawn(async move {
@@ -426,9 +434,10 @@ impl VmManager {
     /// the manager for the control plane's `delete_vm` to clean up.
     pub async fn send_migration(
         &self,
-        vm_id: &str,
-        destination_url: &str,
+        req: &ProtoSendMigrationRequest,
     ) -> Result<(), VmManagerError> {
+        let vm_id = req.vm_id.as_str();
+        let destination_url = req.destination_url.as_str();
         info!("Sending migration for VM {} to {}", vm_id, destination_url);
 
         let socket_path = {
@@ -446,7 +455,22 @@ impl VmManager {
             Err(_) => None,
         };
 
-        let body = format!(r#"{{"destination_url":"{}"}}"#, destination_url);
+        let body = serde_json::to_string(&models::SendMigrationData {
+            tls_dir: self.migration_tls_dir(),
+            downtime_ms: req.max_downtime_ms,
+            timeout_s: req.timeout_secs,
+            timeout_strategy: Some(match req.on_timeout() {
+                ProtoMigrationTimeoutAction::Cancel => models::TimeoutStrategy::Cancel,
+                ProtoMigrationTimeoutAction::Finish => models::TimeoutStrategy::Ignore,
+            }),
+            connections: req.connections.map(i64::from),
+            memory_mode: Some(match req.memory_mode() {
+                ProtoMigrationMemoryMode::Precopy => models::MigrationMode::Precopy,
+                ProtoMigrationMemoryMode::Postcopy => models::MigrationMode::Postcopy,
+            }),
+            ..models::SendMigrationData::new(destination_url.to_string())
+        })
+        .map_err(|e| VmManagerError::InvalidConfig(e.to_string()))?;
         Self::send_api_request(
             &socket_path,
             "PUT",
@@ -461,7 +485,7 @@ impl VmManager {
                 self.wait_for_migration_outcome(vm_id, &socket_path, &events_path, earlier)
                     .await?
             }
-            None => Self::wait_for_vmm_exit(vm_id, &socket_path).await?,
+            None => Self::wait_for_vmm_exit(vm_id, &socket_path, req.timeout_secs).await?,
         }
 
         // Mark the source instance as Shutdown.  We keep it in the map so
@@ -522,22 +546,34 @@ impl VmManager {
 
     /// Wait for a VMM without the event monitor to exit, which it does once a
     /// migration out succeeds. One that fails leaves the VM running here, which
-    /// only shows as the VMM outliving Cloud Hypervisor's migration timeout.
-    async fn wait_for_vmm_exit(vm_id: &str, socket_path: &PathBuf) -> Result<(), VmManagerError> {
+    /// only shows as the VMM outliving the migration's timeout.
+    async fn wait_for_vmm_exit(
+        vm_id: &str,
+        socket_path: &PathBuf,
+        timeout_secs: Option<i64>,
+    ) -> Result<(), VmManagerError> {
         // Cloud Hypervisor's default migration timeout is an hour.
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(3600 + 60);
+        let timeout_secs = timeout_secs.unwrap_or(3600);
+        let deadline =
+            tokio::time::Instant::now() + Duration::from_secs(timeout_secs.unsigned_abs() + 60);
         while Self::send_api_request(socket_path, "GET", "/api/v1/vmm.ping", None)
             .await
             .is_ok()
         {
             if tokio::time::Instant::now() >= deadline {
                 return Err(VmManagerError::MigrationError(format!(
-                    "VM {vm_id} is still on this node an hour after its migration started"
+                    "VM {vm_id} is still on this node {timeout_secs}s after its migration started"
                 )));
             }
             sleep(MIGRATION_POLL_INTERVAL).await;
         }
         Ok(())
+    }
+
+    fn migration_tls_dir(&self) -> Option<String> {
+        self.migration_tls
+            .as_ref()
+            .map(|tls| tls.path().display().to_string())
     }
 }
 

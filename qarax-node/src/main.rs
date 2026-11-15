@@ -10,7 +10,7 @@ use tracing::{error, info};
 #[global_allocator]
 static ALLOC: dhat::Alloc = dhat::Alloc;
 
-use qarax_node::cloud_hypervisor::VmManager;
+use qarax_node::cloud_hypervisor::{MigrationTlsDir, VmManager};
 use qarax_node::firecracker::FirecrackerManager;
 use qarax_node::overlaybd::OverlayBdManager;
 use qarax_node::rpc::node::StoragePoolKind;
@@ -65,6 +65,13 @@ pub struct Args {
     /// its ACPI power button, before it is forced off
     #[clap(long, default_value = "30")]
     graceful_stop_timeout_secs: u64,
+
+    /// Directory with the migration CA (ca-cert.pem), this node's server
+    /// certificate (server-cert.pem, server-key.pem; valid for the address the
+    /// node is registered under) and a client certificate (client-cert.pem,
+    /// client-key.pem). Live migrations in and out use TLS when it is set.
+    #[clap(long)]
+    migration_tls_dir: Option<PathBuf>,
 
     /// Enable OpenTelemetry export
     #[clap(long, default_value = "false", env = "OTEL_ENABLED")]
@@ -181,6 +188,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
+    let migration_tls = args
+        .migration_tls_dir
+        .map(MigrationTlsDir::new)
+        .transpose()?;
     let overlaybd_manager_for_transfer = overlaybd_manager.clone();
     let vm_manager = Arc::new(VmManager::with_storage(
         &args.runtime_dir,
@@ -189,6 +200,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         overlaybd_manager,
         qarax_init_binary,
         std::time::Duration::from_secs(args.graceful_stop_timeout_secs),
+        migration_tls,
     ));
     vm_manager.recover_vms().await;
 

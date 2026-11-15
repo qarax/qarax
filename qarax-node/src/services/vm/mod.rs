@@ -891,6 +891,7 @@ impl VmService for VmServiceImpl {
             numa_nodes,
             architecture,
             firecracker_version,
+            migration_tls: self.ch_manager.has_migration_tls(),
         }))
     }
 
@@ -1384,11 +1385,7 @@ impl VmService for VmServiceImpl {
             vm_id, req.destination_url
         );
 
-        match self
-            .ch_manager
-            .send_migration(&vm_id, &req.destination_url)
-            .await
-        {
+        match self.ch_manager.send_migration(&req).await {
             Ok(()) => {
                 info!("VM {} migrated out successfully", vm_id);
                 Ok(Response::new(()))

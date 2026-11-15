@@ -33,14 +33,53 @@ use crate::rpc::node::StoragePoolKind;
 use crate::rpc::node::{
     ConsoleConfig as ProtoConsoleConfig, ConsoleMode as ProtoConsoleMode,
     CpuTopology as ProtoCpuTopology, CpusConfig as ProtoCpusConfig, DiskConfig as ProtoDiskConfig,
-    ExecVmResponse, MemoryConfig as ProtoMemoryConfig, NetConfig as ProtoNetConfig,
+    ExecVmResponse, MemoryConfig as ProtoMemoryConfig,
+    MigrationMemoryMode as ProtoMigrationMemoryMode,
+    MigrationTimeoutAction as ProtoMigrationTimeoutAction, NetConfig as ProtoNetConfig,
     NumaPlacement as ProtoNumaPlacement, PayloadConfig as ProtoPayloadConfig,
     RateLimiterConfig as ProtoRateLimiterConfig, RngConfig as ProtoRngConfig,
-    TokenBucket as ProtoTokenBucket, VfioDeviceConfig as ProtoVfioDeviceConfig,
-    VhostMode as ProtoVhostMode, VmConfig as ProtoVmConfig, VmState, VmStatus,
-    VsockConfig as ProtoVsockConfig,
+    SendMigrationRequest as ProtoSendMigrationRequest, TokenBucket as ProtoTokenBucket,
+    VfioDeviceConfig as ProtoVfioDeviceConfig, VhostMode as ProtoVhostMode,
+    VmConfig as ProtoVmConfig, VmState, VmStatus, VsockConfig as ProtoVsockConfig,
 };
 use crate::storage::StorageBackendRegistry;
+
+/// A directory with the certificates Cloud Hypervisor uses for migration
+/// TLS: the migration CA, a server certificate valid for the address this
+/// node is registered under (for migrations in), and a client certificate
+/// (for migrations out).
+#[derive(Debug, Clone)]
+pub struct MigrationTlsDir(PathBuf);
+
+impl MigrationTlsDir {
+    const FILES: [&str; 5] = [
+        "ca-cert.pem",
+        "server-cert.pem",
+        "server-key.pem",
+        "client-cert.pem",
+        "client-key.pem",
+    ];
+
+    pub fn new(dir: PathBuf) -> Result<Self, String> {
+        let missing: Vec<&str> = Self::FILES
+            .into_iter()
+            .filter(|file| !dir.join(file).is_file())
+            .collect();
+        if missing.is_empty() {
+            Ok(Self(dir))
+        } else {
+            Err(format!(
+                "migration TLS directory {} has no {}",
+                dir.display(),
+                missing.join(", ")
+            ))
+        }
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.0
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum VmManagerError {
@@ -142,6 +181,8 @@ pub struct VmManager {
     /// How long `stop_vm` waits for a guest to power off after pressing its
     /// power button before forcing it off.
     graceful_stop_timeout: Duration,
+    /// Certificates for migrating VMs in and out over TLS; plain TCP without.
+    migration_tls: Option<MigrationTlsDir>,
 }
 
 impl VmManager {
@@ -153,6 +194,7 @@ impl VmManager {
         overlaybd_manager: Option<Arc<OverlayBdManager>>,
         qarax_init_binary: Option<PathBuf>,
         graceful_stop_timeout: Duration,
+        migration_tls: Option<MigrationTlsDir>,
     ) -> Self {
         let runtime_dir = runtime_dir.into();
         let ch_binary = ch_binary.into();
@@ -171,7 +213,13 @@ impl VmManager {
             overlaybd_manager,
             qarax_init_binary,
             graceful_stop_timeout,
+            migration_tls,
         }
+    }
+
+    /// Whether migrations in and out of this node use TLS.
+    pub fn has_migration_tls(&self) -> bool {
+        self.migration_tls.is_some()
     }
 
     /// Get the OverlayBD manager if configured (used for import operations)

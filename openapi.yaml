@@ -2456,6 +2456,12 @@ paths:
     post:
       tags:
       - vms
+      summary: Live-migrate a running or paused Cloud Hypervisor VM to another host.
+      description: |-
+        Its disks must be on shared storage attached to both hosts. The migration
+        runs over TLS when both hosts have migration certificates
+        (`qarax-node --migration-tls-dir`); one between a host with them and a host
+        without is refused.
       operationId: migrate
       parameters:
       - name: vm_id
@@ -2481,7 +2487,7 @@ paths:
         '404':
           description: VM or host not found
         '422':
-          description: VM not in a migratable state
+          description: The VM can't migrate to that host, or the options are invalid
         '500':
           description: Internal server error
   /vms/{vm_id}/nics:
@@ -3987,6 +3993,50 @@ components:
           format: date-time
         url:
           type: string
+    MigrationMemoryMode:
+      type: string
+      description: How a live migration moves guest memory.
+      enum:
+      - precopy
+      - postcopy
+    MigrationOptions:
+      type: object
+      description: |-
+        Live migration tuning. Cloud Hypervisor's defaults apply to whatever is
+        left out.
+      properties:
+        connections:
+          type:
+          - integer
+          - 'null'
+          format: int32
+          description: Parallel TCP connections for the memory transfer (default 1).
+          maximum: 128
+          minimum: 1
+        max_downtime_ms:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          description: Longest pause of the guest at switch-over to aim for (default 300 ms).
+          minimum: 1
+        memory_mode:
+          $ref: '#/components/schemas/MigrationMemoryMode'
+        on_timeout:
+          $ref: '#/components/schemas/MigrationTimeoutAction'
+        timeout_secs:
+          type:
+          - integer
+          - 'null'
+          format: int64
+          description: Longest the whole migration may take (default 3600 s).
+          minimum: 1
+    MigrationTimeoutAction:
+      type: string
+      description: What a live migration does when it reaches its timeout.
+      enum:
+      - cancel
+      - finish
     Network:
       type: object
       required:
@@ -5650,15 +5700,17 @@ components:
           type: string
           format: uuid
     VmMigrateRequest:
-      type: object
+      allOf:
+      - $ref: '#/components/schemas/MigrationOptions'
+      - type: object
+        required:
+        - target_host_id
+        properties:
+          target_host_id:
+            type: string
+            format: uuid
+            description: UUID of the destination host to migrate the VM to.
       description: Request body for `POST /vms/{vm_id}/migrate`.
-      required:
-      - target_host_id
-      properties:
-        target_host_id:
-          type: string
-          format: uuid
-          description: UUID of the destination host to migrate the VM to.
     VmMigrateResponse:
       type: object
       description: Response body for `POST /vms/{vm_id}/migrate`.

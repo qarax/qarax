@@ -7,4 +7,4 @@ pub(crate) mod cloud_init;
 mod manager;
 
 pub use cloud_hypervisor_sdk::models;
-pub use manager::{VmManager, VmManagerError};
+pub use manager::{MigrationTlsDir, VmManager, VmManagerError};

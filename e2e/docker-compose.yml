@@ -66,6 +66,7 @@ services:
       - qarax_storage_2:/var/lib/qarax/storage
       - qarax_vms_2:/var/lib/qarax/vms
       - qarax_overlaybd_2:/var/lib/qarax/overlaybd
+      - migration_tls:/var/lib/qarax/migration-tls:ro
       - /lib/modules:/lib/modules:ro
       - /sys/kernel/config:/sys/kernel/config
     environment:
@@ -76,11 +77,14 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://host.docker.internal:14318}
       OTEL_BSP_SCHEDULE_DELAY: ${OTEL_BSP_SCHEDULE_DELAY:-5000}
       OTEL_METRIC_EXPORT_INTERVAL: ${OTEL_METRIC_EXPORT_INTERVAL:-60000}
+    command: [ "/entrypoint.sh", "--migration-tls-dir", "/var/lib/qarax/migration-tls/qarax-node-2" ]
     ports:
       - "50052:50051"
     depends_on:
       registry:
         condition: service_healthy
+      migration-tls:
+        condition: service_completed_successfully
       nfs-server:
         condition: service_healthy
         required: false
@@ -134,6 +138,19 @@ services:
       timeout: 5s
       retries: 10
 
+  # Certificates for live migration TLS between the nodes (each node's server
+  # certificate is valid for its service name, the address it registers under).
+  migration-tls:
+    build:
+      context: ..
+      dockerfile: e2e/Dockerfile.qarax-node
+      args:
+        CLOUD_HYPERVISOR_VERSION: ${CLOUD_HYPERVISOR_VERSION}
+        FIRECRACKER_VERSION: ${FIRECRACKER_VERSION}
+    entrypoint: [ "gen-migration-tls", "/var/lib/qarax/migration-tls", "qarax-node", "qarax-node-2" ]
+    volumes:
+      - migration_tls:/var/lib/qarax/migration-tls
+
   qarax-node:
     build:
       context: ..
@@ -154,6 +171,7 @@ services:
       - qarax_storage:/var/lib/qarax/storage
       - qarax_vms:/var/lib/qarax/vms
       - qarax_overlaybd:/var/lib/qarax/overlaybd
+      - migration_tls:/var/lib/qarax/migration-tls:ro
       # Required for modprobe to load host kernel modules (e.g. target_core_user for overlaybd-tcmu)
       - /lib/modules:/lib/modules:ro
       # Share host configfs so overlaybd-tcmu can see the target subsystem after modprobe
@@ -167,11 +185,14 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://host.docker.internal:14318}
       OTEL_BSP_SCHEDULE_DELAY: ${OTEL_BSP_SCHEDULE_DELAY:-5000}
       OTEL_METRIC_EXPORT_INTERVAL: ${OTEL_METRIC_EXPORT_INTERVAL:-60000}
+    command: [ "/entrypoint.sh", "--migration-tls-dir", "/var/lib/qarax/migration-tls/qarax-node" ]
     ports:
       - "50051:50051"
     depends_on:
       registry:
         condition: service_healthy
+      migration-tls:
+        condition: service_completed_successfully
       nfs-server:
         condition: service_healthy
         required: false
@@ -218,4 +239,5 @@ volumes:
   qarax_storage_2:
   qarax_vms_2:
   qarax_overlaybd_2:
+  migration_tls:
   nfs_export:

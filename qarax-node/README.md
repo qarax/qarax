@@ -30,6 +30,7 @@ All flags can also be set as env vars.
 | `--convertor-binary` | `/opt/overlaybd/snapshotter/convertor` | OverlayBD converter (disabled if absent) |
 | `--overlaybd-cache-dir` | `/var/lib/qarax/overlaybd` | OverlayBD per-VM configs and upper layers |
 | `--graceful-stop-timeout-secs` | `30` | How long a stop waits for a Cloud Hypervisor guest to power off after pressing its ACPI power button, before forcing it off |
+| `--migration-tls-dir` | unset | Directory with the migration CA (`ca-cert.pem`), this node's server certificate (`server-cert.pem`, `server-key.pem`), valid for the address the node is registered under, and a client certificate (`client-cert.pem`, `client-key.pem`). Live migrations in and out use TLS when set. Every node needs it, or none: the control plane refuses migrations between a node with it and one without |
 
 Env vars: `RUST_LOG` (tracing filter), `INSECURE_REGISTRIES` (comma-separated hosts for HTTP registry access).
 
