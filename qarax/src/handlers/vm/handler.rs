@@ -3911,10 +3911,15 @@ pub(crate) async fn execute_planned_vm_migration(
         .await
         .map_err(|e| format!("receive_migration failed: {:#}", e))?;
 
+    // From here on, a failure leaves the destination with a VM that never
+    // arrived: a receiving Cloud Hypervisor, its TAPs and storage mappings,
+    // and the VM's id, which would refuse the next migration there.
+
     // The destination filters the VM from its first packet there.
-    network_policy::sync_vm_firewall_on_host(db_pool, vm_id, target_host.id)
-        .await
-        .map_err(|e| format!("sync_vm_firewall on the destination failed: {e}"))?;
+    if let Err(e) = network_policy::sync_vm_firewall_on_host(db_pool, vm_id, target_host.id).await {
+        discard_incoming_vm(&dest_client, vm_id).await;
+        return Err(format!("sync_vm_firewall on the destination failed: {e}"));
+    }
 
     if let Some(job_id) = job_id {
         let _ = jobs::update_progress(db_pool, job_id, 25).await;
@@ -3922,10 +3927,27 @@ pub(crate) async fn execute_planned_vm_migration(
 
     let actual_receiver_url = receiver_url.replace("0.0.0.0", &target_host.address);
 
-    source_client
+    if let Err(e) = source_client
         .send_migration(vm_id, &actual_receiver_url, &options)
         .await
-        .map_err(|e| format!("send_migration failed: {:#}", e))?;
+    {
+        // The error may only mean the source's answer was lost (a dropped
+        // connection) after the VM moved, in which case it runs on the
+        // destination and removing it there would lose it.
+        let arrived = dest_client
+            .get_vm_info(vm_id)
+            .await
+            .is_ok_and(|state| state.status == crate::grpc_client::node::VmStatus::Running as i32);
+        if !arrived {
+            discard_incoming_vm(&dest_client, vm_id).await;
+            return Err(format!("send_migration failed: {e:#}"));
+        }
+        tracing::warn!(
+            vm_id = %vm_id,
+            error = %format!("{e:#}"),
+            "send_migration failed, but the VM runs on the destination; finishing the migration"
+        );
+    }
 
     if let Some(job_id) = job_id {
         let _ = jobs::update_progress(db_pool, job_id, 75).await;
@@ -3949,6 +3971,17 @@ pub(crate) async fn execute_planned_vm_migration(
     }
 
     Ok(())
+}
+
+/// Remove the VM a failed migration left on its destination.
+async fn discard_incoming_vm(dest_client: &NodeClient, vm_id: Uuid) {
+    if let Err(e) = dest_client.delete_vm(vm_id).await {
+        tracing::warn!(
+            vm_id = %vm_id,
+            error = %e,
+            "Failed to remove the VM from the destination after its migration failed; manual cleanup may be needed"
+        );
+    }
 }
 
 #[utoipa::path(

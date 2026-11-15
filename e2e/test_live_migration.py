@@ -26,6 +26,7 @@ import httpx2
 import pytest
 from qarax_api_client import Client
 from qarax_api_client.api.hosts import evacuate as evacuate_host
+from qarax_api_client.api.hosts import list_ as list_hosts
 from qarax_api_client.api.hosts import update as update_host
 from qarax_api_client.api.jobs import get as get_job
 from qarax_api_client.api.storage_objects import delete as delete_storage_object
@@ -67,6 +68,9 @@ from helpers import (
     AUTH_HEADERS,
     call_api,
     call_api_detailed,
+    NODE_RUNTIME_DIR,
+    compose_container,
+    docker,
     exec_when_ready,
     wait_for_host_status,
     wait_for_status,
@@ -273,6 +277,92 @@ async def test_live_migration(client, two_hosts, options):
                 await call_api(delete_storage_object, client=c, object_id=disk_id)
             if pool_id is not None:
                 await call_api(delete_pool, client=c, pool_id=pool_id)
+
+
+def _vmm_processes(container, vm_id):
+    """Command lines of the Cloud Hypervisor processes for vm_id in container."""
+    cmdlines = docker(
+        "exec",
+        container,
+        "sh",
+        "-c",
+        'for p in /proc/[0-9]*; do tr "\\0" " " < "$p/cmdline"; echo; done 2>/dev/null',
+    ).stdout.splitlines()
+    return [c for c in cmdlines if "cloud-hypervisor" in c and f"{vm_id}.sock" in c]
+
+
+@pytest.mark.asyncio
+async def test_failed_migration_leaves_nothing_on_the_destination(client, two_hosts):
+    """
+    A migration that fails once the destination is receiving keeps the VM
+    running on its source and leaves nothing on the destination, so a second
+    migration there succeeds. The destination used to keep a Cloud Hypervisor
+    and the VM's id, refusing every later migration of it there.
+
+    The failure: a directory where the destination's Cloud Hypervisor puts the
+    VM's vsock socket, which the node can't clear, so restoring the VM there
+    can't bind it.
+    """
+    host1_id, host2_id = two_hosts
+    vm_id = target = vsock_path = None
+    async with client as c:
+        try:
+            vm_id_raw = await call_api(
+                create_vm,
+                client=c,
+                body=NewVm(
+                    name=f"e2e-migrate-fail-{uuid.uuid4().hex[:6]}",
+                    hypervisor=Hypervisor.CLOUD_HV,
+                    boot_vcpus=1,
+                    max_vcpus=1,
+                    memory_size=256 * 1024 * 1024,
+                    guest_agent=True,
+                ),
+            )
+            vm_id = UUID(str(vm_id_raw).strip('"'))
+            await call_api(start_vm, client=c, vm_id=vm_id)
+            vm = await wait_for_status(
+                c, vm_id, VmStatus.RUNNING, timeout=VM_OPERATION_TIMEOUT
+            )
+            source_host_id = vm.host_id
+            target_host_id = host2_id if source_host_id == host1_id else host1_id
+            hosts = {h.id: h for h in await call_api(list_hosts, client=c)}
+            target = compose_container(hosts[target_host_id].address)
+            vsock_path = f"{NODE_RUNTIME_DIR}/{vm_id}.vsock"
+            docker("exec", target, "mkdir", "-p", vsock_path)
+
+            migrate_to_target = VmMigrateRequest(target_host_id=target_host_id)
+            resp = await call_api_detailed(
+                migrate, client=c, vm_id=vm_id, body=migrate_to_target
+            )
+            assert resp.status_code == 202, resp.content
+            with pytest.raises(RuntimeError, match="send_migration failed"):
+                await _wait_for_job(c, resp.parsed.job_id)
+
+            # The job fails first, then hands the VM back.
+            vm = await wait_for_status(c, vm_id, VmStatus.RUNNING)
+            assert vm.host_id == source_host_id
+            result = await exec_when_ready(c, vm_id, "echo alive")
+            assert result.stdout.strip() == "alive", result
+            assert not _vmm_processes(target, vm_id), (
+                "the failed migration left a Cloud Hypervisor on the destination"
+            )
+
+            # Nothing of the VM left there to refuse it.
+            docker("exec", target, "rmdir", vsock_path)
+            vsock_path = None
+            resp = await call_api_detailed(
+                migrate, client=c, vm_id=vm_id, body=migrate_to_target
+            )
+            assert resp.status_code == 202, resp.content
+            await _wait_for_job(c, resp.parsed.job_id)
+            vm = await call_api(get_vm, client=c, vm_id=vm_id)
+            assert (vm.status, vm.host_id) == (VmStatus.RUNNING, target_host_id)
+        finally:
+            if vsock_path is not None:
+                docker("exec", target, "rm", "-rf", vsock_path, check=False)
+            if vm_id is not None:
+                await call_api(delete_vm, client=c, vm_id=vm_id)
 
 
 @pytest.mark.asyncio
