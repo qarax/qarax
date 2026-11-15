@@ -157,15 +157,16 @@ async def _resize(c, vm_id, logical_name, new_size):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("image_format", ["raw", "qcow2"])
-async def test_resize_disk_shutdown_vm(client, image_format):
+@pytest.mark.parametrize("started", [True, False], ids=["shutdown", "never-started"])
+async def test_resize_disk_stopped_vm(client, image_format, started):
     """
-    Resize a disk attached to a Shutdown VM.
+    Resize a disk attached to a stopped VM: one started and stopped, or one
+    never started, which its node doesn't know yet.
 
-    Creates a local pool and a disk backed by a per-test image, starts and
-    stops the VM to reach Shutdown state, then doubles the disk. Verifies the
-    returned StorageObject and the image's virtual size on the VM's node: for
-    qcow2 that lives in the image header, which growing the file alone leaves
-    as it was.
+    Creates a local pool and a disk backed by a per-test image, then doubles
+    the disk. Verifies the returned StorageObject and the image's virtual size
+    on the VM's node: for qcow2 that lives in the image header, which growing
+    the file alone leaves as it was.
     """
     test_id = uuid.uuid4().hex[:8]
     async with client as c:
@@ -195,18 +196,20 @@ async def test_resize_disk_shutdown_vm(client, image_format):
                 body=AttachDiskRequest(storage_object_id=disk_id),
             )
 
-            # Boot and stop to get the VM into Shutdown state (assigns a host).
-            await call_api(start_vm, client=c, vm_id=vm_id)
-            await wait_for_status(c, vm_id, VmStatus.RUNNING)
-            await call_api(stop_vm, client=c, vm_id=vm_id)
-            await wait_for_status(c, vm_id, VmStatus.SHUTDOWN)
+            stopped_status = VmStatus.CREATED
+            if started:
+                await call_api(start_vm, client=c, vm_id=vm_id)
+                await wait_for_status(c, vm_id, VmStatus.RUNNING)
+                await call_api(stop_vm, client=c, vm_id=vm_id)
+                await wait_for_status(c, vm_id, VmStatus.SHUTDOWN)
+                stopped_status = VmStatus.SHUTDOWN
 
             await _resize(c, vm_id, attached.logical_name, new_size)
 
-            # VM should still be Shutdown after resize.
+            # The VM stays stopped.
             vm = await call_api(get_vm, client=c, vm_id=vm_id)
-            assert vm.status == VmStatus.SHUTDOWN, (
-                f"VM should remain Shutdown after disk resize, got {vm.status}"
+            assert vm.status == stopped_status, (
+                f"VM should remain {stopped_status} after disk resize, got {vm.status}"
             )
 
             # The node grew the image, not just the database record.

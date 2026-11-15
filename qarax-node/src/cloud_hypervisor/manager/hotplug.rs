@@ -232,22 +232,9 @@ impl VmManager {
             return Ok(());
         }
 
-        let format = match Self::image_type_to_sdk(image_format, Some(path)) {
-            models::ImageType::Qcow2 => "qcow2",
-            _ => "raw",
-        };
-        let output = tokio::process::Command::new("qemu-img")
-            .args(["resize", "-f", format, path, &new_size.to_string()])
-            .output()
+        crate::disk_image::grow_image(Path::new(path), new_size, image_format)
             .await
-            .map_err(|e| VmManagerError::StorageError(format!("failed to run qemu-img: {e}")))?;
-        if !output.status.success() {
-            return Err(VmManagerError::StorageError(format!(
-                "qemu-img resize {path} failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            )));
-        }
-        Ok(())
+            .map_err(VmManagerError::StorageError)
     }
 
     /// Add a VFIO device (e.g., GPU) to a running VM

@@ -239,16 +239,13 @@ impl VmManager {
     /// autodetect, CH refuses writes to sector 0 of a raw image, which breaks
     /// ext4 superblock updates.
     pub(super) fn image_type_to_sdk(format: ProtoImageFormat, path: Option<&str>) -> ImageType {
+        let format = match path {
+            Some(path) => crate::disk_image::recorded_or_probed(format, Path::new(path)),
+            None => format,
+        };
         match format {
-            ProtoImageFormat::Raw => ImageType::Raw,
             ProtoImageFormat::Qcow2 => ImageType::Qcow2,
-            // From a control plane that doesn't record formats yet.
-            ProtoImageFormat::Unspecified => {
-                match path.map(|path| crate::disk_image::probe_image_format(Path::new(path))) {
-                    Some(Ok(ProtoImageFormat::Qcow2)) => ImageType::Qcow2,
-                    _ => ImageType::Raw,
-                }
-            }
+            _ => ImageType::Raw,
         }
     }
 
