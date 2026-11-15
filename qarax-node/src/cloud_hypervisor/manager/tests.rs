@@ -322,22 +322,18 @@ async fn recovered_vm_deletion_cleans_overlaybd_state_and_preserves_external_upp
     }
 }
 
-/// Serve the Cloud Hypervisor API calls `stop_vm` makes, for a VM in `state`
-/// whose guest powers off on its power button when `obeys_power_button`.
-/// `vmm.ping` reports `vmm_pid`. Returns the PUT endpoints called, in order.
+/// Answers Cloud Hypervisor API requests on `listener` with the body
+/// `respond(method, endpoint)` returns. Aborting the returned task closes the
+/// listener, as the VMM exiting would.
 fn serve_fake_cloud_hypervisor(
     listener: tokio::net::UnixListener,
-    state: models::VmState,
-    obeys_power_button: bool,
-    vmm_pid: u32,
-) -> Arc<std::sync::Mutex<Vec<String>>> {
-    let puts = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let state = Arc::new(std::sync::Mutex::new(state));
-    let served_puts = puts.clone();
+    respond: impl Fn(&str, &str) -> String + Send + Sync + 'static,
+) -> tokio::task::JoinHandle<()> {
+    let respond = Arc::new(respond);
     tokio::spawn(async move {
         loop {
             let (mut stream, _) = listener.accept().await.unwrap();
-            let (puts, state) = (served_puts.clone(), state.clone());
+            let respond = respond.clone();
             tokio::spawn(async move {
                 let mut request = vec![0; 4096];
                 // One connection can carry several requests (the SDK handle's does).
@@ -346,26 +342,7 @@ fn serve_fake_cloud_hypervisor(
                     let mut parts = request.split_whitespace();
                     let method = parts.next().unwrap();
                     let endpoint = parts.next().unwrap().rsplit('/').next().unwrap();
-                    let body = match (method, endpoint) {
-                        ("GET", "vm.info") => serde_json::to_string(&models::VmInfo::new(
-                            VmConfig::default(),
-                            *state.lock().unwrap(),
-                        ))
-                        .unwrap(),
-                        ("GET", "vmm.ping") => {
-                            serde_json::json!({"version": "v54.0", "pid": vmm_pid}).to_string()
-                        }
-                        ("PUT", "vm.power-button" | "vm.shutdown") => {
-                            puts.lock().unwrap().push(endpoint.to_string());
-                            let mut state = state.lock().unwrap();
-                            if endpoint == "vm.shutdown" || obeys_power_button {
-                                // What vm.info reports once the guest is off.
-                                *state = models::VmState::Created;
-                            }
-                            String::new()
-                        }
-                        _ => panic!("unexpected request: {request}"),
-                    };
+                    let body = respond(method, endpoint);
                     let response = format!(
                         "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}",
                         body.len(),
@@ -375,8 +352,31 @@ fn serve_fake_cloud_hypervisor(
                 }
             });
         }
-    });
-    puts
+    })
+}
+
+/// A VmInstance for a VMM serving its API on `socket`.
+async fn running_instance(vm_id: &str, socket: PathBuf) -> VmInstance {
+    let vm = Machine::connect(MachineConfig {
+        vm_id: Uuid::parse_str(vm_id).unwrap(),
+        socket_path: Cow::Owned(socket.clone()),
+        exec_path: Cow::Owned(PathBuf::from("unused-cloud-hypervisor")),
+    })
+    .await
+    .unwrap();
+    VmInstance {
+        proto_config: ProtoVmConfig::default(),
+        process: None,
+        vm,
+        socket_path: socket,
+        status: VmStatus::Running,
+        tap_devices: Vec::new(),
+        passt_processes: Vec::new(),
+        serial_pty_path: None,
+        console_pty_path: None,
+        vsock_socket_path: None,
+        storage_backend_kind: None,
+    }
 }
 
 #[tokio::test]
@@ -420,36 +420,37 @@ async fn stop_vm_lets_the_guest_power_off_before_forcing_it() {
             vmm.arg0("--no-shutdown");
         }
         let vmm = vmm.arg("30").kill_on_drop(true).spawn().unwrap();
-        let puts = serve_fake_cloud_hypervisor(
+        let vmm_pid = vmm.id().unwrap();
+        let puts = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let state = std::sync::Mutex::new(state);
+        let served_puts = puts.clone();
+        serve_fake_cloud_hypervisor(
             tokio::net::UnixListener::bind(&socket).unwrap(),
-            state,
-            obeys_power_button,
-            vmm.id().unwrap(),
-        );
-
-        let vm = Machine::connect(MachineConfig {
-            vm_id: Uuid::parse_str(&vm_id).unwrap(),
-            socket_path: Cow::Owned(socket.clone()),
-            exec_path: Cow::Owned(PathBuf::from("unused-cloud-hypervisor")),
-        })
-        .await
-        .unwrap();
-        manager.vms.lock().await.insert(
-            vm_id.clone(),
-            VmInstance {
-                proto_config: ProtoVmConfig::default(),
-                process: None,
-                vm,
-                socket_path: socket,
-                status: VmStatus::Running,
-                tap_devices: Vec::new(),
-                passt_processes: Vec::new(),
-                serial_pty_path: None,
-                console_pty_path: None,
-                vsock_socket_path: None,
-                storage_backend_kind: None,
+            move |method, endpoint| match (method, endpoint) {
+                ("GET", "vm.info") => serde_json::to_string(&models::VmInfo::new(
+                    VmConfig::default(),
+                    *state.lock().unwrap(),
+                ))
+                .unwrap(),
+                ("GET", "vmm.ping") => {
+                    serde_json::json!({"version": "v54.0", "pid": vmm_pid}).to_string()
+                }
+                ("PUT", "vm.power-button" | "vm.shutdown") => {
+                    served_puts.lock().unwrap().push(endpoint.to_string());
+                    if endpoint == "vm.shutdown" || obeys_power_button {
+                        // What vm.info reports once the guest is off.
+                        *state.lock().unwrap() = models::VmState::Created;
+                    }
+                    String::new()
+                }
+                _ => panic!("unexpected request: {method} {endpoint}"),
             },
         );
+        manager
+            .vms
+            .lock()
+            .await
+            .insert(vm_id.clone(), running_instance(&vm_id, socket).await);
 
         manager.stop_vm(&vm_id).await.unwrap();
 
@@ -459,6 +460,142 @@ async fn stop_vm_lets_the_guest_power_off_before_forcing_it() {
             VmStatus::Shutdown,
             "{case}"
         );
+    }
+}
+
+/// `send_migration` returns once Cloud Hypervisor reports how the migration
+/// ended, not when `vm.send-migration` returns, which is as soon as it starts.
+#[tokio::test]
+async fn send_migration_waits_for_the_migration_to_end() {
+    fn event(source: &str, event: &str) -> String {
+        let event = serde_json::json!({
+            "timestamp": {"secs": 0, "nanos": 0},
+            "source": source,
+            "event": event,
+            "properties": null,
+        });
+        format!("{}\n\n", serde_json::to_string_pretty(&event).unwrap())
+    }
+
+    struct Case {
+        name: &'static str,
+        /// Events the VMM reported before; `None` when it has no event monitor.
+        earlier_events: Option<&'static [&'static str]>,
+        sent_events: &'static [&'static str],
+        vmm_exits: bool,
+        expected: Result<(), &'static str>,
+    }
+    let cases = [
+        Case {
+            name: "finishes, after an earlier attempt failed",
+            earlier_events: Some(&["migration-starting", "migration-failed"]),
+            sent_events: &[
+                "migration-starting",
+                "migration-memory-iteration",
+                "migration-finished",
+            ],
+            vmm_exits: true,
+            expected: Ok(()),
+        },
+        Case {
+            name: "fails",
+            earlier_events: Some(&[]),
+            sent_events: &["migration-starting", "migration-failed"],
+            vmm_exits: false,
+            expected: Err("Cloud Hypervisor reported migration-failed"),
+        },
+        Case {
+            name: "VMM exits without an outcome",
+            earlier_events: Some(&[]),
+            sent_events: &["migration-starting"],
+            vmm_exits: true,
+            expected: Err("Cloud Hypervisor exited before the migration ended"),
+        },
+        Case {
+            name: "VMM started without the event monitor",
+            earlier_events: None,
+            sent_events: &[],
+            vmm_exits: true,
+            expected: Ok(()),
+        },
+    ];
+    for Case {
+        name: case,
+        earlier_events,
+        sent_events,
+        vmm_exits,
+        expected,
+    } in cases
+    {
+        let directory = TempDir::new().unwrap();
+        let manager = test_manager(&directory);
+        let vm_id = Uuid::new_v4().to_string();
+        let socket = manager.socket_path(&vm_id);
+        let events_path = manager.events_path(&vm_id);
+        if let Some(earlier_events) = earlier_events {
+            let mut events = event("vmm", "starting");
+            for name in earlier_events {
+                events.push_str(&event("vm", name));
+            }
+            std::fs::write(&events_path, events).unwrap();
+        }
+
+        let sent = Arc::new(tokio::sync::Notify::new());
+        let notify_sent = sent.clone();
+        let sent_events: String = sent_events.iter().map(|name| event("vm", name)).collect();
+        let server = serve_fake_cloud_hypervisor(
+            tokio::net::UnixListener::bind(&socket).unwrap(),
+            move |method, endpoint| match (method, endpoint) {
+                ("GET", "vmm.ping") => r#"{"version":"v54.0","pid":1}"#.to_string(),
+                ("PUT", "vm.send-migration") => {
+                    if !sent_events.is_empty() {
+                        let mut events = std::fs::OpenOptions::new()
+                            .append(true)
+                            .open(&events_path)
+                            .unwrap();
+                        std::io::Write::write_all(&mut events, sent_events.as_bytes()).unwrap();
+                    }
+                    notify_sent.notify_one();
+                    String::new()
+                }
+                _ => panic!("unexpected request: {method} {endpoint}"),
+            },
+        );
+        manager
+            .vms
+            .lock()
+            .await
+            .insert(vm_id.clone(), running_instance(&vm_id, socket).await);
+
+        let (result, ()) = tokio::join!(
+            manager.send_migration(&vm_id, "tcp:destination:49152"),
+            async {
+                sent.notified().await;
+                if vmm_exits {
+                    server.abort();
+                }
+            }
+        );
+
+        match expected {
+            Ok(()) => {
+                result.unwrap_or_else(|e| panic!("{case}: {e}"));
+                assert_eq!(
+                    manager.vms.lock().await[&vm_id].status,
+                    VmStatus::Shutdown,
+                    "{case}"
+                );
+            }
+            Err(message) => {
+                let error = result.expect_err(case).to_string();
+                assert!(error.contains(message), "{case}: {error}");
+                assert_eq!(
+                    manager.vms.lock().await[&vm_id].status,
+                    VmStatus::Running,
+                    "{case}"
+                );
+            }
+        }
     }
 }
 

@@ -87,7 +87,7 @@ impl VmManager {
             .await;
 
         let process = self
-            .spawn_cloud_hypervisor(&socket_path, log_file)
+            .spawn_cloud_hypervisor(vm_id, log_file)
             .map_err(VmManagerError::SpawnError)?;
 
         info!(
@@ -316,7 +316,7 @@ impl VmManager {
         .into_std()
         .await;
 
-        let process = match self.spawn_cloud_hypervisor(&socket_path, log_file) {
+        let process = match self.spawn_cloud_hypervisor(vm_id, log_file) {
             Ok(p) => p,
             Err(e) => {
                 for tap in &tap_devices {
@@ -416,13 +416,14 @@ impl VmManager {
         Ok(receiver_url)
     }
 
-    /// Send a live migration from this node to the destination.
+    /// Send a live migration from this node to the destination, returning
+    /// once it has ended.
     ///
-    /// Calls `vm.send-migration` on the source Cloud Hypervisor process.
-    /// This call blocks until Cloud Hypervisor completes the migration.
-    /// On success the source VM process has exited; the VmInstance is removed
-    /// from the manager (TAP cleanup is left to the caller via `delete_vm` or
-    /// an explicit cleanup step).
+    /// `vm.send-migration` only starts it (Cloud Hypervisor v53 and later),
+    /// and this VMM has to stay up until it ends: under postcopy it serves the
+    /// guest's memory after the switch-over. On success the VMM exits; on
+    /// failure the VM keeps running here. Either way the VmInstance stays in
+    /// the manager for the control plane's `delete_vm` to clean up.
     pub async fn send_migration(
         &self,
         vm_id: &str,
@@ -438,6 +439,13 @@ impl VmManager {
             instance.socket_path.clone()
         };
 
+        // A VMM started by an older qarax-node has no event monitor.
+        let events_path = self.events_path(vm_id);
+        let earlier_migrations = match tokio::fs::read(&events_path).await {
+            Ok(events) => Some(migration_events(&events).len()),
+            Err(_) => None,
+        };
+
         let body = format!(r#"{{"destination_url":"{}"}}"#, destination_url);
         Self::send_api_request(
             &socket_path,
@@ -447,6 +455,14 @@ impl VmManager {
         )
         .await
         .map_err(|e| VmManagerError::MigrationError(format!("vm.send-migration failed: {}", e)))?;
+
+        match earlier_migrations {
+            Some(earlier) => {
+                self.wait_for_migration_outcome(vm_id, &socket_path, &events_path, earlier)
+                    .await?
+            }
+            None => Self::wait_for_vmm_exit(vm_id, &socket_path).await?,
+        }
 
         // Mark the source instance as Shutdown.  We keep it in the map so
         // the control plane can call delete_vm() to clean up TAP devices and
@@ -464,4 +480,107 @@ impl VmManager {
         );
         Ok(())
     }
+
+    /// Wait for the event monitor to report how the migration after the
+    /// `earlier` ones it lists ended.
+    async fn wait_for_migration_outcome(
+        &self,
+        vm_id: &str,
+        socket_path: &PathBuf,
+        events_path: &Path,
+        earlier: usize,
+    ) -> Result<(), VmManagerError> {
+        loop {
+            // Checked before reading the events: the VMM exits right after
+            // reporting success.
+            let vmm_alive = Self::send_api_request(socket_path, "GET", "/api/v1/vmm.ping", None)
+                .await
+                .is_ok();
+            let events = tokio::fs::read(events_path).await.map_err(|e| {
+                VmManagerError::MigrationError(format!(
+                    "failed to read {}: {e}",
+                    events_path.display()
+                ))
+            })?;
+            let failure = match migration_events(&events).into_iter().nth(earlier) {
+                Some(MigrationEvent::Finished) => return Ok(()),
+                Some(MigrationEvent::Ended(event)) => format!("Cloud Hypervisor reported {event}"),
+                Some(MigrationEvent::Started) | None if vmm_alive => {
+                    sleep(MIGRATION_POLL_INTERVAL).await;
+                    continue;
+                }
+                Some(MigrationEvent::Started) | None => {
+                    "Cloud Hypervisor exited before the migration ended".to_string()
+                }
+            };
+            return Err(VmManagerError::MigrationError(format!(
+                "{failure}; see {}",
+                self.log_path(vm_id).display()
+            )));
+        }
+    }
+
+    /// Wait for a VMM without the event monitor to exit, which it does once a
+    /// migration out succeeds. One that fails leaves the VM running here, which
+    /// only shows as the VMM outliving Cloud Hypervisor's migration timeout.
+    async fn wait_for_vmm_exit(vm_id: &str, socket_path: &PathBuf) -> Result<(), VmManagerError> {
+        // Cloud Hypervisor's default migration timeout is an hour.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3600 + 60);
+        while Self::send_api_request(socket_path, "GET", "/api/v1/vmm.ping", None)
+            .await
+            .is_ok()
+        {
+            if tokio::time::Instant::now() >= deadline {
+                return Err(VmManagerError::MigrationError(format!(
+                    "VM {vm_id} is still on this node an hour after its migration started"
+                )));
+            }
+            sleep(MIGRATION_POLL_INTERVAL).await;
+        }
+        Ok(())
+    }
+}
+
+const MIGRATION_POLL_INTERVAL: Duration = Duration::from_millis(250);
+
+/// Where a migration out stands, per the event monitor.
+#[derive(Debug, PartialEq)]
+enum MigrationEvent {
+    Started,
+    Finished,
+    /// `migration-failed` or `migration-cancelled`.
+    Ended(String),
+}
+
+/// One item per migration out the event monitor output in `events` lists, in
+/// order: how it ended, or `Started` while it runs.
+fn migration_events(events: &[u8]) -> Vec<MigrationEvent> {
+    #[derive(serde::Deserialize)]
+    struct Event {
+        source: String,
+        event: String,
+    }
+
+    let mut migrations = Vec::new();
+    // Pretty-printed JSON objects separated by blank lines; the last one may
+    // still be half written.
+    for event in serde_json::Deserializer::from_slice(events)
+        .into_iter::<Event>()
+        .map_while(Result::ok)
+        .filter(|event| event.source == "vm")
+    {
+        let outcome = match event.event.as_str() {
+            "migration-starting" => {
+                migrations.push(MigrationEvent::Started);
+                continue;
+            }
+            "migration-finished" => MigrationEvent::Finished,
+            "migration-failed" | "migration-cancelled" => MigrationEvent::Ended(event.event),
+            _ => continue,
+        };
+        if let Some(last) = migrations.last_mut() {
+            *last = outcome;
+        }
+    }
+    migrations
 }
