@@ -28,7 +28,7 @@ make run-local VM=1 # Same, but the node is the appliance image as a bootc micro
 make stop-local      # Stop and remove the local Docker stack
 make appliance-build # Build bootc container image for qarax-node (hypervisor host)
 make appliance-push  # Push appliance image to registry
-make ruff-check      # Lint the Python SDK (run after make sdk)
+make ruff-check      # Lint the Python SDK (run after make sdk) and pyflakes over e2e/
 make ruff-fmt        # Auto-format Python SDK with ruff
 SKIP_DOCKER=1 make test  # Run tests skipping Postgres startup (if already running)
 ```
@@ -179,7 +179,7 @@ On every PR and push to master, in parallel:
 |---|---|
 | Format | `make check-fmt`: `cargo +nightly fmt --all -- --check` |
 | Clippy | `make check-clippy`: clippy with the otel features, `-D warnings` |
-| Test | against a Postgres 16 service: `make check-test` (nextest with the otel features), `make check-sqlx` (`cargo sqlx prepare --workspace --check` after migrating), `make check-openapi` and `make check-sdk` (regenerate `openapi.yaml` and the Python SDK and fail on a diff) |
+| Test | against a Postgres 16 service: `make check-test` (nextest with the otel features), `make check-sqlx` (`cargo sqlx prepare --workspace --check` after migrating), `make check-openapi` and `make check-sdk` (regenerate `openapi.yaml` and the Python SDK and fail on a diff), `make check-e2e-lint` (pyflakes over `e2e/`, since E2E itself skips unlabelled PRs) |
 | Audit and shell lint | `make check-audit` (`cargo audit`, ignores in `.cargo/audit.toml`), `make check-shell` (`shellcheck --severity=warning` and `shfmt -d` over every `*.sh`; nothing else exercises `demos/` and `hack/`) |
 | Build | `make build-release` (musl, otel features); uploads the four binaries as a workflow artifact |
 | E2E | downloads the build artifacts, starts a Docker Compose stack with KVM passthrough, runs pytest |

@@ -14,7 +14,7 @@ import uuid
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from threading import Thread
 
-import httpx
+import httpx2
 import pytest
 from qarax_api_client import Client
 from qarax_api_client.api.vms import (
@@ -127,7 +127,7 @@ def client():
 
 @pytest.fixture
 def http_client():
-    return httpx.Client(base_url=QARAX_URL, headers=AUTH_HEADERS)
+    return httpx2.Client(base_url=QARAX_URL, headers=AUTH_HEADERS)
 
 
 from helpers import AUTH_HEADERS, call_api, docker, wait_for_status

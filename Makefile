@@ -1,4 +1,4 @@
-.PHONY: build build-release test test-deps clean openapi sdk help lint fmt shfmt shellcheck ruff-check ruff-fmt ci-checks check-fmt check-clippy check-test check-sqlx check-openapi check-sdk check-audit check-shell appliance-build appliance-push run-local stop-local
+.PHONY: build build-release test test-deps clean openapi sdk help lint fmt shfmt shellcheck ruff-check ruff-fmt ci-checks check-fmt check-clippy check-test check-sqlx check-openapi check-sdk check-e2e-lint check-audit check-shell appliance-build appliance-push run-local stop-local
 
 # On macOS, override default musl target (linker fails cross-compiling from Mac)
 UNAME_S := $(shell uname -s)
@@ -28,7 +28,7 @@ help:
 	@echo "  make lint       - Run cargo clippy (lint)"
 	@echo "  make fmt        - Run cargo fmt + shfmt (format)"
 	@echo "  make ci-checks  - Run every CI check (CI jobs run the check-* targets; needs make test-deps)"
-	@echo "  make ruff-check - Run ruff check on Python SDK"
+	@echo "  make ruff-check - Run ruff check on Python SDK and e2e tests"
 	@echo "  make ruff-fmt   - Run ruff format on Python SDK"
 	@echo "  make appliance-build - Build bootc appliance image locally"
 	@echo "  make appliance-push  - Push appliance image to registry"
@@ -90,7 +90,7 @@ fmt: ruff-fmt shfmt
 # Postgres (make test-deps). CI builds with the OpenTelemetry features.
 OTEL_FEATURES = --features qarax/otel,qarax-node/otel
 
-ci-checks: check-fmt check-clippy check-test check-sqlx check-openapi check-sdk check-audit check-shell
+ci-checks: check-fmt check-clippy check-test check-sqlx check-openapi check-sdk check-e2e-lint check-audit check-shell
 
 check-fmt:
 	cargo +nightly fmt --all -- --check
@@ -115,6 +115,12 @@ check-sdk: sdk
 	@git diff --exit-code -- python-sdk || \
 		(echo "python-sdk is out of date: run 'make sdk' and commit it"; exit 1)
 
+# Pyflakes over the e2e tests (rules in e2e/pyproject.toml), with the SDK's
+# pinned ruff. E2E only runs on master and labelled PRs, so without this an
+# undefined name first fails after merging.
+check-e2e-lint:
+	cd python-sdk && uv run ruff check ../e2e
+
 check-audit:
 	cargo audit
 
@@ -132,7 +138,7 @@ shfmt:
 shellcheck:
 	shellcheck -x $(SHELL_SCRIPTS)
 
-ruff-check:
+ruff-check: check-e2e-lint
 	@cd python-sdk && uv run ruff check .
 
 ruff-fmt:

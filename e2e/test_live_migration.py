@@ -22,7 +22,7 @@ import time
 import uuid
 from uuid import UUID
 
-import httpx
+import httpx2
 import pytest
 from qarax_api_client import Client
 from qarax_api_client.api.hosts import evacuate as evacuate_host
@@ -96,7 +96,7 @@ async def _wait_for_job(c, job_id, timeout=MIGRATION_TIMEOUT):
 
 
 async def _update_host_placement(
-    http_client: httpx.AsyncClient,
+    http_client: httpx2.AsyncClient,
     host_id: UUID,
     reservation_class: str | None = None,
     placement_labels: dict[str, str] | None = None,
@@ -115,7 +115,7 @@ async def _update_host_placement(
 
 
 async def _create_vm_raw(
-    http_client: httpx.AsyncClient,
+    http_client: httpx2.AsyncClient,
     *,
     name: str,
     tags: list[str] | None = None,
@@ -329,7 +329,7 @@ async def test_scheduler_placement_policy_reservation_anti_affinity_and_spread(
     anti_vm_id = None
     spread_vm_ids: list[UUID] = []
 
-    async with client as c, httpx.AsyncClient(base_url=QARAX_URL, headers=AUTH_HEADERS) as http_client:
+    async with client as c, httpx2.AsyncClient(base_url=QARAX_URL, headers=AUTH_HEADERS) as http_client:
         try:
             await _update_host_placement(
                 http_client, host1_id, reservation_class=reservation_class
