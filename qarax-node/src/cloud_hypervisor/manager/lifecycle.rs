@@ -331,7 +331,7 @@ impl VmManager {
             .into_std()
             .await;
 
-        let process = match self.spawn_cloud_hypervisor(&socket_path, log_file) {
+        let process = match self.spawn_cloud_hypervisor(&vm_id, log_file) {
             Ok(p) => p,
             Err(e) => {
                 for tap in &tap_devices {
@@ -715,10 +715,11 @@ impl VmManager {
             let _ = tokio::fs::remove_file(vsock_socket_path).await;
         }
 
-        // Clean up persisted config
-        let config_path = self.config_path(vm_id);
-        if config_path.exists() {
-            let _ = tokio::fs::remove_file(&config_path).await;
+        // Clean up persisted config and Cloud Hypervisor's events
+        for path in [self.config_path(vm_id), self.events_path(vm_id)] {
+            if path.exists() {
+                let _ = tokio::fs::remove_file(&path).await;
+            }
         }
 
         // Clean up cloud-init seed image if present

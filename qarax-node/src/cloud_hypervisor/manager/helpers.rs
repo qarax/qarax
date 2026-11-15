@@ -21,6 +21,12 @@ impl VmManager {
         self.runtime_dir.join(format!("{}.json", vm_id))
     }
 
+    /// Where Cloud Hypervisor's event monitor writes, see
+    /// [`Self::spawn_cloud_hypervisor`].
+    pub(super) fn events_path(&self, vm_id: &str) -> PathBuf {
+        self.runtime_dir.join(format!("{}.events", vm_id))
+    }
+
     /// Persist a VM's proto config for recovery after a node restart.
     pub(super) async fn persist_config(&self, vm_id: &str, config: &ProtoVmConfig) {
         if let Err(e) = tokio::fs::write(self.config_path(vm_id), config.encode_to_vec()).await {
@@ -228,23 +234,30 @@ impl VmManager {
         (serial_pty, console_pty)
     }
 
-    /// Start a Cloud Hypervisor process serving its API on `socket_path`, with
-    /// stdout and stderr going to `log_file`.
+    /// Start the Cloud Hypervisor process for `vm_id`, serving its API on
+    /// [`Self::socket_path`], with stdout and stderr going to `log_file`.
     ///
     /// `--no-shutdown` keeps the VMM, and the VM defined in it, when the guest
     /// powers off, the same state `vm.shutdown` leaves: `vm.info` reports it as
     /// `Created` and `vm.boot` starts it again. Without it the process exits
     /// with the guest, and the VM can't be started until it is recreated.
+    ///
+    /// The event monitor is the only place Cloud Hypervisor reports how a
+    /// live migration out ended (see [`Self::send_migration`]).
     pub(super) fn spawn_cloud_hypervisor(
         &self,
-        socket_path: &Path,
+        vm_id: &str,
         log_file: std::fs::File,
     ) -> std::io::Result<Child> {
         let stderr_file = log_file.try_clone()?;
+        let mut event_monitor = std::ffi::OsString::from("path=");
+        event_monitor.push(self.events_path(vm_id));
         Command::new(&self.ch_binary)
             .arg("--api-socket")
-            .arg(socket_path)
+            .arg(self.socket_path(vm_id))
             .arg("--no-shutdown")
+            .arg("--event-monitor")
+            .arg(event_monitor)
             .stdout(std::process::Stdio::from(log_file))
             .stderr(std::process::Stdio::from(stderr_file))
             .kill_on_drop(true)

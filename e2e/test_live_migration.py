@@ -65,6 +65,7 @@ from helpers import (
     AUTH_HEADERS,
     call_api,
     call_api_detailed,
+    exec_when_ready,
     wait_for_host_status,
     wait_for_status,
 )
@@ -150,7 +151,8 @@ async def test_live_migration(client, two_hosts):
     - Create a VM and attach a disk from the NFS pool before its first start
     - Start VM, wait for RUNNING
     - Migrate to the other host, wait for job COMPLETED
-    - Assert VM is RUNNING and host_id == target host
+    - Assert VM is RUNNING and host_id == target host, and that its guest
+      answers there
     """
     host1_id, host2_id = two_hosts
     pool_id = None
@@ -196,6 +198,7 @@ async def test_live_migration(client, two_hosts):
                 boot_vcpus=1,
                 max_vcpus=1,
                 memory_size=256 * 1024 * 1024,
+                guest_agent=True,
             )
             result = await call_api(create_vm, client=c, body=new_vm)
             vm_id = UUID(str(result).strip('"'))
@@ -239,6 +242,11 @@ async def test_live_migration(client, two_hosts):
             )
             assert vm.host_id == target_host_id, (
                 f"Expected host_id={target_host_id} after migration, got: {vm.host_id}"
+            )
+            # The guest itself moved: its agent answers through the target node.
+            result = await exec_when_ready(c, vm_id, "echo alive")
+            assert result.stdout.strip() == "alive", (
+                f"exit={result.exit_code} stdout={result.stdout!r} stderr={result.stderr!r}"
             )
         finally:
             if vm_id is not None:
