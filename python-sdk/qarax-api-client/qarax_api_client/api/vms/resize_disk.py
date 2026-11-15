@@ -78,7 +78,9 @@ def sync_detailed(
     client: AuthenticatedClient | Client,
     body: DiskResizeRequest,
 ) -> Response[Any | StorageObject]:
-    """
+    """Grow a disk. A running VM's disk grows live and the guest sees the new size
+    right away; a stopped VM's image (raw or qcow2) grows in place.
+
     Args:
         vm_id (UUID):
         disk_id (str):
@@ -112,7 +114,9 @@ def sync(
     client: AuthenticatedClient | Client,
     body: DiskResizeRequest,
 ) -> Any | StorageObject | None:
-    """
+    """Grow a disk. A running VM's disk grows live and the guest sees the new size
+    right away; a stopped VM's image (raw or qcow2) grows in place.
+
     Args:
         vm_id (UUID):
         disk_id (str):
@@ -141,7 +145,9 @@ async def asyncio_detailed(
     client: AuthenticatedClient | Client,
     body: DiskResizeRequest,
 ) -> Response[Any | StorageObject]:
-    """
+    """Grow a disk. A running VM's disk grows live and the guest sees the new size
+    right away; a stopped VM's image (raw or qcow2) grows in place.
+
     Args:
         vm_id (UUID):
         disk_id (str):
@@ -173,7 +179,9 @@ async def asyncio(
     client: AuthenticatedClient | Client,
     body: DiskResizeRequest,
 ) -> Any | StorageObject | None:
-    """
+    """Grow a disk. A running VM's disk grows live and the guest sees the new size
+    right away; a stopped VM's image (raw or qcow2) grows in place.
+
     Args:
         vm_id (UUID):
         disk_id (str):

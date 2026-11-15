@@ -235,7 +235,7 @@ impl VmManager {
         }
     }
 
-    fn is_qcow2(path: &str) -> bool {
+    pub(super) fn is_qcow2(path: &str) -> bool {
         use std::io::Read;
         let mut f = match std::fs::File::open(path) {
             Ok(f) => f,

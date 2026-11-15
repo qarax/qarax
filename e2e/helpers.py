@@ -173,6 +173,18 @@ def create_sparse_file_on_nodes(path, size_bytes):
         docker("exec", container, "sh", "-c", command)
 
 
+def create_image_on_nodes(path, size_bytes, image_format):
+    """Create an empty disk image (`raw` or `qcow2`) at `path` on every
+    qarax-node container."""
+    quoted = shlex.quote(path)
+    command = (
+        f"mkdir -p $(dirname {quoted}) && "
+        f"qemu-img create -q -f {shlex.quote(image_format)} {quoted} {size_bytes}"
+    )
+    for container in containers(NODE_CONTAINER_PREFIX):
+        docker("exec", container, "sh", "-c", command)
+
+
 def remove_file_from_nodes(path):
     """Remove `path` from every qarax-node container."""
     for container in containers(NODE_CONTAINER_PREFIX):

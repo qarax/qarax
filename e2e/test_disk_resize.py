@@ -1,11 +1,13 @@
 """
 E2E tests for disk resize (PUT /vms/{vm_id}/disks/{disk_id}/resize).
 
-Resizes a disk attached to a Shutdown VM on a real Cloud Hypervisor node and
-checks both the API response and the backing file's size on the VM's node.
-The disk is a per-test sparse file, never a shared image.
+Resizes a disk on a real Cloud Hypervisor node: a raw or qcow2 image attached
+to a Shutdown VM, checking the API response and the image's virtual size on
+the VM's node, and a raw image of a running VM, checking the guest sees the
+new size. Each disk is a per-test image, never a shared one.
 """
 
+import json
 import uuid
 from uuid import UUID
 
@@ -65,8 +67,9 @@ from helpers import (
     call_api,
     call_api_detailed,
     compose_container,
-    create_sparse_file_on_nodes,
+    create_image_on_nodes,
     docker,
+    exec_when_ready,
     remove_file_from_nodes,
     wait_for_status,
 )
@@ -90,6 +93,7 @@ async def _make_vm(c, test_id):
             boot_vcpus=1,
             max_vcpus=1,
             memory_size=256 * MIB,
+            guest_agent=True,
         ),
     )
     return UUID(str(vm_id_raw).strip('"'))
@@ -132,28 +136,46 @@ async def _make_disk(c, test_id, pool_id, path, size_bytes):
     return UUID(str(disk_id_raw).strip('"'))
 
 
+async def _resize(c, vm_id, logical_name, new_size):
+    resp = await call_api_detailed(
+        resize_disk,
+        client=c,
+        vm_id=vm_id,
+        disk_id=logical_name,
+        body=DiskResizeRequest(new_size_bytes=new_size),
+    )
+    assert resp.status_code == 200, (
+        f"Disk resize failed: {resp.status_code} {resp.content.decode()}"
+    )
+    assert resp.parsed.size_bytes == new_size, (
+        f"Expected size_bytes={new_size}, got {resp.parsed.size_bytes}"
+    )
+
+
 @pytest.mark.asyncio
-async def test_resize_disk_shutdown_vm(client):
+@pytest.mark.parametrize("image_format", ["raw", "qcow2"])
+async def test_resize_disk_shutdown_vm(client, image_format):
     """
     Resize a disk attached to a Shutdown VM.
 
-    Creates a local pool, attaches a disk pointing to an isolated sparse file,
-    starts and stops the VM to reach Shutdown state, then resizes the disk
-    from its recorded size to double that size. Verifies the returned
-    StorageObject and the backing file on the VM's node both have the new size.
+    Creates a local pool and a disk backed by a per-test image, starts and
+    stops the VM to reach Shutdown state, then doubles the disk. Verifies the
+    returned StorageObject and the image's virtual size on the VM's node: for
+    qcow2 that lives in the image header, which growing the file alone leaves
+    as it was.
     """
     test_id = uuid.uuid4().hex[:8]
     async with client as c:
         hosts = _up_hosts(await call_api(list_hosts, client=c))
         assert hosts, "No UP hosts available"
         pool_id = disk_id = vm_id = None
-        disk_path = f"/var/lib/qarax/e2e-drs-{test_id}/resize-disk.raw"
+        disk_path = f"/var/lib/qarax/e2e-drs-{test_id}/resize-disk.{image_format}"
         try:
             pool_id = await _make_local_pool(c, test_id, hosts)
 
             initial_size = 256 * MIB
             new_size = initial_size * 2
-            create_sparse_file_on_nodes(disk_path, initial_size)
+            create_image_on_nodes(disk_path, initial_size, image_format)
 
             disk_id = await _make_disk(
                 c,
@@ -169,7 +191,6 @@ async def test_resize_disk_shutdown_vm(client):
                 vm_id=vm_id,
                 body=AttachDiskRequest(storage_object_id=disk_id),
             )
-            logical_name = attached.logical_name
 
             # Boot and stop to get the VM into Shutdown state (assigns a host).
             await call_api(start_vm, client=c, vm_id=vm_id)
@@ -177,20 +198,7 @@ async def test_resize_disk_shutdown_vm(client):
             await call_api(stop_vm, client=c, vm_id=vm_id)
             await wait_for_status(c, vm_id, VmStatus.SHUTDOWN)
 
-            resp = await call_api_detailed(
-                resize_disk,
-                client=c,
-                vm_id=vm_id,
-                disk_id=logical_name,
-                body=DiskResizeRequest(new_size_bytes=new_size),
-            )
-            assert resp.status_code == 200, (
-                f"Disk resize failed: {resp.status_code} {resp.content.decode()}"
-            )
-            updated = resp.parsed
-            assert updated.size_bytes == new_size, (
-                f"Expected size_bytes={new_size}, got {updated.size_bytes}"
-            )
+            await _resize(c, vm_id, attached.logical_name, new_size)
 
             # VM should still be Shutdown after resize.
             vm = await call_api(get_vm, client=c, vm_id=vm_id)
@@ -198,15 +206,84 @@ async def test_resize_disk_shutdown_vm(client):
                 f"VM should remain Shutdown after disk resize, got {vm.status}"
             )
 
-            # The node grew the backing file, not just the database record.
+            # The node grew the image, not just the database record.
             vm_host = next(h for h in hosts if h.id == vm.host_id)
-            stat = docker(
-                "exec", compose_container(vm_host.address), "stat", "-c", "%s", disk_path
+            info = docker(
+                "exec",
+                compose_container(vm_host.address),
+                "qemu-img",
+                "info",
+                "-f",
+                image_format,
+                "--output=json",
+                disk_path,
             )
-            assert int(stat.stdout) == new_size, (
+            virtual_size = json.loads(info.stdout)["virtual-size"]
+            assert virtual_size == new_size, (
                 f"Expected {disk_path} on {vm_host.address} to be {new_size} bytes, "
-                f"got {stat.stdout.strip()}"
+                f"got {virtual_size}"
             )
+        finally:
+            if vm_id:
+                await call_api(delete_vm, client=c, vm_id=vm_id)
+            if disk_id:
+                await call_api(delete_storage_object, client=c, object_id=disk_id)
+            if pool_id:
+                await call_api(delete_pool, client=c, pool_id=pool_id)
+            remove_file_from_nodes(disk_path)
+
+
+@pytest.mark.asyncio
+async def test_resize_disk_running_vm(client):
+    """
+    Resize a disk of a running VM: the guest sees the new size without a
+    restart, and the VM keeps running.
+    """
+    test_id = uuid.uuid4().hex[:8]
+    async with client as c:
+        hosts = _up_hosts(await call_api(list_hosts, client=c))
+        assert hosts, "No UP hosts available"
+        pool_id = disk_id = vm_id = None
+        disk_path = f"/var/lib/qarax/e2e-drs-{test_id}/resize-disk.raw"
+        try:
+            pool_id = await _make_local_pool(c, test_id, hosts)
+
+            initial_size = 256 * MIB
+            new_size = initial_size * 2
+            create_image_on_nodes(disk_path, initial_size, "raw")
+            disk_id = await _make_disk(
+                c, test_id, pool_id, path=disk_path, size_bytes=initial_size
+            )
+            vm_id = await _make_vm(c, test_id)
+            attached = await call_api(
+                attach_disk,
+                client=c,
+                vm_id=vm_id,
+                body=AttachDiskRequest(storage_object_id=disk_id),
+            )
+            await call_api(start_vm, client=c, vm_id=vm_id)
+            await wait_for_status(c, vm_id, VmStatus.RUNNING)
+
+            # The guest's only disk; its size is in 512-byte sectors.
+            size_in_guest = "cat /sys/block/vda/size"
+            result = await exec_when_ready(c, vm_id, size_in_guest)
+            assert result.stdout.strip() == str(initial_size // 512), result
+
+            await _resize(c, vm_id, attached.logical_name, new_size)
+
+            result = await exec_when_ready(
+                c,
+                vm_id,
+                "for i in 1 2 3 4 5 6 7 8 9 10; do "
+                f'  [ "$({size_in_guest})" = {new_size // 512} ] && exit 0; sleep 1; '
+                f"done; {size_in_guest}; exit 1",
+            )
+            assert result.exit_code == 0, (
+                f"the guest still sees {result.stdout.strip()} sectors, "
+                f"not {new_size // 512}"
+            )
+            vm = await call_api(get_vm, client=c, vm_id=vm_id)
+            assert vm.status == VmStatus.RUNNING, vm.status
         finally:
             if vm_id:
                 await call_api(delete_vm, client=c, vm_id=vm_id)
