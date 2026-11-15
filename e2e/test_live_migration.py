@@ -294,7 +294,7 @@ def _vmm_processes(container, vm_id):
 async def test_failed_migration_leaves_nothing_on_the_destination(client, two_hosts):
     """
     A migration that fails, here because a guest rewriting its memory can't
-    switch over within 1 ms before the 1 s timeout cancels it, keeps the VM
+    switch over within 1 ms before the 1 s timeout ends it, keeps the VM
     running on its source and leaves nothing on the destination, so a second
     migration there succeeds. The destination used to keep a receiving Cloud
     Hypervisor and the VM's id, refusing every later migration of it there.
@@ -343,7 +343,9 @@ async def test_failed_migration_leaves_nothing_on_the_destination(client, two_ho
                 ),
             )
             assert resp.status_code == 202, resp.content
-            with pytest.raises(RuntimeError, match="migration-cancelled"):
+            # At the timeout, Cloud Hypervisor reports the migration failed
+            # (cancelled is for vm.cancel-migration).
+            with pytest.raises(RuntimeError, match="Cloud Hypervisor reported migration-failed"):
                 await _wait_for_job(c, resp.parsed.job_id)
 
             # The job fails first, then hands the VM back.
