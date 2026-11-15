@@ -393,7 +393,7 @@ async def test_vpc_routing_and_security_group_updates(client):
         net_b_id = None
         attached = []
 
-        async with httpx.AsyncClient(base_url=QARAX_URL, timeout=30.0, headers=AUTH_HEADERS) as raw:
+        async with httpx2.AsyncClient(base_url=QARAX_URL, timeout=30.0, headers=AUTH_HEADERS) as raw:
             try:
                 net_a_resp = await raw.post(
                     "/networks",
