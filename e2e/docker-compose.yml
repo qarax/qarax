@@ -77,7 +77,7 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://host.docker.internal:14318}
       OTEL_BSP_SCHEDULE_DELAY: ${OTEL_BSP_SCHEDULE_DELAY:-5000}
       OTEL_METRIC_EXPORT_INTERVAL: ${OTEL_METRIC_EXPORT_INTERVAL:-60000}
-    command: [ "--migration-tls-dir", "/var/lib/qarax/migration-tls/qarax-node-2" ]
+    command: [ "/entrypoint.sh", "--migration-tls-dir", "/var/lib/qarax/migration-tls/qarax-node-2" ]
     ports:
       - "50052:50051"
     depends_on:
@@ -185,7 +185,7 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://host.docker.internal:14318}
       OTEL_BSP_SCHEDULE_DELAY: ${OTEL_BSP_SCHEDULE_DELAY:-5000}
       OTEL_METRIC_EXPORT_INTERVAL: ${OTEL_METRIC_EXPORT_INTERVAL:-60000}
-    command: [ "--migration-tls-dir", "/var/lib/qarax/migration-tls/qarax-node" ]
+    command: [ "/entrypoint.sh", "--migration-tls-dir", "/var/lib/qarax/migration-tls/qarax-node" ]
     ports:
       - "50051:50051"
     depends_on:
