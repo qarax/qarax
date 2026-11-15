@@ -97,6 +97,8 @@ pub struct NewVm {
     pub guest_agent: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ha_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disk_rate_limiter: Option<RateLimiterConfig>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

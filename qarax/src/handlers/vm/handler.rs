@@ -2710,6 +2710,11 @@ async fn build_create_vm_request(env: &App, vm: &Vm) -> Result<CreateVmRequest> 
         }
     }
 
+    let vm_disk_group = vm_disk_rate_limit_group(vm)?;
+    for disk in &mut resolved_disks {
+        join_vm_disk_group(disk, vm_disk_group.is_some());
+    }
+
     Ok(CreateVmRequest {
         vm_id,
         boot_vcpus: vm.boot_vcpus,
@@ -2740,6 +2745,7 @@ async fn build_create_vm_request(env: &App, vm: &Vm) -> Result<CreateVmRequest> 
         serial: serial_override,
         console: console_override,
         hypervisor: vm.hypervisor.clone(),
+        rate_limit_groups: vm_disk_group.into_iter().collect(),
     })
 }
 
@@ -2963,9 +2969,10 @@ pub async fn attach_disk(
             Some(object_id) => Some(storage_objects::get(env.pool(), object_id).await?),
             None => None,
         };
-        let disk_config =
+        let mut disk_config =
             disk_config_for_hotplug(env.pool(), &host, &disk, &obj, &pool, upper_object.as_ref())
                 .await?;
+        join_vm_disk_group(&mut disk_config, vm_disk_rate_limit_group(&vm)?.is_some());
         if let Err(e) = NodeClient::new(&host.address, host.port as u16)
             .add_disk_device(vm_id, disk_config)
             .await
@@ -3156,7 +3163,8 @@ fn disk_to_disk_config(
         num_queues: Some(disk.num_queues),
         queue_size: Some(disk.queue_size),
         rate_limiter: disk.rate_limiter.as_ref().map(Into::into),
-        rate_limit_group: disk.rate_limit_group.clone(),
+        // Set by `join_vm_disk_group`; nothing records a group per disk.
+        rate_limit_group: None,
         pci_segment: (disk.pci_segment != 0).then_some(disk.pci_segment),
         serial: disk.serial_number.clone(),
         oci_image_ref,
@@ -3164,6 +3172,36 @@ fn disk_to_disk_config(
         upper_data_path,
         upper_index_path,
         image_format: image_format as i32,
+    }
+}
+
+/// Cloud Hypervisor's id for the rate-limit group of a VM's `disk_rate_limiter`.
+const VM_DISK_RATE_LIMIT_GROUP: &str = "qarax-vm-disks";
+
+/// The rate-limit group of the VM's `disk_rate_limiter`, if it has one.
+fn vm_disk_rate_limit_group(
+    vm: &Vm,
+) -> Result<Option<crate::grpc_client::node::RateLimitGroupConfig>> {
+    let limiter = vms::disk_rate_limiter(&vm.config).map_err(|e| {
+        crate::errors::Error::UnprocessableEntity(format!(
+            "VM {} has an invalid disk_rate_limiter: {e}",
+            vm.id
+        ))
+    })?;
+    Ok(
+        limiter.map(|limiter| crate::grpc_client::node::RateLimitGroupConfig {
+            id: VM_DISK_RATE_LIMIT_GROUP.to_string(),
+            config: Some((&limiter).into()),
+        }),
+    )
+}
+
+/// Put `disk` in the VM's disk rate-limit group, when the VM has one, unless
+/// it has a limiter of its own or a vhost-user backend: Cloud Hypervisor
+/// allows neither in a group.
+fn join_vm_disk_group(disk: &mut DiskConfig, vm_has_group: bool) {
+    if vm_has_group && disk.rate_limiter.is_none() && disk.vhost_user != Some(true) {
+        disk.rate_limit_group = Some(VM_DISK_RATE_LIMIT_GROUP.to_string());
     }
 }
 
@@ -3852,7 +3890,7 @@ pub(crate) async fn execute_planned_vm_migration(
                 iommu: None,
             })),
         console: create_req.console,
-        rate_limit_groups: vec![],
+        rate_limit_groups: create_req.rate_limit_groups,
         cloud_init: create_req.cloud_init_user_data.as_ref().map(|user_data| {
             crate::grpc_client::node::CloudInitConfig {
                 user_data: user_data.clone(),

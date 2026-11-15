@@ -4526,6 +4526,14 @@ components:
           type:
           - string
           - 'null'
+        disk_rate_limiter:
+          oneOf:
+          - $ref: '#/components/schemas/RateLimiterConfig'
+            description: |-
+              One bandwidth and operations limit shared by all of the VM's disks
+              that have no limiter of their own, rather than one each. Set at
+              creation; Cloud Hypervisor VMs only.
+          - type: 'null'
         guest_agent:
           type:
           - boolean
@@ -5485,6 +5493,11 @@ components:
           type:
           - string
           - 'null'
+        disk_rate_limiter:
+          oneOf:
+          - $ref: '#/components/schemas/RateLimiterConfig'
+            description: See [`NewVm::disk_rate_limiter`].
+          - type: 'null'
         guest_agent:
           type: boolean
         ha_enabled:

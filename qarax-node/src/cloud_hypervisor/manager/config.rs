@@ -43,6 +43,27 @@ impl VmManager {
             );
         }
 
+        if !config.rate_limit_groups.is_empty() {
+            sdk_config.rate_limit_groups = Some(
+                config
+                    .rate_limit_groups
+                    .iter()
+                    .map(|group| {
+                        let limiter = group.config.as_ref().ok_or_else(|| {
+                            VmManagerError::InvalidConfig(format!(
+                                "rate limit group {} has no limiter",
+                                group.id
+                            ))
+                        })?;
+                        Ok(models::RateLimitGroupConfig {
+                            id: group.id.clone(),
+                            rate_limiter_config: Box::new(Self::proto_rate_limiter_to_sdk(limiter)),
+                        })
+                    })
+                    .collect::<Result<_, VmManagerError>>()?,
+            );
+        }
+
         // Networks
         if !config.networks.is_empty() {
             sdk_config.net = Some(

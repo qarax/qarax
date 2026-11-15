@@ -12,6 +12,7 @@ use crate::{
 };
 
 use crate::model::network_interfaces::{InterfaceType, RateLimiterConfig, VhostMode};
+use validator::Validate;
 
 #[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
 pub struct CpuTopology {
@@ -46,6 +47,18 @@ pub const GUEST_AGENT_CONFIG_KEY: &str = "guest_agent";
 const LEGACY_SANDBOX_EXEC_CONFIG_KEY: &str = "sandbox_exec";
 pub const HA_ENABLED_CONFIG_KEY: &str = "ha_enabled";
 pub const FAILED_OVER_FROM_CONFIG_KEY: &str = "failed_over_from";
+pub const DISK_RATE_LIMITER_CONFIG_KEY: &str = "disk_rate_limiter";
+
+/// The VM-wide disk limit recorded in a VM's config, if any (see
+/// [`NewVm::disk_rate_limiter`]).
+pub fn disk_rate_limiter(
+    config: &serde_json::Value,
+) -> Result<Option<RateLimiterConfig>, serde_json::Error> {
+    config
+        .get(DISK_RATE_LIMITER_CONFIG_KEY)
+        .map(RateLimiterConfig::deserialize)
+        .transpose()
+}
 
 pub fn guest_agent_enabled(config: &serde_json::Value) -> bool {
     config
@@ -205,6 +218,8 @@ pub struct Vm {
     pub placement_policy: Option<PlacementPolicy>,
     pub guest_agent: bool,
     pub ha_enabled: bool,
+    /// See [`NewVm::disk_rate_limiter`].
+    pub disk_rate_limiter: Option<RateLimiterConfig>,
 
     // CPU configuration
     pub boot_vcpus: i32,
@@ -285,6 +300,7 @@ impl From<VmRow> for Vm {
             placement_policy: placement_policy_from_config(&row.config.0),
             guest_agent: guest_agent_enabled(&row.config.0),
             ha_enabled: ha_enabled(&row.config.0),
+            disk_rate_limiter: disk_rate_limiter(&row.config.0).ok().flatten(),
 
             boot_vcpus: row.boot_vcpus,
             max_vcpus: row.max_vcpus,
@@ -615,6 +631,11 @@ pub struct NewVm {
     /// to live on shared storage pools.
     pub ha_enabled: Option<bool>,
 
+    /// One bandwidth and operations limit shared by all of the VM's disks
+    /// that have no limiter of their own, rather than one each. Set at
+    /// creation; Cloud Hypervisor VMs only.
+    pub disk_rate_limiter: Option<RateLimiterConfig>,
+
     #[serde(default = "default_vm_config")]
     pub config: serde_json::Value,
 }
@@ -726,6 +747,7 @@ pub async fn resolve_create_request(pool: &PgPool, request: NewVm) -> Result<Res
         placement_policy,
         guest_agent,
         ha_enabled,
+        disk_rate_limiter,
         config,
     } = request;
 
@@ -801,6 +823,20 @@ pub async fn resolve_create_request(pool: &PgPool, request: NewVm) -> Result<Res
     }
     if let Some(enabled) = ha_enabled {
         set_ha_enabled_config(&mut config, enabled);
+    }
+    if let Some(limiter) = disk_rate_limiter {
+        limiter.validate()?;
+        if hypervisor == Hypervisor::Firecracker {
+            return Err(Error::UnprocessableEntity(
+                "disk_rate_limiter isn't supported for firecracker VMs, which can't share a \
+                 limit between disks; set rate_limiter on each disk instead"
+                    .into(),
+            ));
+        }
+        if !config.is_object() {
+            config = default_vm_config();
+        }
+        config[DISK_RATE_LIMITER_CONFIG_KEY] = serde_json::json!(limiter);
     }
 
     Ok(ResolvedNewVm {

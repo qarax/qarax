@@ -14,6 +14,7 @@ from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
     from ..models.placement_policy import PlacementPolicy
+    from ..models.rate_limiter_config import RateLimiterConfig
 
 
 T = TypeVar("T", bound="Vm")
@@ -47,6 +48,7 @@ class Vm:
         cloud_init_user_data (None | str | Unset):
         cpu_topology (Any | Unset):
         description (None | str | Unset):
+        disk_rate_limiter (None | RateLimiterConfig | Unset):
         host_id (None | Unset | UUID):
         image_ref (None | str | Unset):
         memory_hotplug_size (int | None | Unset):
@@ -78,6 +80,7 @@ class Vm:
     cloud_init_user_data: None | str | Unset = UNSET
     cpu_topology: Any | Unset = UNSET
     description: None | str | Unset = UNSET
+    disk_rate_limiter: None | RateLimiterConfig | Unset = UNSET
     host_id: None | Unset | UUID = UNSET
     image_ref: None | str | Unset = UNSET
     memory_hotplug_size: int | None | Unset = UNSET
@@ -87,6 +90,7 @@ class Vm:
 
     def to_dict(self) -> dict[str, Any]:
         from ..models.placement_policy import PlacementPolicy  # noqa: PLC0415
+        from ..models.rate_limiter_config import RateLimiterConfig  # noqa: PLC0415
 
         boot_mode = self.boot_mode.value
 
@@ -158,6 +162,14 @@ class Vm:
         else:
             description = self.description
 
+        disk_rate_limiter: dict[str, Any] | None | Unset
+        if isinstance(self.disk_rate_limiter, Unset):
+            disk_rate_limiter = UNSET
+        elif isinstance(self.disk_rate_limiter, RateLimiterConfig):
+            disk_rate_limiter = self.disk_rate_limiter.to_dict()
+        else:
+            disk_rate_limiter = self.disk_rate_limiter
+
         host_id: None | str | Unset
         if isinstance(self.host_id, Unset):
             host_id = UNSET
@@ -228,6 +240,8 @@ class Vm:
             field_dict["cpu_topology"] = cpu_topology
         if description is not UNSET:
             field_dict["description"] = description
+        if disk_rate_limiter is not UNSET:
+            field_dict["disk_rate_limiter"] = disk_rate_limiter
         if host_id is not UNSET:
             field_dict["host_id"] = host_id
         if image_ref is not UNSET:
@@ -244,6 +258,7 @@ class Vm:
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         from ..models.placement_policy import PlacementPolicy  # noqa: PLC0415
+        from ..models.rate_limiter_config import RateLimiterConfig  # noqa: PLC0415
 
         d = dict(src_dict)
         boot_mode = BootMode(d.pop("boot_mode"))
@@ -337,6 +352,23 @@ class Vm:
 
         description = _parse_description(d.pop("description", UNSET))
 
+        def _parse_disk_rate_limiter(data: object) -> None | RateLimiterConfig | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, dict):
+                    raise TypeError()
+                disk_rate_limiter_type_0 = RateLimiterConfig.from_dict(data)
+
+                return disk_rate_limiter_type_0
+            except (TypeError, ValueError, AttributeError, KeyError):
+                pass
+            return cast(None | RateLimiterConfig | Unset, data)
+
+        disk_rate_limiter = _parse_disk_rate_limiter(d.pop("disk_rate_limiter", UNSET))
+
         def _parse_host_id(data: object) -> None | Unset | UUID:
             if data is None:
                 return data
@@ -423,6 +455,7 @@ class Vm:
             cloud_init_user_data=cloud_init_user_data,
             cpu_topology=cpu_topology,
             description=description,
+            disk_rate_limiter=disk_rate_limiter,
             host_id=host_id,
             image_ref=image_ref,
             memory_hotplug_size=memory_hotplug_size,

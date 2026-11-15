@@ -143,6 +143,9 @@ pub struct CreateVmRequest {
     pub console: Option<node::ConsoleConfig>,
     /// Hypervisor backend to use
     pub hypervisor: crate::model::vms::Hypervisor,
+    /// Limits shared by several disks, which name one as their
+    /// `rate_limit_group`
+    pub rate_limit_groups: Vec<node::RateLimitGroupConfig>,
 }
 
 impl From<&RateLimiterConfig> for node::RateLimiterConfig {
@@ -342,6 +345,7 @@ impl NodeClient {
             serial,
             console,
             hypervisor,
+            rate_limit_groups,
         } = req;
         debug!("Creating VM {} on node {}", vm_id, self.address);
 
@@ -422,7 +426,7 @@ impl NodeClient {
             rng,
             serial: Some(serial_cfg),
             console,
-            rate_limit_groups: vec![],
+            rate_limit_groups,
             cloud_init: cloud_init_user_data.map(|user_data| CloudInitConfig {
                 user_data,
                 meta_data: cloud_init_meta_data.unwrap_or_default(),
