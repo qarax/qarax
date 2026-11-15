@@ -68,6 +68,7 @@ from helpers import (
     AUTH_HEADERS,
     call_api,
     call_api_detailed,
+    NODE_RUNTIME_DIR,
     compose_container,
     docker,
     exec_when_ready,
@@ -293,14 +294,17 @@ def _vmm_processes(container, vm_id):
 @pytest.mark.asyncio
 async def test_failed_migration_leaves_nothing_on_the_destination(client, two_hosts):
     """
-    A migration that fails, here because a guest rewriting its memory can't
-    switch over within 1 ms before the 1 s timeout ends it, keeps the VM
+    A migration that fails once the destination is receiving keeps the VM
     running on its source and leaves nothing on the destination, so a second
-    migration there succeeds. The destination used to keep a receiving Cloud
-    Hypervisor and the VM's id, refusing every later migration of it there.
+    migration there succeeds. The destination used to keep a Cloud Hypervisor
+    and the VM's id, refusing every later migration of it there.
+
+    The failure: a directory where the destination's Cloud Hypervisor puts the
+    VM's vsock socket, which the node can't clear, so restoring the VM there
+    can't bind it.
     """
     host1_id, host2_id = two_hosts
-    vm_id = None
+    vm_id = target = vsock_path = None
     async with client as c:
         try:
             vm_id_raw = await call_api(
@@ -324,28 +328,15 @@ async def test_failed_migration_leaves_nothing_on_the_destination(client, two_ho
             target_host_id = host2_id if source_host_id == host1_id else host1_id
             hosts = {h.id: h for h in await call_api(list_hosts, client=c)}
             target = compose_container(hosts[target_host_id].address)
+            vsock_path = f"{NODE_RUNTIME_DIR}/{vm_id}.vsock"
+            docker("exec", target, "mkdir", "-p", vsock_path)
 
-            await exec_when_ready(
-                c,
-                vm_id,
-                "(while true; do busybox dd if=/dev/zero of=/tmp/dirty bs=1M count=32; done)"
-                " >/dev/null 2>&1 & echo $! > /tmp/dirty.pid",
-            )
+            migrate_to_target = VmMigrateRequest(target_host_id=target_host_id)
             resp = await call_api_detailed(
-                migrate,
-                client=c,
-                vm_id=vm_id,
-                body=VmMigrateRequest(
-                    target_host_id=target_host_id,
-                    max_downtime_ms=1,
-                    timeout_secs=1,
-                    on_timeout=MigrationTimeoutAction.CANCEL,
-                ),
+                migrate, client=c, vm_id=vm_id, body=migrate_to_target
             )
             assert resp.status_code == 202, resp.content
-            # At the timeout, Cloud Hypervisor reports the migration failed
-            # (cancelled is for vm.cancel-migration).
-            with pytest.raises(RuntimeError, match="Cloud Hypervisor reported migration-failed"):
+            with pytest.raises(RuntimeError, match="send_migration failed"):
                 await _wait_for_job(c, resp.parsed.job_id)
 
             # The job fails first, then hands the VM back.
@@ -358,18 +349,18 @@ async def test_failed_migration_leaves_nothing_on_the_destination(client, two_ho
             )
 
             # Nothing of the VM left there to refuse it.
-            await exec_when_ready(c, vm_id, 'kill "$(cat /tmp/dirty.pid)"')
+            docker("exec", target, "rmdir", vsock_path)
+            vsock_path = None
             resp = await call_api_detailed(
-                migrate,
-                client=c,
-                vm_id=vm_id,
-                body=VmMigrateRequest(target_host_id=target_host_id),
+                migrate, client=c, vm_id=vm_id, body=migrate_to_target
             )
             assert resp.status_code == 202, resp.content
             await _wait_for_job(c, resp.parsed.job_id)
             vm = await call_api(get_vm, client=c, vm_id=vm_id)
             assert (vm.status, vm.host_id) == (VmStatus.RUNNING, target_host_id)
         finally:
+            if vsock_path is not None:
+                docker("exec", target, "rm", "-rf", vsock_path, check=False)
             if vm_id is not None:
                 await call_api(delete_vm, client=c, vm_id=vm_id)
 
