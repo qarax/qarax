@@ -76,10 +76,37 @@ make appliance-push
 
 # Deploy and initialize
 qarax host deploy node-01 --image ghcr.io/yourorg/qarax-vmm-host:latest --ssh-key ~/.ssh/id_ed25519
+# Install the node's certificates (below), then:
 qarax host init node-01
 ```
 
 See the [qarax-node README](qarax-node/) for runtime dependencies and configuration.
+
+### Node certificates
+
+qarax-node's gRPC API only serves clients that present a certificate from its
+CA. Each node needs a server certificate for the address its host is
+registered under (`--address`), and the control plane needs a client
+certificate. `scripts/gen-node-tls.sh` makes both; run it again with more
+nodes to issue theirs from the same CA:
+
+```bash
+scripts/gen-node-tls.sh ./node-tls 10.0.0.42 node-02.example.com
+
+# Control plane: node_tls_dir (default /etc/qarax/node-tls, env NODE_TLS_DIR)
+install -d -m 700 /etc/qarax/node-tls
+cp node-tls/control-plane/* /etc/qarax/node-tls/
+
+# Each host: qarax-node --tls-dir (default /etc/qarax-node/tls)
+ssh root@10.0.0.42 'install -d -m 700 /etc/qarax-node/tls'
+scp node-tls/nodes/10.0.0.42/* root@10.0.0.42:/etc/qarax-node/tls/
+```
+
+Keep `node-tls/ca-key.pem` off the hosts. Both sides read their files at
+startup: the control plane refuses to start without them, and qarax-node exits
+until they are there (its systemd unit restarts it). Restart both after
+replacing certificates. The local stack (`make run-local`) and the e2e tests
+generate their own.
 
 ### Host credentials
 

@@ -87,7 +87,7 @@ Do not jump to code investigation when services may not be running or the wrong 
 - `qarax/src/auth.rs` — Bearer-token middleware (see API Authentication)
 - `qarax/src/secret_provider.rs` — Resolves host `credential_ref`s (`env://NAME`, `file:///path`); passwords are never stored in the DB
 - `qarax/src/model/` — Database models with inline SQLx queries
-- `qarax/src/grpc_client.rs` — Tonic client for communicating with qarax-node instances
+- `qarax/src/grpc_client.rs` — Tonic client for communicating with qarax-node instances, over mTLS (`NodeTls`, loaded from `node_tls_dir` at startup)
 - `qarax/src/vm_monitor.rs` — Background task that periodically reconciles VM status with nodes
 - `qarax/src/resource_monitor.rs` — Background task polling host resource metrics
 - `qarax/src/ha_monitor.rs` — Background task failing over HA-enabled VMs from dead hosts
@@ -156,7 +156,11 @@ gRPC services in `qarax-node/src/services/` implement generated tonic traits:
 
 ## Configuration
 
-YAML files in `configuration/` (base.yaml, local.yaml, production.yaml), selected by `APP_ENVIRONMENT` env var (default: local). Key env var overrides: `DATABASE_HOST`, `DATABASE_PORT`, `DATABASE_USERNAME`, `DATABASE_PASSWORD`, `DATABASE_NAME`.
+YAML files in `configuration/` (base.yaml, local.yaml, production.yaml), selected by `APP_ENVIRONMENT` env var (default: local). Key env var overrides: `DATABASE_HOST`, `DATABASE_PORT`, `DATABASE_USERNAME`, `DATABASE_PASSWORD`, `DATABASE_NAME`, `NODE_TLS_DIR`.
+
+### Node gRPC TLS
+
+qarax-node's gRPC API is mTLS only: it serves clients with a certificate from the CA in its `--tls-dir` (default `/etc/qarax-node/tls`), and the control plane connects with the client certificate in `node_tls_dir` (default `/etc/qarax/node-tls`, env `NODE_TLS_DIR`). Neither starts without its files. `scripts/gen-node-tls.sh DIR NODE...` makes both; a node's certificate must name the address its host is registered under. The compose service `certs` generates them for the local stack and e2e (`qarax-node`, `qarax-node-2`, `bootc-vm`), and the qarax tests run the same script. `Failed to connect to qarax-node` with a certificate error means the host address isn't on the node's certificate, or the two sides' files come from different CAs.
 
 ### API Authentication
 

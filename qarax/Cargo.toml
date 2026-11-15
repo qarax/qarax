@@ -46,7 +46,10 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 hmac = "0.12"
 sha2 = "0.10"
 hex = "0.4"
-tonic = "0.12.3"
+tonic = { version = "0.12.3", features = ["tls"] }
+# tonic builds its TLS configs from rustls' process-wide crypto provider (see
+# grpc_client::NodeTls).
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 prost = "0.13.5"
 russh = "0.65.1"
 async-stream = "0.3"

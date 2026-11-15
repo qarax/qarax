@@ -7,7 +7,7 @@ services:
       cache_to:
         - type=gha,mode=max,scope=e2e-nfs-server
 
-  migration-tls:
+  certs:
     image: qarax/e2e-qarax-node:ci
     build:
       cache_from:

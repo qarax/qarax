@@ -455,6 +455,7 @@ podman build \
 	--build-arg "NODE_ARTIFACTS_SHA=${node_artifacts_sha}" \
 	--build-arg "REGISTRY_PORT=${REGISTRY_PORT}" \
 	--build-arg "OTEL_LGTM_IMAGE=${OTEL_LGTM_IMAGE}" \
+	--build-arg "NODE_ADDRESS=${CP_VM_IP}" \
 	-f "${DEMO_DIR}/Containerfile.control-plane" \
 	-t "$CP_IMAGE" .
 

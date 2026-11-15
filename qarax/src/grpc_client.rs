@@ -1,8 +1,12 @@
 // gRPC client for communicating with qarax-node
 
+use std::path::Path;
+use std::sync::OnceLock;
+
 use anyhow::{Context, Result};
 use tokio::sync::mpsc;
 use tokio::time::{Duration, sleep};
+use tonic::transport::{Certificate, ClientTlsConfig, Endpoint, Identity};
 use tracing::{debug, instrument, warn};
 use uuid::Uuid;
 
@@ -13,6 +17,48 @@ use crate::model::vms::{MigrationMemoryMode, MigrationOptions, MigrationTimeoutA
 /// host whose address drops packets holds the request for the kernel's full
 /// SYN retry budget, about two minutes, before failing.
 const NODE_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The TLS every [`NodeClient`] connects with, set by [`init_node_tls`].
+static NODE_TLS: OnceLock<ClientTlsConfig> = OnceLock::new();
+
+/// The control plane's TLS identity towards the nodes, whose gRPC API only
+/// serves clients with a certificate from their CA.
+pub struct NodeTls(ClientTlsConfig);
+
+impl NodeTls {
+    /// Reads `ca-cert.pem` (the CA that issued the nodes' certificates),
+    /// `client-cert.pem` and `client-key.pem` from `dir`, as
+    /// scripts/gen-node-tls.sh writes them. Fails if one is missing or invalid.
+    pub fn load(dir: &Path) -> Result<Self> {
+        // tonic builds its rustls configs from the process-wide crypto
+        // provider, and the dependency tree enables both of rustls' providers,
+        // so rustls can't pick one itself. Err only means one is installed
+        // already.
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let read = |name: &str| {
+            let path = dir.join(name);
+            std::fs::read(&path).with_context(|| format!("failed to read {}", path.display()))
+        };
+        let config = ClientTlsConfig::new()
+            .ca_certificate(Certificate::from_pem(read("ca-cert.pem")?))
+            .identity(Identity::from_pem(
+                read("client-cert.pem")?,
+                read("client-key.pem")?,
+            ));
+        // Parses the files, which tonic otherwise leaves until the first connect.
+        Endpoint::from_static("https://qarax-node")
+            .tls_config(config.clone())
+            .with_context(|| format!("invalid node TLS files in {}", dir.display()))?;
+        Ok(Self(config))
+    }
+}
+
+/// Makes every [`NodeClient`] connect with `tls`. Like
+/// [`crate::model::events::init_event_bus`], the first call wins: tests start
+/// several apps in one process, all with the same identity.
+pub fn init_node_tls(tls: NodeTls) {
+    let _ = NODE_TLS.set(tls.0);
+}
 
 // Include the generated proto code
 #[allow(clippy::result_large_err)]
@@ -220,20 +266,23 @@ impl NodeClient {
             || message.contains("guest-agent connect failed")
     }
 
-    /// Create a new client for the specified qarax-node address
+    /// Create a new client for the specified qarax-node address. It connects
+    /// with the TLS identity [`init_node_tls`] set; the node's certificate
+    /// must be valid for `host`.
     pub fn new(host: &str, port: u16) -> Self {
         Self {
-            address: format!("http://{}:{}", host, port),
+            address: format!("https://{}:{}", host, port),
             vm_channel: tokio::sync::OnceCell::new(),
         }
     }
 
-    /// Create a new client from a full address string (host:port)
-    pub fn from_address(address: &str) -> Self {
-        Self {
-            address: format!("http://{}", address),
-            vm_channel: tokio::sync::OnceCell::new(),
-        }
+    fn endpoint(&self) -> Result<Endpoint> {
+        let tls = NODE_TLS.get().context("node TLS is not configured")?;
+        Ok(Endpoint::from_shared(self.address.clone())
+            .context("invalid qarax-node address")?
+            .tls_config(tls.clone())
+            .context("invalid node TLS configuration")?
+            .connect_timeout(NODE_CONNECT_TIMEOUT))
     }
 
     async fn connect_vm_service(&self) -> Result<VmClient> {
@@ -241,9 +290,7 @@ impl NodeClient {
         let channel = self
             .vm_channel
             .get_or_try_init(|| async {
-                tonic::transport::Channel::from_shared(self.address.clone())
-                    .context("invalid qarax-node address")?
-                    .connect_timeout(NODE_CONNECT_TIMEOUT)
+                self.endpoint()?
                     .connect()
                     .await
                     .context("Failed to connect to qarax-node")
@@ -264,9 +311,8 @@ impl NodeClient {
     }
 
     async fn connect_file_transfer_service(&self) -> Result<FileTransferClient> {
-        let channel = tonic::transport::Channel::from_shared(self.address.clone())
-            .context("invalid qarax-node address")?
-            .connect_timeout(NODE_CONNECT_TIMEOUT)
+        let channel = self
+            .endpoint()?
             .connect()
             .await
             .context("Failed to connect to qarax-node")?;
@@ -1532,6 +1578,18 @@ mod tests {
 
     #[tokio::test]
     async fn connecting_to_an_unreachable_node_fails_fast() {
+        let certs = tempfile::tempdir().unwrap();
+        let status = std::process::Command::new("sh")
+            .arg(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../scripts/gen-node-tls.sh"
+            ))
+            .arg(certs.path())
+            .status()
+            .unwrap();
+        assert!(status.success(), "gen-node-tls.sh failed");
+        init_node_tls(NodeTls::load(&certs.path().join("control-plane")).unwrap());
+
         // 192.0.2.0/24 (TEST-NET-1) is never routed, so a connect there gets
         // no answer at all: only the connect timeout ends it early.
         let client = NodeClient::new("192.0.2.1", 50051);

@@ -9,7 +9,7 @@ use reqwest::StatusCode;
 use serde_json::json;
 use sqlx::PgPool;
 use std::assert_matches;
-use support::spawn_app;
+use support::{node_server_tls, spawn_app};
 use tokio::net::TcpListener;
 use uuid::Uuid;
 
@@ -238,6 +238,7 @@ async fn managed_disk_cleanup_retries_without_losing_allocation_or_deleting_regi
         loop { yield listener.accept().await.map(|(stream, _)| stream); }
     };
     let server = tokio::spawn(tonic::transport::Server::builder()
+        .tls_config(node_server_tls()).unwrap()
         .add_service(qarax::grpc_client::node::file_transfer_service_server::FileTransferServiceServer::new(node.clone()))
         .serve_with_incoming(incoming));
     let host_id = Uuid::new_v4();

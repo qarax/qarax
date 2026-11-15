@@ -61,7 +61,7 @@ RUN dnf install -y \
     guestfs-tools \
     iscsi-initiator-utils \
     dropbear \
-    # For e2e/gen-migration-tls.sh
+    # For e2e/gen-migration-tls.sh and scripts/gen-node-tls.sh
     openssl \
     && dnf clean all
 
@@ -158,7 +158,8 @@ RUN chmod +x /usr/local/bin/guest-ssh
 
 COPY e2e/entrypoint-qarax-node.sh /entrypoint.sh
 COPY e2e/gen-migration-tls.sh /usr/local/bin/gen-migration-tls
-RUN chmod +x /entrypoint.sh /usr/local/bin/gen-migration-tls
+COPY scripts/gen-node-tls.sh /usr/local/bin/gen-node-tls
+RUN chmod +x /entrypoint.sh /usr/local/bin/gen-migration-tls /usr/local/bin/gen-node-tls
 
 EXPOSE 50051
 

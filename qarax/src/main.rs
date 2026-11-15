@@ -4,6 +4,7 @@ use common::telemtry::{get_subscriber, init_subscriber};
 use qarax::{
     configuration::{default_control_plane_architecture, get_configuration},
     database,
+    grpc_client::NodeTls,
     startup::run,
 };
 use sqlx::PgPool;
@@ -46,6 +47,11 @@ async fn main() -> std::io::Result<()> {
     let subscriber = get_subscriber("qarax".into(), "info".into(), std::io::stdout);
     init_subscriber(subscriber);
 
+    let node_tls = NodeTls::load(&configuration.node_tls_dir).map_err(|e| {
+        tracing::error!("Failed to load the node TLS files: {e:#}");
+        std::io::Error::other(e)
+    })?;
+
     database::run_migrations(&configuration.database.connection_string())
         .await
         .expect("Failed to run migrations");
@@ -78,6 +84,7 @@ async fn main() -> std::io::Result<()> {
         configuration.auth.clone(),
         configuration.ha.clone(),
         default_control_plane_architecture(),
+        node_tls,
     )
     .await
     {
