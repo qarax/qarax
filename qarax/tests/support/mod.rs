@@ -111,6 +111,9 @@ pub async fn spawn_app_with_auth(auth: AuthSettings) -> TestApp {
     // Postgres' 60 s authentication_timeout.
     let (shutdown, shutdown_rx) = oneshot::channel();
     let database = configuration.database.clone();
+    // Loading it installs the process-wide TLS crypto provider, which a test's
+    // fake node needs as soon as spawn_app returns.
+    let node_tls = NodeTls::load(&NODE_TLS_DIR.path().join("control-plane")).unwrap();
     let handle = std::thread::spawn(move || {
         let rt = Runtime::new().unwrap();
         rt.block_on(async move {
@@ -128,7 +131,7 @@ pub async fn spawn_app_with_auth(auth: AuthSettings) -> TestApp {
                 auth,
                 configuration.ha,
                 default_control_plane_architecture(),
-                NodeTls::load(&NODE_TLS_DIR.path().join("control-plane")).unwrap(),
+                node_tls,
             )
             .await
             .expect("Failed to start the control plane");
