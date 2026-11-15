@@ -339,6 +339,16 @@ async def test_guest_cannot_turn_its_raw_disk_into_qcow2(client):
                 client=c, vm_id=vm_id, device_id=attached.logical_name
             )
             assert rm_resp.status_code == 204, rm_resp.content.decode()
+            # Cloud Hypervisor keeps the device, and its id, until the guest
+            # has ejected it.
+            result = await exec_when_ready(
+                c,
+                vm_id,
+                "for i in 1 2 3 4 5 6 7 8 9 10; do "
+                "  [ -e /sys/block/vda ] || exit 0; sleep 1; "
+                "done; exit 1",
+            )
+            assert result.exit_code == 0, "the guest never let go of the disk"
             attach_resp = await attach_disk.asyncio_detailed(
                 client=c,
                 vm_id=vm_id,
