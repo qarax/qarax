@@ -11,7 +11,7 @@ import subprocess
 import time
 import uuid
 
-import httpx
+import httpx2
 import pytest
 
 from helpers import AUTH_HEADERS, QARAX_URL, compose_container
@@ -181,7 +181,7 @@ class GuestNetwork:
 
 @pytest.fixture
 async def api():
-    async with httpx.AsyncClient(
+    async with httpx2.AsyncClient(
         base_url=QARAX_URL, headers=AUTH_HEADERS, timeout=60
     ) as client:
         yield client

@@ -26,7 +26,7 @@ import uuid
 from pathlib import Path
 from uuid import UUID
 
-import httpx
+import httpx2
 import pytest
 from qarax_api_client import Client
 from qarax_api_client.api.hosts import init as init_host
@@ -145,7 +145,7 @@ async def test_ha_failover_on_host_failure(client, two_hosts):
     dead_host_id = None
     stopped_service = None
 
-    async with client as c, httpx.AsyncClient(base_url=QARAX_URL, headers=AUTH_HEADERS) as http_client:
+    async with client as c, httpx2.AsyncClient(base_url=QARAX_URL, headers=AUTH_HEADERS) as http_client:
         try:
             # Pin both VMs to host1 by putting host2 in maintenance.
             await call_api(

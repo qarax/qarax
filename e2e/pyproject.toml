@@ -6,7 +6,6 @@ requires-python = ">=3.11"
 dependencies = [
     "pytest>=9.0.3",
     "pytest-asyncio>=0.25.2",
-    "httpx>=0.28.1",
     "httpx2>=2.13.1",
     "protobuf>=5.29.3",
     "opentelemetry-proto>=1.31.0",
@@ -24,6 +23,11 @@ dev = [
 
 [tool.uv.sources]
 qarax-api-client = { path = "../python-sdk/qarax-api-client", editable = true }
+
+# Pyflakes only (undefined names, unused imports). E2E runs on master and
+# labelled PRs only, so `make check-e2e-lint` catches these on every PR.
+[tool.ruff.lint]
+select = ["F"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

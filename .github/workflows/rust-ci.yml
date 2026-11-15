@@ -66,6 +66,7 @@ jobs:
       - run: make check-sqlx
       - run: make check-openapi
       - run: make check-sdk
+      - run: make check-e2e-lint
 
   audit-and-shell:
     name: Audit and shell lint
