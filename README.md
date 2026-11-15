@@ -36,7 +36,8 @@ make stop-local          # stop the stack
 
 Requires Docker, Docker Compose, KVM (`/dev/kvm`), and a Rust toolchain.
 
-The API serves Swagger UI at `http://localhost:8000/swagger-ui`.
+The API is served under `/v1` (e.g. `http://localhost:8000/v1/vms`), with Swagger UI at
+`http://localhost:8000/swagger-ui`.
 
 See [docs/HOME_LAB.md](docs/HOME_LAB.md) for a verified cloud-image walkthrough,
 an explanation of compose mode vs VM mode, and the steps to turn the same CLI

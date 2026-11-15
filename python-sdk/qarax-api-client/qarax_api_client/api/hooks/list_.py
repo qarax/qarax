@@ -27,7 +27,7 @@ def _get_kwargs(
 
     _kwargs: dict[str, Any] = {
         "method": "get",
-        "url": "/hooks",
+        "url": "/v1/hooks",
         "params": params,
     }
 

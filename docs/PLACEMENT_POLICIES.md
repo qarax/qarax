@@ -126,7 +126,7 @@ qarax host placement set node-west-1 --clear-reservation-class --clear-labels
 Host placement metadata is updated with:
 
 ```http
-PUT /hosts/{host_id}/placement
+PUT /v1/hosts/{host_id}/placement
 Content-Type: application/json
 ```
 
@@ -156,7 +156,7 @@ Content-Type: application/json
 
 ### API shape
 
-`POST /vms` accepts:
+`POST /v1/vms` accepts:
 
 ```json
 {

@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 #[utoipa::path(
     get,
-    path = "/boot-sources",
+    path = "/v1/boot-sources",
     params(crate::handlers::NameQuery),
     responses(
         (status = 200, description = "List all boot sources", body = Vec<BootSource>),
@@ -32,7 +32,7 @@ pub async fn list(
 
 #[utoipa::path(
     get,
-    path = "/boot-sources/{boot_source_id}",
+    path = "/v1/boot-sources/{boot_source_id}",
     params(
         ("boot_source_id" = uuid::Uuid, Path, description = "Boot source unique identifier")
     ),
@@ -57,7 +57,7 @@ pub async fn get(
 
 #[utoipa::path(
     post,
-    path = "/boot-sources",
+    path = "/v1/boot-sources",
     request_body = NewBootSource,
     responses(
         (status = 201, description = "Boot source created successfully", body = String),
@@ -77,7 +77,7 @@ pub async fn create(
 
 #[utoipa::path(
     delete,
-    path = "/boot-sources/{boot_source_id}",
+    path = "/v1/boot-sources/{boot_source_id}",
     params(
         ("boot_source_id" = uuid::Uuid, Path, description = "Boot source unique identifier")
     ),

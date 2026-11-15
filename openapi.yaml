@@ -6,7 +6,7 @@ info:
     name: ''
   version: 0.1.0
 paths:
-  /audit-logs:
+  /v1/audit-logs:
     get:
       tags:
       - audit-logs
@@ -60,7 +60,7 @@ paths:
           description: Invalid query parameters
         '500':
           description: Internal server error
-  /audit-logs/{audit_log_id}:
+  /v1/audit-logs/{audit_log_id}:
     get:
       tags:
       - audit-logs
@@ -84,7 +84,7 @@ paths:
           description: Not found
         '500':
           description: Internal server error
-  /backups:
+  /v1/backups:
     get:
       tags:
       - backups
@@ -140,7 +140,7 @@ paths:
           description: Invalid backup request
         '500':
           description: Internal server error
-  /backups/{backup_id}:
+  /v1/backups/{backup_id}:
     get:
       tags:
       - backups
@@ -187,7 +187,7 @@ paths:
           description: No UP host can reach the VM snapshot
         '500':
           description: Internal server error
-  /backups/{backup_id}/restore:
+  /v1/backups/{backup_id}/restore:
     post:
       tags:
       - backups
@@ -213,7 +213,7 @@ paths:
           description: Backup cannot be restored
         '500':
           description: Internal server error
-  /boot-sources:
+  /v1/boot-sources:
     get:
       tags:
       - boot-sources
@@ -259,7 +259,7 @@ paths:
           description: Invalid input
         '500':
           description: Internal server error
-  /boot-sources/{boot_source_id}:
+  /v1/boot-sources/{boot_source_id}:
     get:
       tags:
       - boot-sources
@@ -302,7 +302,7 @@ paths:
           description: Boot source not found
         '500':
           description: Internal server error
-  /hooks:
+  /v1/hooks:
     get:
       tags:
       - hooks
@@ -350,7 +350,7 @@ paths:
           description: Invalid input
         '500':
           description: Internal server error
-  /hooks/{hook_id}:
+  /v1/hooks/{hook_id}:
     get:
       tags:
       - hooks
@@ -422,7 +422,7 @@ paths:
           description: Lifecycle hook not found
         '500':
           description: Internal server error
-  /hooks/{hook_id}/executions:
+  /v1/hooks/{hook_id}/executions:
     get:
       tags:
       - hooks
@@ -448,7 +448,7 @@ paths:
           description: Lifecycle hook not found
         '500':
           description: Internal server error
-  /hosts:
+  /v1/hosts:
     get:
       tags:
       - hosts
@@ -504,7 +504,7 @@ paths:
           description: Invalid input
         '500':
           description: Internal server error
-  /hosts/{host_id}:
+  /v1/hosts/{host_id}:
     delete:
       tags:
       - hosts
@@ -555,7 +555,7 @@ paths:
           description: Status is not up, down or maintenance
         '500':
           description: Internal server error
-  /hosts/{host_id}/deploy:
+  /v1/hosts/{host_id}/deploy:
     post:
       tags:
       - hosts
@@ -589,7 +589,7 @@ paths:
           description: Invalid input
         '500':
           description: Internal server error
-  /hosts/{host_id}/evacuate:
+  /v1/hosts/{host_id}/evacuate:
     post:
       tags:
       - hosts
@@ -613,7 +613,7 @@ paths:
           description: Host not found
         '422':
           description: Host or resident VMs are not evacuatable
-  /hosts/{host_id}/gpus:
+  /v1/hosts/{host_id}/gpus:
     get:
       tags:
       - hosts
@@ -639,7 +639,7 @@ paths:
           description: Host not found
         '500':
           description: Internal server error
-  /hosts/{host_id}/init:
+  /v1/hosts/{host_id}/init:
     post:
       tags:
       - hosts
@@ -665,7 +665,7 @@ paths:
           description: Host is being installed
         '500':
           description: Internal server error
-  /hosts/{host_id}/numa:
+  /v1/hosts/{host_id}/numa:
     get:
       tags:
       - hosts
@@ -691,7 +691,7 @@ paths:
           description: Host not found
         '500':
           description: Internal server error
-  /hosts/{host_id}/placement:
+  /v1/hosts/{host_id}/placement:
     put:
       tags:
       - hosts
@@ -719,7 +719,7 @@ paths:
           description: Invalid placement metadata
         '500':
           description: Internal server error
-  /hosts/{host_id}/resources:
+  /v1/hosts/{host_id}/resources:
     get:
       tags:
       - hosts
@@ -741,7 +741,7 @@ paths:
                 $ref: '#/components/schemas/HostResourceCapacity'
         '404':
           description: Host not found
-  /hosts/{host_id}/upgrade:
+  /v1/hosts/{host_id}/upgrade:
     post:
       tags:
       - hosts
@@ -769,7 +769,7 @@ paths:
           description: Host is already being installed
         '500':
           description: Internal server error
-  /instance-types:
+  /v1/instance-types:
     get:
       tags:
       - instance-types
@@ -817,7 +817,7 @@ paths:
           description: Invalid input
         '500':
           description: Internal server error
-  /instance-types/{instance_type_id}:
+  /v1/instance-types/{instance_type_id}:
     get:
       tags:
       - instance-types
@@ -860,7 +860,7 @@ paths:
           description: Instance type not found
         '500':
           description: Internal server error
-  /jobs/{job_id}:
+  /v1/jobs/{job_id}:
     get:
       tags:
       - jobs
@@ -884,7 +884,7 @@ paths:
           description: Job not found
         '500':
           description: Internal server error
-  /networks:
+  /v1/networks:
     get:
       tags:
       - networks
@@ -930,7 +930,7 @@ paths:
           description: Invalid input
         '500':
           description: Internal server error
-  /networks/{network_id}:
+  /v1/networks/{network_id}:
     get:
       tags:
       - networks
@@ -977,7 +977,7 @@ paths:
           description: Failed to detach the network on a node
         '500':
           description: Internal server error
-  /networks/{network_id}/hosts:
+  /v1/networks/{network_id}/hosts:
     get:
       tags:
       - networks
@@ -1030,7 +1030,7 @@ paths:
           description: Failed to attach network on node
         '500':
           description: Internal server error
-  /networks/{network_id}/hosts/{host_id}:
+  /v1/networks/{network_id}/hosts/{host_id}:
     delete:
       tags:
       - networks
@@ -1059,7 +1059,7 @@ paths:
           description: Failed to detach network on node
         '500':
           description: Internal server error
-  /networks/{network_id}/ips:
+  /v1/networks/{network_id}/ips:
     get:
       tags:
       - networks
@@ -1083,7 +1083,7 @@ paths:
                   $ref: '#/components/schemas/IpAllocation'
         '500':
           description: Internal server error
-  /sandbox-pools:
+  /v1/sandbox-pools:
     get:
       tags:
       - sandbox-pools
@@ -1099,7 +1099,7 @@ paths:
                   $ref: '#/components/schemas/SandboxPool'
         '500':
           description: Internal server error
-  /sandboxes:
+  /v1/sandboxes:
     get:
       tags:
       - sandboxes
@@ -1136,7 +1136,7 @@ paths:
           description: Invalid input or no available hosts
         '500':
           description: Internal server error
-  /sandboxes/{sandbox_id}:
+  /v1/sandboxes/{sandbox_id}:
     get:
       tags:
       - sandboxes
@@ -1179,7 +1179,7 @@ paths:
           description: Sandbox not found
         '500':
           description: Internal server error
-  /sandboxes/{sandbox_id}/exec:
+  /v1/sandboxes/{sandbox_id}/exec:
     post:
       tags:
       - sandboxes
@@ -1211,7 +1211,7 @@ paths:
           description: Sandbox is not ready or guest exec is unavailable
         '500':
           description: Internal server error
-  /sandboxes/{sandbox_id}/keepalive:
+  /v1/sandboxes/{sandbox_id}/keepalive:
     post:
       tags:
       - sandboxes
@@ -1231,7 +1231,7 @@ paths:
           description: Sandbox not found
         '500':
           description: Internal server error
-  /scheduling/config:
+  /v1/scheduling/config:
     get:
       tags:
       - scheduling
@@ -1243,7 +1243,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SchedulingSettings'
-  /security-groups:
+  /v1/security-groups:
     get:
       tags:
       - security-groups
@@ -1289,7 +1289,7 @@ paths:
           description: Invalid input
         '500':
           description: Internal server error
-  /security-groups/{security_group_id}:
+  /v1/security-groups/{security_group_id}:
     get:
       tags:
       - security-groups
@@ -1332,7 +1332,7 @@ paths:
           description: Security group not found
         '500':
           description: Internal server error
-  /security-groups/{security_group_id}/rules:
+  /v1/security-groups/{security_group_id}/rules:
     get:
       tags:
       - security-groups
@@ -1389,7 +1389,7 @@ paths:
           description: Invalid input
         '500':
           description: Internal server error
-  /security-groups/{security_group_id}/rules/{rule_id}:
+  /v1/security-groups/{security_group_id}/rules/{rule_id}:
     delete:
       tags:
       - security-groups
@@ -1416,7 +1416,7 @@ paths:
           description: Security group or rule not found
         '500':
           description: Internal server error
-  /storage-objects:
+  /v1/storage-objects:
     get:
       tags:
       - storage-objects
@@ -1484,7 +1484,7 @@ paths:
           description: Invalid input
         '500':
           description: Internal server error
-  /storage-objects/{object_id}:
+  /v1/storage-objects/{object_id}:
     get:
       tags:
       - storage-objects
@@ -1531,7 +1531,7 @@ paths:
           description: Storage object is still in use
         '500':
           description: Internal server error
-  /storage-pools:
+  /v1/storage-pools:
     get:
       tags:
       - storage-pools
@@ -1577,7 +1577,7 @@ paths:
           description: Invalid input
         '500':
           description: Internal server error
-  /storage-pools/{pool_id}:
+  /v1/storage-pools/{pool_id}:
     get:
       tags:
       - storage-pools
@@ -1622,7 +1622,7 @@ paths:
           description: Storage pool still has storage objects, or pending file cleanup
         '500':
           description: Internal server error
-  /storage-pools/{pool_id}/disks:
+  /v1/storage-pools/{pool_id}/disks:
     post:
       tags:
       - storage-pools
@@ -1661,7 +1661,7 @@ paths:
           description: Validation error
         '500':
           description: Internal server error
-  /storage-pools/{pool_id}/hosts:
+  /v1/storage-pools/{pool_id}/hosts:
     get:
       tags:
       - storage-pools
@@ -1714,7 +1714,7 @@ paths:
           description: The node can't attach the pool (e.g. OverlayBD without overlaybd-tcmu)
         '500':
           description: Internal server error
-  /storage-pools/{pool_id}/hosts/{host_id}:
+  /v1/storage-pools/{pool_id}/hosts/{host_id}:
     delete:
       tags:
       - storage-pools
@@ -1743,7 +1743,7 @@ paths:
           description: The node, which is up, failed to detach the pool
         '500':
           description: Internal server error
-  /storage-pools/{pool_id}/import:
+  /v1/storage-pools/{pool_id}/import:
     post:
       tags:
       - storage-pools
@@ -1776,7 +1776,7 @@ paths:
           description: No UP host attached to pool
         '500':
           description: Internal server error
-  /storage-pools/{pool_id}/luns:
+  /v1/storage-pools/{pool_id}/luns:
     post:
       tags:
       - storage-pools
@@ -1813,7 +1813,7 @@ paths:
           description: Validation error
         '500':
           description: Internal server error
-  /storage-pools/{pool_id}/transfers:
+  /v1/storage-pools/{pool_id}/transfers:
     get:
       tags:
       - transfers
@@ -1876,7 +1876,7 @@ paths:
           description: Invalid input
         '500':
           description: Internal server error
-  /storage-pools/{pool_id}/transfers/{transfer_id}:
+  /v1/storage-pools/{pool_id}/transfers/{transfer_id}:
     get:
       tags:
       - transfers
@@ -1907,7 +1907,7 @@ paths:
           description: Transfer not found
         '500':
           description: Internal server error
-  /vm-templates:
+  /v1/vm-templates:
     get:
       tags:
       - vm-templates
@@ -1955,7 +1955,7 @@ paths:
           description: Invalid input
         '500':
           description: Internal server error
-  /vm-templates/{vm_template_id}:
+  /v1/vm-templates/{vm_template_id}:
     get:
       tags:
       - vm-templates
@@ -2000,7 +2000,7 @@ paths:
           description: VM template still has a sandbox pool
         '500':
           description: Internal server error
-  /vm-templates/{vm_template_id}/sandbox-pool:
+  /v1/vm-templates/{vm_template_id}/sandbox-pool:
     get:
       tags:
       - sandbox-pools
@@ -2072,7 +2072,7 @@ paths:
           description: Sandbox pool not found
         '500':
           description: Internal server error
-  /vms:
+  /v1/vms:
     get:
       tags:
       - vms
@@ -2132,7 +2132,7 @@ paths:
           description: Invalid input
         '500':
           description: Internal server error
-  /vms/preflight:
+  /v1/vms/preflight:
     post:
       tags:
       - vms
@@ -2154,7 +2154,7 @@ paths:
           description: Image or host is not preflightable
         '500':
           description: Internal server error
-  /vms/{vm_id}:
+  /v1/vms/{vm_id}:
     get:
       tags:
       - vms
@@ -2197,7 +2197,7 @@ paths:
           description: VM not found
         '500':
           description: Internal server error
-  /vms/{vm_id}/commit:
+  /v1/vms/{vm_id}/commit:
     post:
       tags:
       - vms
@@ -2227,7 +2227,7 @@ paths:
           description: VM not found
         '422':
           description: VM not eligible for commit
-  /vms/{vm_id}/console:
+  /v1/vms/{vm_id}/console:
     get:
       tags:
       - vms
@@ -2251,7 +2251,7 @@ paths:
           description: Console logging not available for this VM
         '500':
           description: Internal server error
-  /vms/{vm_id}/console/attach:
+  /v1/vms/{vm_id}/console/attach:
     get:
       tags:
       - vms
@@ -2274,7 +2274,7 @@ paths:
           description: VM console not available or not in PTY mode
         '500':
           description: Internal server error
-  /vms/{vm_id}/disks:
+  /v1/vms/{vm_id}/disks:
     post:
       tags:
       - vms
@@ -2312,7 +2312,7 @@ paths:
           description: VM not in Created, Running, or Shutdown state
         '500':
           description: Internal server error
-  /vms/{vm_id}/disks/{device_id}:
+  /v1/vms/{vm_id}/disks/{device_id}:
     delete:
       tags:
       - vms
@@ -2340,7 +2340,7 @@ paths:
           description: VM not in Created, Running, or Shutdown state
         '500':
           description: Internal server error
-  /vms/{vm_id}/disks/{disk_id}/resize:
+  /v1/vms/{vm_id}/disks/{disk_id}/resize:
     put:
       tags:
       - vms
@@ -2381,7 +2381,7 @@ paths:
           description: VM neither running nor stopped, disk not resizable, or size invalid
         '500':
           description: Internal server error
-  /vms/{vm_id}/exec:
+  /v1/vms/{vm_id}/exec:
     post:
       tags:
       - vms
@@ -2413,7 +2413,7 @@ paths:
           description: VM is not running or guest exec is unavailable
         '500':
           description: Internal server error
-  /vms/{vm_id}/force-stop:
+  /v1/vms/{vm_id}/force-stop:
     post:
       tags:
       - vms
@@ -2433,7 +2433,7 @@ paths:
           description: VM not found
         '500':
           description: Internal server error
-  /vms/{vm_id}/metrics:
+  /v1/vms/{vm_id}/metrics:
     get:
       tags:
       - vms
@@ -2457,7 +2457,7 @@ paths:
           description: VM not found
         '500':
           description: Internal server error
-  /vms/{vm_id}/migrate:
+  /v1/vms/{vm_id}/migrate:
     post:
       tags:
       - vms
@@ -2495,7 +2495,7 @@ paths:
           description: The VM can't migrate to that host, or the options are invalid
         '500':
           description: Internal server error
-  /vms/{vm_id}/nics:
+  /v1/vms/{vm_id}/nics:
     get:
       tags:
       - vms
@@ -2554,7 +2554,7 @@ paths:
           description: VM not in Created or Running state
         '500':
           description: Internal server error
-  /vms/{vm_id}/nics/{device_id}:
+  /v1/vms/{vm_id}/nics/{device_id}:
     delete:
       tags:
       - vms
@@ -2582,7 +2582,7 @@ paths:
           description: VM not in Created or Running state
         '500':
           description: Internal server error
-  /vms/{vm_id}/pause:
+  /v1/vms/{vm_id}/pause:
     post:
       tags:
       - vms
@@ -2604,7 +2604,7 @@ paths:
           description: VM is held by a running start, migrate or commit job
         '500':
           description: Internal server error
-  /vms/{vm_id}/resize:
+  /v1/vms/{vm_id}/resize:
     put:
       tags:
       - vms
@@ -2636,7 +2636,7 @@ paths:
           description: VM not running, or resize parameters out of range
         '500':
           description: Internal server error
-  /vms/{vm_id}/restore:
+  /v1/vms/{vm_id}/restore:
     post:
       tags:
       - vms
@@ -2668,7 +2668,7 @@ paths:
           description: VM not in a restoreable state or snapshot not ready
         '500':
           description: Internal server error
-  /vms/{vm_id}/resume:
+  /v1/vms/{vm_id}/resume:
     post:
       tags:
       - vms
@@ -2690,7 +2690,7 @@ paths:
           description: VM is held by a running start, migrate or commit job
         '500':
           description: Internal server error
-  /vms/{vm_id}/security-groups:
+  /v1/vms/{vm_id}/security-groups:
     get:
       tags:
       - vms
@@ -2741,7 +2741,7 @@ paths:
           description: VM or security group not found
         '500':
           description: Internal server error
-  /vms/{vm_id}/security-groups/{security_group_id}:
+  /v1/vms/{vm_id}/security-groups/{security_group_id}:
     delete:
       tags:
       - vms
@@ -2768,7 +2768,7 @@ paths:
           description: VM or security group not found
         '500':
           description: Internal server error
-  /vms/{vm_id}/snapshots:
+  /v1/vms/{vm_id}/snapshots:
     get:
       tags:
       - vms
@@ -2831,7 +2831,7 @@ paths:
           description: VM not found
         '500':
           description: Internal server error
-  /vms/{vm_id}/snapshots/{snapshot_id}:
+  /v1/vms/{vm_id}/snapshots/{snapshot_id}:
     delete:
       tags:
       - vms
@@ -2862,7 +2862,7 @@ paths:
           description: No UP host can reach the snapshot's data
         '500':
           description: Internal server error
-  /vms/{vm_id}/start:
+  /v1/vms/{vm_id}/start:
     post:
       tags:
       - vms
@@ -2888,7 +2888,7 @@ paths:
           description: VM not in a startable state
         '500':
           description: Internal server error
-  /vms/{vm_id}/stop:
+  /v1/vms/{vm_id}/stop:
     post:
       tags:
       - vms
@@ -2917,7 +2917,7 @@ paths:
           description: VM is held by a running start, migrate or commit job
         '500':
           description: Internal server error
-  /vms/{vm_id}/template:
+  /v1/vms/{vm_id}/template:
     post:
       tags:
       - vms

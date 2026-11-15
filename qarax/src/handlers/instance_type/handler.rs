@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 #[utoipa::path(
     get,
-    path = "/instance-types",
+    path = "/v1/instance-types",
     params(crate::handlers::NameQuery),
     responses(
         (status = 200, description = "List all instance types", body = Vec<InstanceType>),
@@ -32,7 +32,7 @@ pub async fn list(
 
 #[utoipa::path(
     get,
-    path = "/instance-types/{instance_type_id}",
+    path = "/v1/instance-types/{instance_type_id}",
     params(
         ("instance_type_id" = uuid::Uuid, Path, description = "Instance type unique identifier")
     ),
@@ -57,7 +57,7 @@ pub async fn get(
 
 #[utoipa::path(
     post,
-    path = "/instance-types",
+    path = "/v1/instance-types",
     request_body = NewInstanceType,
     responses(
         (status = 201, description = "Instance type created successfully", body = String),
@@ -78,7 +78,7 @@ pub async fn create(
 
 #[utoipa::path(
     delete,
-    path = "/instance-types/{instance_type_id}",
+    path = "/v1/instance-types/{instance_type_id}",
     params(
         ("instance_type_id" = uuid::Uuid, Path, description = "Instance type unique identifier")
     ),

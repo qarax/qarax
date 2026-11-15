@@ -61,7 +61,7 @@ done
 # buffered stdout until the first event. curl runs directly (not through
 # api_curl) so $! is its PID.
 open_stream() {
-	local log="${WORK}/$1" url="${SERVER}/events$2"
+	local log="${WORK}/$1" url="${SERVER}/v1/events$2"
 	echo -e "  ${DIM}\$ curl -N -H \"Authorization: Bearer \$QARAX_TOKEN\" '${url}'${NC}"
 	curl -sN -D "${log}.headers" -H "Authorization: Bearer ${QARAX_TOKEN}" "$url" >"$log" &
 	STREAM_PIDS+=("$!")
@@ -194,7 +194,7 @@ ok "The full stream delivered all ${#ALL_WANT[@]} transitions; ?status=running d
 info "Deleting a VM emits no SSE event (lifecycle hooks do get a 'deleted' delivery)."
 echo
 echo -e "  Try it yourself:"
-echo -e "  ${DIM}\$ curl -N -H \"Authorization: Bearer \$QARAX_TOKEN\" '${SERVER}/events'${NC}"
-echo -e "  ${DIM}\$ curl -N -H \"Authorization: Bearer \$QARAX_TOKEN\" '${SERVER}/events?status=running'${NC}"
-echo -e "  ${DIM}\$ curl -N -H \"Authorization: Bearer \$QARAX_TOKEN\" '${SERVER}/events?vm_id=<uuid>'${NC}"
-echo -e "  ${DIM}\$ curl -N -H \"Authorization: Bearer \$QARAX_TOKEN\" '${SERVER}/events?tag=<tag>'${NC}"
+echo -e "  ${DIM}\$ curl -N -H \"Authorization: Bearer \$QARAX_TOKEN\" '${SERVER}/v1/events'${NC}"
+echo -e "  ${DIM}\$ curl -N -H \"Authorization: Bearer \$QARAX_TOKEN\" '${SERVER}/v1/events?status=running'${NC}"
+echo -e "  ${DIM}\$ curl -N -H \"Authorization: Bearer \$QARAX_TOKEN\" '${SERVER}/v1/events?vm_id=<uuid>'${NC}"
+echo -e "  ${DIM}\$ curl -N -H \"Authorization: Bearer \$QARAX_TOKEN\" '${SERVER}/v1/events?tag=<tag>'${NC}"

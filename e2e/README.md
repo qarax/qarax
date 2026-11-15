@@ -103,6 +103,6 @@ printed in the summary (`-rs`).
 KEEP=1 ./run_e2e_tests.sh
 docker compose logs qarax-node
 docker compose exec qarax-node sh
-curl -H "Authorization: Bearer e2e-test-token" http://localhost:8000/vms
+curl -H "Authorization: Bearer e2e-test-token" http://localhost:8000/v1/vms
 docker compose --profile '*' down -v
 ```

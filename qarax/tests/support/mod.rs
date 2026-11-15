@@ -69,7 +69,10 @@ pub fn node_server_tls() -> tonic::transport::ServerTlsConfig {
 }
 
 pub struct TestApp {
+    /// The API's base URL (`/v1` on the server).
     pub address: String,
+    /// The server's root, for the unversioned routes (`/`, the API docs).
+    pub root: String,
     /// Pool for direct database access from the test.
     pub pool: PgPool,
     db_name: String,
@@ -99,7 +102,8 @@ pub async fn spawn_app_with_auth(auth: AuthSettings) -> TestApp {
 
     let listener = StdTcpListener::bind("127.0.0.1:0").expect("Failed to bind random port");
     listener.set_nonblocking(true).unwrap();
-    let address = format!("http://{}", listener.local_addr().unwrap());
+    let root = format!("http://{}", listener.local_addr().unwrap());
+    let address = format!("{root}/v1");
 
     // The app gets its own runtime, pool and listener. If it shared the test's
     // runtime, TestApp::drop (which blocks that runtime) could stall one of its
@@ -139,6 +143,7 @@ pub async fn spawn_app_with_auth(auth: AuthSettings) -> TestApp {
 
     TestApp {
         address,
+        root,
         pool,
         db_name: configuration.database.name,
         app: Some(AppThread { shutdown, handle }),

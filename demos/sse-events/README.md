@@ -1,6 +1,6 @@
 # SSE Event Stream Demo
 
-Demonstrates the `GET /events` endpoint, which streams VM status changes as
+Demonstrates the `GET /v1/events` endpoint, which streams VM status changes as
 Server-Sent Events (SSE).
 
 ## What it shows
@@ -65,16 +65,16 @@ Examples:
 
 ```bash
 # All events
-curl -N -H "Authorization: Bearer $QARAX_TOKEN" http://localhost:8000/events
+curl -N -H "Authorization: Bearer $QARAX_TOKEN" http://localhost:8000/v1/events
 
 # Only transitions to running
-curl -N -H "Authorization: Bearer $QARAX_TOKEN" 'http://localhost:8000/events?status=running'
+curl -N -H "Authorization: Bearer $QARAX_TOKEN" 'http://localhost:8000/v1/events?status=running'
 
 # Events for a single VM
-curl -N -H "Authorization: Bearer $QARAX_TOKEN" 'http://localhost:8000/events?vm_id=<uuid>'
+curl -N -H "Authorization: Bearer $QARAX_TOKEN" 'http://localhost:8000/v1/events?vm_id=<uuid>'
 
 # Combined filter: only a specific VM transitioning to shutdown
-curl -N -H "Authorization: Bearer $QARAX_TOKEN" 'http://localhost:8000/events?vm_id=<uuid>&status=shutdown'
+curl -N -H "Authorization: Bearer $QARAX_TOKEN" 'http://localhost:8000/v1/events?vm_id=<uuid>&status=shutdown'
 ```
 
 ## Wire format

@@ -49,7 +49,7 @@ def _get_kwargs(
 
     _kwargs: dict[str, Any] = {
         "method": "get",
-        "url": "/storage-objects",
+        "url": "/v1/storage-objects",
         "params": params,
     }
 

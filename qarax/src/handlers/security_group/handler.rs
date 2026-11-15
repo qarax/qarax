@@ -17,7 +17,7 @@ use uuid::Uuid;
 
 #[utoipa::path(
     get,
-    path = "/security-groups",
+    path = "/v1/security-groups",
     params(crate::handlers::NameQuery),
     responses(
         (status = 200, description = "List security groups", body = Vec<SecurityGroup>),
@@ -39,7 +39,7 @@ pub async fn list(
 
 #[utoipa::path(
     get,
-    path = "/security-groups/{security_group_id}",
+    path = "/v1/security-groups/{security_group_id}",
     params(
         ("security_group_id" = uuid::Uuid, Path, description = "Security group unique identifier")
     ),
@@ -64,7 +64,7 @@ pub async fn get(
 
 #[utoipa::path(
     post,
-    path = "/security-groups",
+    path = "/v1/security-groups",
     request_body = NewSecurityGroup,
     responses(
         (status = 201, description = "Security group created successfully", body = String),
@@ -93,7 +93,7 @@ pub async fn create(
 
 #[utoipa::path(
     delete,
-    path = "/security-groups/{security_group_id}",
+    path = "/v1/security-groups/{security_group_id}",
     params(
         ("security_group_id" = uuid::Uuid, Path, description = "Security group unique identifier")
     ),
@@ -126,7 +126,7 @@ pub async fn delete(
 
 #[utoipa::path(
     get,
-    path = "/security-groups/{security_group_id}/rules",
+    path = "/v1/security-groups/{security_group_id}/rules",
     params(
         ("security_group_id" = uuid::Uuid, Path, description = "Security group unique identifier")
     ),
@@ -152,7 +152,7 @@ pub async fn list_rules(
 
 #[utoipa::path(
     post,
-    path = "/security-groups/{security_group_id}/rules",
+    path = "/v1/security-groups/{security_group_id}/rules",
     params(
         ("security_group_id" = uuid::Uuid, Path, description = "Security group unique identifier")
     ),
@@ -179,7 +179,7 @@ pub async fn create_rule(
 
 #[utoipa::path(
     delete,
-    path = "/security-groups/{security_group_id}/rules/{rule_id}",
+    path = "/v1/security-groups/{security_group_id}/rules/{rule_id}",
     params(
         ("security_group_id" = uuid::Uuid, Path, description = "Security group unique identifier"),
         ("rule_id" = uuid::Uuid, Path, description = "Security-group rule unique identifier")

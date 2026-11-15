@@ -60,7 +60,7 @@ def _get_kwargs(
 
     _kwargs: dict[str, Any] = {
         "method": "get",
-        "url": "/audit-logs",
+        "url": "/v1/audit-logs",
         "params": params,
     }
 

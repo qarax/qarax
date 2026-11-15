@@ -16,7 +16,7 @@ def _get_kwargs(
 
     _kwargs: dict[str, Any] = {
         "method": "post",
-        "url": "/hosts/{host_id}/upgrade".format(
+        "url": "/v1/hosts/{host_id}/upgrade".format(
             host_id=quote(str(host_id), safe=""),
         ),
     }

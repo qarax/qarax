@@ -21,7 +21,7 @@ def _get_kwargs(
 
     _kwargs: dict[str, Any] = {
         "method": "put",
-        "url": "/vm-templates/{vm_template_id}/sandbox-pool".format(
+        "url": "/v1/vm-templates/{vm_template_id}/sandbox-pool".format(
             vm_template_id=quote(str(vm_template_id), safe=""),
         ),
     }

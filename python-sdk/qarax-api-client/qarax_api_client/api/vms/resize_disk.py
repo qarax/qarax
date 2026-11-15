@@ -22,7 +22,7 @@ def _get_kwargs(
 
     _kwargs: dict[str, Any] = {
         "method": "put",
-        "url": "/vms/{vm_id}/disks/{disk_id}/resize".format(
+        "url": "/v1/vms/{vm_id}/disks/{disk_id}/resize".format(
             vm_id=quote(str(vm_id), safe=""),
             disk_id=quote(str(disk_id), safe=""),
         ),

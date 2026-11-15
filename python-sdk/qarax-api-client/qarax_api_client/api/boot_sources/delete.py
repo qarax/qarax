@@ -16,7 +16,7 @@ def _get_kwargs(
 
     _kwargs: dict[str, Any] = {
         "method": "delete",
-        "url": "/boot-sources/{boot_source_id}".format(
+        "url": "/v1/boot-sources/{boot_source_id}".format(
             boot_source_id=quote(str(boot_source_id), safe=""),
         ),
     }

@@ -130,7 +130,7 @@ You can trigger the same flow through qarax instead of running SSH commands manu
 
 ```bash
 # 1) Register the host in qarax (port is qarax-node gRPC port)
-curl -s -X POST http://localhost:8000/hosts \
+curl -s -X POST http://localhost:8000/v1/hosts \
   -H 'Content-Type: application/json' \
   -d '{
     "name": "vmm-host-1",
@@ -141,7 +141,7 @@ curl -s -X POST http://localhost:8000/hosts \
   }'
 
 # 2) Start bootc deployment over SSH
-curl -s -X POST http://localhost:8000/hosts/<host-id>/deploy \
+curl -s -X POST http://localhost:8000/v1/hosts/<host-id>/deploy \
   -H 'Content-Type: application/json' \
   -d '{
     "image": "quay.io/yourorg/qarax-vmm-host:v1.0.0",
@@ -156,7 +156,7 @@ curl -s -X POST http://localhost:8000/hosts/<host-id>/deploy \
 Deployment runs asynchronously. Track progress with:
 
 ```bash
-curl -s http://localhost:8000/hosts | jq
+curl -s http://localhost:8000/v1/hosts | jq
 ```
 
 Host status transitions:

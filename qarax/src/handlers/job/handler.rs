@@ -12,7 +12,7 @@ use super::{ApiResponse, Result};
 
 #[utoipa::path(
     get,
-    path = "/jobs/{job_id}",
+    path = "/v1/jobs/{job_id}",
     params(
         ("job_id" = uuid::Uuid, Path, description = "Job unique identifier")
     ),

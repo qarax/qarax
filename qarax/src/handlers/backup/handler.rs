@@ -246,7 +246,7 @@ async fn create_database_backup(env: &App, request: &CreateBackupRequest) -> Res
 
 #[utoipa::path(
     get,
-    path = "/backups",
+    path = "/v1/backups",
     params(crate::handlers::BackupListQuery),
     responses(
         (status = 200, description = "List backups", body = Vec<Backup>),
@@ -268,7 +268,7 @@ pub async fn list(
 
 #[utoipa::path(
     get,
-    path = "/backups/{backup_id}",
+    path = "/v1/backups/{backup_id}",
     params(
         ("backup_id" = uuid::Uuid, Path, description = "Backup unique identifier")
     ),
@@ -293,7 +293,7 @@ pub async fn get(
 
 #[utoipa::path(
     post,
-    path = "/backups",
+    path = "/v1/backups",
     request_body = CreateBackupRequest,
     responses(
         (status = 201, description = "Backup created", body = Backup),
@@ -351,7 +351,7 @@ pub async fn create(
 
 #[utoipa::path(
     post,
-    path = "/backups/{backup_id}/restore",
+    path = "/v1/backups/{backup_id}/restore",
     params(
         ("backup_id" = uuid::Uuid, Path, description = "Backup unique identifier")
     ),
@@ -445,7 +445,7 @@ pub async fn restore(
 
 #[utoipa::path(
     delete,
-    path = "/backups/{backup_id}",
+    path = "/v1/backups/{backup_id}",
     params(
         ("backup_id" = uuid::Uuid, Path, description = "Backup unique identifier")
     ),

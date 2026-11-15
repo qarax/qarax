@@ -35,8 +35,9 @@ impl Client {
         self.token.as_deref()
     }
 
+    /// `path` on the API, which the server serves under `/v1`.
     fn url(&self, path: &str) -> String {
-        format!("{}{}", self.base_url, path)
+        format!("{}/v1{}", self.base_url, path)
     }
 
     /// Checks that the response status is 2xx; on error, extracts the message
@@ -239,6 +240,7 @@ mod tests {
         let _ = client.get_text("/").await;
 
         let request = server.await.unwrap();
+        assert!(request.starts_with("get /v1/ "), "{request}");
         assert!(request.contains("authorization: bearer my-token"));
     }
 

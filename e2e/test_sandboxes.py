@@ -279,7 +279,7 @@ async def wait_for_sandbox_pool_ready(client, vm_template_id, min_ready=1, timeo
     httpx_client = client.get_async_httpx_client()
     deadline = time.time() + timeout
     while time.time() < deadline:
-        response = await httpx_client.get(f"{QARAX_URL}/vm-templates/{vm_template_id}/sandbox-pool")
+        response = await httpx_client.get(f"{QARAX_URL}/v1/vm-templates/{vm_template_id}/sandbox-pool")
         assert response.status_code == 200, (
             f"Expected sandbox pool GET to succeed, got {response.status_code}: {response.text}"
         )
@@ -433,7 +433,7 @@ async def test_sandbox_pool_claim_returns_completed_claim_job(client, sandbox_te
 
         try:
             response = await httpx_client.put(
-                f"{QARAX_URL}/vm-templates/{sandbox_template}/sandbox-pool",
+                f"{QARAX_URL}/v1/vm-templates/{sandbox_template}/sandbox-pool",
                 json={"min_ready": 1},
             )
             assert response.status_code == 200, (
@@ -454,7 +454,7 @@ async def test_sandbox_pool_claim_returns_completed_claim_job(client, sandbox_te
             )
             assert created is not None
 
-            job_response = await httpx_client.get(f"{QARAX_URL}/jobs/{created.job_id}")
+            job_response = await httpx_client.get(f"{QARAX_URL}/v1/jobs/{created.job_id}")
             assert job_response.status_code == 200
             job = job_response.json()
             assert job["status"] == "completed"
@@ -471,7 +471,7 @@ async def test_sandbox_pool_claim_returns_completed_claim_job(client, sandbox_te
             if configured is not None:
                 # The template is shared by the module: leave it without a pool.
                 response = await httpx_client.delete(
-                    f"{QARAX_URL}/vm-templates/{sandbox_template}/sandbox-pool"
+                    f"{QARAX_URL}/v1/vm-templates/{sandbox_template}/sandbox-pool"
                 )
                 assert response.status_code == 204, response.text
 

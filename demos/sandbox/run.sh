@@ -171,7 +171,7 @@ pool_filled() {
 # API error isn't mistaken for a reap.
 sandbox_gone() {
 	local code
-	code=$(api_curl -s -o /dev/null -w '%{http_code}' "${SERVER}/sandboxes/$1")
+	code=$(api_curl -s -o /dev/null -w '%{http_code}' "${SERVER}/v1/sandboxes/$1")
 	case "$code" in
 	404) return 0 ;;
 	200) return 1 ;;

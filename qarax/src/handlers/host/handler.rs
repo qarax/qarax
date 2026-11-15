@@ -245,7 +245,7 @@ async fn fail_host_evacuation(
 
 #[utoipa::path(
     get,
-    path = "/hosts",
+    path = "/v1/hosts",
     params(crate::handlers::HostListQuery),
     responses(
         (status = 200, description = "List all hosts", body = Vec<Host>),
@@ -271,7 +271,7 @@ pub async fn list(
 
 #[utoipa::path(
     post,
-    path = "/hosts",
+    path = "/v1/hosts",
     request_body = NewHost,
     responses(
         (status = 201, description = "Host created successfully", body = String),
@@ -305,7 +305,7 @@ pub async fn add(
 
 #[utoipa::path(
     patch,
-    path = "/hosts/{host_id}",
+    path = "/v1/hosts/{host_id}",
     params(
         ("host_id" = uuid::Uuid, Path, description = "Host unique identifier")
     ),
@@ -343,7 +343,7 @@ pub async fn update(
 
 #[utoipa::path(
     delete,
-    path = "/hosts/{host_id}",
+    path = "/v1/hosts/{host_id}",
     params(
         ("host_id" = uuid::Uuid, Path, description = "Host unique identifier")
     ),
@@ -375,7 +375,7 @@ pub async fn delete(
 
 #[utoipa::path(
     put,
-    path = "/hosts/{host_id}/placement",
+    path = "/v1/hosts/{host_id}/placement",
     params(
         ("host_id" = uuid::Uuid, Path, description = "Host unique identifier")
     ),
@@ -405,7 +405,7 @@ pub async fn update_placement(
 
 #[utoipa::path(
     post,
-    path = "/hosts/{host_id}/evacuate",
+    path = "/v1/hosts/{host_id}/evacuate",
     params(
         ("host_id" = uuid::Uuid, Path, description = "Host unique identifier")
     ),
@@ -585,7 +585,7 @@ pub async fn evacuate(
 
 #[utoipa::path(
     post,
-    path = "/hosts/{host_id}/deploy",
+    path = "/v1/hosts/{host_id}/deploy",
     params(
         ("host_id" = uuid::Uuid, Path, description = "Host unique identifier")
     ),
@@ -641,7 +641,7 @@ pub async fn deploy(
 
 #[utoipa::path(
     post,
-    path = "/hosts/{host_id}/init",
+    path = "/v1/hosts/{host_id}/init",
     params(
         ("host_id" = uuid::Uuid, Path, description = "Host unique identifier")
     ),
@@ -931,7 +931,7 @@ mod tests {
 
 #[utoipa::path(
     post,
-    path = "/hosts/{host_id}/upgrade",
+    path = "/v1/hosts/{host_id}/upgrade",
     params(
         ("host_id" = uuid::Uuid, Path, description = "Host unique identifier")
     ),
@@ -1009,7 +1009,7 @@ fn resolved_host_password(env: &App, host: &Host) -> Result<Option<String>> {
 
 #[utoipa::path(
     get,
-    path = "/hosts/{host_id}/gpus",
+    path = "/v1/hosts/{host_id}/gpus",
     params(
         ("host_id" = uuid::Uuid, Path, description = "Host unique identifier")
     ),
@@ -1036,7 +1036,7 @@ pub async fn list_gpus(
 
 #[utoipa::path(
     get,
-    path = "/hosts/{host_id}/numa",
+    path = "/v1/hosts/{host_id}/numa",
     params(
         ("host_id" = uuid::Uuid, Path, description = "Host unique identifier")
     ),
@@ -1064,7 +1064,7 @@ pub async fn list_numa_nodes(
 
 #[utoipa::path(
     get,
-    path = "/hosts/{host_id}/resources",
+    path = "/v1/hosts/{host_id}/resources",
     params(
         ("host_id" = uuid::Uuid, Path, description = "Host unique identifier")
     ),

@@ -445,7 +445,7 @@ async def test_scheduler_placement_policy_reservation_anti_affinity_and_spread(
     anti_vm_id = None
     spread_vm_ids: list[UUID] = []
 
-    async with client as c, httpx2.AsyncClient(base_url=QARAX_URL, headers=AUTH_HEADERS) as http_client:
+    async with client as c, httpx2.AsyncClient(base_url=f"{QARAX_URL}/v1", headers=AUTH_HEADERS) as http_client:
         try:
             await _update_host_placement(
                 http_client, host1_id, reservation_class=reservation_class
