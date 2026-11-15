@@ -9,7 +9,8 @@ use crate::{
         models::{
             AttachDiskRequest, CommitVmRequest, CreateSnapshotRequest, CreateVmResult,
             DiskResizeRequest, ExecVmRequest, HotplugNicRequest, NewVm, NewVmNetwork,
-            RestoreRequest, VmImagePreflightRequest, VmMigrateRequest, VmResizeRequest,
+            RateLimiterConfig, RestoreRequest, VmImagePreflightRequest, VmMigrateRequest,
+            VmResizeRequest,
         },
     },
     client::Client,
@@ -255,6 +256,12 @@ enum VmCommand {
         /// Boot order priority (lower = higher priority; default: 0)
         #[arg(long)]
         boot_order: Option<i32>,
+        /// Limit the disk to this many bytes per second (e.g. 50MiB)
+        #[arg(long, value_parser = super::parse_size)]
+        bandwidth_limit: Option<i64>,
+        /// Limit the disk to this many I/O operations per second
+        #[arg(long)]
+        ops_limit: Option<i64>,
     },
     /// Remove a disk from a VM (hotunplugs if VM is running)
     RemoveDisk {
@@ -295,6 +302,12 @@ enum VmCommand {
         /// Enable checksum offload for the NIC
         #[arg(long)]
         offload_csum: Option<bool>,
+        /// Limit the NIC to this many bytes per second each way (e.g. 10MiB)
+        #[arg(long, value_parser = super::parse_size)]
+        bandwidth_limit: Option<i64>,
+        /// Limit the NIC to this many packets per second each way
+        #[arg(long)]
+        ops_limit: Option<i64>,
     },
     /// Remove a NIC from a VM (hotunplugs if VM is running)
     RemoveNic {
@@ -876,6 +889,8 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
             object,
             logical_name,
             boot_order,
+            bandwidth_limit,
+            ops_limit,
         } => {
             let vm_id = resolve_vm_id(client, &vm).await?;
             let object_id = resolve_object_id(client, &object).await?;
@@ -883,6 +898,7 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
                 storage_object_id: object_id,
                 logical_name,
                 boot_order,
+                rate_limiter: RateLimiterConfig::per_second(bandwidth_limit, ops_limit),
             };
             let disk = api::vms::attach_disk(client, vm_id, &req).await?;
             if !matches!(output, OutputFormat::Table) {
@@ -912,6 +928,8 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
             offload_tso,
             offload_ufo,
             offload_csum,
+            bandwidth_limit,
+            ops_limit,
         } => {
             let vm_id = resolve_vm_id(client, &vm).await?;
             let network_id = match network {
@@ -928,6 +946,7 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
                 offload_tso,
                 offload_ufo,
                 offload_csum,
+                rate_limiter: RateLimiterConfig::per_second(bandwidth_limit, ops_limit),
             };
             let nic = api::vms::add_nic(client, vm_id, &req).await?;
             if !matches!(output, OutputFormat::Table) {

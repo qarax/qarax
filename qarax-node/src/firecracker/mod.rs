@@ -22,9 +22,9 @@ use std::sync::Arc;
 
 use firecracker_rust_sdk::machine::{Machine, MicroVm};
 use firecracker_rust_sdk::models::{
-    BootSource, Drive, MachineConfiguration, MemoryBackend, NetworkInterface, SnapshotCreateParams,
-    SnapshotLoadParams, Vm, Vsock, instance_info::State as FcInstanceState,
-    memory_backend::BackendType, vm::State as FcVmState,
+    BootSource, Drive, MachineConfiguration, MemoryBackend, NetworkInterface, RateLimiter,
+    SnapshotCreateParams, SnapshotLoadParams, TokenBucket, Vm, Vsock,
+    instance_info::State as FcInstanceState, memory_backend::BackendType, vm::State as FcVmState,
 };
 use prost::Message;
 use tokio::process::{Child, Command};
@@ -32,7 +32,10 @@ use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
 use crate::rpc::node::ExecVmResponse;
-use crate::rpc::node::{VmConfig as ProtoVmConfig, VmState, VmStatus};
+use crate::rpc::node::{
+    RateLimiterConfig as ProtoRateLimiterConfig, TokenBucket as ProtoTokenBucket,
+    VmConfig as ProtoVmConfig, VmState, VmStatus,
+};
 use crate::vmm::{VmmError, VmmManager};
 
 mod exec;
@@ -246,6 +249,7 @@ impl FirecrackerManager {
                 let mut drive = Drive::new(disk.id.clone(), is_root);
                 drive.path_on_host = Some(path.clone());
                 drive.is_read_only = Some(readonly);
+                drive.rate_limiter = disk.rate_limiter.as_ref().map(rate_limiter_to_sdk);
                 machine.put_drive(&disk.id, &drive).await.map_err(sdk_err)?;
                 debug!("FC drive {} configured (root={})", disk.id, is_root);
             }
@@ -255,6 +259,10 @@ impl FirecrackerManager {
             if let Some(tap) = &net.tap {
                 let mut iface = NetworkInterface::new(tap.clone(), net.id.clone());
                 iface.guest_mac = net.mac.clone();
+                // Cloud Hypervisor applies a NIC's limiter to each direction
+                // separately; Firecracker takes one per direction.
+                iface.rx_rate_limiter = net.rate_limiter.as_ref().map(rate_limiter_to_sdk);
+                iface.tx_rate_limiter = iface.rx_rate_limiter.clone();
                 machine
                     .put_network_interface(&net.id, &iface)
                     .await
@@ -282,6 +290,20 @@ impl FirecrackerManager {
 
         Ok(())
     }
+}
+
+fn rate_limiter_to_sdk(limiter: &ProtoRateLimiterConfig) -> Box<RateLimiter> {
+    fn bucket(bucket: &ProtoTokenBucket) -> Box<TokenBucket> {
+        Box::new(TokenBucket {
+            size: bucket.size,
+            refill_time: bucket.refill_time,
+            one_time_burst: bucket.one_time_burst,
+        })
+    }
+    Box::new(RateLimiter {
+        bandwidth: limiter.bandwidth.as_ref().map(bucket),
+        ops: limiter.ops.as_ref().map(bucket),
+    })
 }
 
 fn sdk_err(e: firecracker_rust_sdk::error::Error) -> VmmError {

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, TypeVar, cast
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 from uuid import UUID
 
 from attrs import define as _attrs_define
@@ -9,6 +9,10 @@ from attrs import field as _attrs_field
 
 from ..models.interface_type import InterfaceType
 from ..types import UNSET, Unset
+
+if TYPE_CHECKING:
+    from ..models.rate_limiter_config import RateLimiterConfig
+
 
 T = TypeVar("T", bound="NetworkInterface")
 
@@ -34,7 +38,7 @@ class NetworkInterface:
         ip_address (None | str | Unset):
         mac_address (None | str | Unset):
         network_id (None | Unset | UUID):
-        rate_limiter (Any | Unset):
+        rate_limiter (None | RateLimiterConfig | Unset):
         tap_name (None | str | Unset):
         vhost_mode (None | str | Unset):
         vhost_socket (None | str | Unset):
@@ -57,13 +61,15 @@ class NetworkInterface:
     ip_address: None | str | Unset = UNSET
     mac_address: None | str | Unset = UNSET
     network_id: None | Unset | UUID = UNSET
-    rate_limiter: Any | Unset = UNSET
+    rate_limiter: None | RateLimiterConfig | Unset = UNSET
     tap_name: None | str | Unset = UNSET
     vhost_mode: None | str | Unset = UNSET
     vhost_socket: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        from ..models.rate_limiter_config import RateLimiterConfig  # noqa: PLC0415
+
         device_id = self.device_id
 
         id = str(self.id)
@@ -116,7 +122,13 @@ class NetworkInterface:
         else:
             network_id = self.network_id
 
-        rate_limiter = self.rate_limiter
+        rate_limiter: dict[str, Any] | None | Unset
+        if isinstance(self.rate_limiter, Unset):
+            rate_limiter = UNSET
+        elif isinstance(self.rate_limiter, RateLimiterConfig):
+            rate_limiter = self.rate_limiter.to_dict()
+        else:
+            rate_limiter = self.rate_limiter
 
         tap_name: None | str | Unset
         if isinstance(self.tap_name, Unset):
@@ -176,6 +188,8 @@ class NetworkInterface:
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
+        from ..models.rate_limiter_config import RateLimiterConfig  # noqa: PLC0415
+
         d = dict(src_dict)
         device_id = d.pop("device_id")
 
@@ -247,7 +261,22 @@ class NetworkInterface:
 
         network_id = _parse_network_id(d.pop("network_id", UNSET))
 
-        rate_limiter = d.pop("rate_limiter", UNSET)
+        def _parse_rate_limiter(data: object) -> None | RateLimiterConfig | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, dict):
+                    raise TypeError()
+                rate_limiter_type_0 = RateLimiterConfig.from_dict(data)
+
+                return rate_limiter_type_0
+            except (TypeError, ValueError, AttributeError, KeyError):
+                pass
+            return cast(None | RateLimiterConfig | Unset, data)
+
+        rate_limiter = _parse_rate_limiter(d.pop("rate_limiter", UNSET))
 
         def _parse_tap_name(data: object) -> None | str | Unset:
             if data is None:

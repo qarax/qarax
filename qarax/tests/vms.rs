@@ -994,6 +994,81 @@ async fn test_malformed_static_ip_is_rejected() {
     );
 }
 
+/// Disk and NIC rate limiters are stored as given. A token bucket that could
+/// not limit anything is refused, naming the field, on each endpoint taking
+/// one: Cloud Hypervisor ignores a zero bucket and refuses a negative one.
+#[tokio::test]
+async fn test_disk_and_nic_rate_limiters() {
+    async fn assert_invalid_field(res: reqwest::Response, pointer: &str) {
+        assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body: Value = res.json().await.unwrap();
+        assert!(
+            body["errors"].pointer(pointer).is_some(),
+            "expected an error at {pointer} in {body}"
+        );
+    }
+
+    let app = spawn_app().await;
+    let client = reqwest::Client::new();
+    let host_id = add_up_host(&client, &app.address, "limits-host").await;
+    let vm_id = create_vm(&client, &app.address, vm_body("vm-limits")).await;
+    let pool_id = create_local_pool(&client, &app.address, &app.pool, host_id, "limits-pool").await;
+    let object_id = create_disk_object(&client, &app.address, pool_id, "limits-disk", GIB).await;
+    let nics_url = format!("{}/vms/{vm_id}/nics", app.address);
+
+    let zero_refill = json!({"bandwidth": {"size": MIB, "refill_time": 0}});
+    let negative_size = json!({"ops": {"size": -1, "refill_time": 1000}});
+    let res = attach_disk(
+        &client,
+        &app.address,
+        vm_id,
+        json!({"storage_object_id": object_id, "rate_limiter": zero_refill}),
+    )
+    .await;
+    assert_invalid_field(res, "/bandwidth/refill_time").await;
+    let res = client
+        .post(&nics_url)
+        .json(&json!({"id": "net0", "rate_limiter": negative_size}))
+        .send()
+        .await
+        .unwrap();
+    assert_invalid_field(res, "/ops/size").await;
+    let res = client
+        .post(format!("{}/vms", app.address))
+        .json(&with(
+            vm_body("vm-bad-limits"),
+            json!({"networks": [{"id": "net0", "rate_limiter": zero_refill}]}),
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_invalid_field(res, "/bandwidth/refill_time").await;
+
+    let limiter = json!({
+        "bandwidth": {"size": MIB, "refill_time": 1000, "one_time_burst": 4 * MIB},
+        "ops": {"size": 100, "refill_time": 500, "one_time_burst": 0},
+    });
+    let res = attach_disk(
+        &client,
+        &app.address,
+        vm_id,
+        json!({"storage_object_id": object_id, "rate_limiter": limiter}),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let disk: Value = res.json().await.unwrap();
+    assert_eq!(disk["rate_limiter"], limiter);
+    let res = client
+        .post(&nics_url)
+        .json(&json!({"id": "net0", "rate_limiter": limiter}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let nic: Value = res.json().await.unwrap();
+    assert_eq!(nic["rate_limiter"], limiter);
+}
+
 #[tokio::test]
 async fn test_add_nic_hotplug_failure_cleans_up_allocation_and_record() {
     let app = spawn_app().await;

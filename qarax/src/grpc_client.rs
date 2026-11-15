@@ -6,7 +6,7 @@ use tokio::time::{Duration, sleep};
 use tracing::{debug, instrument, warn};
 use uuid::Uuid;
 
-use crate::model::network_interfaces::NetworkInterface;
+use crate::model::network_interfaces::{NetworkInterface, RateLimiterConfig, TokenBucket};
 
 /// How long to wait for a TCP connection to a qarax-node. Without a limit, a
 /// host whose address drops packets holds the request for the kernel's full
@@ -144,6 +144,25 @@ pub struct CreateVmRequest {
     pub hypervisor: crate::model::vms::Hypervisor,
 }
 
+impl From<&RateLimiterConfig> for node::RateLimiterConfig {
+    fn from(limiter: &RateLimiterConfig) -> Self {
+        node::RateLimiterConfig {
+            bandwidth: limiter.bandwidth.as_ref().map(Into::into),
+            ops: limiter.ops.as_ref().map(Into::into),
+        }
+    }
+}
+
+impl From<&TokenBucket> for node::TokenBucket {
+    fn from(bucket: &TokenBucket) -> Self {
+        node::TokenBucket {
+            size: bucket.size,
+            refill_time: bucket.refill_time,
+            one_time_burst: bucket.one_time_burst,
+        }
+    }
+}
+
 /// Convert DB network interfaces to proto NetConfig for the node.
 pub fn net_configs_from_db(networks: &[NetworkInterface]) -> Vec<NetConfig> {
     fn normalize_ip(value: &Option<String>) -> Option<String> {
@@ -173,7 +192,7 @@ pub fn net_configs_from_db(networks: &[NetworkInterface]) -> Vec<NetConfig> {
             }),
             num_queues: normalize_num_queues(n.num_queues),
             queue_size: Some(n.queue_size),
-            rate_limiter: None,
+            rate_limiter: n.rate_limiter.as_ref().map(Into::into),
             offload_tso: Some(n.offload_tso),
             offload_ufo: Some(n.offload_ufo),
             offload_csum: Some(n.offload_csum),

@@ -284,6 +284,8 @@ qarax vm add-nic my-vm --network my-network
 qarax vm remove-nic my-vm --device-id net1
 ```
 
+`attach-disk` and `add-nic` take `--bandwidth-limit` (bytes per second, e.g. `50MiB`) and `--ops-limit` (disk requests or NIC packets per second). A NIC's limits apply to each direction separately. For bursts or other refill periods, set `rate_limiter` token buckets through the API.
+
 ### Live resize
 
 ```bash

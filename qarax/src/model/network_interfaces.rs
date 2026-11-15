@@ -3,21 +3,40 @@ use sqlx::{PgPool, Postgres, Transaction, Type, types::Json};
 use strum_macros::{Display, EnumString};
 use utoipa::ToSchema;
 use uuid::Uuid;
+use validator::Validate;
 
 use crate::model::vms::NewVmNetwork;
 
 pub type PgTransaction<'a> = Transaction<'a, Postgres>;
 
-#[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
+/// I/O limits for a disk or NIC, each a token bucket. On a NIC both apply to
+/// received and sent traffic separately.
+#[derive(Serialize, Deserialize, Debug, Clone, ToSchema, Validate)]
 pub struct RateLimiterConfig {
+    /// Bytes per refill period.
+    #[validate]
     pub bandwidth: Option<TokenBucket>,
+    /// Operations per refill period: disk requests, or NIC packets.
+    #[validate]
     pub ops: Option<TokenBucket>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
+/// A token bucket holding up to `size` tokens, refilled from empty in
+/// `refill_time` milliseconds, so it allows `size` per `refill_time` on
+/// average. It starts full.
+#[derive(Serialize, Deserialize, Debug, Clone, ToSchema, Validate)]
 pub struct TokenBucket {
+    /// Bucket capacity, in bytes or operations.
+    #[validate(range(min = 1))]
+    #[schema(minimum = 1)]
     pub size: i64,
+    /// Milliseconds the bucket takes to refill from empty.
+    #[validate(range(min = 1))]
+    #[schema(minimum = 1)]
     pub refill_time: i64,
+    /// Tokens available once, on top of the bucket, before the limit applies.
+    #[validate(range(min = 0))]
+    #[schema(minimum = 0)]
     pub one_time_burst: Option<i64>,
 }
 
@@ -44,7 +63,7 @@ pub struct NetworkInterface {
     // Performance
     pub num_queues: i32,
     pub queue_size: i32,
-    pub rate_limiter: Option<serde_json::Value>,
+    pub rate_limiter: Option<RateLimiterConfig>,
 
     // Offload features
     pub offload_tso: bool,
@@ -72,7 +91,7 @@ pub struct NetworkInterfaceRow {
     pub vhost_mode: Option<String>,
     pub num_queues: i32,
     pub queue_size: i32,
-    pub rate_limiter: Option<Json<serde_json::Value>>,
+    pub rate_limiter: Option<Json<RateLimiterConfig>>,
     pub offload_tso: bool,
     pub offload_ufo: bool,
     pub offload_csum: bool,
@@ -223,10 +242,6 @@ pub async fn create(
     };
 
     let vhost_mode = n.vhost_mode.as_ref().map(|m| m.to_string());
-    let rate_limiter = n
-        .rate_limiter
-        .as_ref()
-        .map(|r| serde_json::to_value(r).unwrap_or(serde_json::Value::Null));
 
     // network_id is set when using managed networking.
     sqlx::query!(
@@ -262,7 +277,7 @@ INSERT INTO network_interfaces (
         vhost_mode,
         n.num_queues.unwrap_or(1),
         n.queue_size.unwrap_or(256),
-        rate_limiter,
+        n.rate_limiter.as_ref().map(Json) as Option<Json<&RateLimiterConfig>>,
         n.offload_tso.unwrap_or(true),
         n.offload_ufo.unwrap_or(true),
         n.offload_csum.unwrap_or(true),

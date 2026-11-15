@@ -6,11 +6,15 @@ Covers:
   - Hotplugging a disk into a running VM, then hotunplugging it
   - Hotplugging a NIC into a running VM (isolated network), reaching the
     network through it, then hotunplugging it
+  - Bandwidth limits on a hotplugged disk and NIC slowing down guest I/O
 
 Each disk test uses its own sparse file, created on every node, as the raw
 block device.
 """
 
+import contextlib
+import re
+import time
 import uuid
 from uuid import UUID
 
@@ -70,7 +74,9 @@ from qarax_api_client.models import (
     NewNetwork,
     NewStoragePool,
     NewVm,
+    RateLimiterConfig,
     StoragePoolType,
+    TokenBucket,
     VmStatus,
 )
 from qarax_api_client.models.attach_disk_request import AttachDiskRequest
@@ -92,7 +98,8 @@ from helpers import (
 )
 from helpers import up_hosts as _up_hosts
 
-DISK_SIZE = 64 * 1024 * 1024
+MIB = 1024 * 1024
+DISK_SIZE = 64 * MIB
 
 
 @pytest.fixture
@@ -115,6 +122,43 @@ async def _make_vm(c, test_id):
         ),
     )
     return UUID(str(vm_id_raw).strip('"'))
+
+
+@contextlib.asynccontextmanager
+async def _isolated_network(c, test_id, hosts, octet):
+    """An isolated 10.<octet>.0.0/24 network, gateway .1, on every UP host
+    since the VM may land on any of them. Yields its UUID; deleted on exit."""
+    net_id_raw = await call_api(
+        create_network,
+        client=c,
+        body=NewNetwork(
+            name=f"e2e-hp-net-{test_id}",
+            subnet=f"10.{octet}.0.0/24",
+            gateway=f"10.{octet}.0.1",
+            type_="isolated",
+        ),
+    )
+    net_id = UUID(str(net_id_raw).strip('"'))
+    attached_host_ids = []
+    try:
+        for host in hosts:
+            await call_api(
+                attach_network_host,
+                client=c,
+                network_id=net_id,
+                body=AttachHostRequest(
+                    host_id=host.id,
+                    bridge_name=f"br-10-{octet}-{test_id[:4]}",
+                ),
+            )
+            attached_host_ids.append(host.id)
+        yield net_id
+    finally:
+        for host_id in attached_host_ids:
+            await call_api(
+                detach_network_host, client=c, network_id=net_id, host_id=host_id
+            )
+        await call_api(delete_network, client=c, network_id=net_id)
 
 
 async def _make_local_disk(c, test_id, hosts, prefix):
@@ -285,92 +329,157 @@ async def test_nic_hotplug_running_vm(client):
     then hotunplug.
     """
     test_id = uuid.uuid4().hex[:8]
-    net_id = vm_id = None
-    attached_host_ids = []
+    vm_id = None
     async with client as c:
-        try:
-            hosts = _up_hosts(await call_api(list_hosts, client=c))
-            assert hosts, "No UP hosts available"
+        hosts = _up_hosts(await call_api(list_hosts, client=c))
+        assert hosts, "No UP hosts available"
+        async with _isolated_network(c, test_id, hosts, 97) as net_id:
+            try:
+                vm_id = await _make_vm(c, test_id)
+                await call_api(start_vm, client=c, vm_id=vm_id)
+                await wait_for_status(c, vm_id, VmStatus.RUNNING)
 
-            # Create an isolated network for the hotplugged NIC
-            net_id_raw = await call_api(
-                create_network,
-                client=c,
-                body=NewNetwork(
-                    name=f"e2e-hp-net-{test_id}",
-                    subnet="10.97.0.0/24",
-                    gateway="10.97.0.1",
-                    type_="isolated",
-                ),
-            )
-            net_id = UUID(str(net_id_raw).strip('"'))
-
-            # The VM may land on any UP host, so the network must exist on each.
-            for host in hosts:
-                await call_api(
-                    attach_network_host,
+                # Hotplug a NIC onto the isolated network
+                add_resp = await add_nic.asyncio_detailed(
                     client=c,
-                    network_id=net_id,
-                    body=AttachHostRequest(
-                        host_id=host.id,
-                        bridge_name=f"br-10-97-{test_id[:4]}",
+                    vm_id=vm_id,
+                    body=NewVmNetwork(id="net0", network_id=net_id),
+                )
+                assert add_resp.status_code == 201, (
+                    f"NIC hotplug failed: {add_resp.status_code} {add_resp.content.decode()}"
+                )
+                nic = add_resp.parsed
+                assert nic.device_id == "net0"
+                assert nic.ip_address is not None, "Expected an IP to be allocated"
+
+                vm = await call_api(get_vm, client=c, vm_id=vm_id)
+                assert vm.status == VmStatus.RUNNING, (
+                    "VM should still be running after NIC hotplug"
+                )
+
+                # The NIC is on its network: up in the guest with its address,
+                # it reaches the gateway.
+                address = nic.ip_address.split("/")[0]
+                result = await exec_when_ready(
+                    c,
+                    vm_id,
+                    f"ip addr add {address}/24 dev eth0 && ip link set eth0 up && "
+                    "ping -c 3 -W 1 10.97.0.1",
+                )
+                assert ", 0% packet loss" in result.stdout, (
+                    f"exit={result.exit_code} stdout={result.stdout!r} stderr={result.stderr!r}"
+                )
+
+                # Hotunplug
+                rm_resp = await remove_nic.asyncio_detailed(
+                    client=c, vm_id=vm_id, device_id="net0"
+                )
+                assert rm_resp.status_code == 204, (
+                    f"NIC hotunplug failed: {rm_resp.status_code} {rm_resp.content.decode()}"
+                )
+
+                vm = await call_api(get_vm, client=c, vm_id=vm_id)
+                assert vm.status == VmStatus.RUNNING, (
+                    "VM should still be running after NIC hotunplug"
+                )
+            finally:
+                if vm_id:
+                    await call_api(delete_vm, client=c, vm_id=vm_id)
+
+
+def _bandwidth_limit(bytes_per_second):
+    return RateLimiterConfig(
+        bandwidth=TokenBucket(size=bytes_per_second, refill_time=1000)
+    )
+
+
+@pytest.mark.asyncio
+async def test_rate_limits_throttle_hotplugged_disk_and_nic(client):
+    """
+    A disk and a NIC hotplugged with bandwidth limits slow the guest down.
+    Reading 4 MiB from a disk limited to 1 MiB/s takes seconds, where it
+    otherwise takes milliseconds. So does a 48 KB ping through a NIC limited
+    to 16 KiB/s, which applies to the request and the reply. Token buckets
+    start full, so each transfer is several times the bucket.
+    """
+    test_id = uuid.uuid4().hex[:8]
+    pool_id = disk_id = vm_id = disk_path = None
+    async with client as c:
+        hosts = _up_hosts(await call_api(list_hosts, client=c))
+        assert hosts, "No UP hosts available"
+        async with _isolated_network(c, test_id, hosts, 96) as net_id:
+            try:
+                pool_id, disk_id, disk_path = await _make_local_disk(
+                    c, test_id, hosts, "rl"
+                )
+                vm_id = await _make_vm(c, test_id)
+                await call_api(start_vm, client=c, vm_id=vm_id)
+                await wait_for_status(c, vm_id, VmStatus.RUNNING)
+
+                await call_api(
+                    attach_disk,
+                    client=c,
+                    vm_id=vm_id,
+                    body=AttachDiskRequest(
+                        storage_object_id=disk_id, rate_limiter=_bandwidth_limit(MIB)
                     ),
                 )
-                attached_host_ids.append(host.id)
-
-            vm_id = await _make_vm(c, test_id)
-            await call_api(start_vm, client=c, vm_id=vm_id)
-            await wait_for_status(c, vm_id, VmStatus.RUNNING)
-
-            # Hotplug a NIC onto the isolated network
-            add_resp = await add_nic.asyncio_detailed(
-                client=c,
-                vm_id=vm_id,
-                body=NewVmNetwork(id="net0", network_id=net_id),
-            )
-            assert add_resp.status_code == 201, (
-                f"NIC hotplug failed: {add_resp.status_code} {add_resp.content.decode()}"
-            )
-            nic = add_resp.parsed
-            assert nic.device_id == "net0"
-            assert nic.ip_address is not None, "Expected an IP to be allocated"
-
-            vm = await call_api(get_vm, client=c, vm_id=vm_id)
-            assert vm.status == VmStatus.RUNNING, (
-                "VM should still be running after NIC hotplug"
-            )
-
-            # The NIC is on its network: up in the guest with its address, it
-            # reaches the gateway.
-            address = nic.ip_address.split("/")[0]
-            result = await exec_when_ready(
-                c,
-                vm_id,
-                f"ip addr add {address}/24 dev eth0 && ip link set eth0 up && "
-                "ping -c 3 -W 1 10.97.0.1",
-            )
-            assert ", 0% packet loss" in result.stdout, (
-                f"exit={result.exit_code} stdout={result.stdout!r} stderr={result.stderr!r}"
-            )
-
-            # Hotunplug
-            rm_resp = await remove_nic.asyncio_detailed(
-                client=c, vm_id=vm_id, device_id="net0"
-            )
-            assert rm_resp.status_code == 204, (
-                f"NIC hotunplug failed: {rm_resp.status_code} {rm_resp.content.decode()}"
-            )
-
-            vm = await call_api(get_vm, client=c, vm_id=vm_id)
-            assert vm.status == VmStatus.RUNNING, (
-                "VM should still be running after NIC hotunplug"
-            )
-        finally:
-            if vm_id:
-                await call_api(delete_vm, client=c, vm_id=vm_id)
-            for host_id in attached_host_ids:
-                await call_api(
-                    detach_network_host, client=c, network_id=net_id, host_id=host_id
+                nic = await call_api(
+                    add_nic,
+                    client=c,
+                    vm_id=vm_id,
+                    body=NewVmNetwork(
+                        id="net0",
+                        network_id=net_id,
+                        rate_limiter=_bandwidth_limit(16 * 1024),
+                    ),
                 )
-            if net_id:
-                await call_api(delete_network, client=c, network_id=net_id)
+
+                # Wait for the guest to see both devices; the disk is the one
+                # of its size.
+                result = await exec_when_ready(
+                    c,
+                    vm_id,
+                    "for i in 1 2 3 4 5 6 7 8 9 10; do "
+                    "  for d in /sys/block/vd*; do "
+                    f'    [ "$(cat $d/size)" = {DISK_SIZE // 512} ] && '
+                    "      [ -e /sys/class/net/eth0 ] && echo /dev/${d##*/} && exit 0; "
+                    "  done; sleep 1; "
+                    "done; exit 1",
+                )
+                assert result.exit_code == 0, (
+                    f"the guest never saw the disk and NIC: {result.stdout!r} {result.stderr!r}"
+                )
+                disk_device = result.stdout.strip()
+
+                started = time.monotonic()
+                result = await exec_when_ready(
+                    c, vm_id, f"busybox dd if={disk_device} of=/dev/null bs=1M count=4"
+                )
+                elapsed = time.monotonic() - started
+                assert result.exit_code == 0, f"dd failed: {result.stderr!r}"
+                assert elapsed >= 2, f"read 4 MiB at 1 MiB/s in {elapsed:.2f}s"
+
+                address = nic.ip_address.split("/")[0]
+                result = await exec_when_ready(
+                    c,
+                    vm_id,
+                    f"ip addr add {address}/24 dev eth0 && ip link set eth0 up && "
+                    "ping -c 1 -s 48000 -W 15 10.96.0.1",
+                )
+                rtt = re.search(r"time=([\d.]+) ms", result.stdout)
+                assert rtt, (
+                    f"exit={result.exit_code} stdout={result.stdout!r} stderr={result.stderr!r}"
+                )
+                assert float(rtt.group(1)) >= 1500, (
+                    f"a 48 KB ping at 16 KiB/s each way took {rtt.group(1)} ms"
+                )
+            finally:
+                if vm_id:
+                    await call_api(delete_vm, client=c, vm_id=vm_id)
+                if disk_id:
+                    await call_api(delete_storage_object, client=c, object_id=disk_id)
+                if pool_id:
+                    await call_api(delete_pool, client=c, pool_id=pool_id)
+                if disk_path:
+                    remove_file_from_nodes(disk_path)

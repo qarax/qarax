@@ -13,11 +13,14 @@ T = TypeVar("T", bound="TokenBucket")
 
 @_attrs_define
 class TokenBucket:
-    """
-    Attributes:
-        refill_time (int):
-        size (int):
-        one_time_burst (int | None | Unset):
+    """A token bucket holding up to `size` tokens, refilled from empty in
+    `refill_time` milliseconds, so it allows `size` per `refill_time` on
+    average. It starts full.
+
+        Attributes:
+            refill_time (int): Milliseconds the bucket takes to refill from empty.
+            size (int): Bucket capacity, in bytes or operations.
+            one_time_burst (int | None | Unset): Tokens available once, on top of the bucket, before the limit applies.
     """
 
     refill_time: int
