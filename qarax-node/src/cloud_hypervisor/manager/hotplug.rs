@@ -190,12 +190,17 @@ impl VmManager {
         Ok(())
     }
 
-    /// Resize the backing file for a disk (VM must be stopped).
-    /// Uses fallocate to extend the file without filling it; falls back to truncate on NFS.
+    /// Grow disk `disk_id`, whose image is at `path`, to `new_size` bytes.
+    ///
+    /// A booted VM's disk grows through Cloud Hypervisor, which resizes the
+    /// image and tells the guest. Otherwise the image grows in place with
+    /// `qemu-img`, which also updates the virtual size in a qcow2 header;
+    /// growing the file alone would leave a qcow2 disk its old size. The new
+    /// space is sparse either way.
     pub async fn resize_disk(
         &self,
-        _vm_id: &str,
-        _disk_id: &str,
+        vm_id: &str,
+        disk_id: &str,
         path: &str,
         new_size: i64,
     ) -> Result<(), VmManagerError> {
@@ -205,36 +210,39 @@ impl VmManager {
             ));
         }
 
-        let metadata = tokio::fs::metadata(path)
+        let socket_path = {
+            let vms = self.vms.lock().await;
+            vms.get(vm_id)
+                .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?
+                .socket_path
+                .clone()
+        };
+        if matches!(
+            Self::query_vm_state(&socket_path).await,
+            Ok(models::VmState::Running | models::VmState::Paused)
+        ) {
+            let body = serde_json::to_string(&models::VmResizeDisk {
+                id: Some(disk_id.to_string()),
+                desired_size: Some(new_size),
+            })
+            .map_err(|e| VmManagerError::InvalidConfig(e.to_string()))?;
+            Self::send_api_request(&socket_path, "PUT", "/api/v1/vm.resize-disk", Some(&body))
+                .await?;
+            return Ok(());
+        }
+
+        let format = if Self::is_qcow2(path) { "qcow2" } else { "raw" };
+        let output = tokio::process::Command::new("qemu-img")
+            .args(["resize", "-f", format, path, &new_size.to_string()])
+            .output()
             .await
-            .map_err(|e| VmManagerError::StorageError(format!("stat {path}: {e}")))?;
-        let current_size = metadata.len() as i64;
-        if new_size <= current_size {
-            return Err(VmManagerError::InvalidConfig(format!(
-                "new_size {new_size} must be greater than current size {current_size}"
+            .map_err(|e| VmManagerError::StorageError(format!("failed to run qemu-img: {e}")))?;
+        if !output.status.success() {
+            return Err(VmManagerError::StorageError(format!(
+                "qemu-img resize {path} failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
             )));
         }
-
-        let status = tokio::process::Command::new("fallocate")
-            .args(["-l", &new_size.to_string(), path])
-            .status()
-            .await
-            .map_err(|e| VmManagerError::StorageError(e.to_string()))?;
-
-        if !status.success() {
-            // Fallback: truncate (always works, may create sparse regions)
-            let status = tokio::process::Command::new("truncate")
-                .args(["-s", &new_size.to_string(), path])
-                .status()
-                .await
-                .map_err(|e| VmManagerError::StorageError(e.to_string()))?;
-            if !status.success() {
-                return Err(VmManagerError::StorageError(format!(
-                    "both fallocate and truncate failed on {path}"
-                )));
-            }
-        }
-
         Ok(())
     }
 

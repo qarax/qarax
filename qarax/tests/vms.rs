@@ -1201,10 +1201,10 @@ async fn test_disk_resize_rejects_invalid_requests() {
     )
     .await;
 
-    set_vm_status(&app.pool, vm_id, "RUNNING").await;
+    set_vm_status(&app.pool, vm_id, "PAUSED").await;
     assert_unprocessable(
         resize("disk0", 4 * GIB).await.unwrap(),
-        "VM must be stopped (Created or Shutdown) to resize a disk",
+        "VM must be running or stopped (Created or Shutdown) to resize a disk",
     )
     .await;
 }

@@ -3978,6 +3978,8 @@ pub struct DiskResizeRequest {
     pub new_size_bytes: i64,
 }
 
+/// Grow a disk. A running VM's disk grows live and the guest sees the new size
+/// right away; a stopped VM's image (raw or qcow2) grows in place.
 #[utoipa::path(
     put,
     path = "/vms/{vm_id}/disks/{disk_id}/resize",
@@ -3989,7 +3991,7 @@ pub struct DiskResizeRequest {
     responses(
         (status = 200, description = "Disk resized successfully", body = crate::model::storage_objects::StorageObject),
         (status = 404, description = "VM or disk not found"),
-        (status = 422, description = "VM not stopped, disk not resizable, or size invalid"),
+        (status = 422, description = "VM neither running nor stopped, disk not resizable, or size invalid"),
         (status = 500, description = "Internal server error")
     ),
     tag = "vms"
@@ -4005,10 +4007,10 @@ pub async fn resize_disk(
 
     let vm = vms::get(env.pool(), vm_id).await?;
     match vm.status {
-        VmStatus::Created | VmStatus::Shutdown => {}
+        VmStatus::Created | VmStatus::Shutdown | VmStatus::Running => {}
         _ => {
             return Err(crate::errors::Error::UnprocessableEntity(
-                "VM must be stopped (Created or Shutdown) to resize a disk".into(),
+                "VM must be running or stopped (Created or Shutdown) to resize a disk".into(),
             ));
         }
     }

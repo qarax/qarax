@@ -338,7 +338,7 @@ enum VmCommand {
         #[arg(long)]
         security_group: String,
     },
-    /// Resize a disk attached to a stopped VM
+    /// Grow a VM's disk: live, seen by the guest at once, when the VM is running
     ResizeDisk {
         /// VM name or ID
         vm: String,
