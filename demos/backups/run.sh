@@ -6,12 +6,12 @@
 #   1. VM backup create/list/get/restore/delete, proving the restore brought
 #      back the guest's state: a file written inside the guest before the
 #      backup reads the same after a stop and restore.
-#   2. Control-plane database backup create/list/get/restore, proving the
-#      restore rewound the database.
+#   2. Control-plane database backup create/list/get/restore/delete, proving
+#      the restore rewound the database but kept the backup's record.
 #
 # Prerequisites:
 #   - qarax stack running (make run-local; started automatically if not up)
-#   - docker (to clear dump files inside the qarax container), jq
+#   - docker (to create the dump directory inside the qarax container), jq
 #
 # Usage:
 #   ./demos/backups/run.sh [--server URL] [--pool-name NAME] [--pool-path PATH]
@@ -80,19 +80,17 @@ backup_status() {
 }
 
 # The control plane writes database dumps into the pool path inside the qarax
-# container: create it there, and remove dumps whose records a database
-# restore dropped.
-clear_dumps() {
-	node_exec qarax sh -c "mkdir -p '${POOL_PATH}' && rm -f '${POOL_PATH}'/*.dump"
+# container: create it there.
+ensure_dump_dir() {
+	node_exec qarax mkdir -p "$POOL_PATH"
 }
 
-# Backups first: deleting a VM drops its backup records but leaves the
-# snapshot data on the node.
+# Deleting a backup or a VM (which deletes the VM's backups) removes the
+# backups' snapshots and dumps too.
 remove_leftovers() {
 	sweep backup "$PREFIX"
 	sweep vm "$PREFIX"
 	sweep instance-type "$PREFIX"
-	clear_dumps
 }
 
 ensure_backup_pool() {
@@ -151,6 +149,7 @@ cleanup() {
 trap cleanup EXIT
 
 step "Preparing reusable local backup storage at '${POOL_PATH}'..."
+ensure_dump_dir
 ensure_backup_pool
 
 banner "Part 1: VM backup create/list/get/restore/delete"
@@ -190,7 +189,7 @@ run qarax backup delete "$VM_BACKUP_NAME"
 step "Deleting the demo VM before the database part..."
 run qarax vm delete "$VM_NAME"
 
-banner "Part 2: Database backup create/list/get/restore"
+banner "Part 2: Database backup create/list/get/restore/delete"
 
 step "Creating control-plane state that should survive the restore..."
 run qarax instance-type create \
@@ -222,13 +221,15 @@ run qarax instance-type get "$PRE_TYPE_NAME"
 if qarax instance-type list -o json | jq -e --arg name "$POST_TYPE_NAME" 'any(.[]; .name == $name)' >/dev/null; then
 	die "Instance type '${POST_TYPE_NAME}' still exists after the database restore"
 fi
-[[ "$(qarax backup list --type database --name "$DB_BACKUP_NAME" -o json | jq 'length')" == "0" ]] ||
-	die "The database restore did not rewind backup metadata as expected"
+[[ "$(qarax backup list --type database --name "$DB_BACKUP_NAME" -o json | jq 'length')" == "1" ]] ||
+	die "The database restore dropped the backup's record"
 ok "Pre-backup data survived; post-backup data was removed."
-info "The database backup's own record is gone too: it was written after the dump it describes."
+info "The backup's record was kept: its dump is outside the database, so restores don't rewind backups."
 
-step "Removing the surviving instance type and the leftover dump..."
+step "Deleting the database backup (removes its dump)..."
+run qarax backup delete "$DB_BACKUP_NAME"
+
+step "Removing the surviving instance type..."
 run qarax instance-type delete "$PRE_TYPE_NAME"
-clear_dumps
 
 banner "Demo Complete"

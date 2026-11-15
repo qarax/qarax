@@ -126,6 +126,7 @@ pub struct BackupListQuery {
         vm::handler::resume,
         vm::handler::list_snapshots,
         vm::handler::create_snapshot,
+        vm::handler::delete_snapshot,
         vm::handler::restore,
         vm::handler::migrate,
         vm::handler::delete,
@@ -550,6 +551,10 @@ fn vms() -> Router {
         .route(
             "/vms/{vm_id}/snapshots",
             get(vm::handler::list_snapshots).post(vm::handler::create_snapshot),
+        )
+        .route(
+            "/vms/{vm_id}/snapshots/{snapshot_id}",
+            axum::routing::delete(vm::handler::delete_snapshot),
         )
         .route("/vms/{vm_id}/restore", post(vm::handler::restore))
         .route("/vms/{vm_id}/migrate", post(vm::handler::migrate))

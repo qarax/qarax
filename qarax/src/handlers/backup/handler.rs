@@ -6,21 +6,22 @@ use secrecy::ExposeSecret;
 use serde::{Deserialize, Serialize};
 use sqlx::{Connection, PgConnection};
 use tokio::{fs, process::Command, time::sleep};
-use tracing::{error, instrument};
+use tracing::{error, instrument, warn};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::{
     App,
-    grpc_client::NodeClient,
     handlers::{
         audit::{AuditEvent, AuditEventExt},
-        vm::handler::{CreateSnapshotRequest, create_vm_snapshot, restore_vm_from_snapshot},
+        vm::handler::{
+            CreateSnapshotRequest, create_vm_snapshot, delete_snapshot_files,
+            restore_vm_from_snapshot,
+        },
     },
     model::{
         audit_log::{AuditAction, AuditResourceType},
         backups::{self, Backup, BackupStatus, BackupType, NewBackup},
-        hosts::{self, HostStatus},
         storage_objects::{self, NewStorageObject, StorageObjectType},
         storage_pools, vms,
     },
@@ -395,11 +396,30 @@ pub async fn restore(
             let dump_path = storage_objects::get_path_from_config(&storage_object.config)
                 .ok_or(crate::errors::Error::InternalServerError)?;
 
+            // Database backups are files outside the database, which the
+            // restore must not rewind: the dump predates its own record and
+            // those of later backups, and has records of backups deleted
+            // since. Keep the records as they are now.
+            let database_backups = backups::list_database_backup_records(env.pool()).await?;
+
             env.set_maintenance_mode(true);
             let _maintenance = DropGuard::new(env.clone(), |env| env.set_maintenance_mode(false));
             sleep(Duration::from_millis(500)).await;
             terminate_database_sessions(&env).await?;
             run_pg_restore(&env, &dump_path).await?;
+
+            // The database is restored either way: a record that can't be put
+            // back is logged with its dump, not turned into a failed restore.
+            for (record, e) in
+                backups::reset_database_backup_records(env.pool(), &database_backups).await?
+            {
+                warn!(
+                    backup_id = %record.id,
+                    dump = ?storage_objects::get_path_from_config(&record.object_config),
+                    error = %e,
+                    "could not re-record a database backup after the restore; its dump is untracked"
+                );
+            }
 
             RestoreBackupResponse {
                 backup_id: backup.id,
@@ -455,39 +475,12 @@ pub async fn delete(
     let storage_object = storage_objects::get(env.pool(), backup.storage_object_id).await?;
     if let Some(path) = storage_objects::get_path_from_config(&storage_object.config) {
         match backup.backup_type {
-            // A VM snapshot is written by the node running the VM, which is
-            // not necessarily one the (local) pool is attached to, and the VM
-            // may have moved since. DeleteSnapshot treats a missing directory
-            // as success, so ask every candidate: the VM's current host and
-            // all hosts attached to the pool.
             BackupType::Vm => {
-                let mut host_ids =
-                    storage_pools::list_host_ids(env.pool(), storage_object.storage_pool_id)
-                        .await?;
-                if let Some(vm_id) = backup.vm_id
-                    && let Some(vm_host) = vms::get(env.pool(), vm_id).await?.host_id
-                {
-                    host_ids.push(vm_host);
-                }
-                host_ids.sort();
-                host_ids.dedup();
-
-                let mut reached = 0;
-                for host_id in host_ids {
-                    let host = hosts::require_by_id(env.pool(), host_id).await?;
-                    if host.status != HostStatus::Up {
-                        continue;
-                    }
-                    NodeClient::new(&host.address, host.port as u16)
-                        .delete_snapshot(&format!("file://{path}"))
-                        .await
-                        .map_err(|e| {
-                            error!(error = %e, backup_id = %backup.id, host_id = %host.id, "failed to delete VM backup snapshot");
-                            crate::errors::Error::InternalServerError
-                        })?;
-                    reached += 1;
-                }
-                if reached == 0 {
+                let vm_host = match backup.vm_id {
+                    Some(vm_id) => vms::get(env.pool(), vm_id).await?.host_id,
+                    None => None,
+                };
+                if !delete_snapshot_files(&env, &storage_object, vm_host).await? {
                     return Err(crate::errors::Error::UnprocessableEntity(
                         "no UP host can reach the backup's snapshot".into(),
                     ));

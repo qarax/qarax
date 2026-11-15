@@ -159,6 +159,16 @@ pub async fn list_snapshots(
     client.get(&path).await
 }
 
+pub async fn delete_snapshot(
+    client: &Client,
+    vm_id: Uuid,
+    snapshot_id: Uuid,
+) -> anyhow::Result<()> {
+    client
+        .delete(&format!("/vms/{vm_id}/snapshots/{snapshot_id}"))
+        .await
+}
+
 pub async fn restore(client: &Client, vm_id: Uuid, req: &RestoreRequest) -> anyhow::Result<Vm> {
     client.post(&format!("/vms/{vm_id}/restore"), req).await
 }

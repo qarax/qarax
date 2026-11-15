@@ -33,7 +33,7 @@ use crate::{
         backups,
         backups::{Backup, BackupType, NewBackup},
         boot_sources, host_gpus, host_numa, hosts,
-        hosts::Host,
+        hosts::{Host, HostStatus},
         jobs::{self, JobType, NewJob},
         lifecycle_hooks,
         network_interfaces::{self, NetworkInterface, RateLimiterConfig},
@@ -2012,6 +2012,93 @@ pub async fn restore(
     })
 }
 
+/// Removes a VM snapshot's directory (`object`) from the nodes. A snapshot is
+/// written by the node running the VM, which is not necessarily one the
+/// (local) pool is attached to, and the VM may have moved since. DeleteSnapshot
+/// treats a missing directory as success, so this asks every candidate that is
+/// UP: the VM's current host and all hosts attached to the pool. Returns false
+/// when none is UP, so the files may still be on a host that is down.
+pub(crate) async fn delete_snapshot_files(
+    env: &App,
+    object: &StorageObject,
+    vm_host_id: Option<Uuid>,
+) -> Result<bool> {
+    let Some(path) = storage_objects::get_path_from_config(&object.config) else {
+        return Ok(true);
+    };
+    let mut host_ids = storage_pools::list_host_ids(env.pool(), object.storage_pool_id).await?;
+    host_ids.extend(vm_host_id);
+    host_ids.sort();
+    host_ids.dedup();
+
+    let mut reached = false;
+    for host_id in host_ids {
+        let host = hosts::require_by_id(env.pool(), host_id).await?;
+        if host.status != HostStatus::Up {
+            continue;
+        }
+        NodeClient::new(&host.address, host.port as u16)
+            .delete_snapshot(&format!("file://{path}"))
+            .await
+            .map_err(|e| {
+                error!(error = %e, storage_object_id = %object.id, host_id = %host.id, "failed to delete VM snapshot");
+                crate::errors::Error::InternalServerError
+            })?;
+        reached = true;
+    }
+    Ok(reached)
+}
+
+#[utoipa::path(
+    delete,
+    path = "/vms/{vm_id}/snapshots/{snapshot_id}",
+    params(
+        ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier"),
+        ("snapshot_id" = uuid::Uuid, Path, description = "Snapshot unique identifier")
+    ),
+    responses(
+        (status = 204, description = "Snapshot, its backup record and its stored data deleted"),
+        (status = 404, description = "VM or snapshot not found"),
+        (status = 409, description = "Snapshot is still being created"),
+        (status = 422, description = "No UP host can reach the snapshot's data"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "vms"
+)]
+#[instrument(skip(env))]
+pub async fn delete_snapshot(
+    Extension(env): Extension<App>,
+    Path((vm_id, snapshot_id)): Path<(Uuid, Uuid)>,
+) -> Result<StatusCode> {
+    let vm = vms::get(env.pool(), vm_id).await?;
+    let snapshot = snapshots::get(env.pool(), snapshot_id)
+        .await
+        .map_err(|e| match e {
+            sqlx::Error::RowNotFound => crate::errors::Error::NotFound,
+            _ => crate::errors::Error::Sqlx(e),
+        })?;
+    if snapshot.vm_id != vm_id {
+        return Err(crate::errors::Error::NotFound);
+    }
+    if snapshot.status == SnapshotStatus::Creating {
+        return Err(crate::errors::Error::Conflict(
+            "snapshot is still being created".into(),
+        ));
+    }
+
+    // Remove the stored data first, so a failure leaves the records in place
+    // and the delete can be retried.
+    let object = storage_objects::get(env.pool(), snapshot.storage_object_id).await?;
+    if !delete_snapshot_files(&env, &object, vm.host_id).await? {
+        return Err(crate::errors::Error::UnprocessableEntity(
+            "no UP host can reach the snapshot's data".into(),
+        ));
+    }
+    // Cascades to the snapshot row and the backup it is recorded as.
+    storage_objects::delete(env.pool(), object.id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 #[utoipa::path(
     get,
     path = "/vms/{vm_id}/metrics",
@@ -2082,7 +2169,7 @@ pub async fn metrics(
         ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier")
     ),
     responses(
-        (status = 204, description = "VM deleted successfully"),
+        (status = 204, description = "VM deleted, with its snapshots and VM backups"),
         (status = 404, description = "VM not found"),
         (status = 500, description = "Internal server error")
     ),
@@ -2094,6 +2181,24 @@ pub async fn delete(
     Path(vm_id): Path<Uuid>,
 ) -> Result<axum::response::Response> {
     let vm = vms::get(env.pool(), vm_id).await?;
+
+    // Its snapshots, and the VM backups they are recorded as, can't be
+    // restored without the VM. Remove their data first, so a node that fails
+    // to leaves the VM in place and the delete can be retried. Files on a host
+    // that is down stay there, as the VM's own do.
+    for snapshot in snapshots::list_for_vm(env.pool(), vm_id, None).await? {
+        let object = storage_objects::get(env.pool(), snapshot.storage_object_id).await?;
+        if !delete_snapshot_files(&env, &object, vm.host_id).await? {
+            warn!(
+                vm_id = %vm_id,
+                snapshot_id = %snapshot.id,
+                path = ?storage_objects::get_path_from_config(&object.config),
+                "no UP host can reach the deleted VM's snapshot; leaving its files"
+            );
+        }
+        // Cascades to the snapshot row and its backup.
+        storage_objects::delete(env.pool(), object.id).await?;
+    }
 
     // Release any allocated GPUs before deleting
     if let Err(e) = host_gpus::deallocate_by_vm(env.pool(), vm_id).await {

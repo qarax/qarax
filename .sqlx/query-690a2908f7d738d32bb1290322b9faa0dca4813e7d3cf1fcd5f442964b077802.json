@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nDELETE FROM storage_objects\nWHERE id IN (SELECT storage_object_id FROM backups\n             WHERE backup_type = 'DATABASE' AND NOT (id = ANY($1)))\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "UuidArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "690a2908f7d738d32bb1290322b9faa0dca4813e7d3cf1fcd5f442964b077802"
+}
