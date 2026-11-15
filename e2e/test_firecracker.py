@@ -50,8 +50,10 @@ from qarax_api_client.models import (
     Hypervisor,
     NewStoragePool,
     NewVm,
+    RateLimiterConfig,
     RestoreRequest,
     StoragePoolType,
+    TokenBucket,
     VmStatus,
 )
 
@@ -246,6 +248,80 @@ async def test_fc_stop_ends_the_vm(client, guest_agent):
                 )
         finally:
             await call_api(delete_vm, client=c, vm_id=vm_id)
+
+
+@pytest.mark.asyncio
+async def test_fc_disk_rate_limit_throttles_reads(client):
+    """A Firecracker drive attached with a bandwidth limit is throttled:
+    reading 4 MiB at 1 MiB/s takes seconds, where it otherwise takes
+    milliseconds (the bucket starts full, so the first MiB is free)."""
+    test_id = uuid.uuid4().hex[:8]
+    vm_id = pool_id = disk_id = None
+    async with client as c:
+        try:
+            vm_id_raw = await call_api(
+                create_vm,
+                client=c,
+                body=new_fc_vm(f"e2e-fc-rl-{test_id}", guest_agent=True),
+            )
+            vm_id = str(vm_id_raw).strip('"')
+            vm = await call_api(get_vm, client=c, vm_id=vm_id)
+            pool_id_raw = await call_api(
+                create_pool,
+                client=c,
+                body=NewStoragePool(
+                    name=f"e2e-fc-rl-pool-{test_id}",
+                    pool_type=StoragePoolType.LOCAL,
+                    config={"path": f"/var/lib/qarax/e2e-fc-rl-{test_id}"},
+                ),
+            )
+            pool_id = UUID(str(pool_id_raw).strip('"'))
+            await call_api(
+                attach_pool_host,
+                client=c,
+                pool_id=pool_id,
+                body=AttachPoolHostRequest(host_id=vm.host_id),
+            )
+            disk = await call_api(
+                create_disk,
+                client=c,
+                pool_id=pool_id,
+                body=CreateDiskRequest(
+                    name=f"e2e-fc-rl-disk-{test_id}", size_bytes=16 * 1024 * 1024
+                ),
+            )
+            disk_id = disk.storage_object_id
+            # Firecracker drives can't be hotplugged: attached before the start.
+            await call_api(
+                attach_disk,
+                client=c,
+                vm_id=vm_id,
+                body=AttachDiskRequest(
+                    storage_object_id=disk_id,
+                    rate_limiter=RateLimiterConfig(
+                        bandwidth=TokenBucket(size=1024 * 1024, refill_time=1000)
+                    ),
+                ),
+            )
+            await call_api(start_vm, client=c, vm_id=vm_id)
+            await wait_for_status(c, vm_id, VmStatus.RUNNING)
+            result = await exec_when_ready(c, vm_id, "[ -e /dev/vda ]")
+            assert result.exit_code == 0, "the guest doesn't see the drive"
+
+            started = time.monotonic()
+            result = await exec_when_ready(
+                c, vm_id, "busybox dd if=/dev/vda of=/dev/null bs=1M count=4"
+            )
+            elapsed = time.monotonic() - started
+            assert result.exit_code == 0, f"dd failed: {result.stderr!r}"
+            assert elapsed >= 2, f"read 4 MiB at 1 MiB/s in {elapsed:.2f}s"
+        finally:
+            if vm_id:
+                await call_api(delete_vm, client=c, vm_id=vm_id)
+            if disk_id is not None:
+                await call_api(delete_storage_object, client=c, object_id=disk_id)
+            if pool_id is not None:
+                await call_api(delete_pool, client=c, pool_id=pool_id)
 
 
 @pytest.mark.asyncio
