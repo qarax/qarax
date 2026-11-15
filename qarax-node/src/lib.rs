@@ -10,4 +10,5 @@ pub mod rpc;
 pub mod services;
 pub mod snapshot;
 pub mod storage;
+pub mod tls;
 pub mod vmm;

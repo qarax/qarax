@@ -50,6 +50,7 @@ RUN dnf install -y \
     kmod \
     libnl3 \
     openssh-server \
+    openssl \
     kernel-core \
     kernel-modules \
     && dnf clean all
@@ -155,6 +156,30 @@ SyslogIdentifier=qarax
 WantedBy=multi-user.target
 EOF
 
+# The node's gRPC API only serves clients with a certificate from its CA. At
+# first boot this makes a demo CA, the node's certificate for NODE_ADDRESS (the
+# address run.sh registers the host under) and the control plane's client
+# certificate, and puts them where both services read them by default.
+ARG NODE_ADDRESS
+RUN cat > /etc/systemd/system/qarax-node-tls.service << 'EOF' && \
+    sed -i "s|__NODE_ADDRESS__|${NODE_ADDRESS:?set NODE_ADDRESS}|g" \
+    /etc/systemd/system/qarax-node-tls.service
+[Unit]
+Description=Create the qarax node gRPC certificates (demo CA)
+Before=qarax.service qarax-node.service
+ConditionPathExists=!/etc/qarax-node/tls/server-key.pem
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/gen-node-tls /var/lib/qarax/node-tls __NODE_ADDRESS__
+ExecStart=/bin/sh -c 'umask 077 && mkdir -p /etc/qarax-node/tls /etc/qarax/node-tls && \
+    cp /var/lib/qarax/node-tls/nodes/__NODE_ADDRESS__/* /etc/qarax-node/tls/ && \
+    cp /var/lib/qarax/node-tls/control-plane/* /etc/qarax/node-tls/'
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
 RUN mkdir -p /etc/systemd/system/qarax-node.service.d && \
     cat > /etc/systemd/system/qarax-node.service.d/otel.conf << 'EOF'
 [Service]
@@ -182,6 +207,7 @@ RUN mkdir -p /etc/systemd/system/multi-user.target.wants && \
     ln -sf /etc/systemd/system/qarax.service /etc/systemd/system/multi-user.target.wants/qarax.service && \
     ln -sf /etc/systemd/system/overlaybd-tcmu.service /etc/systemd/system/multi-user.target.wants/overlaybd-tcmu.service && \
     ln -sf /etc/systemd/system/qarax-node.service /etc/systemd/system/multi-user.target.wants/qarax-node.service && \
+    ln -sf /etc/systemd/system/qarax-node-tls.service /etc/systemd/system/multi-user.target.wants/qarax-node-tls.service && \
     ln -sf /usr/lib/systemd/system/sshd.service /etc/systemd/system/multi-user.target.wants/sshd.service && \
     ln -sf /etc/systemd/system/otel-lgtm.service /etc/systemd/system/multi-user.target.wants/otel-lgtm.service
 
@@ -259,8 +285,9 @@ StartLimitBurst=5
 WantedBy=multi-user.target
 EOF
 
-# Copy configuration and the node's systemd units
+# Copy configuration, the node's systemd units and the certificate script
 COPY configuration/ /etc/qarax/configuration/
+COPY --chmod=0755 scripts/gen-node-tls.sh /usr/local/bin/gen-node-tls
 COPY deployments/overlaybd-tcmu.service /etc/systemd/system/overlaybd-tcmu.service
 COPY deployments/qarax-node.service /etc/systemd/system/qarax-node.service
 

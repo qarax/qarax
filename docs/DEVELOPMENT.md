@@ -57,6 +57,10 @@ the container is its gateway `10.0.2.2` (DHCP from dnsmasq, NAT out), port
 5000 there proxies the compose registry, and the container's ports 22 and
 50051 are forwarded to the guest.
 
+The container's entrypoint also copies the node's gRPC certificates (made by
+the compose service `certs` for the name `bootc-vm`) into the guest's
+`/etc/qarax-node/tls` once its SSH is up, and restarts `qarax-node`.
+
 Because the guest resolves `registry` to its gateway, the stack's OverlayBD
 pool (`http://registry:5000`) works on the VM node unchanged, and
 `bootc switch` pulls from `10.0.2.2:5000/...` (the upgrade tests' images).
@@ -94,7 +98,9 @@ docker compose -f e2e/docker-compose.yml exec bootc-vm \
 - `losetup: ... failed to set up loop device`: the `loop` module can't load,
   usually because the kernel was upgraded without a reboot.
 - `bootc-vm` never gets healthy: read its serial console (`logs bootc-vm`);
-  the guest should reach `qarax-node.service` within about 15 s.
+  the guest should reach `qarax-node.service` within about 15 s. qarax-node
+  only listens once its certificates are copied in (see the container log's
+  "Installed the node's gRPC certificates").
 - A deploy fails with `Unknown server key`: the qarax container pinned the SSH
   host key of an earlier disk at the same address. A disk rebuild generates
   new keys; `make stop-local` (or recreating the qarax container) clears the

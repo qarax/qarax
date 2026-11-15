@@ -18,6 +18,7 @@ use qarax::{
     configuration::{
         AuthSettings, DatabaseSettings, default_control_plane_architecture, get_configuration,
     },
+    grpc_client::NodeTls,
     startup::run,
 };
 use reqwest::StatusCode;
@@ -35,6 +36,37 @@ static TRACING: LazyLock<()> = LazyLock::new(|| {
         init_subscriber(get_subscriber(name, level, std::io::sink));
     }
 });
+
+/// The node TLS files, made by the script operators use: the control plane's,
+/// and those of a node registered as 127.0.0.1 (see [`node_server_tls`]).
+static NODE_TLS_DIR: LazyLock<tempfile::TempDir> = LazyLock::new(|| {
+    let dir = tempfile::tempdir().unwrap();
+    let status = std::process::Command::new("sh")
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../scripts/gen-node-tls.sh"
+        ))
+        .arg(dir.path())
+        .arg("127.0.0.1")
+        .status()
+        .expect("failed to run gen-node-tls.sh");
+    assert!(status.success(), "gen-node-tls.sh failed");
+    dir
+});
+
+/// The TLS a fake node registered as 127.0.0.1 serves with, as qarax-node
+/// does: it accepts only the control plane's client certificate.
+pub fn node_server_tls() -> tonic::transport::ServerTlsConfig {
+    use tonic::transport::{Certificate, Identity, ServerTlsConfig};
+    let read =
+        |name: &str| std::fs::read(NODE_TLS_DIR.path().join("nodes/127.0.0.1").join(name)).unwrap();
+    ServerTlsConfig::new()
+        .identity(Identity::from_pem(
+            read("server-cert.pem"),
+            read("server-key.pem"),
+        ))
+        .client_ca_root(Certificate::from_pem(read("ca-cert.pem")))
+}
 
 pub struct TestApp {
     pub address: String,
@@ -92,6 +124,7 @@ pub async fn spawn_app_with_auth(auth: AuthSettings) -> TestApp {
                 auth,
                 configuration.ha,
                 default_control_plane_architecture(),
+                NodeTls::load(&NODE_TLS_DIR.path().join("control-plane")).unwrap(),
             )
             .await
             .expect("Failed to start the control plane");

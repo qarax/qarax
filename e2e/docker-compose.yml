@@ -67,6 +67,7 @@ services:
       - qarax_vms_2:/var/lib/qarax/vms
       - qarax_overlaybd_2:/var/lib/qarax/overlaybd
       - migration_tls:/var/lib/qarax/migration-tls:ro
+      - node_tls:/var/lib/qarax/node-tls:ro
       - /lib/modules:/lib/modules:ro
       - /sys/kernel/config:/sys/kernel/config
     environment:
@@ -77,13 +78,13 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://host.docker.internal:14318}
       OTEL_BSP_SCHEDULE_DELAY: ${OTEL_BSP_SCHEDULE_DELAY:-5000}
       OTEL_METRIC_EXPORT_INTERVAL: ${OTEL_METRIC_EXPORT_INTERVAL:-60000}
-    command: [ "/entrypoint.sh", "--migration-tls-dir", "/var/lib/qarax/migration-tls/qarax-node-2" ]
+    command: [ "/entrypoint.sh", "--migration-tls-dir", "/var/lib/qarax/migration-tls/qarax-node-2", "--tls-dir", "/var/lib/qarax/node-tls/nodes/qarax-node-2" ]
     ports:
       - "50052:50051"
     depends_on:
       registry:
         condition: service_healthy
-      migration-tls:
+      certs:
         condition: service_completed_successfully
       nfs-server:
         condition: service_healthy
@@ -122,11 +123,16 @@ services:
       # API token auth - tests authenticate with QARAX_TEST_TOKEN
       AUTH_ENABLED: "true"
       AUTH_TOKENS: ${QARAX_TEST_TOKEN:-e2e-test-token}
+      NODE_TLS_DIR: /var/lib/qarax/node-tls/control-plane
+    volumes:
+      - node_tls:/var/lib/qarax/node-tls:ro
     ports:
       - "8000:8000"
     depends_on:
       postgres:
         condition: service_healthy
+      certs:
+        condition: service_completed_successfully
       qarax-node:
         condition: service_healthy
       qarax-node-2:
@@ -138,18 +144,26 @@ services:
       timeout: 5s
       retries: 10
 
-  # Certificates for live migration TLS between the nodes (each node's server
-  # certificate is valid for its service name, the address it registers under).
-  migration-tls:
+  # Certificates, each node's valid for its service name (the address it
+  # registers under): live migration TLS between the nodes, and the nodes'
+  # gRPC TLS, which only serves the control plane's client certificate.
+  certs:
     build:
       context: ..
       dockerfile: e2e/Dockerfile.qarax-node
       args:
         CLOUD_HYPERVISOR_VERSION: ${CLOUD_HYPERVISOR_VERSION}
         FIRECRACKER_VERSION: ${FIRECRACKER_VERSION}
-    entrypoint: [ "gen-migration-tls", "/var/lib/qarax/migration-tls", "qarax-node", "qarax-node-2" ]
+    entrypoint:
+      - sh
+      - -c
+      - |
+        set -e
+        gen-migration-tls /var/lib/qarax/migration-tls qarax-node qarax-node-2
+        gen-node-tls /var/lib/qarax/node-tls qarax-node qarax-node-2 bootc-vm
     volumes:
       - migration_tls:/var/lib/qarax/migration-tls
+      - node_tls:/var/lib/qarax/node-tls
 
   qarax-node:
     build:
@@ -172,6 +186,7 @@ services:
       - qarax_vms:/var/lib/qarax/vms
       - qarax_overlaybd:/var/lib/qarax/overlaybd
       - migration_tls:/var/lib/qarax/migration-tls:ro
+      - node_tls:/var/lib/qarax/node-tls:ro
       # Required for modprobe to load host kernel modules (e.g. target_core_user for overlaybd-tcmu)
       - /lib/modules:/lib/modules:ro
       # Share host configfs so overlaybd-tcmu can see the target subsystem after modprobe
@@ -185,13 +200,13 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://host.docker.internal:14318}
       OTEL_BSP_SCHEDULE_DELAY: ${OTEL_BSP_SCHEDULE_DELAY:-5000}
       OTEL_METRIC_EXPORT_INTERVAL: ${OTEL_METRIC_EXPORT_INTERVAL:-60000}
-    command: [ "/entrypoint.sh", "--migration-tls-dir", "/var/lib/qarax/migration-tls/qarax-node" ]
+    command: [ "/entrypoint.sh", "--migration-tls-dir", "/var/lib/qarax/migration-tls/qarax-node", "--tls-dir", "/var/lib/qarax/node-tls/nodes/qarax-node" ]
     ports:
       - "50051:50051"
     depends_on:
       registry:
         condition: service_healthy
-      migration-tls:
+      certs:
         condition: service_completed_successfully
       nfs-server:
         condition: service_healthy
@@ -218,9 +233,13 @@ services:
     volumes:
       - ./bootc-vm-overlay.qcow2:/disk/bootc-vm-overlay.qcow2
       - ./bootc-vm-base.qcow2:/disk/bootc-vm-base.qcow2:ro
+      # The entrypoint copies nodes/bootc-vm into the guest.
+      - node_tls:/node-tls:ro
     depends_on:
       registry:
         condition: service_healthy
+      certs:
+        condition: service_completed_successfully
     healthcheck:
       # The guest itself: the port forwards only apply to traffic arriving
       # on the container's uplink.
@@ -240,4 +259,5 @@ volumes:
   qarax_vms_2:
   qarax_overlaybd_2:
   migration_tls:
+  node_tls:
   nfs_export:

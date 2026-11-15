@@ -73,6 +73,13 @@ pub struct Args {
     #[clap(long)]
     migration_tls_dir: Option<PathBuf>,
 
+    /// Directory with this node's gRPC TLS files: server-cert.pem and
+    /// server-key.pem (valid for the address the node is registered under)
+    /// and ca-cert.pem, the CA that issued the control plane's client
+    /// certificate. Only clients with a certificate from that CA are served.
+    #[clap(long, default_value = "/etc/qarax-node/tls")]
+    tls_dir: PathBuf,
+
     /// Enable OpenTelemetry export
     #[clap(long, default_value = "false", env = "OTEL_ENABLED")]
     otel_enabled: bool,
@@ -126,6 +133,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         tracing_subscriber::fmt().with_max_level(Level::INFO).init();
     }
+
+    // Before anything else, so a node without its certificates fails at once.
+    let tls = qarax_node::tls::server_tls_config(&args.tls_dir)?;
 
     let addr = format!("0.0.0.0:{}", args.port).parse()?;
 
@@ -242,6 +252,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(feature = "otel")]
     {
         Server::builder()
+            .tls_config(tls)?
             .layer(trace_extraction::OtelGrpcLayer)
             .add_service(VmServiceServer::new(vm_service))
             .add_service(FileTransferServiceServer::new(file_transfer_service))
@@ -252,6 +263,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(not(feature = "otel"))]
     {
         Server::builder()
+            .tls_config(tls)?
             .add_service(VmServiceServer::new(vm_service))
             .add_service(FileTransferServiceServer::new(file_transfer_service))
             .serve_with_shutdown(addr, shutdown_signal())

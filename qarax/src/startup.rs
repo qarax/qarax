@@ -23,11 +23,13 @@ pub async fn run(
     auth: AuthSettings,
     ha: HaSettings,
     control_plane_architecture: String,
+    node_tls: crate::grpc_client::NodeTls,
 ) -> Result<
     impl IntoFuture<Output = std::io::Result<()>> + Send,
     Box<dyn std::error::Error + Send + Sync>,
 > {
     crate::model::events::init_event_bus();
+    crate::grpc_client::init_node_tls(node_tls);
 
     let a = App::new(
         db_pool,

@@ -164,6 +164,16 @@ Host status transitions:
 - `up` on success
 - `installation_failed` on deployment error
 
+### Install the node's certificates
+
+qarax-node serves its gRPC API only with its TLS files in
+`/etc/qarax-node/tls` (`ca-cert.pem`, `server-cert.pem`, `server-key.pem`),
+and the control plane only connects with its client certificate. Make them with
+`scripts/gen-node-tls.sh` and copy them as the top-level README's "Node
+certificates" section shows. Until they are there, `qarax-node.service` exits
+and systemd restarts it every 5 seconds. `/etc` survives `bootc switch`, so a
+host keeps its certificates across upgrades.
+
 After reboot, the host will:
 - Boot from the container image
 - Load all kernel modules for VM support

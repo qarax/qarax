@@ -217,6 +217,9 @@ pub struct Settings {
     pub telemetry: TelemetrySettings,
     #[serde(default)]
     pub auth: AuthSettings,
+    /// Directory with the control plane's TLS files for qarax-node's gRPC API
+    /// (see [`crate::grpc_client::NodeTls::load`]). Overridden by NODE_TLS_DIR.
+    pub node_tls_dir: std::path::PathBuf,
 }
 
 #[derive(serde::Deserialize, Debug, Clone)]
@@ -368,6 +371,10 @@ pub fn get_configuration() -> Result<Settings, config::ConfigError> {
                         .filter(|t| !t.is_empty())
                         .collect::<Vec<_>>()
                 }),
+        )?
+        .set_override_option(
+            "node_tls_dir",
+            std::env::var("NODE_TLS_DIR").ok().filter(|s| !s.is_empty()),
         )?
         .build()?;
     settings.try_deserialize::<Settings>()
