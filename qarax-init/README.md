@@ -12,8 +12,15 @@ When the kernel starts qarax-init as PID 1 inside a VM:
 4. Brings up the loopback interface (raw ioctls, no `ip` binary needed)
 5. Reads `/.qarax-config.json` for entrypoint, cmd, and env from the OCI image config
 6. Forks, execs the workload in the child, and reaps zombies in the parent
+7. Watches `/dev/input` for the power button, and shuts the VM down when it is pressed
 
 Logs to both `/dev/kmsg` and stderr.
+
+## Shutdown
+
+qarax-node stops a Cloud Hypervisor VM by pressing its ACPI power button, which the guest kernel reports as a `KEY_POWER` press on an input device. qarax-init then sends SIGTERM to every process, gives them 10 seconds to exit (like `docker stop`), sends SIGKILL to whatever is left, syncs and powers off. It powers off as soon as everything has exited.
+
+The guest kernel needs `CONFIG_ACPI_BUTTON` and `CONFIG_INPUT_EVDEV` (both built into the Cloud Hypervisor guest kernel). Without them the press goes unseen and qarax-node forces the VM off after its graceful stop timeout.
 
 ## Building
 

@@ -188,7 +188,8 @@ enum VmCommand {
         #[arg(long, default_value = "kernel")]
         boot_mode: String,
     },
-    /// Stop a VM
+    /// Stop a VM, letting the guest shut down first (forced off after the
+    /// node's graceful stop timeout)
     Stop {
         /// VM name or ID
         vm: String,

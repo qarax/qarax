@@ -227,4 +227,81 @@ impl VmManager {
 
         (serial_pty, console_pty)
     }
+
+    /// Start a Cloud Hypervisor process serving its API on `socket_path`, with
+    /// stdout and stderr going to `log_file`.
+    ///
+    /// `--no-shutdown` keeps the VMM, and the VM defined in it, when the guest
+    /// powers off, the same state `vm.shutdown` leaves: `vm.info` reports it as
+    /// `Created` and `vm.boot` starts it again. Without it the process exits
+    /// with the guest, and the VM can't be started until it is recreated.
+    pub(super) fn spawn_cloud_hypervisor(
+        &self,
+        socket_path: &Path,
+        log_file: std::fs::File,
+    ) -> std::io::Result<Child> {
+        let stderr_file = log_file.try_clone()?;
+        Command::new(&self.ch_binary)
+            .arg("--api-socket")
+            .arg(socket_path)
+            .arg("--no-shutdown")
+            .stdout(std::process::Stdio::from(log_file))
+            .stderr(std::process::Stdio::from(stderr_file))
+            .kill_on_drop(true)
+            .spawn()
+    }
+
+    /// The VM's state as Cloud Hypervisor reports it in `vm.info`.
+    pub(super) async fn query_vm_state(
+        socket_path: &PathBuf,
+    ) -> Result<models::VmState, VmManagerError> {
+        #[derive(serde::Deserialize)]
+        struct VmInfoState {
+            state: models::VmState,
+        }
+
+        let body = Self::send_api_request(socket_path, "GET", "/api/v1/vm.info", None).await?;
+        let info: VmInfoState = serde_json::from_str(&body)
+            .map_err(|e| VmManagerError::ProcessError(format!("unexpected vm.info: {e}")))?;
+        Ok(info.state)
+    }
+
+    /// Whether the Cloud Hypervisor serving `socket_path` was started with
+    /// `--no-shutdown`. Every process this node starts is (see
+    /// [`Self::spawn_cloud_hypervisor`]), but one that survived a restart from
+    /// an older qarax-node may not be: powering its guest off would end the
+    /// process, so the VM could not be started again.
+    pub(super) async fn keeps_vm_after_guest_power_off(socket_path: &PathBuf) -> bool {
+        let ping = match Self::send_api_request(socket_path, "GET", "/api/v1/vmm.ping", None)
+            .await
+            .and_then(|body| {
+                serde_json::from_str::<models::VmmPingResponse>(&body)
+                    .map_err(|e| VmManagerError::ProcessError(format!("unexpected vmm.ping: {e}")))
+            }) {
+            Ok(ping) => ping,
+            Err(e) => {
+                warn!(
+                    "Cloud Hypervisor at {} did not answer vmm.ping: {e}",
+                    socket_path.display()
+                );
+                return false;
+            }
+        };
+        let Some(pid) = ping.pid else {
+            warn!(
+                "Cloud Hypervisor at {} did not report its PID",
+                socket_path.display()
+            );
+            return false;
+        };
+        match tokio::fs::read(format!("/proc/{pid}/cmdline")).await {
+            Ok(cmdline) => cmdline
+                .split(|b| *b == 0)
+                .any(|arg| arg == b"--no-shutdown"),
+            Err(e) => {
+                warn!("Failed to read the command line of Cloud Hypervisor PID {pid}: {e}");
+                false
+            }
+        }
+    }
 }

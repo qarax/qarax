@@ -29,6 +29,7 @@ All flags can also be set as env vars.
 | `--qarax-init-binary` | `/usr/local/bin/qarax-init` | PID 1 init for OCI VMs (disabled if absent) |
 | `--convertor-binary` | `/opt/overlaybd/snapshotter/convertor` | OverlayBD converter (disabled if absent) |
 | `--overlaybd-cache-dir` | `/var/lib/qarax/overlaybd` | OverlayBD per-VM configs and upper layers |
+| `--graceful-stop-timeout-secs` | `30` | How long a stop waits for a Cloud Hypervisor guest to power off after pressing its ACPI power button, before forcing it off |
 
 Env vars: `RUST_LOG` (tracing filter), `INSECURE_REGISTRIES` (comma-separated hosts for HTTP registry access).
 

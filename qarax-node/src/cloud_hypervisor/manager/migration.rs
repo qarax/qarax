@@ -85,15 +85,9 @@ impl VmManager {
             .map_err(VmManagerError::SpawnError)?
             .into_std()
             .await;
-        let stderr_file = log_file.try_clone().map_err(VmManagerError::SpawnError)?;
 
-        let process = Command::new(&self.ch_binary)
-            .arg("--api-socket")
-            .arg(&socket_path)
-            .stdout(std::process::Stdio::from(log_file))
-            .stderr(std::process::Stdio::from(stderr_file))
-            .kill_on_drop(true)
-            .spawn()
+        let process = self
+            .spawn_cloud_hypervisor(&socket_path, log_file)
             .map_err(VmManagerError::SpawnError)?;
 
         info!(
@@ -322,8 +316,8 @@ impl VmManager {
         .into_std()
         .await;
 
-        let stderr_file = match log_file.try_clone() {
-            Ok(f) => f,
+        let process = match self.spawn_cloud_hypervisor(&socket_path, log_file) {
+            Ok(p) => p,
             Err(e) => {
                 for tap in &tap_devices {
                     Self::delete_tap_device(tap).await;
@@ -331,15 +325,6 @@ impl VmManager {
                 return Err(VmManagerError::SpawnError(e));
             }
         };
-
-        let process = Command::new(&self.ch_binary)
-            .arg("--api-socket")
-            .arg(&socket_path)
-            .stdout(std::process::Stdio::from(log_file))
-            .stderr(std::process::Stdio::from(stderr_file))
-            .kill_on_drop(true)
-            .spawn()
-            .map_err(VmManagerError::SpawnError)?;
 
         info!(
             "Cloud Hypervisor receive-migration process started with PID: {:?}",

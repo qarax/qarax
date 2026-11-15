@@ -11,8 +11,6 @@ Each disk test uses its own sparse file, created on every node, as the raw
 block device.
 """
 
-import asyncio
-import time
 import uuid
 from uuid import UUID
 
@@ -53,9 +51,6 @@ from qarax_api_client.api.vms import (
     remove_nic,
 )
 from qarax_api_client.api.vms import (
-    exec_ as exec_vm,
-)
-from qarax_api_client.api.vms import (
     create as create_vm,
 )
 from qarax_api_client.api.vms import (
@@ -85,14 +80,13 @@ from qarax_api_client.models.new_storage_object import NewStorageObject
 from qarax_api_client.models.new_vm_network import NewVmNetwork
 from qarax_api_client.models.storage_object_type import StorageObjectType
 
-from qarax_api_client.models.exec_vm_request import ExecVmRequest
 
 from helpers import (
     AUTH_HEADERS,
     QARAX_URL,
     call_api,
-    call_api_detailed,
     create_sparse_file_on_nodes,
+    exec_when_ready,
     remove_file_from_nodes,
     wait_for_status,
 )
@@ -284,20 +278,6 @@ async def test_disk_hotplug_running_vm(client):
                 remove_file_from_nodes(disk_path)
 
 
-async def _exec_when_ready(c, vm_id, script):
-    """Run a shell script in the guest once its agent answers."""
-    request = ExecVmRequest(command=["/bin/sh", "-c", script], timeout_secs=20)
-    deadline = time.monotonic() + 60
-    while True:
-        response = await call_api_detailed(exec_vm, client=c, vm_id=vm_id, body=request)
-        if response.status_code == 200:
-            return response.parsed
-        # 422 until the guest agent is up.
-        assert response.status_code == 422, response.content.decode()
-        assert time.monotonic() < deadline, "the guest agent never answered"
-        await asyncio.sleep(1)
-
-
 @pytest.mark.asyncio
 async def test_nic_hotplug_running_vm(client):
     """
@@ -363,7 +343,7 @@ async def test_nic_hotplug_running_vm(client):
             # The NIC is on its network: up in the guest with its address, it
             # reaches the gateway.
             address = nic.ip_address.split("/")[0]
-            result = await _exec_when_ready(
+            result = await exec_when_ready(
                 c,
                 vm_id,
                 f"ip addr add {address}/24 dev eth0 && ip link set eth0 up && "

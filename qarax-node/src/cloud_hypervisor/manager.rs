@@ -139,6 +139,9 @@ pub struct VmManager {
     overlaybd_manager: Option<Arc<OverlayBdManager>>,
     /// Path to qarax-init used for OCI boot injection and preflight checks.
     qarax_init_binary: Option<PathBuf>,
+    /// How long `stop_vm` waits for a guest to power off after pressing its
+    /// power button before forcing it off.
+    graceful_stop_timeout: Duration,
 }
 
 impl VmManager {
@@ -149,6 +152,7 @@ impl VmManager {
         storage_backends: StorageBackendRegistry,
         overlaybd_manager: Option<Arc<OverlayBdManager>>,
         qarax_init_binary: Option<PathBuf>,
+        graceful_stop_timeout: Duration,
     ) -> Self {
         let runtime_dir = runtime_dir.into();
         let ch_binary = ch_binary.into();
@@ -166,6 +170,7 @@ impl VmManager {
             storage_backends,
             overlaybd_manager,
             qarax_init_binary,
+            graceful_stop_timeout,
         }
     }
 
