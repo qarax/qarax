@@ -61,6 +61,8 @@ RUN dnf install -y \
     guestfs-tools \
     iscsi-initiator-utils \
     dropbear \
+    # For e2e/gen-migration-tls.sh
+    openssl \
     && dnf clean all
 
 # Install Cloud Hypervisor (static binary)
@@ -155,7 +157,8 @@ EOF
 RUN chmod +x /usr/local/bin/guest-ssh
 
 COPY e2e/entrypoint-qarax-node.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+COPY e2e/gen-migration-tls.sh /usr/local/bin/gen-migration-tls
+RUN chmod +x /entrypoint.sh /usr/local/bin/gen-migration-tls
 
 EXPOSE 50051
 

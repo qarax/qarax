@@ -325,9 +325,13 @@ path is writable from the qarax control-plane process.
 
 ```bash
 qarax vm migrate my-vm --host node-02
+qarax vm migrate my-vm --host node-02 --connections 4 --max-downtime-ms 500 --timeout-secs 600
+qarax vm migrate my-vm --host node-02 --postcopy
 ```
 
-Requires shared storage (NFS or OverlayBD) between both hosts.
+Requires shared storage (NFS or OverlayBD) between both hosts. The migration uses TLS when both hosts' nodes run with `--migration-tls-dir`. A migration between a node with it and one without is refused.
+
+By default a migration copies memory while the guest runs, then pauses it for up to `--max-downtime-ms` to switch over, and cancels at `--timeout-secs` (`--finish-on-timeout` switches over anyway). `--postcopy` switches over first and moves memory afterwards. That always finishes, even for a guest that writes memory faster than it can be copied, but the VM is lost if the source host or the network fails before all of its memory has moved.
 
 ## Lifecycle hooks
 

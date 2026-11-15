@@ -1270,14 +1270,16 @@ async fn test_rejected_commit_leaves_vm_status_alone() {
 async fn test_migrate_rejects_invalid_requests() {
     let app = spawn_app().await;
     let client = reqwest::Client::new();
-    add_up_host(&client, &app.address, "source-host").await;
+    let source = add_up_host(&client, &app.address, "source-host").await;
     let target = add_up_host(&client, &app.address, "target-host").await;
-    let migrate = |vm_id: Uuid, target_host_id: Uuid| {
+    let migrate_with = |vm_id: Uuid, target_host_id: Uuid, options: Value| {
         client
             .post(format!("{}/vms/{vm_id}/migrate", app.address))
-            .json(&json!({"target_host_id": target_host_id}))
+            .json(&with(json!({"target_host_id": target_host_id}), options))
             .send()
     };
+    let migrate =
+        |vm_id: Uuid, target_host_id: Uuid| migrate_with(vm_id, target_host_id, json!({}));
 
     let res = migrate(Uuid::new_v4(), target).await.unwrap();
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
@@ -1295,6 +1297,64 @@ async fn test_migrate_rejects_invalid_requests() {
     assert_unprocessable(
         migrate(vm_id, current_host).await.unwrap(),
         "Source and destination hosts are the same",
+    )
+    .await;
+    let other_host = if current_host == target {
+        source
+    } else {
+        target
+    };
+
+    for (option, value) in [
+        ("connections", 0),
+        ("connections", 129),
+        ("timeout_secs", 0),
+    ] {
+        let res = migrate_with(vm_id, other_host, json!({ option: value }))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY, "{option}");
+        let body: Value = res.json().await.unwrap();
+        assert!(body["errors"][option].is_array(), "{option}: {body}");
+    }
+
+    // Whether to migrate over TLS is the nodes' to say, and neither answers.
+    assert_unprocessable(
+        migrate(vm_id, other_host).await.unwrap(),
+        "to plan the migration",
+    )
+    .await;
+
+    // Postcopy can't move memory a vhost-user backend maps; refused before
+    // asking the nodes anything.
+    let vhost_vm = create_vm(
+        &client,
+        &app.address,
+        with(
+            vm_body("vm-migrate-vhost"),
+            json!({"networks": [
+                {"id": "net0", "vhost_user": true, "vhost_socket": "/run/vhost-net0.sock"}
+            ]}),
+        ),
+    )
+    .await;
+    set_vm_status(&app.pool, vhost_vm, "RUNNING").await;
+    let vm = get_json(&client, format!("{}/vms/{vhost_vm}", app.address)).await;
+    let vhost_vm_host: Uuid = vm["host_id"].as_str().unwrap().parse().unwrap();
+    let res = migrate_with(
+        vhost_vm,
+        if vhost_vm_host == target {
+            source
+        } else {
+            target
+        },
+        json!({"memory_mode": "postcopy"}),
+    )
+    .await
+    .unwrap();
+    assert_unprocessable(
+        res,
+        "postcopy migration is not supported for VMs with vhost-user disks or NICs",
     )
     .await;
 }

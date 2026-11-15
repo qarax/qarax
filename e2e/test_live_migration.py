@@ -52,6 +52,8 @@ from qarax_api_client.models import (
     CreateDiskRequest,
     HostStatus,
     Hypervisor,
+    MigrationMemoryMode,
+    MigrationTimeoutAction,
     NewStoragePool,
     NewVm,
     StoragePoolType,
@@ -144,9 +146,25 @@ async def _create_vm_raw(
 
 
 @pytest.mark.asyncio
-async def test_live_migration(client, two_hosts):
+@pytest.mark.parametrize(
+    "options",
+    [
+        pytest.param(
+            {
+                "connections": 4,
+                "max_downtime_ms": 500,
+                "timeout_secs": 300,
+                "on_timeout": MigrationTimeoutAction.FINISH,
+            },
+            id="precopy",
+        ),
+        pytest.param({"memory_mode": MigrationMemoryMode.POSTCOPY}, id="postcopy"),
+    ],
+)
+async def test_live_migration(client, two_hosts, options):
     """
-    Full live migration lifecycle:
+    Full live migration lifecycle, over TLS (the e2e nodes have migration
+    certificates), with precopy tuning or postcopy:
     - Create NFS pool, attach to both hosts
     - Create a VM and attach a disk from the NFS pool before its first start
     - Start VM, wait for RUNNING
@@ -193,7 +211,7 @@ async def test_live_migration(client, two_hosts):
 
             # Create the VM
             new_vm = NewVm(
-                name="e2e-live-migrate",
+                name=f"e2e-live-migrate-{uuid.uuid4().hex[:6]}",
                 hypervisor=Hypervisor.CLOUD_HV,
                 boot_vcpus=1,
                 max_vcpus=1,
@@ -225,7 +243,7 @@ async def test_live_migration(client, two_hosts):
                 migrate,
                 client=c,
                 vm_id=vm_id,
-                body=VmMigrateRequest(target_host_id=target_host_id),
+                body=VmMigrateRequest(target_host_id=target_host_id, **options),
             )
             assert migrate_resp.status_code == 202, (
                 f"Expected 202 from migrate, got {migrate_resp.status_code}: {migrate_resp.content}"

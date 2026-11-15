@@ -168,10 +168,9 @@ impl crate::vmm::VmmManager for VmManager {
 
     async fn send_migration(
         &self,
-        vm_id: &str,
-        destination_url: &str,
+        req: &ProtoSendMigrationRequest,
     ) -> Result<(), crate::vmm::VmmError> {
-        VmManager::send_migration(self, vm_id, destination_url)
+        VmManager::send_migration(self, req)
             .await
             .map_err(Into::into)
     }

@@ -17,7 +17,7 @@ use crate::{
         },
         jobs::{self, JobType, NewJob},
         network_interfaces, storage_pools,
-        vms::{self, Vm, VmStatus},
+        vms::{self, MigrationOptions, Vm, VmStatus},
     },
 };
 use axum::{Extension, Json, extract::Path};
@@ -159,7 +159,7 @@ async fn pick_evacuation_plan(
             )));
         };
 
-        match plan_vm_migration(env, vm.id, candidate.id).await {
+        match plan_vm_migration(env, vm.id, candidate.id, MigrationOptions::default()).await {
             Ok(plan) => return Ok(plan),
             Err(crate::errors::Error::UnprocessableEntity(reason)) => {
                 excluded_host_ids.push(candidate.id);

@@ -229,6 +229,7 @@ mod tests {
                 hostname: "node-1".to_string(),
                 cloud_hypervisor_version: "44.0".to_string(),
                 firecracker_version: Some("Firecracker v1.11.0".to_string()),
+                migration_tls: false,
                 kernel_version: "6.12.0".to_string(),
                 node_version: "0.1.0".to_string(),
                 total_cpus: 8,

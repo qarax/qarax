@@ -49,6 +49,9 @@ from .job import Job
 from .job_status import JobStatus
 from .job_type import JobType
 from .lifecycle_hook import LifecycleHook
+from .migration_memory_mode import MigrationMemoryMode
+from .migration_options import MigrationOptions
+from .migration_timeout_action import MigrationTimeoutAction
 from .network import Network
 from .network_host import NetworkHost
 from .network_interface import NetworkInterface
@@ -165,6 +168,9 @@ __all__ = (
     "JobStatus",
     "JobType",
     "LifecycleHook",
+    "MigrationMemoryMode",
+    "MigrationOptions",
+    "MigrationTimeoutAction",
     "Network",
     "NetworkHost",
     "NetworkInterface",

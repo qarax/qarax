@@ -11,7 +11,8 @@ use async_trait::async_trait;
 
 use crate::rpc::node::{
     DiskConfig as ProtoDiskConfig, ExecVmResponse, NetConfig as ProtoNetConfig,
-    VfioDeviceConfig as ProtoVfioDeviceConfig, VmConfig as ProtoVmConfig, VmState,
+    SendMigrationRequest, VfioDeviceConfig as ProtoVfioDeviceConfig, VmConfig as ProtoVmConfig,
+    VmState,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -181,7 +182,7 @@ pub trait VmmManager: Send + Sync + 'static {
         Err(VmmError::Unsupported("receive_migration"))
     }
 
-    async fn send_migration(&self, _vm_id: &str, _destination_url: &str) -> Result<(), VmmError> {
+    async fn send_migration(&self, _req: &SendMigrationRequest) -> Result<(), VmmError> {
         Err(VmmError::Unsupported("send_migration"))
     }
 

@@ -367,6 +367,24 @@ enum VmCommand {
         /// Destination host name or ID
         #[arg(long)]
         host: String,
+        /// Longest pause of the guest at switch-over to aim for, in
+        /// milliseconds (default 300)
+        #[arg(long)]
+        max_downtime_ms: Option<i64>,
+        /// Give up after this many seconds (default 3600)
+        #[arg(long)]
+        timeout_secs: Option<i64>,
+        /// At the timeout, switch over with a longer pause instead of cancelling
+        #[arg(long)]
+        finish_on_timeout: bool,
+        /// Parallel TCP connections for the memory transfer (1-128, default 1)
+        #[arg(long)]
+        connections: Option<i32>,
+        /// Switch over first and move memory afterwards: always finishes, but
+        /// the VM is lost if the source host or network fails before it has
+        /// all moved
+        #[arg(long)]
+        postcopy: bool,
     },
     /// Convert an OCI image VM to a standalone raw disk (like docker commit)
     Commit {
@@ -1034,11 +1052,24 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
             }
         }
 
-        VmCommand::Migrate { vm, host } => {
+        VmCommand::Migrate {
+            vm,
+            host,
+            max_downtime_ms,
+            timeout_secs,
+            finish_on_timeout,
+            connections,
+            postcopy,
+        } => {
             let vm_id = resolve_vm_id(client, &vm).await?;
             let host_id = resolve_host_id(client, &host).await?;
             let req = VmMigrateRequest {
                 target_host_id: host_id,
+                max_downtime_ms,
+                timeout_secs,
+                on_timeout: finish_on_timeout.then_some("finish"),
+                connections,
+                memory_mode: postcopy.then_some("postcopy"),
             };
             let resp = api::vms::migrate(client, vm_id, &req).await?;
             if !matches!(output, OutputFormat::Table) {

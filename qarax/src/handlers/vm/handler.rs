@@ -48,8 +48,8 @@ use crate::{
         vm_rng,
         vm_templates::{self, CreateVmTemplateFromVmRequest},
         vms::{
-            self, BootMode, ExecVmRequest, ExecVmResponse, Hypervisor, NewVm, NewVmNetwork,
-            ResolvedNewVm, Vm, VmOp, VmStatus,
+            self, BootMode, ExecVmRequest, ExecVmResponse, Hypervisor, MigrationMemoryMode,
+            MigrationOptions, NewVm, NewVmNetwork, ResolvedNewVm, Vm, VmOp, VmStatus,
         },
     },
     network_policy,
@@ -3496,6 +3496,8 @@ pub async fn detach_security_group(
 pub struct VmMigrateRequest {
     /// UUID of the destination host to migrate the VM to.
     pub target_host_id: Uuid,
+    #[serde(flatten)]
+    pub options: MigrationOptions,
 }
 
 /// Response body for `POST /vms/{vm_id}/migrate`.
@@ -3511,12 +3513,14 @@ pub(crate) struct PlannedVmMigration {
     pub target_host: Host,
     pub original_status: VmStatus,
     pub create_req: CreateVmRequest,
+    pub options: MigrationOptions,
 }
 
 pub(crate) async fn plan_vm_migration(
     env: &App,
     vm_id: Uuid,
     target_host_id: Uuid,
+    options: MigrationOptions,
 ) -> Result<PlannedVmMigration> {
     let vm = vms::get(env.pool(), vm_id).await?;
     VmOp::Migrate.check(vm.status)?;
@@ -3615,6 +3619,36 @@ pub(crate) async fn plan_vm_migration(
     target_vm.host_id = Some(target_host.id);
     let create_req = build_create_vm_request(env, &target_vm).await?;
 
+    // Cloud Hypervisor can't fault in memory behind a vhost-user backend.
+    if options.memory_mode == MigrationMemoryMode::Postcopy
+        && (create_req.disks.iter().any(|d| d.vhost_user == Some(true))
+            || create_req
+                .networks
+                .iter()
+                .any(|n| n.vhost_user == Some(true)))
+    {
+        return Err(crate::errors::Error::UnprocessableEntity(
+            "postcopy migration is not supported for VMs with vhost-user disks or NICs".into(),
+        ));
+    }
+
+    // A receiver with migration certificates only accepts TLS, and one
+    // without them can't speak it.
+    let source_tls = node_has_migration_tls(&source_host).await?;
+    let target_tls = node_has_migration_tls(&target_host).await?;
+    if source_tls != target_tls {
+        let (with_tls, without_tls) = if source_tls {
+            (&source_host, &target_host)
+        } else {
+            (&target_host, &source_host)
+        };
+        return Err(crate::errors::Error::UnprocessableEntity(format!(
+            "host '{}' migrates over TLS (qarax-node --migration-tls-dir) and host '{}' \
+             doesn't; migrate between hosts that both have it or both don't",
+            with_tls.name, without_tls.name
+        )));
+    }
+
     Ok(PlannedVmMigration {
         vm_id,
         vm_name: vm.name,
@@ -3622,7 +3656,21 @@ pub(crate) async fn plan_vm_migration(
         target_host,
         original_status: vm.status,
         create_req,
+        options,
     })
+}
+
+async fn node_has_migration_tls(host: &Host) -> Result<bool> {
+    NodeClient::new(&host.address, host.port as u16)
+        .get_node_info()
+        .await
+        .map(|info| info.migration_tls)
+        .map_err(|e| {
+            crate::errors::Error::UnprocessableEntity(format!(
+                "could not reach host '{}' to plan the migration: {e:#}",
+                host.name
+            ))
+        })
 }
 
 /// Move a VM into `Migrating`, but only from the status its migration plan
@@ -3652,6 +3700,7 @@ pub(crate) async fn execute_planned_vm_migration(
         target_host,
         original_status,
         create_req,
+        options,
         ..
     } = plan;
     let source_client = NodeClient::new(&source_host.address, source_host.port as u16);
@@ -3736,7 +3785,7 @@ pub(crate) async fn execute_planned_vm_migration(
     let actual_receiver_url = receiver_url.replace("0.0.0.0", &target_host.address);
 
     source_client
-        .send_migration(vm_id, &actual_receiver_url)
+        .send_migration(vm_id, &actual_receiver_url, &options)
         .await
         .map_err(|e| format!("send_migration failed: {:#}", e))?;
 
@@ -3789,6 +3838,12 @@ pub async fn create_template_from_vm(
     Ok((StatusCode::CREATED, id.to_string()))
 }
 
+/// Live-migrate a running or paused Cloud Hypervisor VM to another host.
+///
+/// Its disks must be on shared storage attached to both hosts. The migration
+/// runs over TLS when both hosts have migration certificates
+/// (`qarax-node --migration-tls-dir`); one between a host with them and a host
+/// without is refused.
 #[utoipa::path(
     post,
     path = "/vms/{vm_id}/migrate",
@@ -3799,7 +3854,7 @@ pub async fn create_template_from_vm(
     responses(
         (status = 202, description = "Migration accepted", body = VmMigrateResponse),
         (status = 404, description = "VM or host not found"),
-        (status = 422, description = "VM not in a migratable state"),
+        (status = 422, description = "The VM can't migrate to that host, or the options are invalid"),
         (status = 500, description = "Internal server error")
     ),
     tag = "vms"
@@ -3810,7 +3865,8 @@ pub async fn migrate(
     Path(vm_id): Path<Uuid>,
     Json(req): Json<VmMigrateRequest>,
 ) -> Result<axum::response::Response> {
-    let plan = plan_vm_migration(&env, vm_id, req.target_host_id).await?;
+    req.options.validate()?;
+    let plan = plan_vm_migration(&env, vm_id, req.target_host_id, req.options).await?;
     let original_status = plan.original_status;
 
     claim_for_migration(env.pool(), vm_id, original_status).await?;

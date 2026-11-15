@@ -235,6 +235,16 @@ pub struct CommitVmResponse {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct VmMigrateRequest {
     pub target_host_id: Uuid,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_downtime_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_secs: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub on_timeout: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connections: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_mode: Option<&'static str>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

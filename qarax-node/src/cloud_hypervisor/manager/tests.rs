@@ -13,6 +13,7 @@ fn test_manager(runtime_dir: &TempDir) -> VmManager {
         None,
         // Short, so stop_vm tests reach the forced stop quickly.
         Duration::from_secs(1),
+        None,
     )
 }
 
@@ -240,6 +241,7 @@ async fn recovered_vm_deletion_cleans_overlaybd_state_and_preserves_external_upp
             Some(overlaybd.clone()),
             None,
             Duration::from_secs(1),
+            None,
         );
         let config = ProtoVmConfig {
             vm_id: vm_id.clone(),
@@ -323,11 +325,11 @@ async fn recovered_vm_deletion_cleans_overlaybd_state_and_preserves_external_upp
 }
 
 /// Answers Cloud Hypervisor API requests on `listener` with the body
-/// `respond(method, endpoint)` returns. Aborting the returned task closes the
-/// listener, as the VMM exiting would.
+/// `respond(method, endpoint, request body)` returns. Aborting the returned
+/// task closes the listener, as the VMM exiting would.
 fn serve_fake_cloud_hypervisor(
     listener: tokio::net::UnixListener,
-    respond: impl Fn(&str, &str) -> String + Send + Sync + 'static,
+    respond: impl Fn(&str, &str, &str) -> String + Send + Sync + 'static,
 ) -> tokio::task::JoinHandle<()> {
     let respond = Arc::new(respond);
     tokio::spawn(async move {
@@ -342,7 +344,8 @@ fn serve_fake_cloud_hypervisor(
                     let mut parts = request.split_whitespace();
                     let method = parts.next().unwrap();
                     let endpoint = parts.next().unwrap().rsplit('/').next().unwrap();
-                    let body = respond(method, endpoint);
+                    let request_body = request.split_once("\r\n\r\n").map_or("", |(_, b)| b);
+                    let body = respond(method, endpoint, request_body);
                     let response = format!(
                         "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}",
                         body.len(),
@@ -426,7 +429,7 @@ async fn stop_vm_lets_the_guest_power_off_before_forcing_it() {
         let served_puts = puts.clone();
         serve_fake_cloud_hypervisor(
             tokio::net::UnixListener::bind(&socket).unwrap(),
-            move |method, endpoint| match (method, endpoint) {
+            move |method, endpoint, _| match (method, endpoint) {
                 ("GET", "vm.info") => serde_json::to_string(&models::VmInfo::new(
                     VmConfig::default(),
                     *state.lock().unwrap(),
@@ -545,7 +548,7 @@ async fn send_migration_waits_for_the_migration_to_end() {
         let sent_events: String = sent_events.iter().map(|name| event("vm", name)).collect();
         let server = serve_fake_cloud_hypervisor(
             tokio::net::UnixListener::bind(&socket).unwrap(),
-            move |method, endpoint| match (method, endpoint) {
+            move |method, endpoint, _| match (method, endpoint) {
                 ("GET", "vmm.ping") => r#"{"version":"v54.0","pid":1}"#.to_string(),
                 ("PUT", "vm.send-migration") => {
                     if !sent_events.is_empty() {
@@ -567,15 +570,17 @@ async fn send_migration_waits_for_the_migration_to_end() {
             .await
             .insert(vm_id.clone(), running_instance(&vm_id, socket).await);
 
-        let (result, ()) = tokio::join!(
-            manager.send_migration(&vm_id, "tcp:destination:49152"),
-            async {
-                sent.notified().await;
-                if vmm_exits {
-                    server.abort();
-                }
+        let request = ProtoSendMigrationRequest {
+            vm_id: vm_id.clone(),
+            destination_url: "tcp:destination:49152".to_string(),
+            ..Default::default()
+        };
+        let (result, ()) = tokio::join!(manager.send_migration(&request), async {
+            sent.notified().await;
+            if vmm_exits {
+                server.abort();
             }
-        );
+        });
 
         match expected {
             Ok(()) => {
@@ -597,6 +602,89 @@ async fn send_migration_waits_for_the_migration_to_end() {
             }
         }
     }
+}
+
+/// The migration's settings and this node's TLS certificates reach Cloud
+/// Hypervisor's `vm.send-migration`.
+#[tokio::test]
+async fn send_migration_passes_tls_and_settings_to_cloud_hypervisor() {
+    let directory = TempDir::new().unwrap();
+    let tls_dir = directory.path().join("migration-tls");
+    std::fs::create_dir(&tls_dir).unwrap();
+    for file in [
+        "ca-cert.pem",
+        "server-cert.pem",
+        "server-key.pem",
+        "client-cert.pem",
+        "client-key.pem",
+    ] {
+        std::fs::write(tls_dir.join(file), "").unwrap();
+    }
+    let manager = VmManager::with_storage(
+        directory.path(),
+        "/bin/true",
+        StorageBackendRegistry::new(),
+        None,
+        None,
+        Duration::from_secs(1),
+        Some(MigrationTlsDir::new(tls_dir.clone()).unwrap()),
+    );
+    let vm_id = Uuid::new_v4().to_string();
+    let socket = manager.socket_path(&vm_id);
+    let events_path = manager.events_path(&vm_id);
+    std::fs::write(&events_path, "").unwrap();
+
+    let sent = Arc::new(std::sync::Mutex::new(None));
+    let sent_body = sent.clone();
+    serve_fake_cloud_hypervisor(
+        tokio::net::UnixListener::bind(&socket).unwrap(),
+        move |method, endpoint, body| match (method, endpoint) {
+            ("GET", "vmm.ping") => r#"{"version":"v54.0","pid":1}"#.to_string(),
+            ("PUT", "vm.send-migration") => {
+                *sent_body.lock().unwrap() = Some(body.to_string());
+                let finished = serde_json::json!({"source": "vm", "event": "migration-starting"})
+                    .to_string()
+                    + &serde_json::json!({"source": "vm", "event": "migration-finished"})
+                        .to_string();
+                std::fs::write(&events_path, finished).unwrap();
+                String::new()
+            }
+            _ => panic!("unexpected request: {method} {endpoint}"),
+        },
+    );
+    manager
+        .vms
+        .lock()
+        .await
+        .insert(vm_id.clone(), running_instance(&vm_id, socket).await);
+
+    manager
+        .send_migration(&ProtoSendMigrationRequest {
+            vm_id: vm_id.clone(),
+            destination_url: "tcp:destination:49152".to_string(),
+            max_downtime_ms: Some(500),
+            timeout_secs: Some(120),
+            on_timeout: ProtoMigrationTimeoutAction::Finish as i32,
+            connections: Some(4),
+            memory_mode: ProtoMigrationMemoryMode::Postcopy as i32,
+        })
+        .await
+        .unwrap();
+
+    let body: serde_json::Value =
+        serde_json::from_str(sent.lock().unwrap().as_deref().unwrap()).unwrap();
+    assert_eq!(
+        body,
+        serde_json::json!({
+            "destination_url": "tcp:destination:49152",
+            "tls_dir": tls_dir.display().to_string(),
+            "downtime_ms": 500,
+            "timeout_s": 120,
+            "timeout_strategy": "Ignore",
+            "connections": 4,
+            "memory_mode": "Postcopy",
+        })
+    );
 }
 
 #[test]

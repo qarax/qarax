@@ -339,6 +339,9 @@ message NodeInfo {
   repeated NumaNode numa_nodes = 12;
   string architecture = 13;
   optional string firecracker_version = 14;
+  // Whether the node has certificates for migration TLS
+  // (qarax-node --migration-tls-dir), used for every migration in or out.
+  bool migration_tls = 15;
 }
 
 // ============================================================================
@@ -423,6 +426,33 @@ message ReceiveMigrationResponse {
 message SendMigrationRequest {
   string vm_id            = 1;
   string destination_url  = 2; // e.g. "tcp://192.168.1.20:49152"
+  // Longest pause of the guest at switch-over the migration aims for
+  // (Cloud Hypervisor's default: 300 ms).
+  optional int64 max_downtime_ms = 3;
+  // Total time the migration may take (Cloud Hypervisor's default: 1 hour).
+  optional int64 timeout_secs = 4;
+  MigrationTimeoutAction on_timeout = 5;
+  // Parallel TCP connections for the memory transfer (1-128, default 1).
+  optional int32 connections = 6;
+  MigrationMemoryMode memory_mode = 7;
+}
+
+// How guest memory moves to the destination.
+enum MigrationMemoryMode {
+  // Copy memory while the guest runs, then pause it to switch over.
+  MIGRATION_MEMORY_MODE_PRECOPY = 0;
+  // Switch over first, then move memory as the destination faults it in.
+  // Always converges, but the VM is lost if the source or the link fails
+  // before every page has moved.
+  MIGRATION_MEMORY_MODE_POSTCOPY = 1;
+}
+
+// What a migration does when it reaches its timeout.
+enum MigrationTimeoutAction {
+  // Abort; the VM keeps running on the source.
+  MIGRATION_TIMEOUT_ACTION_CANCEL = 0;
+  // Switch over anyway, pausing the guest longer than max_downtime_ms.
+  MIGRATION_TIMEOUT_ACTION_FINISH = 1;
 }
 
 service VmService {

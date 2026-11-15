@@ -335,6 +335,53 @@ pub enum BootMode {
     Firmware,
 }
 
+/// How a live migration moves guest memory.
+#[derive(Deserialize, Serialize, Debug, Clone, Copy, Default, Eq, PartialEq, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MigrationMemoryMode {
+    /// Copy memory while the guest runs, then pause it briefly to switch over.
+    #[default]
+    Precopy,
+    /// Switch over first, then move memory as the guest touches it. It
+    /// finishes however fast the guest writes memory, but the VM is lost if
+    /// the source host or the network fails before all of it has moved.
+    /// Not available for VMs with vhost-user disks or NICs.
+    Postcopy,
+}
+
+/// What a live migration does when it reaches its timeout.
+#[derive(Deserialize, Serialize, Debug, Clone, Copy, Default, Eq, PartialEq, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MigrationTimeoutAction {
+    /// Abort; the VM keeps running on the source host.
+    #[default]
+    Cancel,
+    /// Switch over anyway, pausing the guest for longer than `max_downtime_ms`.
+    Finish,
+}
+
+/// Live migration tuning. Cloud Hypervisor's defaults apply to whatever is
+/// left out.
+#[derive(Deserialize, Debug, Clone, Default, ToSchema, validator::Validate)]
+pub struct MigrationOptions {
+    /// Longest pause of the guest at switch-over to aim for (default 300 ms).
+    #[validate(range(min = 1))]
+    #[schema(minimum = 1)]
+    pub max_downtime_ms: Option<i64>,
+    /// Longest the whole migration may take (default 3600 s).
+    #[validate(range(min = 1))]
+    #[schema(minimum = 1)]
+    pub timeout_secs: Option<i64>,
+    #[serde(default)]
+    pub on_timeout: MigrationTimeoutAction,
+    /// Parallel TCP connections for the memory transfer (default 1).
+    #[validate(range(min = 1, max = 128))]
+    #[schema(minimum = 1, maximum = 128)]
+    pub connections: Option<i32>,
+    #[serde(default)]
+    pub memory_mode: MigrationMemoryMode,
+}
+
 #[derive(
     Deserialize, Serialize, Debug, Clone, Copy, Eq, PartialEq, Type, EnumString, Display, ToSchema,
 )]
