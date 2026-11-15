@@ -87,7 +87,45 @@ impl VmManager {
         let body = serde_json::json!({ "id": device_id }).to_string();
         Self::send_api_request(&socket_path, "PUT", "/api/v1/vm.remove-device", Some(&body))
             .await?;
+        Self::wait_for_device_removal(vm_id, &socket_path, device_id).await;
         Ok(())
+    }
+
+    /// Wait for Cloud Hypervisor to let go of a removed device. It keeps the
+    /// device, and its id, until the guest has ejected it: adding a device
+    /// with that id before then is refused, and a NIC's TAP is still in use.
+    /// A guest that takes longer than the deadline only gets a warning; the
+    /// removal still happens once it ejects the device.
+    async fn wait_for_device_removal(vm_id: &str, socket_path: &PathBuf, device_id: &str) {
+        const DEADLINE: Duration = Duration::from_secs(10);
+        const POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+        #[derive(serde::Deserialize)]
+        struct VmInfoDevices {
+            #[serde(default)]
+            device_tree: Option<HashMap<String, serde::de::IgnoredAny>>,
+        }
+
+        let deadline = tokio::time::Instant::now() + DEADLINE;
+        loop {
+            let present = Self::send_api_request(socket_path, "GET", "/api/v1/vm.info", None)
+                .await
+                .ok()
+                .and_then(|body| serde_json::from_str::<VmInfoDevices>(&body).ok())
+                .and_then(|info| info.device_tree)
+                .is_some_and(|tree| tree.contains_key(device_id));
+            if !present {
+                return;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                warn!(
+                    "VM {vm_id}'s guest hasn't ejected device {device_id} after {}s; it goes once the guest does",
+                    DEADLINE.as_secs()
+                );
+                return;
+            }
+            sleep(POLL_INTERVAL).await;
+        }
     }
 
     /// Remove a network device from a VM, with the TAP qarax-node made for it.

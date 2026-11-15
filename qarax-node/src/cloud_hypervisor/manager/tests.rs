@@ -716,6 +716,53 @@ fn disk_image_type_comes_from_the_recorded_format() {
     }
 }
 
+/// Removing a device returns once Cloud Hypervisor has let go of it, which
+/// is when the guest ejects it, not when `vm.remove-device` answers: until
+/// then the device's id can't be reused.
+#[tokio::test]
+async fn remove_disk_device_waits_for_the_guest_to_eject_it() {
+    let directory = TempDir::new().unwrap();
+    let manager = test_manager(&directory);
+    let vm_id = Uuid::new_v4().to_string();
+    let socket = manager.socket_path(&vm_id);
+
+    // vm.info polls until the guest "ejects" the disk.
+    let polls_left = Arc::new(std::sync::atomic::AtomicI32::new(-1));
+    let served = polls_left.clone();
+    serve_fake_cloud_hypervisor(
+        tokio::net::UnixListener::bind(&socket).unwrap(),
+        move |method, endpoint, _| match (method, endpoint) {
+            ("PUT", "vm.remove-device") => {
+                served.store(3, std::sync::atomic::Ordering::SeqCst);
+                String::new()
+            }
+            ("GET", "vm.info") => {
+                let mut info = serde_json::to_value(models::VmInfo::new(
+                    VmConfig::default(),
+                    models::VmState::Running,
+                ))
+                .unwrap();
+                if served.fetch_sub(1, std::sync::atomic::Ordering::SeqCst) != 0 {
+                    info["device_tree"] = serde_json::json!({"disk0": {"id": "disk0"}});
+                }
+                info.to_string()
+            }
+            _ => panic!("unexpected request: {method} {endpoint}"),
+        },
+    );
+    manager
+        .vms
+        .lock()
+        .await
+        .insert(vm_id.clone(), running_instance(&vm_id, socket).await);
+
+    manager.remove_disk_device(&vm_id, "disk0").await.unwrap();
+    assert!(
+        polls_left.load(std::sync::atomic::Ordering::SeqCst) < 0,
+        "returned while the device was still there"
+    );
+}
+
 #[test]
 fn vfio_device_iommu_is_sent_as_iommu_type() {
     for (iommu, expected) in [
