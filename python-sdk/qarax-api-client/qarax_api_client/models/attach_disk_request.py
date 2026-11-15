@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, TypeVar, cast
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 from uuid import UUID
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 
 from ..types import UNSET, Unset
+
+if TYPE_CHECKING:
+    from ..models.rate_limiter_config import RateLimiterConfig
+
 
 T = TypeVar("T", bound="AttachDiskRequest")
 
@@ -19,14 +23,18 @@ class AttachDiskRequest:
         storage_object_id (UUID): Storage object ID (any type: disk, oci_image, iso, etc.).
         boot_order (int | None | Unset): Boot priority — lower is higher priority (default: `0`).
         logical_name (None | str | Unset): Logical device name inside the VM (e.g. "vda"); auto-generated if omitted.
+        rate_limiter (None | RateLimiterConfig | Unset):
     """
 
     storage_object_id: UUID
     boot_order: int | None | Unset = UNSET
     logical_name: None | str | Unset = UNSET
+    rate_limiter: None | RateLimiterConfig | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        from ..models.rate_limiter_config import RateLimiterConfig  # noqa: PLC0415
+
         storage_object_id = str(self.storage_object_id)
 
         boot_order: int | None | Unset
@@ -41,6 +49,14 @@ class AttachDiskRequest:
         else:
             logical_name = self.logical_name
 
+        rate_limiter: dict[str, Any] | None | Unset
+        if isinstance(self.rate_limiter, Unset):
+            rate_limiter = UNSET
+        elif isinstance(self.rate_limiter, RateLimiterConfig):
+            rate_limiter = self.rate_limiter.to_dict()
+        else:
+            rate_limiter = self.rate_limiter
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -52,11 +68,15 @@ class AttachDiskRequest:
             field_dict["boot_order"] = boot_order
         if logical_name is not UNSET:
             field_dict["logical_name"] = logical_name
+        if rate_limiter is not UNSET:
+            field_dict["rate_limiter"] = rate_limiter
 
         return field_dict
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
+        from ..models.rate_limiter_config import RateLimiterConfig  # noqa: PLC0415
+
         d = dict(src_dict)
         storage_object_id = UUID(d.pop("storage_object_id"))
 
@@ -78,10 +98,28 @@ class AttachDiskRequest:
 
         logical_name = _parse_logical_name(d.pop("logical_name", UNSET))
 
+        def _parse_rate_limiter(data: object) -> None | RateLimiterConfig | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, dict):
+                    raise TypeError()
+                rate_limiter_type_0 = RateLimiterConfig.from_dict(data)
+
+                return rate_limiter_type_0
+            except (TypeError, ValueError, AttributeError, KeyError):
+                pass
+            return cast(None | RateLimiterConfig | Unset, data)
+
+        rate_limiter = _parse_rate_limiter(d.pop("rate_limiter", UNSET))
+
         attach_disk_request = cls(
             storage_object_id=storage_object_id,
             boot_order=boot_order,
             logical_name=logical_name,
+            rate_limiter=rate_limiter,
         )
 
         attach_disk_request.additional_properties = d

@@ -13,6 +13,7 @@ use std::time::Instant;
 use tracing::{error, info, instrument, warn};
 use utoipa::ToSchema;
 use uuid::Uuid;
+use validator::Validate;
 
 use common::cpu_list::expand_cpu_list;
 
@@ -35,7 +36,7 @@ use crate::{
         hosts::Host,
         jobs::{self, JobType, NewJob},
         lifecycle_hooks,
-        network_interfaces::{self, NetworkInterface},
+        network_interfaces::{self, NetworkInterface, RateLimiterConfig},
         networks,
         sandboxes::{self, SandboxStatus},
         security_groups, snapshots,
@@ -515,25 +516,29 @@ async fn ensure_ip_address_is_available(
 }
 
 /// Reject a malformed static IP before it reaches an `inet` cast in SQL, where
-/// it would surface as a 500.
-fn ensure_requested_ip_parses(net: &NewVmNetwork) -> Result<()> {
-    match net.ip.as_deref() {
-        Some(ip) if ip.parse::<std::net::IpAddr>().is_err() => {
-            Err(crate::errors::Error::UnprocessableEntity(format!(
-                "Invalid IP address {ip:?} for network interface '{}'",
-                net.id
-            )))
-        }
-        _ => Ok(()),
+/// it would surface as a 500, and a rate limiter the hypervisor would ignore
+/// (a zero bucket) or refuse when the VM starts (a negative one).
+fn ensure_nic_request_is_valid(net: &NewVmNetwork) -> Result<()> {
+    if let Some(ip) = net.ip.as_deref()
+        && ip.parse::<std::net::IpAddr>().is_err()
+    {
+        return Err(crate::errors::Error::UnprocessableEntity(format!(
+            "Invalid IP address {ip:?} for network interface '{}'",
+            net.id
+        )));
     }
+    if let Some(rate_limiter) = &net.rate_limiter {
+        rate_limiter.validate()?;
+    }
+    Ok(())
 }
 
-async fn validate_requested_static_ips_are_available(
+async fn validate_requested_networks(
     pool: &sqlx::PgPool,
     networks: Option<&[crate::model::vms::NewVmNetwork]>,
 ) -> Result<()> {
     for net in networks.unwrap_or(&[]) {
-        ensure_requested_ip_parses(net)?;
+        ensure_nic_request_is_valid(net)?;
         if let (Some(network_id), Some(ip_address)) = (net.network_id, net.ip.as_deref()) {
             ensure_ip_address_is_available(pool, network_id, ip_address).await?;
         }
@@ -837,7 +842,7 @@ pub(crate) async fn create_vm_internal(env: &App, vm: ResolvedNewVm) -> Result<U
         .clone()
         .unwrap_or_else(|| env.control_plane_architecture().to_string());
     persist_vm_scheduling_metadata(&mut vm, &target_architecture);
-    validate_requested_static_ips_are_available(env.pool(), vm.networks.as_deref()).await?;
+    validate_requested_networks(env.pool(), vm.networks.as_deref()).await?;
     ensure_security_groups_exist(env.pool(), vm.security_group_ids.as_deref()).await?;
 
     let mut tx = env.pool().begin().await?;
@@ -923,7 +928,7 @@ pub(crate) async fn create_vm_with_image_internal(
         .clone()
         .unwrap_or_else(|| env.control_plane_architecture().to_string());
     persist_vm_scheduling_metadata(&mut vm, &target_architecture);
-    validate_requested_static_ips_are_available(env.pool(), vm.networks.as_deref()).await?;
+    validate_requested_networks(env.pool(), vm.networks.as_deref()).await?;
     ensure_security_groups_exist(env.pool(), vm.security_group_ids.as_deref()).await?;
 
     let mut tx = env.pool().begin().await?;
@@ -2818,6 +2823,8 @@ pub struct AttachDiskRequest {
     pub logical_name: Option<String>,
     /// Boot priority — lower is higher priority (default: `0`).
     pub boot_order: Option<i32>,
+    /// Bandwidth and operation limits for the disk.
+    pub rate_limiter: Option<RateLimiterConfig>,
 }
 
 /// Attach a storage object to a VM as a disk.
@@ -2848,6 +2855,9 @@ pub async fn attach_disk(
 ) -> Result<axum::response::Response> {
     use axum::response::IntoResponse as _;
 
+    if let Some(rate_limiter) = &req.rate_limiter {
+        rate_limiter.validate()?;
+    }
     let vm = vms::get(env.pool(), vm_id).await?;
     match vm.status {
         VmStatus::Created | VmStatus::Running | VmStatus::Shutdown => {}
@@ -2903,6 +2913,7 @@ pub async fn attach_disk(
         device_path: format!("/dev/{}", logical_name),
         boot_order: Some(boot_order),
         read_only: Some(false),
+        rate_limiter: req.rate_limiter,
         ..Default::default()
     };
 
@@ -3089,7 +3100,7 @@ fn disk_to_disk_config(
         vhost_socket: disk.vhost_socket.clone(),
         num_queues: Some(disk.num_queues),
         queue_size: Some(disk.queue_size),
-        rate_limiter: None,
+        rate_limiter: disk.rate_limiter.as_ref().map(Into::into),
         rate_limit_group: disk.rate_limit_group.clone(),
         pci_segment: (disk.pci_segment != 0).then_some(disk.pci_segment),
         serial: disk.serial_number.clone(),
@@ -3242,7 +3253,7 @@ pub async fn add_nic(
             ));
         }
     }
-    ensure_requested_ip_parses(&req)?;
+    ensure_nic_request_is_valid(&req)?;
 
     let existing = network_interfaces::list_by_vm(env.pool(), vm_id).await?;
 

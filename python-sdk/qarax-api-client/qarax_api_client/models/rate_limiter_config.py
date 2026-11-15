@@ -17,10 +17,12 @@ T = TypeVar("T", bound="RateLimiterConfig")
 
 @_attrs_define
 class RateLimiterConfig:
-    """
-    Attributes:
-        bandwidth (None | TokenBucket | Unset):
-        ops (None | TokenBucket | Unset):
+    """I/O limits for a disk or NIC, each a token bucket. On a NIC both apply to
+    received and sent traffic separately.
+
+        Attributes:
+            bandwidth (None | TokenBucket | Unset):
+            ops (None | TokenBucket | Unset):
     """
 
     bandwidth: None | TokenBucket | Unset = UNSET

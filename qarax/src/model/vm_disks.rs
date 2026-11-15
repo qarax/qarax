@@ -3,6 +3,8 @@ use sqlx::{PgPool, Postgres, Transaction, types::Json};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+use crate::model::network_interfaces::RateLimiterConfig;
+
 type PgTransaction<'a> = Transaction<'a, Postgres>;
 
 #[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
@@ -25,7 +27,7 @@ pub struct VmDisk {
     // Performance
     pub num_queues: i32,
     pub queue_size: i32,
-    pub rate_limiter: Option<serde_json::Value>,
+    pub rate_limiter: Option<RateLimiterConfig>,
     pub rate_limit_group: Option<String>,
 
     // PCI configuration
@@ -54,7 +56,7 @@ pub struct VmDiskRow {
     pub vhost_socket: Option<String>,
     pub num_queues: i32,
     pub queue_size: i32,
-    pub rate_limiter: Option<Json<serde_json::Value>>,
+    pub rate_limiter: Option<Json<RateLimiterConfig>>,
     pub rate_limit_group: Option<String>,
     pub pci_segment: i32,
     pub serial_number: Option<String>,
@@ -100,7 +102,7 @@ pub struct NewVmDisk {
     pub vhost_socket: Option<String>,
     pub num_queues: Option<i32>,
     pub queue_size: Option<i32>,
-    pub rate_limiter: Option<serde_json::Value>,
+    pub rate_limiter: Option<RateLimiterConfig>,
     pub rate_limit_group: Option<String>,
     pub pci_segment: Option<i32>,
     pub serial_number: Option<String>,
@@ -349,7 +351,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $
         disk.vhost_socket.as_deref(),
         disk.num_queues.unwrap_or(1),
         disk.queue_size.unwrap_or(128),
-        disk.rate_limiter.as_ref(),
+        disk.rate_limiter.as_ref().map(Json) as Option<Json<&RateLimiterConfig>>,
         disk.rate_limit_group.as_deref(),
         disk.pci_segment.unwrap_or(0),
         disk.serial_number.as_deref(),

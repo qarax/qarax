@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, TypeVar, cast
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 from uuid import UUID
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 
 from ..types import UNSET, Unset
+
+if TYPE_CHECKING:
+    from ..models.rate_limiter_config import RateLimiterConfig
+
 
 T = TypeVar("T", bound="VmDisk")
 
@@ -29,7 +33,7 @@ class VmDisk:
         vm_id (UUID):
         boot_order (int | None | Unset):
         rate_limit_group (None | str | Unset):
-        rate_limiter (Any | Unset):
+        rate_limiter (None | RateLimiterConfig | Unset):
         serial_number (None | str | Unset):
         storage_object_id (None | Unset | UUID):
         upper_storage_object_id (None | Unset | UUID): For OverlayBD disks: ID of the OverlaybdUpper StorageObject
@@ -52,7 +56,7 @@ class VmDisk:
     vm_id: UUID
     boot_order: int | None | Unset = UNSET
     rate_limit_group: None | str | Unset = UNSET
-    rate_limiter: Any | Unset = UNSET
+    rate_limiter: None | RateLimiterConfig | Unset = UNSET
     serial_number: None | str | Unset = UNSET
     storage_object_id: None | Unset | UUID = UNSET
     upper_storage_object_id: None | Unset | UUID = UNSET
@@ -60,6 +64,8 @@ class VmDisk:
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        from ..models.rate_limiter_config import RateLimiterConfig  # noqa: PLC0415
+
         config = self.config
 
         device_path = self.device_path
@@ -94,7 +100,13 @@ class VmDisk:
         else:
             rate_limit_group = self.rate_limit_group
 
-        rate_limiter = self.rate_limiter
+        rate_limiter: dict[str, Any] | None | Unset
+        if isinstance(self.rate_limiter, Unset):
+            rate_limiter = UNSET
+        elif isinstance(self.rate_limiter, RateLimiterConfig):
+            rate_limiter = self.rate_limiter.to_dict()
+        else:
+            rate_limiter = self.rate_limiter
 
         serial_number: None | str | Unset
         if isinstance(self.serial_number, Unset):
@@ -160,6 +172,8 @@ class VmDisk:
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
+        from ..models.rate_limiter_config import RateLimiterConfig  # noqa: PLC0415
+
         d = dict(src_dict)
         config = d.pop("config")
 
@@ -201,7 +215,22 @@ class VmDisk:
 
         rate_limit_group = _parse_rate_limit_group(d.pop("rate_limit_group", UNSET))
 
-        rate_limiter = d.pop("rate_limiter", UNSET)
+        def _parse_rate_limiter(data: object) -> None | RateLimiterConfig | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, dict):
+                    raise TypeError()
+                rate_limiter_type_0 = RateLimiterConfig.from_dict(data)
+
+                return rate_limiter_type_0
+            except (TypeError, ValueError, AttributeError, KeyError):
+                pass
+            return cast(None | RateLimiterConfig | Unset, data)
+
+        rate_limiter = _parse_rate_limiter(d.pop("rate_limiter", UNSET))
 
         def _parse_serial_number(data: object) -> None | str | Unset:
             if data is None:

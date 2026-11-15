@@ -603,6 +603,40 @@ pub struct AttachDiskRequest {
     pub storage_object_id: Uuid,
     pub logical_name: Option<String>,
     pub boot_order: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rate_limiter: Option<RateLimiterConfig>,
+}
+
+/// I/O limits for a disk or NIC: a token bucket each for bytes and for
+/// operations (disk requests or NIC packets).
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RateLimiterConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bandwidth: Option<TokenBucket>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ops: Option<TokenBucket>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TokenBucket {
+    pub size: i64,
+    /// Milliseconds the bucket takes to refill from empty.
+    pub refill_time: i64,
+}
+
+impl RateLimiterConfig {
+    /// Limits of `bandwidth` bytes and `ops` operations per second, or `None`
+    /// when neither is set.
+    pub fn per_second(bandwidth: Option<i64>, ops: Option<i64>) -> Option<Self> {
+        let bucket = |size| TokenBucket {
+            size,
+            refill_time: 1000,
+        };
+        (bandwidth.is_some() || ops.is_some()).then(|| RateLimiterConfig {
+            bandwidth: bandwidth.map(bucket),
+            ops: ops.map(bucket),
+        })
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -666,6 +700,8 @@ pub struct HotplugNicRequest {
     pub offload_ufo: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub offload_csum: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rate_limiter: Option<RateLimiterConfig>,
 }
 
 // Snapshots
