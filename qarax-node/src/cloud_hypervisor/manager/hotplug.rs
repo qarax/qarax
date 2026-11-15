@@ -203,6 +203,7 @@ impl VmManager {
         disk_id: &str,
         path: &str,
         new_size: i64,
+        image_format: ProtoImageFormat,
     ) -> Result<(), VmManagerError> {
         if path.is_empty() || path.contains('\0') {
             return Err(VmManagerError::InvalidConfig(
@@ -231,7 +232,10 @@ impl VmManager {
             return Ok(());
         }
 
-        let format = if Self::is_qcow2(path) { "qcow2" } else { "raw" };
+        let format = match Self::image_type_to_sdk(image_format, Some(path)) {
+            models::ImageType::Qcow2 => "qcow2",
+            _ => "raw",
+        };
         let output = tokio::process::Command::new("qemu-img")
             .args(["resize", "-f", format, path, &new_size.to_string()])
             .output()

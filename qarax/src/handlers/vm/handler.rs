@@ -23,8 +23,8 @@ use crate::{
         CreateVmRequest, NodeClient, net_configs_from_db,
         node::{
             ConsoleConfig as ProtoConsoleConfig, ConsoleMode as ProtoConsoleMode, CpuPinning,
-            DiskConfig, NetConfig, NumaPlacement, RngConfig as ProtoRngConfig, VhostMode,
-            VsockConfig,
+            DiskConfig, ImageFormat as ProtoImageFormat, NetConfig, NumaPlacement,
+            RngConfig as ProtoRngConfig, VhostMode, VsockConfig,
         },
     },
     handlers::audit::{AuditEvent, AuditEventExt},
@@ -2527,6 +2527,8 @@ async fn build_create_vm_request(env: &App, vm: &Vm) -> Result<CreateVmRequest> 
     // Resolve each vm_disk to a DiskConfig using the pre-fetched maps
     let mut resolved_disks: Vec<DiskConfig> = Vec::new();
     let mut has_overlaybd_boot = false;
+    // Looked up for the first file disk whose format isn't recorded yet.
+    let mut disk_host: Option<Host> = None;
 
     for disk in &db_disks {
         if let Some(so_id) = disk.storage_object_id {
@@ -2560,6 +2562,7 @@ async fn build_create_vm_request(env: &App, vm: &Vm) -> Result<CreateVmRequest> 
                     resolved_disks.push(disk_to_disk_config(
                         disk,
                         None,
+                        ProtoImageFormat::Raw,
                         Some(image_ref),
                         Some(registry_url),
                         upper_data_path,
@@ -2568,8 +2571,36 @@ async fn build_create_vm_request(env: &App, vm: &Vm) -> Result<CreateVmRequest> 
                     has_overlaybd_boot = true;
                 }
                 storage_pools::StoragePoolType::Local | storage_pools::StoragePoolType::Nfs => {
-                    let path = storage_objects::get_path_from_config(&obj.config);
-                    resolved_disks.push(disk_to_disk_config(disk, path, None, None, None, None));
+                    let path =
+                        storage_objects::get_path_from_config(&obj.config).ok_or_else(|| {
+                            crate::errors::Error::UnprocessableEntity(format!(
+                                "Storage object {} has no path",
+                                obj.id
+                            ))
+                        })?;
+                    let host = match disk_host.take() {
+                        Some(host) => host,
+                        None => {
+                            let host_id = vm.host_id.ok_or_else(|| {
+                                crate::errors::Error::UnprocessableEntity(
+                                    "VM has no assigned host".into(),
+                                )
+                            })?;
+                            hosts::require_by_id(env.pool(), host_id).await?
+                        }
+                    };
+                    let image_format =
+                        file_disk_image_format(env.pool(), &host, obj, &path).await?;
+                    disk_host = Some(host);
+                    resolved_disks.push(disk_to_disk_config(
+                        disk,
+                        Some(path),
+                        image_format,
+                        None,
+                        None,
+                        None,
+                        None,
+                    ));
                 }
                 storage_pools::StoragePoolType::Block => {
                     let path = iscsi_by_path(&obj.config).ok_or_else(|| {
@@ -2581,6 +2612,7 @@ async fn build_create_vm_request(env: &App, vm: &Vm) -> Result<CreateVmRequest> 
                     resolved_disks.push(disk_to_disk_config(
                         disk,
                         Some(path),
+                        ProtoImageFormat::Raw,
                         None,
                         None,
                         None,
@@ -2930,7 +2962,9 @@ pub async fn attach_disk(
             Some(object_id) => Some(storage_objects::get(env.pool(), object_id).await?),
             None => None,
         };
-        let disk_config = disk_config_for_hotplug(&disk, &obj, &pool, upper_object.as_ref())?;
+        let disk_config =
+            disk_config_for_hotplug(env.pool(), &host, &disk, &obj, &pool, upper_object.as_ref())
+                .await?;
         if let Err(e) = NodeClient::new(&host.address, host.port as u16)
             .add_disk_device(vm_id, disk_config)
             .await
@@ -2953,8 +2987,11 @@ pub async fn attach_disk(
     .into_response())
 }
 
-/// Build a `DiskConfig` proto from a `VmDisk` + resolved storage object/pool (no DB calls).
-fn disk_config_for_hotplug(
+/// Build a `DiskConfig` proto from a `VmDisk` + resolved storage object/pool,
+/// for the VM on `host`.
+async fn disk_config_for_hotplug(
+    db: &PgPool,
+    host: &Host,
     disk: &vm_disks::VmDisk,
     obj: &storage_objects::StorageObject,
     pool: &storage_pools::StoragePool,
@@ -2978,6 +3015,7 @@ fn disk_config_for_hotplug(
             Ok(disk_to_disk_config(
                 disk,
                 None,
+                ProtoImageFormat::Raw,
                 Some(image_ref),
                 Some(registry_url),
                 upper_data_path,
@@ -2985,8 +3023,22 @@ fn disk_config_for_hotplug(
             ))
         }
         storage_pools::StoragePoolType::Local | storage_pools::StoragePoolType::Nfs => {
-            let path = storage_objects::get_path_from_config(&obj.config);
-            Ok(disk_to_disk_config(disk, path, None, None, None, None))
+            let path = storage_objects::get_path_from_config(&obj.config).ok_or_else(|| {
+                crate::errors::Error::UnprocessableEntity(format!(
+                    "Storage object {} has no path",
+                    obj.id
+                ))
+            })?;
+            let image_format = file_disk_image_format(db, host, obj, &path).await?;
+            Ok(disk_to_disk_config(
+                disk,
+                Some(path),
+                image_format,
+                None,
+                None,
+                None,
+                None,
+            ))
         }
         storage_pools::StoragePoolType::Block => {
             let path = iscsi_by_path(&obj.config).ok_or_else(|| {
@@ -2998,6 +3050,7 @@ fn disk_config_for_hotplug(
             Ok(disk_to_disk_config(
                 disk,
                 Some(path),
+                ProtoImageFormat::Raw,
                 None,
                 None,
                 None,
@@ -3086,6 +3139,7 @@ fn resolve_disk_resize_target(
 fn disk_to_disk_config(
     disk: &vm_disks::VmDisk,
     path: Option<String>,
+    image_format: ProtoImageFormat,
     oci_image_ref: Option<String>,
     registry_url: Option<String>,
     upper_data_path: Option<String>,
@@ -3108,7 +3162,52 @@ fn disk_to_disk_config(
         registry_url,
         upper_data_path,
         upper_index_path,
+        image_format: image_format as i32,
     }
+}
+
+/// How the image of a Local or NFS disk object at `path` is read: the format
+/// recorded on the object or, when it has none yet, the one `host` reads from
+/// the image, recorded from then on. That is the disk's first use, before a
+/// guest could have written a header to it (see [`storage_objects::ImageFormat`]).
+async fn file_disk_image_format(
+    pool: &PgPool,
+    host: &Host,
+    object: &storage_objects::StorageObject,
+    path: &str,
+) -> Result<ProtoImageFormat> {
+    let recorded = storage_objects::ImageFormat::recorded_in(&object.config).map_err(|e| {
+        crate::errors::Error::UnprocessableEntity(format!(
+            "storage object {} has an invalid config.format: {e}",
+            object.id
+        ))
+    })?;
+    let format = match recorded {
+        Some(format) => format,
+        None => {
+            let probed = NodeClient::new(&host.address, host.port as u16)
+                .probe_image_format(path)
+                .await
+                .map_err(|e| {
+                    crate::errors::Error::UnprocessableEntity(format!(
+                        "could not read the format of disk image {path} on host '{}': {e:#}",
+                        host.name
+                    ))
+                })?;
+            let format = match probed {
+                ProtoImageFormat::Qcow2 => storage_objects::ImageFormat::Qcow2,
+                _ => storage_objects::ImageFormat::Raw,
+            };
+            let mut config = object.config.clone();
+            config["format"] = serde_json::json!(format);
+            storage_objects::update_config(pool, object.id, &config).await?;
+            format
+        }
+    };
+    Ok(match format {
+        storage_objects::ImageFormat::Raw => ProtoImageFormat::Raw,
+        storage_objects::ImageFormat::Qcow2 => ProtoImageFormat::Qcow2,
+    })
 }
 
 /// Build a `NetConfig` proto message from a `NetworkInterface` record, resolving
@@ -4085,6 +4184,16 @@ pub async fn resize_disk(
         crate::errors::Error::UnprocessableEntity("disk has no backing storage object".into())
     })?;
 
+    let host = host_for_vm(&env, vm_id).await?;
+    // Settled before the transaction below locks the object: recording a
+    // format writes to it.
+    let image_format = {
+        let obj = storage_objects::get(env.pool(), so_id).await?;
+        let pool_record = storage_pools::get(env.pool(), obj.storage_pool_id).await?;
+        let target = resolve_disk_resize_target(&disk, &obj, &pool_record)?;
+        file_disk_image_format(env.pool(), &host, &obj, &target.path).await?
+    };
+
     let mut tx = env.pool().begin().await?;
     let obj = storage_objects::get_for_update(&mut tx, so_id).await?;
     let pool_record = storage_pools::get(env.pool(), obj.storage_pool_id).await?;
@@ -4105,9 +4214,14 @@ pub async fn resize_disk(
 
     storage_objects::update_size_bytes_tx(&mut tx, target.storage_object_id, req.new_size_bytes)
         .await?;
-    let host = host_for_vm(&env, vm_id).await?;
     NodeClient::new(&host.address, host.port as u16)
-        .resize_disk(vm_id, &disk.logical_name, &target.path, req.new_size_bytes)
+        .resize_disk(
+            vm_id,
+            &disk.logical_name,
+            &target.path,
+            req.new_size_bytes,
+            image_format,
+        )
         .await
         .map_err(|e| {
             error!("Failed to resize disk {} for VM {}: {}", disk_id, vm_id, e);
@@ -4391,7 +4505,9 @@ async fn run_vm_commit_inner(
             storage_pool_id: Some(target_pool_id),
             object_type: StorageObjectType::Disk,
             size_bytes,
-            config: serde_json::Value::Object(serde_json::Map::new()),
+            // Raw by construction, with the guest's own first sectors, which
+            // a probe must not read as a qcow2 header.
+            config: serde_json::json!({ "format": storage_objects::ImageFormat::Raw }),
             parent_id: None,
         },
         vms::get(db_pool, vm_id)

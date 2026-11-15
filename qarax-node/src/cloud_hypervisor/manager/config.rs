@@ -235,16 +235,21 @@ impl VmManager {
         }
     }
 
-    pub(super) fn is_qcow2(path: &str) -> bool {
-        use std::io::Read;
-        let mut f = match std::fs::File::open(path) {
-            Ok(f) => f,
-            Err(_) => return false,
-        };
-        let mut magic = [0u8; 4];
-        f.read_exact(&mut magic)
-            .map(|_| magic == [0x51, 0x46, 0x49, 0xfb])
-            .unwrap_or(false)
+    /// Cloud Hypervisor's image type for `disk`. Always explicit: left to
+    /// autodetect, CH refuses writes to sector 0 of a raw image, which breaks
+    /// ext4 superblock updates.
+    pub(super) fn image_type_to_sdk(format: ProtoImageFormat, path: Option<&str>) -> ImageType {
+        match format {
+            ProtoImageFormat::Raw => ImageType::Raw,
+            ProtoImageFormat::Qcow2 => ImageType::Qcow2,
+            // From a control plane that doesn't record formats yet.
+            ProtoImageFormat::Unspecified => {
+                match path.map(|path| crate::disk_image::probe_image_format(Path::new(path))) {
+                    Some(Ok(ProtoImageFormat::Qcow2)) => ImageType::Qcow2,
+                    _ => ImageType::Raw,
+                }
+            }
+        }
     }
 
     pub(super) fn proto_disk_to_sdk(
@@ -266,16 +271,10 @@ impl VmManager {
             id: Some(disk.id.clone()),
             serial: disk.serial.clone(),
             rate_limit_group: disk.rate_limit_group.clone(),
-            // Detect qcow2 by magic bytes (QFI\xfb); otherwise force Raw to
-            // prevent CH from autodetecting and disabling sector 0 writes,
-            // which breaks ext4 superblock updates on raw images.
-            image_type: Some(
-                if disk.path.as_deref().map(Self::is_qcow2).unwrap_or(false) {
-                    ImageType::Qcow2
-                } else {
-                    ImageType::Raw
-                },
-            ),
+            image_type: Some(Self::image_type_to_sdk(
+                disk.image_format(),
+                disk.path.as_deref(),
+            )),
             ..Default::default()
         })
     }

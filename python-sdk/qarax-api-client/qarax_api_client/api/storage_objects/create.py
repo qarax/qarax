@@ -61,7 +61,11 @@ def sync_detailed(
     client: AuthenticatedClient | Client,
     body: NewStorageObject,
 ) -> Response[Any | str]:
-    """
+    """Register a storage object. A disk image's `config.format` (`raw` or
+    `qcow2`) is how it is read; without one, its node reads the format from the
+    image when a VM first uses it, before any guest has written to it, and
+    records that.
+
     Args:
         body (NewStorageObject):
 
@@ -89,7 +93,11 @@ def sync(
     client: AuthenticatedClient | Client,
     body: NewStorageObject,
 ) -> Any | str | None:
-    """
+    """Register a storage object. A disk image's `config.format` (`raw` or
+    `qcow2`) is how it is read; without one, its node reads the format from the
+    image when a VM first uses it, before any guest has written to it, and
+    records that.
+
     Args:
         body (NewStorageObject):
 
@@ -112,7 +120,11 @@ async def asyncio_detailed(
     client: AuthenticatedClient | Client,
     body: NewStorageObject,
 ) -> Response[Any | str]:
-    """
+    """Register a storage object. A disk image's `config.format` (`raw` or
+    `qcow2`) is how it is read; without one, its node reads the format from the
+    image when a VM first uses it, before any guest has written to it, and
+    records that.
+
     Args:
         body (NewStorageObject):
 
@@ -138,7 +150,11 @@ async def asyncio(
     client: AuthenticatedClient | Client,
     body: NewStorageObject,
 ) -> Any | str | None:
-    """
+    """Register a storage object. A disk image's `config.format` (`raw` or
+    `qcow2`) is how it is read; without one, its node reads the format from the
+    image when a VM first uses it, before any guest has written to it, and
+    records that.
+
     Args:
         body (NewStorageObject):
 

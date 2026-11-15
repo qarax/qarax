@@ -111,7 +111,7 @@ async fn create_disk_object(
             "storage_pool_id": pool_id,
             "object_type": "disk",
             "size_bytes": size_bytes,
-            "config": {"path": format!("/tmp/{pool_id}/{name}")}
+            "config": {"path": format!("/tmp/{pool_id}/{name}"), "format": "raw"}
         }))
         .send()
         .await

@@ -23,10 +23,11 @@ use crate::rpc::node::{
     DetachNetworkRequest, DetachNetworkResponse, DetachStoragePoolRequest, DeviceCounters,
     ExecVmRequest, ExecVmResponse, GpuInfo, HypervisorType, ImportOverlayBdRequest,
     ImportOverlayBdResponse, NodeInfo, NumaNode, PreflightCheck, PreflightImageRequest,
-    PreflightImageResponse, ReceiveMigrationRequest, ReceiveMigrationResponse, RemoveDeviceRequest,
-    ResizeDiskRequest, ResizeVmRequest, RestoreVmRequest, SendMigrationRequest, SnapshotVmRequest,
-    StoragePoolKind, SyncNetworkIsolationRequest, SyncVmFirewallRequest, SyncVpcOverlaysRequest,
-    VmConfig, VmCounters, VmId, VmList, VmState, vm_service_server::VmService,
+    PreflightImageResponse, ProbeImageFormatRequest, ProbeImageFormatResponse,
+    ReceiveMigrationRequest, ReceiveMigrationResponse, RemoveDeviceRequest, ResizeDiskRequest,
+    ResizeVmRequest, RestoreVmRequest, SendMigrationRequest, SnapshotVmRequest, StoragePoolKind,
+    SyncNetworkIsolationRequest, SyncVmFirewallRequest, SyncVpcOverlaysRequest, VmConfig,
+    VmCounters, VmId, VmList, VmState, vm_service_server::VmService,
 };
 use crate::vmm::{VmmError, VmmManager};
 use common::cpu_list::expand_cpu_list;
@@ -662,7 +663,13 @@ impl VmService for VmServiceImpl {
             .await
             .ok_or_else(|| Status::not_found(format!("VM {} not found", req.vm_id)))?;
         match manager
-            .resize_disk(&req.vm_id, &req.disk_id, &req.path, req.new_size)
+            .resize_disk(
+                &req.vm_id,
+                &req.disk_id,
+                &req.path,
+                req.new_size,
+                req.image_format(),
+            )
             .await
         {
             Ok(()) => {
@@ -674,6 +681,21 @@ impl VmService for VmServiceImpl {
                 Err(map_vmm_error(e))
             }
         }
+    }
+
+    async fn probe_image_format(
+        &self,
+        request: Request<ProbeImageFormatRequest>,
+    ) -> Result<Response<ProbeImageFormatResponse>, Status> {
+        let path = request.into_inner().path;
+        let image_format = crate::disk_image::probe_image_format(std::path::Path::new(&path))
+            .map_err(|e| match e.kind() {
+                std::io::ErrorKind::NotFound => Status::not_found(format!("{path} not found")),
+                _ => Status::internal(format!("failed to read {path}: {e}")),
+            })?;
+        Ok(Response::new(ProbeImageFormatResponse {
+            image_format: image_format as i32,
+        }))
     }
 
     async fn resize_vm(&self, request: Request<ResizeVmRequest>) -> Result<Response<()>, Status> {

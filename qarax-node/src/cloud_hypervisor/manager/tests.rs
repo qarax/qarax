@@ -687,6 +687,35 @@ async fn send_migration_passes_tls_and_settings_to_cloud_hypervisor() {
     );
 }
 
+/// A disk's recorded format decides how Cloud Hypervisor opens it, whatever
+/// its first bytes say; only a disk without one, from an older control plane,
+/// is probed.
+#[test]
+fn disk_image_type_comes_from_the_recorded_format() {
+    let directory = TempDir::new().unwrap();
+    // A raw disk whose guest wrote the qcow2 magic to its first sector.
+    let image = directory.path().join("disk.img");
+    std::fs::write(&image, b"QFI\xfb\0\0\0\x03").unwrap();
+
+    for (format, expected) in [
+        (ProtoImageFormat::Raw, ImageType::Raw),
+        (ProtoImageFormat::Qcow2, ImageType::Qcow2),
+        (ProtoImageFormat::Unspecified, ImageType::Qcow2),
+    ] {
+        let disk = ProtoDiskConfig {
+            id: "disk0".to_string(),
+            path: Some(image.display().to_string()),
+            image_format: format as i32,
+            ..Default::default()
+        };
+        assert_eq!(
+            VmManager::proto_disk_to_sdk(&disk).unwrap().image_type,
+            Some(expected),
+            "{format:?}"
+        );
+    }
+}
+
 #[test]
 fn vfio_device_iommu_is_sent_as_iommu_type() {
     for (iommu, expected) in [

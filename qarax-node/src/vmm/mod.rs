@@ -10,7 +10,7 @@ use std::path::Path;
 use async_trait::async_trait;
 
 use crate::rpc::node::{
-    DiskConfig as ProtoDiskConfig, ExecVmResponse, NetConfig as ProtoNetConfig,
+    DiskConfig as ProtoDiskConfig, ExecVmResponse, ImageFormat, NetConfig as ProtoNetConfig,
     SendMigrationRequest, VfioDeviceConfig as ProtoVfioDeviceConfig, VmConfig as ProtoVmConfig,
     VmState,
 };
@@ -169,6 +169,7 @@ pub trait VmmManager: Send + Sync + 'static {
         _disk_id: &str,
         _path: &str,
         _new_size: i64,
+        _image_format: ImageFormat,
     ) -> Result<(), VmmError> {
         Err(VmmError::Unsupported("resize_disk"))
     }

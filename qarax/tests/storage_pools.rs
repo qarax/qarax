@@ -151,6 +151,41 @@ async fn pool_capacity_tracks_concurrent_creates_resizes_and_deletes() {
     assert!(response.text().await.unwrap().contains("capacity"));
 }
 
+/// A registered disk's image format is `raw` or `qcow2`, and is kept next to
+/// the path the pool gives it.
+#[tokio::test]
+async fn storage_object_format_is_validated_and_kept() {
+    let app = spawn_app().await;
+    let client = reqwest::Client::new();
+    let pool_id = create_test_pool(&app.pool, StoragePoolType::Local).await;
+    let register = |name: &str, format: &str| {
+        client
+            .post(format!("{}/storage-objects", app.address))
+            .json(&json!({
+                "name": name, "storage_pool_id": pool_id, "object_type": "disk",
+                "size_bytes": 1024, "config": {"format": format},
+            }))
+            .send()
+    };
+
+    let response = register("vmdk-disk", "vmdk").await.unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        response
+            .text()
+            .await
+            .unwrap()
+            .contains(r#"config.format must be \"raw\" or \"qcow2\""#)
+    );
+
+    let response = register("qcow2-disk", "qcow2").await.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let id: Uuid = response.text().await.unwrap().parse().unwrap();
+    let config = storage_objects::get(&app.pool, id).await.unwrap().config;
+    assert_eq!(config["format"], "qcow2");
+    assert!(config["path"].is_string(), "{config}");
+}
+
 #[tokio::test]
 async fn disk_resize_reserves_capacity_before_rpc_and_rolls_back_on_failure() {
     use qarax::model::storage_objects::{self, NewStorageObject, StorageObjectType};
@@ -176,7 +211,8 @@ async fn disk_resize_reserves_capacity_before_rpc_and_rolls_back_on_failure() {
             storage_pool_id: Some(pool_id),
             object_type: StorageObjectType::Disk,
             size_bytes: MIB,
-            config: json!({}),
+            // Recorded, so resizing doesn't ask the unreachable node for it.
+            config: json!({"format": "raw"}),
             parent_id: None,
         },
     )

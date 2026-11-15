@@ -1,5 +1,6 @@
 pub mod cloud_hypervisor;
 pub mod cloud_init;
+pub mod disk_image;
 pub mod firecracker;
 pub mod image_preflight;
 pub mod networking;

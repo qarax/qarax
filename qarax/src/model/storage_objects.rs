@@ -257,10 +257,14 @@ async fn resolve_new_object(
                 ),
                 _ => None,
             };
-            if let Some(path) = derived_path {
-                serde_json::json!({ "path": path })
-            } else {
-                new_object.config.clone()
+            match (derived_path, new_object.config.clone()) {
+                // Keep what the caller recorded, such as the image format.
+                (Some(path), serde_json::Value::Object(mut config)) => {
+                    config.insert("path".into(), path.into());
+                    serde_json::Value::Object(config)
+                }
+                (Some(path), _) => serde_json::json!({ "path": path }),
+                (None, config) => config,
             }
         } else {
             new_object.config.clone()
@@ -414,6 +418,26 @@ pub async fn update_size_bytes_tx(
 
 /// Extract the path from a storage object's config JSONB field.
 /// Expected format: {"path": "/var/lib/qarax/images/vmlinux"}
+/// How a disk object's image is read, recorded in its config as `format`.
+///
+/// A file-backed disk's format is recorded before any guest has used the
+/// image, either when it is created or the first time it is used, and never
+/// probed again: a guest can write the start of its raw disk, so probing on
+/// every use would let it turn the disk into a qcow2 one, claiming any size.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ImageFormat {
+    Raw,
+    Qcow2,
+}
+
+impl ImageFormat {
+    /// The format recorded in a storage object's `config`, if any.
+    pub fn recorded_in(config: &serde_json::Value) -> Result<Option<Self>, serde_json::Error> {
+        config.get("format").map(Self::deserialize).transpose()
+    }
+}
+
 pub fn get_path_from_config(config: &serde_json::Value) -> Option<String> {
     config
         .as_object()?
