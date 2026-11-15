@@ -453,6 +453,10 @@ enum StorageObjectCommand {
         /// Optional parent object ID
         #[arg(long)]
         parent: Option<Uuid>,
+        /// A disk image's format (raw or qcow2). Without it, the node reads it
+        /// from the image when a VM first uses the disk, and records it.
+        #[arg(long, value_parser = ["raw", "qcow2"])]
+        format: Option<String>,
     },
     /// Delete a storage object
     Delete {
@@ -529,17 +533,22 @@ pub async fn run_object(
             object_type,
             size,
             parent,
+            format,
         } => {
             let pool_id = match pool {
                 Some(ref s) => Some(resolve_pool_id(client, s).await?),
                 None => None,
+            };
+            let config = match format {
+                Some(format) => serde_json::json!({ "format": format }),
+                None => serde_json::json!({}),
             };
             let new_obj = NewStorageObject {
                 name,
                 storage_pool_id: pool_id,
                 object_type,
                 size_bytes: size,
-                config: serde_json::json!({}),
+                config,
                 parent_id: parent,
             };
             let id = api::storage::create_object(client, &new_obj).await?;

@@ -61,6 +61,10 @@ pub async fn get(
     })
 }
 
+/// Register a storage object. A disk image's `config.format` (`raw` or
+/// `qcow2`) is how it is read; without one, its node reads the format from the
+/// image when a VM first uses it, before any guest has written to it, and
+/// records that.
 #[utoipa::path(
     post,
     path = "/storage-objects",
@@ -77,6 +81,11 @@ pub async fn create(
     Extension(env): Extension<App>,
     Json(new_object): Json<NewStorageObject>,
 ) -> Result<(StatusCode, String)> {
+    storage_objects::ImageFormat::recorded_in(&new_object.config).map_err(|_| {
+        crate::errors::Error::UnprocessableEntity(
+            "config.format must be \"raw\" or \"qcow2\"".into(),
+        )
+    })?;
     let id = storage_objects::create(env.pool(), new_object).await?;
     Ok((StatusCode::CREATED, id.to_string()))
 }

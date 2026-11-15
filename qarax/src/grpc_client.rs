@@ -370,6 +370,8 @@ impl NodeClient {
                 registry_url: None,
                 upper_data_path: None,
                 upper_index_path: None,
+                // The production rootfs (`make run-local` with images) is raw.
+                image_format: node::ImageFormat::Raw as i32,
             });
         }
 
@@ -1385,6 +1387,7 @@ impl NodeClient {
         disk_id: &str,
         path: &str,
         new_size: i64,
+        image_format: node::ImageFormat,
     ) -> Result<()> {
         debug!(
             "Resizing disk {} for VM {} on node {}: path={} new_size={}",
@@ -1397,10 +1400,24 @@ impl NodeClient {
                 disk_id: disk_id.to_string(),
                 path: path.to_string(),
                 new_size,
+                image_format: image_format as i32,
             })
             .await
             .context("Failed to resize disk on qarax-node")?;
         Ok(())
+    }
+
+    /// Read the format of the disk image at `path` from its header.
+    #[instrument(skip(self))]
+    pub async fn probe_image_format(&self, path: &str) -> Result<node::ImageFormat> {
+        let mut client = self.connect_vm_service().await?;
+        let response = client
+            .probe_image_format(node::ProbeImageFormatRequest {
+                path: path.to_string(),
+            })
+            .await
+            .context("Failed to read the disk image's format on qarax-node")?;
+        Ok(response.into_inner().image_format())
     }
 
     /// Prepare the destination node to receive a live migration.

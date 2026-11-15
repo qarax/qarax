@@ -1,10 +1,12 @@
 """
-E2E tests for disk resize (PUT /vms/{vm_id}/disks/{disk_id}/resize).
+E2E tests for disk images on a real Cloud Hypervisor node.
 
-Resizes a disk on a real Cloud Hypervisor node: a raw or qcow2 image attached
-to a Shutdown VM, checking the API response and the image's virtual size on
-the VM's node, and a raw image of a running VM, checking the guest sees the
-new size. Each disk is a per-test image, never a shared one.
+Resize (PUT /vms/{vm_id}/disks/{disk_id}/resize): a raw or qcow2 image
+attached to a Shutdown VM, checking the API response and the image's virtual
+size on the VM's node, and a raw image of a running VM, checking the guest
+sees the new size. Format: a guest can't make its raw disk be opened as qcow2
+by writing a qcow2 header to it. Each disk is a per-test image, never a shared
+one.
 """
 
 import json
@@ -31,6 +33,7 @@ from qarax_api_client.api.storage_pools import (
 )
 from qarax_api_client.api.vms import (
     attach_disk,
+    remove_disk,
     resize_disk,
 )
 from qarax_api_client.api.vms import (
@@ -284,6 +287,80 @@ async def test_resize_disk_running_vm(client):
             )
             vm = await call_api(get_vm, client=c, vm_id=vm_id)
             assert vm.status == VmStatus.RUNNING, vm.status
+        finally:
+            if vm_id:
+                await call_api(delete_vm, client=c, vm_id=vm_id)
+            if disk_id:
+                await call_api(delete_storage_object, client=c, object_id=disk_id)
+            if pool_id:
+                await call_api(delete_pool, client=c, pool_id=pool_id)
+            remove_file_from_nodes(disk_path)
+
+
+@pytest.mark.asyncio
+async def test_guest_cannot_turn_its_raw_disk_into_qcow2(client):
+    """
+    A guest writes the qcow2 magic over the start of its raw disk; plugged in
+    again, the disk is still raw, with the guest's bytes at its start. Its
+    format was recorded when the VM first started, before the guest could
+    write to it. The node used to read it from the image every time it built
+    the disk's config, so it then opened the image as qcow2 with a header the
+    guest wrote, one that could claim any size.
+    """
+    test_id = uuid.uuid4().hex[:8]
+    async with client as c:
+        hosts = _up_hosts(await call_api(list_hosts, client=c))
+        assert hosts, "No UP hosts available"
+        pool_id = disk_id = vm_id = None
+        disk_path = f"/var/lib/qarax/e2e-drs-{test_id}/planted.raw"
+        size = 64 * MIB
+        try:
+            pool_id = await _make_local_pool(c, test_id, hosts)
+            create_image_on_nodes(disk_path, size, "raw")
+            disk_id = await _make_disk(c, test_id, pool_id, path=disk_path, size_bytes=size)
+            vm_id = await _make_vm(c, test_id)
+            attached = await call_api(
+                attach_disk,
+                client=c,
+                vm_id=vm_id,
+                body=AttachDiskRequest(storage_object_id=disk_id),
+            )
+            await call_api(start_vm, client=c, vm_id=vm_id)
+            await wait_for_status(c, vm_id, VmStatus.RUNNING)
+
+            result = await exec_when_ready(
+                c,
+                vm_id,
+                "printf 'QFI\\373' | busybox dd of=/dev/vda conv=notrunc 2>/dev/null && busybox sync",
+            )
+            assert result.exit_code == 0, result
+
+            rm_resp = await remove_disk.asyncio_detailed(
+                client=c, vm_id=vm_id, device_id=attached.logical_name
+            )
+            assert rm_resp.status_code == 204, rm_resp.content.decode()
+            attach_resp = await attach_disk.asyncio_detailed(
+                client=c,
+                vm_id=vm_id,
+                body=AttachDiskRequest(storage_object_id=disk_id),
+            )
+            assert attach_resp.status_code == 201, (
+                f"Re-attaching the disk failed: {attach_resp.status_code} "
+                f"{attach_resp.content.decode()}"
+            )
+
+            # The guest sees the disk again, its size and first bytes unchanged.
+            result = await exec_when_ready(
+                c,
+                vm_id,
+                "for i in 1 2 3 4 5 6 7 8 9 10; do "
+                f'  [ "$(cat /sys/block/vda/size 2>/dev/null)" = {size // 512} ] && '
+                "    exec busybox od -An -tx1 -N4 /dev/vda; "
+                "  sleep 1; "
+                "done; exit 1",
+            )
+            assert result.exit_code == 0, f"the guest never saw the disk again: {result}"
+            assert result.stdout.split() == ["51", "46", "49", "fb"], result.stdout
         finally:
             if vm_id:
                 await call_api(delete_vm, client=c, vm_id=vm_id)

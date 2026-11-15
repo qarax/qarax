@@ -149,8 +149,9 @@ impl crate::vmm::VmmManager for VmManager {
         disk_id: &str,
         path: &str,
         new_size: i64,
+        image_format: ProtoImageFormat,
     ) -> Result<(), crate::vmm::VmmError> {
-        VmManager::resize_disk(self, vm_id, disk_id, path, new_size)
+        VmManager::resize_disk(self, vm_id, disk_id, path, new_size, image_format)
             .await
             .map_err(Into::into)
     }

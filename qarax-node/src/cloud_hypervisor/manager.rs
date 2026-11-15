@@ -33,7 +33,7 @@ use crate::rpc::node::StoragePoolKind;
 use crate::rpc::node::{
     ConsoleConfig as ProtoConsoleConfig, ConsoleMode as ProtoConsoleMode,
     CpuTopology as ProtoCpuTopology, CpusConfig as ProtoCpusConfig, DiskConfig as ProtoDiskConfig,
-    ExecVmResponse, MemoryConfig as ProtoMemoryConfig,
+    ExecVmResponse, ImageFormat as ProtoImageFormat, MemoryConfig as ProtoMemoryConfig,
     MigrationMemoryMode as ProtoMigrationMemoryMode,
     MigrationTimeoutAction as ProtoMigrationTimeoutAction, NetConfig as ProtoNetConfig,
     NumaPlacement as ProtoNumaPlacement, PayloadConfig as ProtoPayloadConfig,

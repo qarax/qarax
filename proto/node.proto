@@ -163,6 +163,27 @@ message DiskConfig {
   // ephemeral paths inside the cache directory (which would be deleted on stop).
   optional string upper_data_path  = 15;
   optional string upper_index_path = 16;
+
+  // How to read the image at path. Recorded on the storage object before any
+  // guest could write to the image: probing it on every boot would let a guest
+  // turn its raw disk into a qcow2 one by writing a header.
+  ImageFormat image_format = 17;
+}
+
+enum ImageFormat {
+  // Not recorded (a control plane older than the node); the node probes the
+  // image, as it always did.
+  IMAGE_FORMAT_UNSPECIFIED = 0;
+  IMAGE_FORMAT_RAW = 1;
+  IMAGE_FORMAT_QCOW2 = 2;
+}
+
+message ProbeImageFormatRequest {
+  string path = 1;
+}
+
+message ProbeImageFormatResponse {
+  ImageFormat image_format = 1;
 }
 
 // ============================================================================
@@ -502,6 +523,9 @@ service VmService {
 
   // Disk resize (extend backing file; VM must be stopped)
   rpc ResizeDisk(ResizeDiskRequest) returns (google.protobuf.Empty) {}
+  // Read a disk image's format from its header, for a disk about to be used
+  // for the first time, before any guest has written to it.
+  rpc ProbeImageFormat(ProbeImageFormatRequest) returns (ProbeImageFormatResponse) {}
 
   // OCI image management
   rpc PreflightImage(PreflightImageRequest) returns (PreflightImageResponse) {}
@@ -628,6 +652,7 @@ message ResizeDiskRequest {
   string disk_id  = 2;   // logical_name of the disk (e.g. "rootfs", "disk0")
   string path     = 3;   // absolute host path to the backing raw file
   int64  new_size = 4;   // target size in bytes (must be > current size)
+  ImageFormat image_format = 5;
 }
 
 // ============================================================================

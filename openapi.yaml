@@ -1461,6 +1461,11 @@ paths:
     post:
       tags:
       - storage-objects
+      summary: |-
+        Register a storage object. A disk image's `config.format` (`raw` or
+        `qcow2`) is how it is read; without one, its node reads the format from the
+        image when a VM first uses it, before any guest has written to it, and
+        records that.
       operationId: create
       requestBody:
         content:
