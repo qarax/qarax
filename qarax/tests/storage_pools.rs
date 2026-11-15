@@ -340,7 +340,7 @@ async fn test_list_pool_hosts() {
     let app = spawn_app().await;
     let client = reqwest::Client::new();
     let res = client
-        .post(format!("{}/storage-pools", &app.address))
+        .post(format!("{}/storage-pools", app.address))
         .json(&serde_json::json!({
             "name": "listed-pool",
             "pool_type": "local",
@@ -360,7 +360,7 @@ async fn test_list_pool_hosts() {
     support::add_host(&client, &app.address, "pool-host-unattached").await;
 
     let res = client
-        .get(format!("{}/storage-pools/{pool_id}/hosts", &app.address))
+        .get(format!("{}/storage-pools/{pool_id}/hosts", app.address))
         .send()
         .await
         .unwrap();
@@ -375,7 +375,7 @@ async fn test_list_pool_hosts() {
     let res = client
         .get(format!(
             "{}/storage-pools/{}/hosts",
-            &app.address,
+            app.address,
             uuid::Uuid::new_v4()
         ))
         .send()
