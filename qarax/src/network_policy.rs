@@ -517,7 +517,7 @@ mod tests {
             host_address: "host".to_string(),
             host_port: 50051,
             network: network.clone(),
-            bridge_name: format!("br{}", &network.name),
+            bridge_name: format!("br{}", network.name),
         }
     }
 

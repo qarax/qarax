@@ -544,7 +544,7 @@ async fn test_create_vm_rejects_root_disk_reused_by_other_vm() {
     .await;
 
     let res = client
-        .post(format!("{}/vms", &app.address))
+        .post(format!("{}/vms", app.address))
         .json(&with(
             vm_body("vm-root-other"),
             json!({"root_disk_object_id": object_id}),
@@ -682,7 +682,7 @@ async fn test_start_with_conflicting_disk_keeps_vm_created() {
     .unwrap();
 
     let res = client
-        .post(format!("{}/vms/{vm_other}/start", &app.address))
+        .post(format!("{}/vms/{vm_other}/start", app.address))
         .send()
         .await
         .unwrap();
@@ -721,7 +721,7 @@ async fn test_start_refuses_a_disk_whose_pool_is_not_on_the_vm_host() {
     assert_eq!(vm["host_id"], vm_host.to_string());
 
     let res = client
-        .post(format!("{}/vms/{vm_id}/start", &app.address))
+        .post(format!("{}/vms/{vm_id}/start", app.address))
         .send()
         .await
         .unwrap();
@@ -828,7 +828,7 @@ async fn test_remove_nic_releases_ip_allocation() {
     );
 
     let res = client
-        .delete(format!("{}/vms/{vm_id}/nics/net0", &app.address))
+        .delete(format!("{}/vms/{vm_id}/nics/net0", app.address))
         .send()
         .await
         .unwrap();
@@ -867,7 +867,7 @@ async fn test_delete_network_refuses_while_a_vm_uses_it() {
         .unwrap();
 
     let res = client
-        .delete(format!("{}/networks/{network_id}", &app.address))
+        .delete(format!("{}/networks/{network_id}", app.address))
         .send()
         .await
         .unwrap();
@@ -879,13 +879,13 @@ async fn test_delete_network_refuses_while_a_vm_uses_it() {
     );
 
     let res = client
-        .delete(format!("{}/vms/{vm_id}", &app.address))
+        .delete(format!("{}/vms/{vm_id}", app.address))
         .send()
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::NO_CONTENT);
     let res = client
-        .delete(format!("{}/networks/{network_id}", &app.address))
+        .delete(format!("{}/networks/{network_id}", app.address))
         .send()
         .await
         .unwrap();
@@ -912,7 +912,7 @@ async fn test_delete_network_detaches_it_from_up_hosts_first() {
 
     let hosts = get_json(
         &client,
-        format!("{}/networks/{network_id}/hosts", &app.address),
+        format!("{}/networks/{network_id}/hosts", app.address),
     )
     .await;
     let mut bridges: Vec<&str> = hosts
@@ -925,29 +925,29 @@ async fn test_delete_network_detaches_it_from_up_hosts_first() {
     assert_eq!(bridges, ["testbr95", "testbr96"]);
 
     let res = client
-        .delete(format!("{}/networks/{network_id}", &app.address))
+        .delete(format!("{}/networks/{network_id}", app.address))
         .send()
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
-    get_json(&client, format!("{}/networks/{network_id}", &app.address)).await;
+    get_json(&client, format!("{}/networks/{network_id}", app.address)).await;
 
     // A host that isn't up can't be reached, so only its record is dropped.
     let res = client
-        .patch(format!("{}/hosts/{up_host}", &app.address))
+        .patch(format!("{}/hosts/{up_host}", app.address))
         .json(&json!({"status": "down"}))
         .send()
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
     let res = client
-        .delete(format!("{}/networks/{network_id}", &app.address))
+        .delete(format!("{}/networks/{network_id}", app.address))
         .send()
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::NO_CONTENT);
     let res = client
-        .get(format!("{}/networks/{network_id}", &app.address))
+        .get(format!("{}/networks/{network_id}", app.address))
         .send()
         .await
         .unwrap();
@@ -970,7 +970,7 @@ async fn test_malformed_static_ip_is_rejected() {
     attach_network_to_host(&app.pool, network_id, host_id, "testbr93").await;
 
     let res = client
-        .post(format!("{}/vms", &app.address))
+        .post(format!("{}/vms", app.address))
         .json(&with(
             vm_body("vm-bad-ip"),
             json!({"networks": [{"id": "net0", "network_id": network_id, "ip": ""}]}),
@@ -982,7 +982,7 @@ async fn test_malformed_static_ip_is_rejected() {
 
     let vm_id = create_vm(&client, &app.address, vm_body("vm-bad-nic-ip")).await;
     let res = client
-        .post(format!("{}/vms/{vm_id}/nics", &app.address))
+        .post(format!("{}/vms/{vm_id}/nics", app.address))
         .json(&json!({"id": "net0", "network_id": network_id, "ip": "10.93.0.300"}))
         .send()
         .await
@@ -1088,7 +1088,7 @@ async fn test_add_nic_hotplug_failure_cleans_up_allocation_and_record() {
     set_vm_status(&app.pool, vm_id, "RUNNING").await;
 
     let res = client
-        .post(format!("{}/vms/{vm_id}/nics", &app.address))
+        .post(format!("{}/vms/{vm_id}/nics", app.address))
         .json(&json!({
             "id": "",
             "network_id": network_id
@@ -1365,7 +1365,7 @@ async fn test_preflight_requires_non_empty_image_ref() {
     let client = reqwest::Client::new();
 
     let res = client
-        .post(format!("{}/vms/preflight", &app.address))
+        .post(format!("{}/vms/preflight", app.address))
         .json(&json!({
             "image_ref": ""
         }))
@@ -1386,7 +1386,7 @@ async fn test_preflight_rejects_selected_host_architecture_mismatch() {
     set_host_architecture(&app.pool, host_id, "x86_64").await;
 
     let res = client
-        .post(format!("{}/vms/preflight", &app.address))
+        .post(format!("{}/vms/preflight", app.address))
         .json(&json!({
             "image_ref": "registry:5000/test/busybox:latest",
             "host_id": host_id,

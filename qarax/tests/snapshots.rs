@@ -31,7 +31,7 @@ async fn test_list_snapshots_returns_404_for_unknown_vm() {
     let random_uuid = Uuid::new_v4();
 
     let res = client
-        .get(format!("{}/vms/{}/snapshots", &app.address, random_uuid))
+        .get(format!("{}/vms/{}/snapshots", app.address, random_uuid))
         .send()
         .await
         .unwrap();
@@ -51,7 +51,7 @@ async fn test_create_snapshot_returns_404_for_unknown_vm() {
     let random_uuid = Uuid::new_v4();
 
     let res = client
-        .post(format!("{}/vms/{}/snapshots", &app.address, random_uuid))
+        .post(format!("{}/vms/{}/snapshots", app.address, random_uuid))
         .json(&json!({}))
         .send()
         .await
@@ -86,14 +86,14 @@ async fn test_create_snapshot_with_unavailable_node_creates_failed_record() {
     )
     .await;
 
-    let snapshots_url = format!("{}/vms/{}/snapshots", &app.address, vm_id);
+    let snapshots_url = format!("{}/vms/{}/snapshots", app.address, vm_id);
     let res = client.get(&snapshots_url).send().await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
     assert_eq!(res.json::<serde_json::Value>().await.unwrap(), json!([]));
 
     // POST /vms/{vm_id}/snapshots — node is not available, should get 500
     let res = client
-        .post(format!("{}/vms/{}/snapshots", &app.address, vm_id))
+        .post(format!("{}/vms/{}/snapshots", app.address, vm_id))
         .json(&json!({}))
         .send()
         .await
@@ -102,7 +102,7 @@ async fn test_create_snapshot_with_unavailable_node_creates_failed_record() {
 
     // GET /vms/{vm_id}/snapshots — should have 1 snapshot with status "failed"
     let res = client
-        .get(format!("{}/vms/{}/snapshots", &app.address, vm_id))
+        .get(format!("{}/vms/{}/snapshots", app.address, vm_id))
         .send()
         .await
         .unwrap();

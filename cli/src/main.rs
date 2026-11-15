@@ -20,70 +20,6 @@ pub fn resolve_token(flag: Option<String>, cfg: &config::Config) -> Option<Strin
     flag.or_else(|| cfg.token.clone())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use config::Config;
-
-    fn cfg(server: Option<&str>) -> Config {
-        Config {
-            server: server.map(str::to_string),
-            token: None,
-        }
-    }
-
-    #[test]
-    fn flag_beats_config_and_default() {
-        let server = resolve_server(
-            Some("http://flag:8000".to_string()),
-            &cfg(Some("http://config:8000")),
-        );
-        assert_eq!(server, "http://flag:8000");
-    }
-
-    #[test]
-    fn config_beats_default() {
-        let server = resolve_server(None, &cfg(Some("http://config:8000")));
-        assert_eq!(server, "http://config:8000");
-    }
-
-    #[test]
-    fn falls_back_to_default() {
-        let server = resolve_server(None, &cfg(None));
-        assert_eq!(server, DEFAULT_SERVER);
-    }
-
-    #[test]
-    fn token_flag_beats_config() {
-        let cfg = Config {
-            server: None,
-            token: Some("config-token".to_string()),
-        };
-        let token = resolve_token(Some("flag-token".to_string()), &cfg);
-        assert_eq!(token, Some("flag-token".to_string()));
-    }
-
-    #[test]
-    fn token_falls_back_to_config() {
-        let cfg = Config {
-            server: None,
-            token: Some("config-token".to_string()),
-        };
-        let token = resolve_token(None, &cfg);
-        assert_eq!(token, Some("config-token".to_string()));
-    }
-
-    #[test]
-    fn token_none_when_unset() {
-        let cfg = Config {
-            server: None,
-            token: None,
-        };
-        let token = resolve_token(None, &cfg);
-        assert_eq!(token, None);
-    }
-}
-
 #[derive(Parser)]
 #[command(name = "qarax", about = "CLI for the qarax VM management API", version)]
 pub struct Cli {
@@ -183,5 +119,69 @@ async fn main() -> Result<()> {
         Commands::Sandbox(args) => commands::sandbox::run(args, &client, cli.output).await,
         Commands::AuditLog(args) => commands::audit_log::run(args, &client, cli.output).await,
         Commands::Configure(_) => unreachable!(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use config::Config;
+
+    fn cfg(server: Option<&str>) -> Config {
+        Config {
+            server: server.map(str::to_string),
+            token: None,
+        }
+    }
+
+    #[test]
+    fn flag_beats_config_and_default() {
+        let server = resolve_server(
+            Some("http://flag:8000".to_string()),
+            &cfg(Some("http://config:8000")),
+        );
+        assert_eq!(server, "http://flag:8000");
+    }
+
+    #[test]
+    fn config_beats_default() {
+        let server = resolve_server(None, &cfg(Some("http://config:8000")));
+        assert_eq!(server, "http://config:8000");
+    }
+
+    #[test]
+    fn falls_back_to_default() {
+        let server = resolve_server(None, &cfg(None));
+        assert_eq!(server, DEFAULT_SERVER);
+    }
+
+    #[test]
+    fn token_flag_beats_config() {
+        let cfg = Config {
+            server: None,
+            token: Some("config-token".to_string()),
+        };
+        let token = resolve_token(Some("flag-token".to_string()), &cfg);
+        assert_eq!(token, Some("flag-token".to_string()));
+    }
+
+    #[test]
+    fn token_falls_back_to_config() {
+        let cfg = Config {
+            server: None,
+            token: Some("config-token".to_string()),
+        };
+        let token = resolve_token(None, &cfg);
+        assert_eq!(token, Some("config-token".to_string()));
+    }
+
+    #[test]
+    fn token_none_when_unset() {
+        let cfg = Config {
+            server: None,
+            token: None,
+        };
+        let token = resolve_token(None, &cfg);
+        assert_eq!(token, None);
     }
 }

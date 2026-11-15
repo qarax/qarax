@@ -96,7 +96,7 @@ check-fmt:
 	cargo +nightly fmt --all -- --check
 
 check-clippy:
-	SQLX_OFFLINE=true cargo clippy --workspace $(OTEL_FEATURES) $(CARGO_TARGET) -- -D warnings
+	SQLX_OFFLINE=true cargo clippy --workspace --all-targets $(OTEL_FEATURES) $(CARGO_TARGET) -- -D warnings
 
 check-test:
 	SQLX_OFFLINE=true $(DB_ENV) cargo nextest run --workspace $(OTEL_FEATURES) $(CARGO_TARGET)

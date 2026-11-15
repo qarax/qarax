@@ -15,7 +15,7 @@ async fn test_add_host_stores_only_credential_reference_and_hides_it() {
     let reference = "env://QARAX_TEST_UNSET_HOST_CREDENTIAL";
     let client = reqwest::Client::new();
     let response = client
-        .post(format!("{}/hosts", &app.address))
+        .post(format!("{}/hosts", app.address))
         .json(&json!({
             "name": "referenced-host",
             "address": "127.0.0.1",
@@ -38,7 +38,7 @@ async fn test_add_host_stores_only_credential_reference_and_hides_it() {
     assert_eq!(stored_reference.as_deref(), Some(reference));
 
     let response = client
-        .get(format!("{}/hosts", &app.address))
+        .get(format!("{}/hosts", app.address))
         .send()
         .await
         .unwrap();
@@ -47,7 +47,7 @@ async fn test_add_host_stores_only_credential_reference_and_hides_it() {
     assert!(!body.contains("QARAX_TEST_UNSET_HOST_CREDENTIAL"));
 
     let response = client
-        .post(format!("{}/hosts/{host_id}/deploy", &app.address))
+        .post(format!("{}/hosts/{host_id}/deploy", app.address))
         .json(&json!({ "image": "example.invalid/qarax:test" }))
         .send()
         .await
@@ -65,7 +65,7 @@ async fn test_deploy_resolves_file_credential_without_exposing_it() {
     let reference = format!("file://{}", secret.path().display());
 
     let response = client
-        .post(format!("{}/hosts", &app.address))
+        .post(format!("{}/hosts", app.address))
         .json(&json!({
             "name": "file-credential-host",
             "address": "127.0.0.1",
@@ -80,7 +80,7 @@ async fn test_deploy_resolves_file_credential_without_exposing_it() {
     let host_id: Uuid = response.text().await.unwrap().parse().unwrap();
 
     let body = client
-        .get(format!("{}/hosts", &app.address))
+        .get(format!("{}/hosts", app.address))
         .send()
         .await
         .unwrap()
@@ -95,7 +95,7 @@ async fn test_deploy_resolves_file_credential_without_exposing_it() {
     // The reference resolves before the SSH connection, which runs in the
     // background against a closed port.
     let response = client
-        .post(format!("{}/hosts/{host_id}/deploy", &app.address))
+        .post(format!("{}/hosts/{host_id}/deploy", app.address))
         .json(&json!({ "image": "example.invalid/qarax:test", "ssh_port": 1, "reboot": false }))
         .send()
         .await
@@ -157,7 +157,7 @@ async fn test_failed_deploy_records_why() {
 
     // Port 1 is closed, so the SSH connection fails right away.
     let response = client
-        .post(format!("{}/hosts/{host_id}/deploy", &app.address))
+        .post(format!("{}/hosts/{host_id}/deploy", app.address))
         .json(&json!({
             "image": "example.invalid/qarax:test",
             "ssh_port": 1,
@@ -172,7 +172,7 @@ async fn test_failed_deploy_records_why() {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     let host = loop {
         let hosts: Vec<serde_json::Value> = client
-            .get(format!("{}/hosts", &app.address))
+            .get(format!("{}/hosts", app.address))
             .send()
             .await
             .unwrap()
@@ -203,7 +203,7 @@ async fn test_failed_deploy_records_why() {
 async fn test_add_host_rejects_legacy_password_field() {
     let app = spawn_app().await;
     let response = reqwest::Client::new()
-        .post(format!("{}/hosts", &app.address))
+        .post(format!("{}/hosts", app.address))
         .json(&json!({
             "name": "ambiguous-credentials",
             "address": "127.0.0.1",
@@ -238,7 +238,7 @@ async fn test_list_host_gpus_returns_discovered_gpus() {
     .unwrap();
 
     let res = client
-        .get(format!("{}/hosts/{host_id}/gpus", &app.address))
+        .get(format!("{}/hosts/{host_id}/gpus", app.address))
         .send()
         .await
         .unwrap();
@@ -250,7 +250,7 @@ async fn test_list_host_gpus_returns_discovered_gpus() {
     assert!(gpus[0]["vm_id"].is_null());
 
     let res = client
-        .get(format!("{}/hosts/{}/gpus", &app.address, Uuid::new_v4()))
+        .get(format!("{}/hosts/{}/gpus", app.address, Uuid::new_v4()))
         .send()
         .await
         .unwrap();
@@ -277,7 +277,7 @@ async fn test_delete_host_refuses_while_vms_are_placed_on_it() {
     .await;
 
     let res = client
-        .delete(format!("{}/hosts/{host_id}", &app.address))
+        .delete(format!("{}/hosts/{host_id}", app.address))
         .send()
         .await
         .unwrap();
@@ -292,19 +292,19 @@ async fn test_delete_host_refuses_while_vms_are_placed_on_it() {
     );
 
     let res = client
-        .delete(format!("{}/vms/{vm_id}", &app.address))
+        .delete(format!("{}/vms/{vm_id}", app.address))
         .send()
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::NO_CONTENT);
     let res = client
-        .delete(format!("{}/hosts/{host_id}", &app.address))
+        .delete(format!("{}/hosts/{host_id}", app.address))
         .send()
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::NO_CONTENT);
     let res = client
-        .delete(format!("{}/hosts/{host_id}", &app.address))
+        .delete(format!("{}/hosts/{host_id}", app.address))
         .send()
         .await
         .unwrap();
@@ -318,7 +318,7 @@ async fn test_delete_host_drops_it_from_pending_storage_cleanups() {
     let gone = add_host(&client, &app.address, "cleanup-gone-host").await;
     let stays = add_host(&client, &app.address, "cleanup-stays-host").await;
     let res = client
-        .post(format!("{}/storage-pools", &app.address))
+        .post(format!("{}/storage-pools", app.address))
         .json(&json!({
             "name": "cleanup-pool",
             "pool_type": "local",
@@ -342,7 +342,7 @@ async fn test_delete_host_drops_it_from_pending_storage_cleanups() {
     .unwrap();
 
     let res = client
-        .delete(format!("{}/hosts/{gone}", &app.address))
+        .delete(format!("{}/hosts/{gone}", app.address))
         .send()
         .await
         .unwrap();

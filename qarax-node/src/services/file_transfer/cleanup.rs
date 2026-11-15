@@ -81,6 +81,7 @@ mod tests {
     use crate::services::file_transfer::FileTransferServiceImpl;
 
     /// Deletes through the RPC handler the control plane calls.
+    #[allow(clippy::result_large_err)]
     async fn delete(req: DeleteStorageFilesRequest) -> Result<(), Status> {
         FileTransferServiceImpl::default()
             .delete_storage_files(Request::new(req))
