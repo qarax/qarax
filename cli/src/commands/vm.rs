@@ -124,6 +124,13 @@ enum VmCommand {
         /// host fails. Requires all VM disks to be on shared storage pools.
         #[arg(long)]
         ha: bool,
+        /// Limit the VM's disks together to this many bytes per second (e.g.
+        /// 200MiB); disks attached with a limit of their own keep theirs
+        #[arg(long, value_parser = super::parse_size)]
+        disk_bandwidth_limit: Option<i64>,
+        /// Limit the VM's disks together to this many I/O operations per second
+        #[arg(long)]
+        disk_ops_limit: Option<i64>,
         /// Number of GPUs to request (enables GPU-aware scheduling)
         #[arg(long)]
         gpu_count: Option<i32>,
@@ -602,6 +609,8 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
             cloud_init_network_config,
             guest_agent,
             ha,
+            disk_bandwidth_limit,
+            disk_ops_limit,
             gpu_count,
             gpu_vendor,
             gpu_model,
@@ -741,6 +750,10 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
                 placement_policy,
                 guest_agent: guest_agent.then_some(true),
                 ha_enabled: ha.then_some(true),
+                disk_rate_limiter: RateLimiterConfig::per_second(
+                    disk_bandwidth_limit,
+                    disk_ops_limit,
+                ),
             };
 
             let result = api::vms::create(client, &new_vm).await?;

@@ -14,6 +14,7 @@ from ..types import UNSET, Unset
 if TYPE_CHECKING:
     from ..models.new_vm_network import NewVmNetwork
     from ..models.placement_policy import PlacementPolicy
+    from ..models.rate_limiter_config import RateLimiterConfig
 
 
 T = TypeVar("T", bound="NewVm")
@@ -42,6 +43,7 @@ class NewVm:
         config (Any | Unset):
         cpu_topology (Any | Unset):
         description (None | str | Unset):
+        disk_rate_limiter (None | RateLimiterConfig | Unset):
         guest_agent (bool | None | Unset): Enable the guest agent used by `vm exec`.
         ha_enabled (bool | None | Unset): Enable high availability for this VM. When its host fails, the VM is
             automatically restarted on another eligible host. Requires all disks
@@ -94,6 +96,7 @@ class NewVm:
     config: Any | Unset = UNSET
     cpu_topology: Any | Unset = UNSET
     description: None | str | Unset = UNSET
+    disk_rate_limiter: None | RateLimiterConfig | Unset = UNSET
     guest_agent: bool | None | Unset = UNSET
     ha_enabled: bool | None | Unset = UNSET
     hypervisor: Hypervisor | None | Unset = UNSET
@@ -122,6 +125,7 @@ class NewVm:
 
     def to_dict(self) -> dict[str, Any]:
         from ..models.placement_policy import PlacementPolicy  # noqa: PLC0415
+        from ..models.rate_limiter_config import RateLimiterConfig  # noqa: PLC0415
 
         name = self.name
 
@@ -182,6 +186,14 @@ class NewVm:
             description = UNSET
         else:
             description = self.description
+
+        disk_rate_limiter: dict[str, Any] | None | Unset
+        if isinstance(self.disk_rate_limiter, Unset):
+            disk_rate_limiter = UNSET
+        elif isinstance(self.disk_rate_limiter, RateLimiterConfig):
+            disk_rate_limiter = self.disk_rate_limiter.to_dict()
+        else:
+            disk_rate_limiter = self.disk_rate_limiter
 
         guest_agent: bool | None | Unset
         if isinstance(self.guest_agent, Unset):
@@ -378,6 +390,8 @@ class NewVm:
             field_dict["cpu_topology"] = cpu_topology
         if description is not UNSET:
             field_dict["description"] = description
+        if disk_rate_limiter is not UNSET:
+            field_dict["disk_rate_limiter"] = disk_rate_limiter
         if guest_agent is not UNSET:
             field_dict["guest_agent"] = guest_agent
         if ha_enabled is not UNSET:
@@ -433,6 +447,7 @@ class NewVm:
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         from ..models.new_vm_network import NewVmNetwork  # noqa: PLC0415
         from ..models.placement_policy import PlacementPolicy  # noqa: PLC0415
+        from ..models.rate_limiter_config import RateLimiterConfig  # noqa: PLC0415
 
         d = dict(src_dict)
         name = d.pop("name")
@@ -530,6 +545,23 @@ class NewVm:
             return cast(None | str | Unset, data)
 
         description = _parse_description(d.pop("description", UNSET))
+
+        def _parse_disk_rate_limiter(data: object) -> None | RateLimiterConfig | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, dict):
+                    raise TypeError()
+                disk_rate_limiter_type_0 = RateLimiterConfig.from_dict(data)
+
+                return disk_rate_limiter_type_0
+            except (TypeError, ValueError, AttributeError, KeyError):
+                pass
+            return cast(None | RateLimiterConfig | Unset, data)
+
+        disk_rate_limiter = _parse_disk_rate_limiter(d.pop("disk_rate_limiter", UNSET))
 
         def _parse_guest_agent(data: object) -> bool | None | Unset:
             if data is None:
@@ -838,6 +870,7 @@ class NewVm:
             config=config,
             cpu_topology=cpu_topology,
             description=description,
+            disk_rate_limiter=disk_rate_limiter,
             guest_agent=guest_agent,
             ha_enabled=ha_enabled,
             hypervisor=hypervisor,

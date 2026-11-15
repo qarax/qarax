@@ -286,6 +286,8 @@ qarax vm remove-nic my-vm --device-id net1
 
 `attach-disk` and `add-nic` take `--bandwidth-limit` (bytes per second, e.g. `50MiB`) and `--ops-limit` (disk requests or NIC packets per second). A NIC's limits apply to each direction separately. For bursts or other refill periods, set `rate_limiter` token buckets through the API.
 
+`vm create --disk-bandwidth-limit 200MiB --disk-ops-limit 5000` (Cloud Hypervisor only) sets one limit that all of the VM's disks share, rather than one each. Disks attached with a limit of their own keep theirs.
+
 ### Live resize
 
 ```bash

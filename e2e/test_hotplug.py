@@ -7,6 +7,7 @@ Covers:
   - Hotplugging a NIC into a running VM (isolated network), reaching the
     network through it, then hotunplugging it
   - Bandwidth limits on a hotplugged disk and NIC slowing down guest I/O
+  - A VM-wide disk limit shared by all of the VM's disks
 
 Each disk test uses its own sparse file, created on every node, as the raw
 block device.
@@ -483,3 +484,65 @@ async def test_rate_limits_throttle_hotplugged_disk_and_nic(client):
                     await call_api(delete_pool, client=c, pool_id=pool_id)
                 if disk_path:
                     remove_file_from_nodes(disk_path)
+
+
+@pytest.mark.asyncio
+async def test_vm_disk_limit_is_shared_by_its_disks(client):
+    """
+    A VM's disk_rate_limiter is one limit for all of its disks: reading 3 MiB
+    from each of two disks at once, at 1 MiB/s for the VM, takes as long as
+    6 MiB from one disk (about 5 s, the bucket starting full), more than twice
+    as long as with a limit per disk.
+    """
+    test_id = uuid.uuid4().hex[:8]
+    made = []  # (pool_id, disk_id, disk_path)
+    vm_id = None
+    async with client as c:
+        try:
+            hosts = _up_hosts(await call_api(list_hosts, client=c))
+            assert hosts, "No UP hosts available"
+            for prefix in ("rla", "rlb"):
+                made.append(await _make_local_disk(c, test_id, hosts, prefix))
+            vm_id_raw = await call_api(
+                create_vm,
+                client=c,
+                body=NewVm(
+                    name=f"e2e-hp-vm-{test_id}",
+                    hypervisor=Hypervisor.CLOUD_HV,
+                    boot_vcpus=1,
+                    max_vcpus=1,
+                    memory_size=256 * 1024 * 1024,
+                    guest_agent=True,
+                    disk_rate_limiter=_bandwidth_limit(MIB),
+                ),
+            )
+            vm_id = UUID(str(vm_id_raw).strip('"'))
+            for _, disk_id, _ in made:
+                await call_api(
+                    attach_disk,
+                    client=c,
+                    vm_id=vm_id,
+                    body=AttachDiskRequest(storage_object_id=disk_id),
+                )
+            await call_api(start_vm, client=c, vm_id=vm_id)
+            await wait_for_status(c, vm_id, VmStatus.RUNNING)
+            result = await exec_when_ready(c, vm_id, "[ -e /dev/vda ] && [ -e /dev/vdb ]")
+            assert result.exit_code == 0, "the guest doesn't see both disks"
+
+            started = time.monotonic()
+            result = await exec_when_ready(
+                c,
+                vm_id,
+                "busybox dd if=/dev/vda of=/dev/null bs=1M count=3 2>/dev/null & "
+                "busybox dd if=/dev/vdb of=/dev/null bs=1M count=3 2>/dev/null; wait",
+            )
+            elapsed = time.monotonic() - started
+            assert result.exit_code == 0, result
+            assert elapsed >= 4, f"read 6 MiB under a shared 1 MiB/s in {elapsed:.2f}s"
+        finally:
+            if vm_id:
+                await call_api(delete_vm, client=c, vm_id=vm_id)
+            for pool_id, disk_id, disk_path in made:
+                await call_api(delete_storage_object, client=c, object_id=disk_id)
+                await call_api(delete_pool, client=c, pool_id=pool_id)
+                remove_file_from_nodes(disk_path)

@@ -1069,6 +1069,58 @@ async fn test_disk_and_nic_rate_limiters() {
     assert_eq!(nic["rate_limiter"], limiter);
 }
 
+/// A VM-wide disk limit is validated like any token bucket, refused for
+/// Firecracker, which can't share one between disks, and returned on the VM.
+#[tokio::test]
+async fn test_vm_disk_rate_limiter() {
+    let app = spawn_app().await;
+    let client = reqwest::Client::new();
+    add_up_host(&client, &app.address, "disk-limit-host").await;
+    let create = |body: Value| {
+        client
+            .post(format!("{}/vms", app.address))
+            .json(&body)
+            .send()
+    };
+
+    let res = create(with(
+        vm_body("vm-fc-disk-limit"),
+        json!({
+            "hypervisor": "firecracker",
+            "disk_rate_limiter": {"bandwidth": {"size": MIB, "refill_time": 1000}},
+        }),
+    ))
+    .await
+    .unwrap();
+    assert_unprocessable(res, "disk_rate_limiter isn't supported for firecracker VMs").await;
+
+    let res = create(with(
+        vm_body("vm-bad-disk-limit"),
+        json!({"disk_rate_limiter": {"ops": {"size": 0, "refill_time": 1000}}}),
+    ))
+    .await
+    .unwrap();
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body: Value = res.json().await.unwrap();
+    assert!(body["errors"]["ops"]["size"].is_array(), "{body}");
+
+    let limiter = json!({
+        "bandwidth": {"size": 200 * MIB, "refill_time": 1000, "one_time_burst": null},
+        "ops": null,
+    });
+    let vm_id = create_vm(
+        &client,
+        &app.address,
+        with(
+            vm_body("vm-disk-limit"),
+            json!({"disk_rate_limiter": limiter}),
+        ),
+    )
+    .await;
+    let vm = get_json(&client, format!("{}/vms/{vm_id}", app.address)).await;
+    assert_eq!(vm["disk_rate_limiter"], limiter);
+}
+
 #[tokio::test]
 async fn test_add_nic_hotplug_failure_cleans_up_allocation_and_record() {
     let app = spawn_app().await;
