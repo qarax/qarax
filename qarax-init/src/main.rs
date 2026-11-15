@@ -4,8 +4,7 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::sync::{
-    Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
+    Arc, Mutex, OnceLock,
     mpsc::{self, Receiver, Sender},
 };
 use std::thread;
@@ -33,9 +32,32 @@ const SHUTDOWN_GRACE: Duration = Duration::from_secs(10);
 const EV_KEY: u16 = 0x01;
 const KEY_POWER: u16 = 116;
 
-/// Set once a shutdown starts. From then on the main loop keeps reaping when
-/// the workload exits, and powers off once nothing is left.
-static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
+/// How a shutdown ends.
+#[derive(Clone, Copy, Debug)]
+enum Ending {
+    PowerOff,
+    /// For a Firecracker guest, which can't power off, only halt, but whose
+    /// VMM exits when it reboots.
+    Reboot,
+}
+
+/// Set, to how it ends, once a shutdown starts. From then on the main loop
+/// keeps reaping when the workload exits, and ends the VM once nothing is left.
+static SHUTDOWN: OnceLock<Ending> = OnceLock::new();
+
+/// A guest agent request other than running a command, on its own line:
+/// `{"shutdown": {"reboot": false}}`.
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ControlRequest {
+    /// Stop every process, then power off or reboot, as the power button
+    /// does. qarax-node sends it to Firecracker guests, which have no power
+    /// button.
+    Shutdown {
+        #[serde(default)]
+        reboot: bool,
+    },
+}
 
 #[derive(Deserialize, Default)]
 struct Config {
@@ -331,20 +353,40 @@ fn serve_exec_connection(stream_fd: OwnedFd, exit_registry: ExitRegistry) {
             let _ = stream.write_all(&body);
             return;
         }
-        Ok(_) => match serde_json::from_str(&request_line) {
-            Ok(req) => req,
-            Err(e) => {
+        Ok(_) => {
+            if let Ok(ControlRequest::Shutdown { reboot }) = serde_json::from_str(&request_line) {
                 let body = serde_json::to_vec(&ExecResponse {
-                    exit_code: 2,
+                    exit_code: 0,
                     stdout: String::new(),
-                    stderr: format!("invalid exec request: {e}"),
+                    stderr: String::new(),
                     timed_out: false,
                 })
                 .unwrap_or_default();
                 let _ = stream.write_all(&body);
+                drop(stream);
+                let ending = if reboot {
+                    Ending::Reboot
+                } else {
+                    Ending::PowerOff
+                };
+                shut_down("qarax-node asked to shut down", ending);
                 return;
             }
-        },
+            match serde_json::from_str(&request_line) {
+                Ok(req) => req,
+                Err(e) => {
+                    let body = serde_json::to_vec(&ExecResponse {
+                        exit_code: 2,
+                        stdout: String::new(),
+                        stderr: format!("invalid exec request: {e}"),
+                        timed_out: false,
+                    })
+                    .unwrap_or_default();
+                    let _ = stream.write_all(&body);
+                    return;
+                }
+            }
+        }
         Err(e) => {
             log(format!("sandbox exec read failed: {e}"));
             return;
@@ -503,7 +545,7 @@ fn watch_power_button(mut device: std::fs::File) {
         // SAFETY: input_event is plain data, and `event` holds one in full.
         let event: libc::input_event = unsafe { std::ptr::read_unaligned(event.as_ptr().cast()) };
         if event.type_ == EV_KEY && event.code == KEY_POWER && event.value == 1 {
-            shut_down();
+            shut_down("power button pressed", Ending::PowerOff);
         }
     }
 }
@@ -511,12 +553,12 @@ fn watch_power_button(mut device: std::fs::File) {
 /// Stop every process and power the VM off. Processes get SIGTERM and
 /// SHUTDOWN_GRACE to exit before SIGKILL; the main loop powers off as soon
 /// as they all have.
-fn shut_down() {
+fn shut_down(reason: &str, ending: Ending) {
     // qarax-node presses the button again while it waits.
-    if SHUTTING_DOWN.swap(true, Ordering::SeqCst) {
+    if SHUTDOWN.set(ending).is_err() {
         return;
     }
-    log("power button pressed, shutting down");
+    log(format!("{reason}, shutting down"));
     // -1 signals every process except init itself.
     let _ = kill(Pid::from_raw(-1), Signal::SIGTERM);
     thread::sleep(SHUTDOWN_GRACE);
@@ -525,19 +567,23 @@ fn shut_down() {
         SHUTDOWN_GRACE.as_secs()
     ));
     let _ = kill(Pid::from_raw(-1), Signal::SIGKILL);
-    power_off();
+    end_vm(ending);
 }
 
-fn power_off() -> ! {
-    log("powering off");
+fn end_vm(ending: Ending) -> ! {
+    let (doing, command) = match ending {
+        Ending::PowerOff => ("powering off", libc::RB_POWER_OFF),
+        Ending::Reboot => ("rebooting", libc::RB_AUTOBOOT),
+    };
+    log(doing);
     unsafe {
         libc::sync();
-        libc::reboot(libc::RB_POWER_OFF);
+        libc::reboot(command);
     }
     // reboot() only returns on failure. Exiting would panic the kernel; wait
     // for qarax-node to force the VM off instead.
     log(format!(
-        "power off failed: {}",
+        "{doing} failed: {}",
         std::io::Error::last_os_error()
     ));
     loop {
@@ -601,18 +647,18 @@ fn main() {
                             _ => continue,
                         };
 
-                        if pid == child && !SHUTTING_DOWN.load(Ordering::SeqCst) {
+                        if pid == child && SHUTDOWN.get().is_none() {
                             std::process::exit(exit_code);
                         }
 
                         record_child_exit(&exit_registry, pid, exit_code);
                     }
-                    // Everything exited after the power button: no need to
-                    // wait out the rest of the grace period.
-                    Err(nix::errno::Errno::ECHILD) if SHUTTING_DOWN.load(Ordering::SeqCst) => {
-                        power_off()
-                    }
-                    Err(nix::errno::Errno::ECHILD) => std::process::exit(0),
+                    // Once shutting down, everything having exited means no
+                    // need to wait out the rest of the grace period.
+                    Err(nix::errno::Errno::ECHILD) => match SHUTDOWN.get() {
+                        Some(&ending) => end_vm(ending),
+                        None => std::process::exit(0),
+                    },
                     Err(e) => {
                         log(format!("waitpid: {e}"));
                         std::process::exit(1);

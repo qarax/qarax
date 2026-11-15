@@ -8,7 +8,7 @@
 //!   create_vm   — spawn process + configure via SDK (Machine)
 //!   start_vm    — Machine::start_instance() → MicroVm; a stopped VM gets
 //!                 a fresh process first, since a microVM can't boot twice
-//!   stop_vm     — MicroVm::send_ctrl_alt_del()
+//!   stop_vm     — shut down through the guest agent, else kill the process
 //!   force_stop  — kill the process
 //!   pause_vm    — MicroVm::patch_vm(Paused)
 //!   resume_vm   — MicroVm::patch_vm(Resumed)
@@ -19,6 +19,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use firecracker_rust_sdk::machine::{Machine, MicroVm};
 use firecracker_rust_sdk::models::{
@@ -39,6 +40,7 @@ use crate::rpc::node::{
 use crate::vmm::{VmmError, VmmManager};
 
 mod exec;
+use exec::GuestAgentAck;
 mod helpers;
 
 /// Where a Firecracker VM is in its lifecycle, with the SDK handle that
@@ -134,10 +136,17 @@ pub struct FirecrackerManager {
     runtime_dir: PathBuf,
     fc_binary: PathBuf,
     vms: Arc<Mutex<HashMap<String, FcVmInstance>>>,
+    /// How long `stop_vm` waits for a guest to shut down before killing its
+    /// VMM.
+    graceful_stop_timeout: Duration,
 }
 
 impl FirecrackerManager {
-    pub fn new(runtime_dir: impl Into<PathBuf>, fc_binary: impl Into<PathBuf>) -> Self {
+    pub fn new(
+        runtime_dir: impl Into<PathBuf>,
+        fc_binary: impl Into<PathBuf>,
+        graceful_stop_timeout: Duration,
+    ) -> Self {
         let runtime_dir = runtime_dir.into();
         let fc_binary = fc_binary.into();
         info!(
@@ -149,6 +158,7 @@ impl FirecrackerManager {
             runtime_dir,
             fc_binary,
             vms: Arc::new(Mutex::new(HashMap::new())),
+            graceful_stop_timeout,
         }
     }
 
@@ -289,6 +299,68 @@ impl FirecrackerManager {
         }
 
         Ok(())
+    }
+
+    /// Ask the guest agent to shut the guest down and reboot, which ends its
+    /// VMM, then wait up to `graceful_stop_timeout` for that. Returns whether
+    /// the VMM exited.
+    async fn shut_down_guest(&self, vm_id: &str, agent_socket: &Path) -> bool {
+        const AGENT_TIMEOUT: Duration = Duration::from_secs(5);
+        const POLL_INTERVAL: Duration = Duration::from_millis(250);
+
+        // An older qarax-init answers it as an invalid exec request.
+        let accepted = Self::guest_agent_request(
+            agent_socket,
+            b"{\"shutdown\":{\"reboot\":true}}\n",
+            AGENT_TIMEOUT,
+        )
+        .await
+        .and_then(|response| {
+            serde_json::from_slice::<GuestAgentAck>(&response)
+                .map_err(|e| VmmError::ExecError(format!("invalid guest-agent response: {e}")))
+        });
+        match accepted {
+            Ok(GuestAgentAck { exit_code: 0 }) => {}
+            Ok(GuestAgentAck { exit_code }) => {
+                warn!("FC: VM {vm_id}'s guest agent refused to shut down (exit code {exit_code})");
+                return false;
+            }
+            Err(e) => {
+                warn!("FC: VM {vm_id}'s guest agent could not be asked to shut down: {e}");
+                return false;
+            }
+        }
+
+        let deadline = tokio::time::Instant::now() + self.graceful_stop_timeout;
+        loop {
+            if self.vmm_exited(vm_id).await {
+                info!("FC: VM {} guest shut down", vm_id);
+                return true;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                warn!(
+                    "FC: VM {} did not shut down within {}s; killing it",
+                    vm_id,
+                    self.graceful_stop_timeout.as_secs()
+                );
+                return false;
+            }
+            tokio::time::sleep(POLL_INTERVAL).await;
+        }
+    }
+
+    /// Whether the VM's Firecracker process has exited.
+    async fn vmm_exited(&self, vm_id: &str) -> bool {
+        let mut vms = self.vms.lock().await;
+        let Some(instance) = vms.get_mut(vm_id) else {
+            return true;
+        };
+        match &mut instance.process {
+            Some(child) => child.try_wait().ok().flatten().is_some(),
+            // Recovered after a node restart: no handle, but nothing answers
+            // its API socket once it's gone.
+            None => std::os::unix::net::UnixStream::connect(&instance.socket_path).is_err(),
+        }
     }
 }
 
@@ -465,29 +537,44 @@ impl VmmManager for FirecrackerManager {
     async fn stop_vm(&self, vm_id: &str) -> Result<(), VmmError> {
         info!("FC: Stopping VM {}", vm_id);
 
+        // A running guest with the agent can shut itself down. Firecracker has
+        // no power button, and Ctrl+Alt+Del needs an i8042 driver the guest
+        // kernel doesn't have.
+        let agent_socket = {
+            let vms = self.vms.lock().await;
+            let instance = vms
+                .get(vm_id)
+                .ok_or_else(|| VmmError::VmNotFound(vm_id.to_string()))?;
+            match instance.phase {
+                FcPhase::Live {
+                    state: LiveState::Running,
+                    ..
+                } => Self::vsock_socket_path_from_config(&instance.proto_config.vsock),
+                _ => None,
+            }
+        };
+        let guest_shut_down = match agent_socket {
+            Some(socket) => self.shut_down_guest(vm_id, &socket).await,
+            None => false,
+        };
+
         let mut vms = self.vms.lock().await;
         let instance = vms
             .get_mut(vm_id)
             .ok_or_else(|| VmmError::VmNotFound(vm_id.to_string()))?;
-
-        match &mut instance.phase {
-            FcPhase::Live { micro_vm, .. } => {
-                if let Err(e) = micro_vm.send_ctrl_alt_del().await {
-                    warn!(
-                        "FC: VM {} soft-stop failed (treating as stopped): {}",
-                        vm_id, e
-                    );
-                }
-            }
-            // Never booted, so there is no guest to shut down.
-            FcPhase::PreBoot(_) => {
-                if let Some(mut process) = instance.process.take() {
+        if !guest_shut_down {
+            match instance.process.take() {
+                Some(mut process) => {
                     let _ = process.kill().await;
                 }
+                None if matches!(instance.phase, FcPhase::Live { .. }) => warn!(
+                    "FC: VM {} was recovered after a node restart, so its process \
+                     can't be killed; it may still be running",
+                    vm_id
+                ),
+                None => {}
             }
-            FcPhase::Stopped | FcPhase::Detached => {}
         }
-
         instance.phase = FcPhase::Stopped;
         info!("FC: VM {} stopped", vm_id);
         Ok(())
@@ -606,8 +693,8 @@ impl VmmManager for FirecrackerManager {
             .get_mut(vm_id)
             .ok_or_else(|| VmmError::VmNotFound(vm_id.to_string()))?;
 
-        // Only a live VM is asked: a stopped one may still answer on its
-        // socket briefly after stop_vm (e.g. a paused VM sent Ctrl+Alt+Del).
+        // Only a live VM is asked: a stopped one recovered after a node
+        // restart may still answer on its socket.
         if let FcPhase::Live { micro_vm, state } = &mut instance.phase
             && let Ok(info) = micro_vm.describe_instance().await
         {

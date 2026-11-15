@@ -213,6 +213,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mgr = Arc::new(FirecrackerManager::new(
             &args.runtime_dir,
             &args.firecracker_binary,
+            std::time::Duration::from_secs(args.graceful_stop_timeout_secs),
         ));
         mgr.recover_vms().await;
         Some(mgr)

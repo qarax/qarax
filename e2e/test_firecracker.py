@@ -15,6 +15,7 @@ Prerequisites:
 - The same vmlinux and test-initramfs used by Cloud Hypervisor tests are reused.
 """
 
+import time
 import uuid
 from uuid import UUID
 
@@ -61,10 +62,16 @@ from helpers import (
     QARAX_URL,
     call_api,
     call_api_detailed,
+    compose_container,
+    docker,
+    exec_when_ready,
     path_exists_in_any,
     wait_for_start,
     wait_for_status,
 )
+
+# qarax-node's --graceful-stop-timeout-secs default.
+GRACEFUL_STOP_TIMEOUT_SECS = 30
 
 
 @pytest.fixture
@@ -174,6 +181,69 @@ async def test_fc_vm_full_lifecycle(client):
             # Start again
             started = await call_api(start_vm, client=c, vm_id=vm_id)
             await wait_for_start(c, vm_id, started.job_id)
+        finally:
+            await call_api(delete_vm, client=c, vm_id=vm_id)
+
+
+def _firecracker_processes(container, vm_id):
+    """Command lines of the Firecracker processes for vm_id in container."""
+    cmdlines = docker(
+        "exec",
+        container,
+        "sh",
+        "-c",
+        'for p in /proc/[0-9]*; do tr "\\0" " " < "$p/cmdline"; echo; done 2>/dev/null',
+    ).stdout.splitlines()
+    return [c for c in cmdlines if "firecracker" in c and f"{vm_id}.fc.sock" in c]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("guest_agent", [True, False], ids=["agent", "no-agent"])
+async def test_fc_stop_ends_the_vm(client, guest_agent):
+    """Stopping a Firecracker VM ends it: no Firecracker process is left.
+
+    With the guest agent the guest shuts itself down, well inside the graceful
+    stop timeout; without it the VMM is killed. Stop used to send Ctrl+Alt+Del,
+    which the guest kernel has no driver for, and report the VM stopped while
+    it kept running.
+    """
+    async with client as c:
+        vm_id_raw = await call_api(
+            create_vm,
+            client=c,
+            body=new_fc_vm(
+                f"e2e-fc-stop-{uuid.uuid4().hex[:6]}", guest_agent=guest_agent
+            ),
+        )
+        vm_id = str(vm_id_raw).strip('"')
+        try:
+            await call_api(start_vm, client=c, vm_id=vm_id)
+            await wait_for_status(c, vm_id, VmStatus.RUNNING)
+            if guest_agent:
+                # Up, so it can take the shutdown request.
+                await exec_when_ready(c, vm_id, "true")
+            vm = await call_api(get_vm, client=c, vm_id=vm_id)
+            hosts = await call_api(list_hosts, client=c)
+            container = compose_container(
+                next(h for h in hosts if h.id == vm.host_id).address
+            )
+            assert _firecracker_processes(container, vm_id), "no Firecracker process"
+
+            started = time.monotonic()
+            await call_api(stop_vm, client=c, vm_id=vm_id)
+            elapsed = time.monotonic() - started
+
+            vm = await call_api(get_vm, client=c, vm_id=vm_id)
+            assert vm.status == VmStatus.SHUTDOWN
+            assert not _firecracker_processes(container, vm_id), (
+                "the VM's Firecracker process outlived its stop"
+            )
+            assert elapsed < GRACEFUL_STOP_TIMEOUT_SECS - 10, f"stop took {elapsed:.1f}s"
+            if guest_agent:
+                logs = docker("logs", container, check=False)
+                assert f"FC: VM {vm_id} guest shut down" in logs.stdout + logs.stderr, (
+                    "the guest was killed, not shut down"
+                )
         finally:
             await call_api(delete_vm, client=c, vm_id=vm_id)
 
