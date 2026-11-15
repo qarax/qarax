@@ -4037,6 +4037,17 @@ pub async fn migrate(
     Json(req): Json<VmMigrateRequest>,
 ) -> Result<axum::response::Response> {
     req.options.validate()?;
+    // Cloud Hypervisor would refuse it only once the destination is receiving.
+    if req.options.memory_mode == MigrationMemoryMode::Postcopy
+        && req
+            .options
+            .connections
+            .is_some_and(|connections| connections > 1)
+    {
+        return Err(crate::errors::Error::UnprocessableEntity(
+            "postcopy migration uses a single connection; leave connections unset".into(),
+        ));
+    }
     let plan = plan_vm_migration(&env, vm_id, req.target_host_id, req.options).await?;
     let original_status = plan.original_status;
 

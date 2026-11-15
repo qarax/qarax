@@ -4016,7 +4016,9 @@ components:
           - integer
           - 'null'
           format: int32
-          description: Parallel TCP connections for the memory transfer (default 1).
+          description: |-
+            Parallel TCP connections for the memory transfer (default 1). Precopy
+            only: postcopy uses one.
           maximum: 128
           minimum: 1
         max_downtime_ms:

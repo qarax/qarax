@@ -1357,6 +1357,18 @@ async fn test_migrate_rejects_invalid_requests() {
         target
     };
 
+    assert_unprocessable(
+        migrate_with(
+            vm_id,
+            other_host,
+            json!({"memory_mode": "postcopy", "connections": 2}),
+        )
+        .await
+        .unwrap(),
+        "postcopy migration uses a single connection",
+    )
+    .await;
+
     for (option, value) in [
         ("connections", 0),
         ("connections", 129),
