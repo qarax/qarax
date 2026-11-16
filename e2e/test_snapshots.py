@@ -218,7 +218,7 @@ async def test_snapshot_delete_removes_its_data(client, snapshot_storage_pool):
             )
             assert snapshot is not None and snapshot.status == SnapshotStatus.READY
             resp = await httpx_client.get(
-                f"{QARAX_URL}/storage-objects/{snapshot.storage_object_id}"
+                f"{QARAX_URL}/v1/storage-objects/{snapshot.storage_object_id}"
             )
             assert resp.status_code == 200, resp.text
             snapshot_dir = resp.json()["config"]["path"]
@@ -230,11 +230,11 @@ async def test_snapshot_delete_removes_its_data(client, snapshot_storage_pool):
             assert resp.status_code.value == 204, resp.content
 
             assert await list_snapshots.asyncio(client=c, vm_id=vm_id) == []
-            resp = await httpx_client.get(f"{QARAX_URL}/backups", params={"backup_type": "vm"})
+            resp = await httpx_client.get(f"{QARAX_URL}/v1/backups", params={"backup_type": "vm"})
             assert resp.status_code == 200, resp.text
             assert all(b["snapshot_id"] != str(snapshot.id) for b in resp.json())
             resp = await httpx_client.get(
-                f"{QARAX_URL}/storage-objects/{snapshot.storage_object_id}"
+                f"{QARAX_URL}/v1/storage-objects/{snapshot.storage_object_id}"
             )
             assert resp.status_code == 404, resp.text
             assert not path_exists_in_any(NODE_CONTAINER_PREFIX, snapshot_dir)

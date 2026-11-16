@@ -235,7 +235,7 @@ async def test_preflight_oci_image(client, oci_image_ref):
             await _attach_overlaybd_pool(c, hosts, overlaybd_pool_id)
 
             response = await c.get_async_httpx_client().post(
-                f"{QARAX_URL}/vms/preflight",
+                f"{QARAX_URL}/v1/vms/preflight",
                 json={
                     "image_ref": oci_image_ref,
                     "boot_mode": "kernel",
@@ -399,7 +399,7 @@ async def test_vm_commit_converts_oci_to_raw_disk(client, oci_image_ref):
             # Commit the VM (raw httpx since SDK not regenerated yet)
             httpx_client = c.get_async_httpx_client()
             commit_resp = await httpx_client.post(
-                f"{QARAX_URL}/vms/{vm_id}/commit",
+                f"{QARAX_URL}/v1/vms/{vm_id}/commit",
                 json={
                     "storage_pool_id": str(commit_pool_id),
                     "size_bytes": 1073741824,  # 1 GiB
@@ -421,7 +421,7 @@ async def test_vm_commit_converts_oci_to_raw_disk(client, oci_image_ref):
 
             # Verify a Disk storage object exists on the commit pool
             disks_resp = await httpx_client.get(
-                f"{QARAX_URL}/storage-objects",
+                f"{QARAX_URL}/v1/storage-objects",
                 params={"name": f"committed-{vm_id}"},
             )
             assert disks_resp.status_code == 200

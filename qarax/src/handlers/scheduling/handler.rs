@@ -8,7 +8,7 @@ use super::{ApiResponse, Result};
 
 #[utoipa::path(
     get,
-    path = "/scheduling/config",
+    path = "/v1/scheduling/config",
     responses(
         (status = 200, description = "Current scheduling configuration", body = SchedulingSettings)
     ),

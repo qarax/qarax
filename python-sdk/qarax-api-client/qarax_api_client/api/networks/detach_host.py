@@ -17,7 +17,7 @@ def _get_kwargs(
 
     _kwargs: dict[str, Any] = {
         "method": "delete",
-        "url": "/networks/{network_id}/hosts/{host_id}".format(
+        "url": "/v1/networks/{network_id}/hosts/{host_id}".format(
             network_id=quote(str(network_id), safe=""),
             host_id=quote(str(host_id), safe=""),
         ),

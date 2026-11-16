@@ -13,7 +13,7 @@ def _get_kwargs() -> dict[str, Any]:
 
     _kwargs: dict[str, Any] = {
         "method": "get",
-        "url": "/sandbox-pools",
+        "url": "/v1/sandbox-pools",
     }
 
     return _kwargs

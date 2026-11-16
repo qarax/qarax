@@ -203,7 +203,7 @@ stop_other_node() {
 	"${COMPOSE[@]}" --profile '*' stop "$service"
 	id=$(qarax host list -o json | jq -r --arg a "$service" '.[] | select(.address == $a and .status == "up") | .id')
 	[[ -n "$id" ]] || return 0
-	api_curl -fsS -X PATCH "${SERVER}/hosts/${id}" -H "Content-Type: application/json" \
+	api_curl -fsS -X PATCH "${SERVER}/v1/hosts/${id}" -H "Content-Type: application/json" \
 		-d '{"status":"down"}' >/dev/null
 	warn "Stopped ${service} and marked its host DOWN; this mode's node is ${NODE_SERVICE}."
 }

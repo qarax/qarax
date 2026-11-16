@@ -18,7 +18,7 @@ use uuid::Uuid;
 
 #[utoipa::path(
     get,
-    path = "/storage-pools",
+    path = "/v1/storage-pools",
     params(crate::handlers::NameQuery),
     responses(
         (status = 200, description = "List all storage pools", body = Vec<StoragePool>),
@@ -40,7 +40,7 @@ pub async fn list(
 
 #[utoipa::path(
     get,
-    path = "/storage-pools/{pool_id}",
+    path = "/v1/storage-pools/{pool_id}",
     params(
         ("pool_id" = uuid::Uuid, Path, description = "Storage pool unique identifier")
     ),
@@ -65,7 +65,7 @@ pub async fn get(
 
 #[utoipa::path(
     post,
-    path = "/storage-pools",
+    path = "/v1/storage-pools",
     request_body = NewStoragePool,
     responses(
         (status = 201, description = "Storage pool created successfully", body = String),
@@ -123,7 +123,7 @@ pub async fn create(
 
 #[utoipa::path(
     delete,
-    path = "/storage-pools/{pool_id}",
+    path = "/v1/storage-pools/{pool_id}",
     params(
         ("pool_id" = uuid::Uuid, Path, description = "Storage pool unique identifier")
     ),
@@ -151,7 +151,7 @@ pub struct AttachPoolHostRequest {
 
 #[utoipa::path(
     get,
-    path = "/storage-pools/{pool_id}/hosts",
+    path = "/v1/storage-pools/{pool_id}/hosts",
     params(
         ("pool_id" = uuid::Uuid, Path, description = "Storage pool unique identifier")
     ),
@@ -176,7 +176,7 @@ pub async fn list_hosts(
 
 #[utoipa::path(
     post,
-    path = "/storage-pools/{pool_id}/hosts",
+    path = "/v1/storage-pools/{pool_id}/hosts",
     params(
         ("pool_id" = uuid::Uuid, Path, description = "Storage pool unique identifier")
     ),
@@ -217,7 +217,7 @@ pub async fn attach_host(
 
 #[utoipa::path(
     delete,
-    path = "/storage-pools/{pool_id}/hosts/{host_id}",
+    path = "/v1/storage-pools/{pool_id}/hosts/{host_id}",
     params(
         ("pool_id" = uuid::Uuid, Path, description = "Storage pool unique identifier"),
         ("host_id" = uuid::Uuid, Path, description = "Host unique identifier")
@@ -302,7 +302,7 @@ pub struct CreateDiskResponse {
 /// Create a disk in the pool: blank (sparse or preallocated) or populated from a source URL.
 #[utoipa::path(
     post,
-    path = "/storage-pools/{pool_id}/disks",
+    path = "/v1/storage-pools/{pool_id}/disks",
     params(
         ("pool_id" = Uuid, Path, description = "Storage pool ID")
     ),
@@ -523,7 +523,7 @@ pub async fn create_disk(
 /// Import an OCI image into the pool, converting it to OverlayBD format.
 #[utoipa::path(
     post,
-    path = "/storage-pools/{pool_id}/import",
+    path = "/v1/storage-pools/{pool_id}/import",
     params(
         ("pool_id" = Uuid, Path, description = "Storage pool ID")
     ),
@@ -655,7 +655,7 @@ pub struct RegisterLunRequest {
 /// and then register it with qarax so VMs can consume it.
 #[utoipa::path(
     post,
-    path = "/storage-pools/{pool_id}/luns",
+    path = "/v1/storage-pools/{pool_id}/luns",
     params(
         ("pool_id" = Uuid, Path, description = "Storage pool ID")
     ),

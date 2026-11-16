@@ -649,7 +649,7 @@ async fn ensure_resize_capacity(
 
 #[utoipa::path(
     post,
-    path = "/vms/preflight",
+    path = "/v1/vms/preflight",
     request_body = VmImagePreflightRequest,
     responses(
         (status = 200, description = "OCI image preflight completed", body = VmImagePreflightResponse),
@@ -735,7 +735,7 @@ pub async fn preflight_image(
 
 #[utoipa::path(
     get,
-    path = "/vms",
+    path = "/v1/vms",
     params(crate::handlers::VmListQuery),
     responses(
         (status = 200, description = "List all VMs", body = Vec<Vm>),
@@ -765,7 +765,7 @@ pub async fn list(
 
 #[utoipa::path(
     get,
-    path = "/vms/{vm_id}",
+    path = "/v1/vms/{vm_id}",
     params(
         ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier")
     ),
@@ -790,7 +790,7 @@ pub async fn get(
 
 #[utoipa::path(
     post,
-    path = "/vms",
+    path = "/v1/vms",
     request_body = NewVm,
     responses(
         (status = 201, description = "VM created successfully (synchronous)", body = String, content_type = "application/json"),
@@ -1318,7 +1318,7 @@ async fn run_overlaybd_create(
 
 #[utoipa::path(
     post,
-    path = "/vms/{vm_id}/start",
+    path = "/v1/vms/{vm_id}/start",
     params(
         ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier")
     ),
@@ -1536,7 +1536,7 @@ async fn ensure_vm_start_allowed(
 /// agent is killed. Use force-stop to power a VM off immediately.
 #[utoipa::path(
     post,
-    path = "/vms/{vm_id}/stop",
+    path = "/v1/vms/{vm_id}/stop",
     params(
         ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier")
     ),
@@ -1594,7 +1594,7 @@ pub async fn stop(
 
 #[utoipa::path(
     post,
-    path = "/vms/{vm_id}/force-stop",
+    path = "/v1/vms/{vm_id}/force-stop",
     params(
         ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier")
     ),
@@ -1649,7 +1649,7 @@ pub async fn force_stop(
 
 #[utoipa::path(
     post,
-    path = "/vms/{vm_id}/pause",
+    path = "/v1/vms/{vm_id}/pause",
     params(
         ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier")
     ),
@@ -1691,7 +1691,7 @@ pub async fn pause(
 
 #[utoipa::path(
     post,
-    path = "/vms/{vm_id}/resume",
+    path = "/v1/vms/{vm_id}/resume",
     params(
         ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier")
     ),
@@ -1733,7 +1733,7 @@ pub async fn resume(
 
 #[utoipa::path(
     get,
-    path = "/vms/{vm_id}/snapshots",
+    path = "/v1/vms/{vm_id}/snapshots",
     params(
         ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier"),
         crate::handlers::NameQuery
@@ -1900,7 +1900,7 @@ pub(crate) async fn create_vm_snapshot(
 
 #[utoipa::path(
     post,
-    path = "/vms/{vm_id}/snapshots",
+    path = "/v1/vms/{vm_id}/snapshots",
     params(
         ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier")
     ),
@@ -1986,7 +1986,7 @@ pub(crate) async fn restore_vm_from_snapshot(
 
 #[utoipa::path(
     post,
-    path = "/vms/{vm_id}/restore",
+    path = "/v1/vms/{vm_id}/restore",
     params(
         ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier")
     ),
@@ -2051,7 +2051,7 @@ pub(crate) async fn delete_snapshot_files(
 
 #[utoipa::path(
     delete,
-    path = "/vms/{vm_id}/snapshots/{snapshot_id}",
+    path = "/v1/vms/{vm_id}/snapshots/{snapshot_id}",
     params(
         ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier"),
         ("snapshot_id" = uuid::Uuid, Path, description = "Snapshot unique identifier")
@@ -2101,7 +2101,7 @@ pub async fn delete_snapshot(
 
 #[utoipa::path(
     get,
-    path = "/vms/{vm_id}/metrics",
+    path = "/v1/vms/{vm_id}/metrics",
     params(
         ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier")
     ),
@@ -2164,7 +2164,7 @@ pub async fn metrics(
 
 #[utoipa::path(
     delete,
-    path = "/vms/{vm_id}",
+    path = "/v1/vms/{vm_id}",
     params(
         ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier")
     ),
@@ -2243,7 +2243,7 @@ pub async fn delete(
 
 #[utoipa::path(
     get,
-    path = "/vms/{vm_id}/console",
+    path = "/v1/vms/{vm_id}/console",
     params(
         ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier")
     ),
@@ -2291,7 +2291,7 @@ pub async fn console_log(
 /// WebSocket console attachment for interactive terminal access
 #[utoipa::path(
     get,
-    path = "/vms/{vm_id}/console/attach",
+    path = "/v1/vms/{vm_id}/console/attach",
     params(
         ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier")
     ),
@@ -2319,7 +2319,7 @@ pub async fn console_attach(
 
 #[utoipa::path(
     post,
-    path = "/vms/{vm_id}/exec",
+    path = "/v1/vms/{vm_id}/exec",
     params(
         ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier")
     ),
@@ -2978,7 +2978,7 @@ pub struct AttachDiskRequest {
 /// (CH keeps the VM definition after shutdown, so disk changes are accepted).
 #[utoipa::path(
     post,
-    path = "/vms/{vm_id}/disks",
+    path = "/v1/vms/{vm_id}/disks",
     params(
         ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier")
     ),
@@ -3407,7 +3407,7 @@ fn next_net_id(existing: &[NetworkInterface]) -> String {
 
 #[utoipa::path(
     delete,
-    path = "/vms/{vm_id}/disks/{device_id}",
+    path = "/v1/vms/{vm_id}/disks/{device_id}",
     params(
         ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier"),
         ("device_id" = String, Path, description = "Disk logical name (e.g. \"disk0\")")
@@ -3465,7 +3465,7 @@ pub async fn remove_disk(
 
 #[utoipa::path(
     post,
-    path = "/vms/{vm_id}/nics",
+    path = "/v1/vms/{vm_id}/nics",
     params(
         ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier")
     ),
@@ -3561,7 +3561,7 @@ pub async fn add_nic(
 
 #[utoipa::path(
     get,
-    path = "/vms/{vm_id}/nics",
+    path = "/v1/vms/{vm_id}/nics",
     params(
         ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier")
     ),
@@ -3587,7 +3587,7 @@ pub async fn list_nics(
 
 #[utoipa::path(
     delete,
-    path = "/vms/{vm_id}/nics/{device_id}",
+    path = "/v1/vms/{vm_id}/nics/{device_id}",
     params(
         ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier"),
         ("device_id" = String, Path, description = "NIC device ID (e.g. \"net0\")")
@@ -3649,7 +3649,7 @@ pub struct AttachSecurityGroupRequest {
 
 #[utoipa::path(
     get,
-    path = "/vms/{vm_id}/security-groups",
+    path = "/v1/vms/{vm_id}/security-groups",
     params(
         ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier")
     ),
@@ -3675,7 +3675,7 @@ pub async fn list_security_groups(
 
 #[utoipa::path(
     post,
-    path = "/vms/{vm_id}/security-groups",
+    path = "/v1/vms/{vm_id}/security-groups",
     params(
         ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier")
     ),
@@ -3706,7 +3706,7 @@ pub async fn attach_security_group(
 
 #[utoipa::path(
     delete,
-    path = "/vms/{vm_id}/security-groups/{security_group_id}",
+    path = "/v1/vms/{vm_id}/security-groups/{security_group_id}",
     params(
         ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier"),
         ("security_group_id" = uuid::Uuid, Path, description = "Security group unique identifier")
@@ -4091,7 +4091,7 @@ async fn discard_incoming_vm(dest_client: &NodeClient, vm_id: Uuid) {
 
 #[utoipa::path(
     post,
-    path = "/vms/{vm_id}/template",
+    path = "/v1/vms/{vm_id}/template",
     params(
         ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier")
     ),
@@ -4122,7 +4122,7 @@ pub async fn create_template_from_vm(
 /// without is refused.
 #[utoipa::path(
     post,
-    path = "/vms/{vm_id}/migrate",
+    path = "/v1/vms/{vm_id}/migrate",
     params(
         ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier")
     ),
@@ -4223,7 +4223,7 @@ pub struct VmResizeRequest {
 
 #[utoipa::path(
     put,
-    path = "/vms/{vm_id}/resize",
+    path = "/v1/vms/{vm_id}/resize",
     params(
         ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier")
     ),
@@ -4325,7 +4325,7 @@ pub struct DiskResizeRequest {
 /// right away; a stopped VM's image (raw or qcow2) grows in place.
 #[utoipa::path(
     put,
-    path = "/vms/{vm_id}/disks/{disk_id}/resize",
+    path = "/v1/vms/{vm_id}/disks/{disk_id}/resize",
     params(
         ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier"),
         ("disk_id" = String, Path, description = "Logical disk name (e.g. \"rootfs\", \"disk0\")")
@@ -4446,7 +4446,7 @@ pub struct CommitVmResponse {
 
 #[utoipa::path(
     post,
-    path = "/vms/{vm_id}/commit",
+    path = "/v1/vms/{vm_id}/commit",
     params(
         ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier")
     ),

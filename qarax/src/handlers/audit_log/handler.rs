@@ -24,7 +24,7 @@ pub struct AuditLogListQuery {
 
 #[utoipa::path(
     get,
-    path = "/audit-logs",
+    path = "/v1/audit-logs",
     params(AuditLogListQuery),
     responses(
         (status = 200, description = "List audit log entries", body = Vec<AuditLog>),
@@ -54,7 +54,7 @@ pub async fn list(
 
 #[utoipa::path(
     get,
-    path = "/audit-logs/{audit_log_id}",
+    path = "/v1/audit-logs/{audit_log_id}",
     params(
         ("audit_log_id" = Uuid, Path, description = "Audit log entry ID")
     ),

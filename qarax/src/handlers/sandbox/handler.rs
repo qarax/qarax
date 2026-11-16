@@ -26,7 +26,7 @@ use super::super::vm::handler::{
 
 #[utoipa::path(
     post,
-    path = "/sandboxes",
+    path = "/v1/sandboxes",
     request_body = NewSandbox,
     responses(
         (status = 202, description = "Sandbox creation started", body = CreateSandboxResponse),
@@ -106,7 +106,7 @@ pub async fn create(
 
 #[utoipa::path(
     post,
-    path = "/sandboxes/{sandbox_id}/exec",
+    path = "/v1/sandboxes/{sandbox_id}/exec",
     params(
         ("sandbox_id" = uuid::Uuid, Path, description = "Sandbox unique identifier")
     ),
@@ -277,7 +277,7 @@ fn spawn_sandbox_ready_watcher(env: App, sandbox_id: Uuid, vm_id: Uuid, wait: Re
 
 #[utoipa::path(
     get,
-    path = "/sandboxes",
+    path = "/v1/sandboxes",
     responses(
         (status = 200, description = "List all sandboxes", body = Vec<Sandbox>),
         (status = 500, description = "Internal server error")
@@ -298,7 +298,7 @@ pub async fn list(Extension(env): Extension<App>) -> Result<ApiResponse<Vec<Sand
 
 #[utoipa::path(
     get,
-    path = "/sandboxes/{sandbox_id}",
+    path = "/v1/sandboxes/{sandbox_id}",
     params(
         ("sandbox_id" = uuid::Uuid, Path, description = "Sandbox unique identifier")
     ),
@@ -325,7 +325,7 @@ pub async fn get(
 
 #[utoipa::path(
     post,
-    path = "/sandboxes/{sandbox_id}/keepalive",
+    path = "/v1/sandboxes/{sandbox_id}/keepalive",
     params(
         ("sandbox_id" = uuid::Uuid, Path, description = "Sandbox unique identifier")
     ),
@@ -356,7 +356,7 @@ pub async fn keepalive(
 
 #[utoipa::path(
     delete,
-    path = "/sandboxes/{sandbox_id}",
+    path = "/v1/sandboxes/{sandbox_id}",
     params(
         ("sandbox_id" = uuid::Uuid, Path, description = "Sandbox unique identifier")
     ),

@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 #[utoipa::path(
     get,
-    path = "/vm-templates",
+    path = "/v1/vm-templates",
     params(crate::handlers::NameQuery),
     responses(
         (status = 200, description = "List all VM templates", body = Vec<VmTemplate>),
@@ -35,7 +35,7 @@ pub async fn list(
 
 #[utoipa::path(
     get,
-    path = "/vm-templates/{vm_template_id}",
+    path = "/v1/vm-templates/{vm_template_id}",
     params(
         ("vm_template_id" = uuid::Uuid, Path, description = "VM template unique identifier")
     ),
@@ -60,7 +60,7 @@ pub async fn get(
 
 #[utoipa::path(
     post,
-    path = "/vm-templates",
+    path = "/v1/vm-templates",
     request_body = NewVmTemplate,
     responses(
         (status = 201, description = "VM template created successfully", body = String),
@@ -81,7 +81,7 @@ pub async fn create(
 
 #[utoipa::path(
     delete,
-    path = "/vm-templates/{vm_template_id}",
+    path = "/v1/vm-templates/{vm_template_id}",
     params(
         ("vm_template_id" = uuid::Uuid, Path, description = "VM template unique identifier")
     ),

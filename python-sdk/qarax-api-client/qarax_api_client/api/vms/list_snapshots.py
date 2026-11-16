@@ -30,7 +30,7 @@ def _get_kwargs(
 
     _kwargs: dict[str, Any] = {
         "method": "get",
-        "url": "/vms/{vm_id}/snapshots".format(
+        "url": "/v1/vms/{vm_id}/snapshots".format(
             vm_id=quote(str(vm_id), safe=""),
         ),
         "params": params,

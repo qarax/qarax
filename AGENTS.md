@@ -72,7 +72,7 @@ Follow this order before touching code:
    - Docker Compose mode: `docker compose ps` and `docker compose logs qarax-node`
    - Hyperconverged mode: `systemctl status qarax-node`, `ps aux | grep cloud-hypervisor`
    - Verify Postgres: `docker compose ps postgres` or `docker compose exec postgres pg_isready -U qarax`
-   - Verify API auth: `curl -H "Authorization: Bearer $QARAX_TOKEN" localhost:8000/hosts`. A 401 means a wrong/missing token, not a down stack (`/` is public, so it can't tell you).
+   - Verify API auth: `curl -H "Authorization: Bearer $QARAX_TOKEN" localhost:8000/v1/hosts`. A 401 means a wrong/missing token, not a down stack (`/` is public, so it can't tell you).
    - Verify host kernel modules: qarax-node (even in a container) loads `target_core_user` and `tcm_loop` (and nftables modules for its firewall and iptables-nft rules, e.g. `nf_conntrack_bridge`) from the host kernel on demand. If `uname -r` has no matching `/lib/modules/` dir (kernel upgraded without reboot), anything not already loaded fails, e.g. TCMU configfs `ENOENT`. Reboot; it is not a code bug.
 3. **Read service logs** before grep-ing source files. Most runtime failures are infrastructure, not code.
 4. **Only after confirming infrastructure is healthy**, investigate code-level issues.
@@ -169,6 +169,7 @@ Static bearer tokens, configured by `AUTH_ENABLED` / `AUTH_TOKENS` (comma-separa
 - **Off** by default (`base.yaml`; `local.yaml` doesn't override it), e.g. `cargo run` against `make test-deps`.
 - **On** in `production.yaml` (no default tokens: set `AUTH_TOKENS`) and in `e2e/docker-compose.yml`, which is also what `make run-local` uses. There the token is `${QARAX_TEST_TOKEN:-e2e-test-token}`.
 - Public routes: `/`, `/swagger-ui*`, `/api-docs/openapi.json`. Everything else needs `Authorization: Bearer <token>`.
+- The API itself is under `/v1` (`/v1/vms`, `/v1/hosts`, ...); only those public routes are at the root. Raw callers (curl in `demos/`, `hack/`, `scripts/`, raw httpx in `e2e/`) must include it; the CLI and the generated SDK add it themselves.
 - The CLI reads `--token` / `QARAX_TOKEN`. `demos/lib.sh` (sourced by `hack/run-local.sh` and `e2e/setup_host.sh`) and `e2e/run_e2e_tests.sh` default it to `e2e-test-token`.
 
 ## CI

@@ -145,7 +145,7 @@ async def test_ha_failover_on_host_failure(client, two_hosts):
     dead_host_id = None
     stopped_service = None
 
-    async with client as c, httpx2.AsyncClient(base_url=QARAX_URL, headers=AUTH_HEADERS) as http_client:
+    async with client as c, httpx2.AsyncClient(base_url=f"{QARAX_URL}/v1", headers=AUTH_HEADERS) as http_client:
         try:
             # Pin both VMs to host1 by putting host2 in maintenance.
             await call_api(

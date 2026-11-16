@@ -89,7 +89,7 @@ ok "qarax API ready"
 
 info "--- Registering host ---"
 # qarax-node is reachable by service name inside the docker network
-HOST_ID=$(curl -sf -X POST "$QARAX_URL/hosts" \
+HOST_ID=$(curl -sf -X POST "$QARAX_URL/v1/hosts" \
 	-H "Content-Type: application/json" \
 	-d '{"name":"profile-node","address":"qarax-node","port":50051,"host_user":"root","password":""}' |
 	jq -r '.[1]')
@@ -97,13 +97,13 @@ HOST_ID=$(curl -sf -X POST "$QARAX_URL/hosts" \
 echo "Host: $HOST_ID"
 
 info "--- Initializing host (exercises gRPC path) ---"
-curl -sf -X POST "$QARAX_URL/hosts/$HOST_ID/init" -o /dev/null
+curl -sf -X POST "$QARAX_URL/v1/hosts/$HOST_ID/init" -o /dev/null
 ok "Host initialized"
 
 info "--- Creating 20 VMs (exercises DB writes + JSON serialization) ---"
 VM_IDS=()
 for i in $(seq 1 20); do
-	VM_ID=$(curl -sf -X POST "$QARAX_URL/vms" \
+	VM_ID=$(curl -sf -X POST "$QARAX_URL/v1/vms" \
 		-H "Content-Type: application/json" \
 		-d "{\"name\":\"profile-vm-$i\",\"hypervisor\":\"cloud_hv\",\"boot_vcpus\":1,\"max_vcpus\":1,\"memory_size\":268435456}" |
 		jq -r .)
@@ -113,21 +113,21 @@ ok "Created ${#VM_IDS[@]} VMs"
 
 info "--- Reading VM list 20 times (exercises DB reads + serialization) ---"
 for _ in $(seq 1 20); do
-	curl -sf "$QARAX_URL/vms" -o /dev/null
+	curl -sf "$QARAX_URL/v1/vms" -o /dev/null
 done
 
 info "--- Fetching each VM individually ---"
 for VM_ID in "${VM_IDS[@]}"; do
-	curl -sf "$QARAX_URL/vms/$VM_ID" -o /dev/null
+	curl -sf "$QARAX_URL/v1/vms/$VM_ID" -o /dev/null
 done
 
 info "--- Listing hosts 5 times ---"
 for _ in $(seq 1 5); do
-	curl -sf "$QARAX_URL/hosts" -o /dev/null
+	curl -sf "$QARAX_URL/v1/hosts" -o /dev/null
 done
 
 info "--- Deleting VMs ---"
 for VM_ID in "${VM_IDS[@]}"; do
-	curl -sf -X DELETE "$QARAX_URL/vms/$VM_ID" -o /dev/null
+	curl -sf -X DELETE "$QARAX_URL/v1/vms/$VM_ID" -o /dev/null
 done
 ok "Workload done — cleanup trap will stop stack and collect profiles"

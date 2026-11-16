@@ -19,7 +19,7 @@ use uuid::Uuid;
 
 #[utoipa::path(
     get,
-    path = "/networks",
+    path = "/v1/networks",
     params(crate::handlers::NameQuery),
     responses(
         (status = 200, description = "List all networks", body = Vec<Network>),
@@ -41,7 +41,7 @@ pub async fn list(
 
 #[utoipa::path(
     get,
-    path = "/networks/{network_id}",
+    path = "/v1/networks/{network_id}",
     params(
         ("network_id" = uuid::Uuid, Path, description = "Network unique identifier")
     ),
@@ -66,7 +66,7 @@ pub async fn get(
 
 #[utoipa::path(
     post,
-    path = "/networks",
+    path = "/v1/networks",
     request_body = NewNetwork,
     responses(
         (status = 201, description = "Network created successfully", body = String),
@@ -86,7 +86,7 @@ pub async fn create(
 
 #[utoipa::path(
     delete,
-    path = "/networks/{network_id}",
+    path = "/v1/networks/{network_id}",
     params(
         ("network_id" = uuid::Uuid, Path, description = "Network unique identifier")
     ),
@@ -142,7 +142,7 @@ pub async fn delete(
 
 #[utoipa::path(
     get,
-    path = "/networks/{network_id}/hosts",
+    path = "/v1/networks/{network_id}/hosts",
     params(
         ("network_id" = uuid::Uuid, Path, description = "Network unique identifier")
     ),
@@ -193,7 +193,7 @@ pub struct AttachHostRequest {
 
 #[utoipa::path(
     post,
-    path = "/networks/{network_id}/hosts",
+    path = "/v1/networks/{network_id}/hosts",
     params(
         ("network_id" = uuid::Uuid, Path, description = "Network unique identifier")
     ),
@@ -326,7 +326,7 @@ pub async fn reattach_host_networks(env: &App, host_id: Uuid) {
 
 #[utoipa::path(
     delete,
-    path = "/networks/{network_id}/hosts/{host_id}",
+    path = "/v1/networks/{network_id}/hosts/{host_id}",
     params(
         ("network_id" = uuid::Uuid, Path, description = "Network unique identifier"),
         ("host_id" = uuid::Uuid, Path, description = "Host unique identifier")
@@ -361,7 +361,7 @@ pub async fn detach_host(
 
 #[utoipa::path(
     get,
-    path = "/networks/{network_id}/ips",
+    path = "/v1/networks/{network_id}/ips",
     params(
         ("network_id" = uuid::Uuid, Path, description = "Network unique identifier")
     ),

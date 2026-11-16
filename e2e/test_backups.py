@@ -48,19 +48,19 @@ VM_OPERATION_TIMEOUT = 60
 
 async def _backup_data_path(httpx_client, backup):
     resp = await httpx_client.get(
-        f"{QARAX_URL}/storage-objects/{backup['storage_object_id']}"
+        f"{QARAX_URL}/v1/storage-objects/{backup['storage_object_id']}"
     )
     assert resp.status_code == 200, resp.text
     return resp.json()["config"]["path"]
 
 
 async def _assert_backup_deleted(httpx_client, backup):
-    resp = await httpx_client.delete(f"{QARAX_URL}/backups/{backup['id']}")
+    resp = await httpx_client.delete(f"{QARAX_URL}/v1/backups/{backup['id']}")
     assert resp.status_code == 204, resp.text
-    resp = await httpx_client.get(f"{QARAX_URL}/backups/{backup['id']}")
+    resp = await httpx_client.get(f"{QARAX_URL}/v1/backups/{backup['id']}")
     assert resp.status_code == 404, resp.text
     resp = await httpx_client.get(
-        f"{QARAX_URL}/storage-objects/{backup['storage_object_id']}"
+        f"{QARAX_URL}/v1/storage-objects/{backup['storage_object_id']}"
     )
     assert resp.status_code == 404, resp.text
 
@@ -119,7 +119,7 @@ async def test_vm_backup_lifecycle(client, backup_storage_pool):
             await wait_for_status(c, vm_id, VmStatus.RUNNING, timeout=VM_OPERATION_TIMEOUT)
 
             create_resp = await httpx_client.post(
-                f"{QARAX_URL}/backups",
+                f"{QARAX_URL}/v1/backups",
                 json={
                     "backup_type": "vm",
                     "vm_id": str(vm_id),
@@ -135,14 +135,14 @@ async def test_vm_backup_lifecycle(client, backup_storage_pool):
             assert backup["snapshot_id"] is not None
 
             list_resp = await httpx_client.get(
-                f"{QARAX_URL}/backups", params={"name": backup["name"]}
+                f"{QARAX_URL}/v1/backups", params={"name": backup["name"]}
             )
             assert list_resp.status_code == 200, list_resp.text
             backups = list_resp.json()
             assert len(backups) == 1
             assert backups[0]["id"] == backup["id"]
 
-            get_resp = await httpx_client.get(f"{QARAX_URL}/backups/{backup['id']}")
+            get_resp = await httpx_client.get(f"{QARAX_URL}/v1/backups/{backup['id']}")
             assert get_resp.status_code == 200, get_resp.text
             assert get_resp.json()["id"] == backup["id"]
 
@@ -150,7 +150,7 @@ async def test_vm_backup_lifecycle(client, backup_storage_pool):
             await wait_for_status(c, vm_id, VmStatus.SHUTDOWN, timeout=VM_OPERATION_TIMEOUT)
 
             restore_resp = await httpx_client.post(
-                f"{QARAX_URL}/backups/{backup['id']}/restore"
+                f"{QARAX_URL}/v1/backups/{backup['id']}/restore"
             )
             assert restore_resp.status_code == 200, restore_resp.text
             restored = restore_resp.json()
@@ -163,7 +163,7 @@ async def test_vm_backup_lifecycle(client, backup_storage_pool):
             # Before the VM: deleting it cascades the backup row away and would
             # leave the snapshot behind (and block the pool fixture's cleanup).
             if backup is not None:
-                await httpx_client.delete(f"{QARAX_URL}/backups/{backup['id']}")
+                await httpx_client.delete(f"{QARAX_URL}/v1/backups/{backup['id']}")
             await delete_vm.asyncio_detailed(client=c, vm_id=vm_id)
 
 
@@ -187,7 +187,7 @@ async def test_database_backup_restore(client, backup_storage_pool):
 
         try:
             create_resp = await httpx_client.post(
-                f"{QARAX_URL}/backups",
+                f"{QARAX_URL}/v1/backups",
                 json={
                     "backup_type": "database",
                     "storage_pool_id": str(backup_storage_pool),
@@ -211,7 +211,7 @@ async def test_database_backup_restore(client, backup_storage_pool):
             assert after_id is not None
 
             later_resp = await httpx_client.post(
-                f"{QARAX_URL}/backups",
+                f"{QARAX_URL}/v1/backups",
                 json={
                     "backup_type": "database",
                     "storage_pool_id": str(backup_storage_pool),
@@ -222,7 +222,7 @@ async def test_database_backup_restore(client, backup_storage_pool):
             later = later_resp.json()
 
             restore_resp = await httpx_client.post(
-                f"{QARAX_URL}/backups/{backup['id']}/restore"
+                f"{QARAX_URL}/v1/backups/{backup['id']}/restore"
             )
             assert restore_resp.status_code == 200, restore_resp.text
             restored = restore_resp.json()
@@ -276,7 +276,7 @@ async def test_vm_backup_delete_removes_snapshot(client, backup_storage_pool):
             )
 
             create_resp = await httpx_client.post(
-                f"{QARAX_URL}/backups",
+                f"{QARAX_URL}/v1/backups",
                 json={
                     "backup_type": "vm",
                     "vm_id": str(vm_id),
@@ -302,7 +302,7 @@ async def test_database_backup_delete_removes_dump(client, backup_storage_pool):
     async with client as c:
         httpx_client = c.get_async_httpx_client()
         create_resp = await httpx_client.post(
-            f"{QARAX_URL}/backups",
+            f"{QARAX_URL}/v1/backups",
             json={
                 "backup_type": "database",
                 "storage_pool_id": str(backup_storage_pool),
@@ -340,7 +340,7 @@ async def test_vm_delete_removes_its_backups(client, backup_storage_pool):
                 c, vm_id, VmStatus.RUNNING, timeout=VM_OPERATION_TIMEOUT
             )
             create_resp = await httpx_client.post(
-                f"{QARAX_URL}/backups",
+                f"{QARAX_URL}/v1/backups",
                 json={
                     "backup_type": "vm",
                     "vm_id": str(vm_id),
@@ -358,10 +358,10 @@ async def test_vm_delete_removes_its_backups(client, backup_storage_pool):
             assert resp.status_code.value == 204, resp.content
             deleted = True
 
-            resp = await httpx_client.get(f"{QARAX_URL}/backups/{backup['id']}")
+            resp = await httpx_client.get(f"{QARAX_URL}/v1/backups/{backup['id']}")
             assert resp.status_code == 404, resp.text
             resp = await httpx_client.get(
-                f"{QARAX_URL}/storage-objects/{backup['storage_object_id']}"
+                f"{QARAX_URL}/v1/storage-objects/{backup['storage_object_id']}"
             )
             assert resp.status_code == 404, resp.text
             assert not path_exists_in_any(NODE_CONTAINER_PREFIX, snapshot_dir)

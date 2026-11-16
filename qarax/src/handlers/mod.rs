@@ -403,8 +403,8 @@ async fn reject_maintenance_requests(
 
 pub fn app(env: App) -> Router {
     let x_request_id = HeaderName::from_static("x-request-id");
-    let router = Router::new()
-        .route("/", get(|| async { "hello" }))
+    // Everything but the root and the API docs is versioned.
+    let api = Router::new()
         .merge(hosts())
         .merge(backups())
         .merge(instance_types())
@@ -421,7 +421,10 @@ pub fn app(env: App) -> Router {
         .merge(scheduling())
         .merge(security_groups())
         .merge(audit_logs())
-        .merge(event_stream())
+        .merge(event_stream());
+    let router = Router::new()
+        .route("/", get(|| async { "hello" }))
+        .nest("/v1", api)
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .layer(
             ServiceBuilder::new()

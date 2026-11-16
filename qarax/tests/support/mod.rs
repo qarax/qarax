@@ -69,7 +69,10 @@ pub fn node_server_tls() -> tonic::transport::ServerTlsConfig {
 }
 
 pub struct TestApp {
+    /// The API's base URL (`/v1` on the server).
     pub address: String,
+    /// The server's root, for the unversioned routes (`/`, the API docs).
+    pub root: String,
     /// Pool for direct database access from the test.
     pub pool: PgPool,
     db_name: String,
@@ -99,7 +102,8 @@ pub async fn spawn_app_with_auth(auth: AuthSettings) -> TestApp {
 
     let listener = StdTcpListener::bind("127.0.0.1:0").expect("Failed to bind random port");
     listener.set_nonblocking(true).unwrap();
-    let address = format!("http://{}", listener.local_addr().unwrap());
+    let root = format!("http://{}", listener.local_addr().unwrap());
+    let address = format!("{root}/v1");
 
     // The app gets its own runtime, pool and listener. If it shared the test's
     // runtime, TestApp::drop (which blocks that runtime) could stall one of its
@@ -107,6 +111,9 @@ pub async fn spawn_app_with_auth(auth: AuthSettings) -> TestApp {
     // Postgres' 60 s authentication_timeout.
     let (shutdown, shutdown_rx) = oneshot::channel();
     let database = configuration.database.clone();
+    // Loading it installs the process-wide TLS crypto provider, which a test's
+    // fake node needs as soon as spawn_app returns.
+    let node_tls = NodeTls::load(&NODE_TLS_DIR.path().join("control-plane")).unwrap();
     let handle = std::thread::spawn(move || {
         let rt = Runtime::new().unwrap();
         rt.block_on(async move {
@@ -124,7 +131,7 @@ pub async fn spawn_app_with_auth(auth: AuthSettings) -> TestApp {
                 auth,
                 configuration.ha,
                 default_control_plane_architecture(),
-                NodeTls::load(&NODE_TLS_DIR.path().join("control-plane")).unwrap(),
+                node_tls,
             )
             .await
             .expect("Failed to start the control plane");
@@ -139,6 +146,7 @@ pub async fn spawn_app_with_auth(auth: AuthSettings) -> TestApp {
 
     TestApp {
         address,
+        root,
         pool,
         db_name: configuration.database.name,
         app: Some(AppThread { shutdown, handle }),

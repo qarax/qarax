@@ -24,7 +24,7 @@ fn build_ws_url(base_url: &str, vm_id: Uuid) -> String {
         base_url.replacen("http://", "ws://", 1)
     };
     format!(
-        "{}/vms/{}/console/attach",
+        "{}/v1/vms/{}/console/attach",
         ws_base.trim_end_matches('/'),
         vm_id
     )
@@ -134,7 +134,7 @@ mod tests {
         let request = ws_request("https://qarax.example/", Some("secret"), vm_id).unwrap();
         assert_eq!(
             request.uri().to_string(),
-            format!("wss://qarax.example/vms/{vm_id}/console/attach")
+            format!("wss://qarax.example/v1/vms/{vm_id}/console/attach")
         );
         assert_eq!(request.headers()[AUTHORIZATION], "Bearer secret");
 

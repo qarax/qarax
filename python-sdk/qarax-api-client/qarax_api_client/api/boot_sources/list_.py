@@ -27,7 +27,7 @@ def _get_kwargs(
 
     _kwargs: dict[str, Any] = {
         "method": "get",
-        "url": "/boot-sources",
+        "url": "/v1/boot-sources",
         "params": params,
     }
 

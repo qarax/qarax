@@ -127,7 +127,7 @@ def client():
 
 @pytest.fixture
 def http_client():
-    return httpx2.Client(base_url=QARAX_URL, headers=AUTH_HEADERS)
+    return httpx2.Client(base_url=f"{QARAX_URL}/v1", headers=AUTH_HEADERS)
 
 
 from helpers import AUTH_HEADERS, call_api, docker, wait_for_status

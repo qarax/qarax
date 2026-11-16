@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 #[utoipa::path(
     get,
-    path = "/storage-objects",
+    path = "/v1/storage-objects",
     params(crate::handlers::StorageObjectListQuery),
     responses(
         (status = 200, description = "List all storage objects", body = Vec<StorageObject>),
@@ -38,7 +38,7 @@ pub async fn list(
 
 #[utoipa::path(
     get,
-    path = "/storage-objects/{object_id}",
+    path = "/v1/storage-objects/{object_id}",
     params(
         ("object_id" = uuid::Uuid, Path, description = "Storage object unique identifier")
     ),
@@ -67,7 +67,7 @@ pub async fn get(
 /// records that.
 #[utoipa::path(
     post,
-    path = "/storage-objects",
+    path = "/v1/storage-objects",
     request_body = NewStorageObject,
     responses(
         (status = 201, description = "Storage object created successfully", body = String),
@@ -92,7 +92,7 @@ pub async fn create(
 
 #[utoipa::path(
     delete,
-    path = "/storage-objects/{object_id}",
+    path = "/v1/storage-objects/{object_id}",
     params(
         ("object_id" = uuid::Uuid, Path, description = "Storage object unique identifier")
     ),

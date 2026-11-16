@@ -17,7 +17,7 @@ from helpers import AUTH_HEADERS, QARAX_TEST_TOKEN, QARAX_URL, compose_container
 async def test_pool_capacity_accounts_for_create_resize_and_delete(pool_type):
     mib = 1024 * 1024
     name = f"e2e-capacity-{uuid.uuid4().hex[:8]}"
-    async with httpx2.AsyncClient(base_url=QARAX_URL, headers=AUTH_HEADERS, timeout=30) as client:
+    async with httpx2.AsyncClient(base_url=f"{QARAX_URL}/v1", headers=AUTH_HEADERS, timeout=30) as client:
         hosts = (await client.get("/hosts")).json()
         host = next(h for h in hosts if h["status"] == "up")
         response = await client.post("/storage-pools", json={

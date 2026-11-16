@@ -81,7 +81,7 @@ api_curl() {
 # Verify the token is accepted. "/" is public, so probe an authenticated route.
 require_auth() {
 	local code
-	code=$(api_curl -s -o /dev/null -w '%{http_code}' --max-time 5 "${SERVER}/hosts" 2>/dev/null || true)
+	code=$(api_curl -s -o /dev/null -w '%{http_code}' --max-time 5 "${SERVER}/v1/hosts" 2>/dev/null || true)
 	if [[ "$code" == "401" || "$code" == "403" ]]; then
 		die "qarax server at ${SERVER} rejected the API token (HTTP ${code}).\nSet QARAX_TOKEN to one of the server's AUTH_TOKENS."
 	fi

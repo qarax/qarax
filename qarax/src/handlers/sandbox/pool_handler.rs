@@ -17,7 +17,7 @@ use super::super::{ApiResponse, Result};
 
 #[utoipa::path(
     get,
-    path = "/sandbox-pools",
+    path = "/v1/sandbox-pools",
     responses(
         (status = 200, description = "List configured sandbox pools", body = Vec<SandboxPool>),
         (status = 500, description = "Internal server error")
@@ -35,7 +35,7 @@ pub async fn list(Extension(env): Extension<App>) -> Result<ApiResponse<Vec<Sand
 
 #[utoipa::path(
     get,
-    path = "/vm-templates/{vm_template_id}/sandbox-pool",
+    path = "/v1/vm-templates/{vm_template_id}/sandbox-pool",
     params(
         ("vm_template_id" = uuid::Uuid, Path, description = "VM template unique identifier")
     ),
@@ -60,7 +60,7 @@ pub async fn get(
 
 #[utoipa::path(
     put,
-    path = "/vm-templates/{vm_template_id}/sandbox-pool",
+    path = "/v1/vm-templates/{vm_template_id}/sandbox-pool",
     params(
         ("vm_template_id" = uuid::Uuid, Path, description = "VM template unique identifier")
     ),
@@ -104,7 +104,7 @@ pub async fn put(
 
 #[utoipa::path(
     delete,
-    path = "/vm-templates/{vm_template_id}/sandbox-pool",
+    path = "/v1/vm-templates/{vm_template_id}/sandbox-pool",
     params(
         ("vm_template_id" = uuid::Uuid, Path, description = "VM template unique identifier")
     ),

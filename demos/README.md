@@ -13,7 +13,7 @@ any of these. A demo also starts the stack itself if it isn't running.
 | [boot-source/](boot-source/) | Boot a VM from a kernel + initramfs | `./hack/run-local.sh` |
 | [cloud-image/](cloud-image/) | Boot a VM from a cloud image (qcow2/raw) with cloud-init SSH key injection | `./hack/run-local.sh` + internet |
 | [hooks/](hooks/) | Watch signed lifecycle webhook deliveries arrive in real time | `./hack/run-local.sh` |
-| [sse-events/](sse-events/) | Stream VM status changes over Server-Sent Events (`GET /events`) | `./hack/run-local.sh` |
+| [sse-events/](sse-events/) | Stream VM status changes over Server-Sent Events (`GET /v1/events`) | `./hack/run-local.sh` |
 | [vm-exec/](vm-exec/) | Create a guest-agent-enabled VM and run a command inside the guest | `./hack/run-local.sh` |
 | [vm-commit/](vm-commit/) | Convert an OverlayBD (OCI-backed) VM into a standalone raw-disk VM | `./hack/run-local.sh` |
 | [backups/](backups/) | VM and control-plane database backups via `qarax backup` | `./hack/run-local.sh` |
@@ -76,7 +76,7 @@ QARAX_SERVER=http://my-server:8000 ./demos/oci/run.sh
 When calling the API by hand, pass the token as a bearer header:
 
 ```bash
-curl -H "Authorization: Bearer $QARAX_TOKEN" http://localhost:8000/vms
+curl -H "Authorization: Bearer $QARAX_TOKEN" http://localhost:8000/v1/vms
 ```
 
 ## Networking notes

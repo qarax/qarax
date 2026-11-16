@@ -105,7 +105,7 @@ cleanup() {
 		echo "  docker compose --profile '*' down -v   # Stop and remove everything"
 		echo ""
 		echo "Test endpoint:"
-		echo "  curl http://localhost:8000/vms"
+		echo "  curl http://localhost:8000/v1/vms"
 		echo ""
 	else
 		echo -e "${YELLOW}Cleaning up...${NC}"

@@ -78,9 +78,7 @@ async fn test_auth_enabled_allows_public_paths_without_token() {
 
     // reqwest follows the swagger-ui redirect, so every path ends in a 200.
     for path in ["", "/swagger-ui", "/api-docs/openapi.json"] {
-        let res = reqwest::get(format!("{}{path}", app.address))
-            .await
-            .unwrap();
+        let res = reqwest::get(format!("{}{path}", app.root)).await.unwrap();
         assert_eq!(res.status(), StatusCode::OK, "{path}");
     }
 }

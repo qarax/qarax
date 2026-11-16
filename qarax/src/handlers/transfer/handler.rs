@@ -26,7 +26,7 @@ fn infer_transfer_type(source: &str) -> TransferType {
 
 #[utoipa::path(
     post,
-    path = "/storage-pools/{pool_id}/transfers",
+    path = "/v1/storage-pools/{pool_id}/transfers",
     params(
         ("pool_id" = uuid::Uuid, Path, description = "Storage pool unique identifier")
     ),
@@ -131,7 +131,7 @@ pub async fn create(
 
 #[utoipa::path(
     get,
-    path = "/storage-pools/{pool_id}/transfers",
+    path = "/v1/storage-pools/{pool_id}/transfers",
     params(
         ("pool_id" = uuid::Uuid, Path, description = "Storage pool unique identifier"),
         crate::handlers::NameQuery
@@ -157,7 +157,7 @@ pub async fn list(
 
 #[utoipa::path(
     get,
-    path = "/storage-pools/{pool_id}/transfers/{transfer_id}",
+    path = "/v1/storage-pools/{pool_id}/transfers/{transfer_id}",
     params(
         ("pool_id" = uuid::Uuid, Path, description = "Storage pool unique identifier"),
         ("transfer_id" = uuid::Uuid, Path, description = "Transfer unique identifier")

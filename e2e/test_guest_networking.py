@@ -182,7 +182,7 @@ class GuestNetwork:
 @pytest.fixture
 async def api():
     async with httpx2.AsyncClient(
-        base_url=QARAX_URL, headers=AUTH_HEADERS, timeout=60
+        base_url=f"{QARAX_URL}/v1", headers=AUTH_HEADERS, timeout=60
     ) as client:
         yield client
 

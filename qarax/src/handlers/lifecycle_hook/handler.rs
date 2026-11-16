@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 #[utoipa::path(
     get,
-    path = "/hooks",
+    path = "/v1/hooks",
     params(crate::handlers::NameQuery),
     responses(
         (status = 200, description = "List all lifecycle hooks", body = Vec<LifecycleHook>),
@@ -34,7 +34,7 @@ pub async fn list(
 
 #[utoipa::path(
     get,
-    path = "/hooks/{hook_id}",
+    path = "/v1/hooks/{hook_id}",
     params(
         ("hook_id" = uuid::Uuid, Path, description = "Lifecycle hook unique identifier")
     ),
@@ -59,7 +59,7 @@ pub async fn get(
 
 #[utoipa::path(
     post,
-    path = "/hooks",
+    path = "/v1/hooks",
     request_body = NewLifecycleHook,
     responses(
         (status = 201, description = "Lifecycle hook created successfully", body = String),
@@ -80,7 +80,7 @@ pub async fn create(
 
 #[utoipa::path(
     patch,
-    path = "/hooks/{hook_id}",
+    path = "/v1/hooks/{hook_id}",
     params(
         ("hook_id" = uuid::Uuid, Path, description = "Lifecycle hook unique identifier")
     ),
@@ -107,7 +107,7 @@ pub async fn update(
 
 #[utoipa::path(
     delete,
-    path = "/hooks/{hook_id}",
+    path = "/v1/hooks/{hook_id}",
     params(
         ("hook_id" = uuid::Uuid, Path, description = "Lifecycle hook unique identifier")
     ),
@@ -129,7 +129,7 @@ pub async fn delete(
 
 #[utoipa::path(
     get,
-    path = "/hooks/{hook_id}/executions",
+    path = "/v1/hooks/{hook_id}/executions",
     params(
         ("hook_id" = uuid::Uuid, Path, description = "Lifecycle hook unique identifier")
     ),
