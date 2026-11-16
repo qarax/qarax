@@ -25,7 +25,7 @@ pub async fn list(client: &Client, name: Option<&str>, tags: &[String]) -> anyho
     } else {
         format!("/vms?{}", params.join("&"))
     };
-    client.get(&path).await
+    client.get_list(&path).await
 }
 
 pub async fn get(client: &Client, vm_id: Uuid) -> anyhow::Result<Vm> {

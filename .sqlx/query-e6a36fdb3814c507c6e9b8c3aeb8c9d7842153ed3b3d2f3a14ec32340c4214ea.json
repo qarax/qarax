@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\nSELECT id,\n        name,\n        description as \"description?\",\n        kernel_image_id,\n        kernel_params as \"kernel_params?\",\n        initrd_image_id as \"initrd_image_id?\"\nFROM boot_sources\nWHERE ($1::text IS NULL OR name = $1)\n        ",
+  "query": "\nSELECT id,\n        name,\n        description as \"description?\",\n        kernel_image_id,\n        kernel_params as \"kernel_params?\",\n        initrd_image_id as \"initrd_image_id?\"\nFROM boot_sources\nWHERE ($1::text IS NULL OR name = $1)\n  AND ($2::text IS NULL OR (name, id) > ($2, $3::uuid))\nORDER BY name, id\nLIMIT $4\n        ",
   "describe": {
     "columns": [
       {
@@ -36,7 +36,10 @@
     ],
     "parameters": {
       "Left": [
-        "Text"
+        "Text",
+        "Text",
+        "Uuid",
+        "Int8"
       ]
     },
     "nullable": [
@@ -48,5 +51,5 @@
       true
     ]
   },
-  "hash": "9c35d27df1b7493ce042483eab611875343027e3af4977db14fb978e7cea810d"
+  "hash": "e6a36fdb3814c507c6e9b8c3aeb8c9d7842153ed3b3d2f3a14ec32340c4214ea"
 }

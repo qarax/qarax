@@ -14,8 +14,9 @@ QARAX_NODE_HOST = os.getenv("QARAX_NODE_HOST", "qarax-node")
 @pytest.mark.telemetry
 def test_otel_exports_trace_propagation_and_metrics(telemetry_collector):
     client = Client(base_url=QARAX_URL, headers=AUTH_HEADERS)
-    hosts = list_hosts.sync(client=client)
-    assert hosts is not None
+    page = list_hosts.sync(client=client)
+    assert page is not None
+    hosts = page.items
 
     host = next((candidate for candidate in hosts if candidate.address == QARAX_NODE_HOST), hosts[0])
     response = init_host.sync_detailed(host_id=host.id, client=client)

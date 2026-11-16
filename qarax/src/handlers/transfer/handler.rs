@@ -10,6 +10,7 @@ use crate::{
         storage_pools,
         transfers::{self, NewTransfer, Transfer, TransferType},
     },
+    pagination::{PageQuery, PageRequest},
     transfer_executor::executor_for_pool,
 };
 
@@ -134,10 +135,12 @@ pub async fn create(
     path = "/v1/storage-pools/{pool_id}/transfers",
     params(
         ("pool_id" = uuid::Uuid, Path, description = "Storage pool unique identifier"),
-        crate::handlers::NameQuery
+        crate::handlers::NameQuery,
+        PageQuery
     ),
     responses(
-        (status = 200, description = "List transfers for this pool", body = Vec<Transfer>),
+        (status = 200, description = "This pool's transfers, by name", body = crate::pagination::TransferPage),
+        (status = 422, description = "Invalid limit or cursor"),
         (status = 500, description = "Internal server error")
     ),
     tag = "transfers"
@@ -147,10 +150,15 @@ pub async fn list(
     Extension(env): Extension<App>,
     Path(pool_id): Path<Uuid>,
     axum::extract::Query(query): axum::extract::Query<crate::handlers::NameQuery>,
-) -> Result<ApiResponse<Vec<Transfer>>> {
-    let transfers = transfers::list_by_pool(env.pool(), pool_id, query.name.as_deref()).await?;
+    axum::extract::Query(page): axum::extract::Query<PageQuery>,
+) -> Result<ApiResponse<crate::pagination::TransferPage>> {
+    let page = PageRequest::try_from(page)?;
+    let transfers =
+        transfers::list_by_pool(env.pool(), pool_id, query.name.as_deref(), &page).await?;
     Ok(ApiResponse {
-        data: transfers,
+        data: crate::pagination::TransferPage::new(transfers, &page, |transfer| {
+            (transfer.name.clone(), transfer.id)
+        }),
         code: StatusCode::OK,
     })
 }

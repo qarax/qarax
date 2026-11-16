@@ -19,6 +19,7 @@ use crate::{
         network_interfaces, storage_pools,
         vms::{self, MigrationOptions, Vm, VmStatus},
     },
+    pagination::{PageQuery, PageRequest},
 };
 use axum::{Extension, Json, extract::Path};
 use http::StatusCode;
@@ -246,9 +247,10 @@ async fn fail_host_evacuation(
 #[utoipa::path(
     get,
     path = "/v1/hosts",
-    params(crate::handlers::HostListQuery),
+    params(crate::handlers::HostListQuery, PageQuery),
     responses(
-        (status = 200, description = "List all hosts", body = Vec<Host>),
+        (status = 200, description = "Hosts, by name", body = crate::pagination::HostPage),
+        (status = 422, description = "Invalid limit or cursor"),
         (status = 500, description = "Internal server error")
     ),
     tag = "hosts"
@@ -257,14 +259,22 @@ async fn fail_host_evacuation(
 pub async fn list(
     Extension(env): Extension<App>,
     axum::extract::Query(query): axum::extract::Query<crate::handlers::HostListQuery>,
-) -> Result<ApiResponse<Vec<Host>>> {
+    axum::extract::Query(page): axum::extract::Query<PageQuery>,
+) -> Result<ApiResponse<crate::pagination::HostPage>> {
+    let page = PageRequest::try_from(page)?;
     let architecture = query
         .architecture
         .as_deref()
         .and_then(common::architecture::normalize_architecture);
-    let hosts = hosts::list(env.pool(), query.name.as_deref(), architecture.as_deref()).await?;
+    let hosts = hosts::list(
+        env.pool(),
+        query.name.as_deref(),
+        architecture.as_deref(),
+        &page,
+    )
+    .await?;
     Ok(ApiResponse {
-        data: hosts,
+        data: crate::pagination::HostPage::new(hosts, &page, |host| (host.name.clone(), host.id)),
         code: StatusCode::OK,
     })
 }
@@ -754,7 +764,7 @@ pub async fn init(
             }
         };
 
-        let all_pools = match storage_pools::list(&db_pool, None).await {
+        let all_pools = match storage_pools::list(&db_pool, None, &PageRequest::all()).await {
             Ok(p) => p,
             Err(e) => {
                 warn!(host_id = %host_id, error = %e, "Failed to list storage pools for host init");

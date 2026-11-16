@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\nSELECT id, name, address, port, host_user, credential_ref, status AS \"status: _\",\n       cloud_hypervisor_version, firecracker_version, kernel_version, node_version,\n       last_deployed_image, reservation_class, placement_labels AS \"placement_labels: _\",\n       architecture, total_cpus, total_memory_bytes, available_memory_bytes, load_average,\n       disk_total_bytes, disk_available_bytes, resources_updated_at, installation_error\nFROM hosts\nWHERE ($1::text IS NULL OR name = $1) AND ($2::text IS NULL OR architecture = $2)\n        ",
+  "query": "\nSELECT id, name, address, port, host_user, credential_ref, status AS \"status: _\",\n       cloud_hypervisor_version, firecracker_version, kernel_version, node_version,\n       last_deployed_image, reservation_class, placement_labels AS \"placement_labels: _\",\n       architecture, total_cpus, total_memory_bytes, available_memory_bytes, load_average,\n       disk_total_bytes, disk_available_bytes, resources_updated_at, installation_error\nFROM hosts\nWHERE ($1::text IS NULL OR name = $1) AND ($2::text IS NULL OR architecture = $2)\n  AND ($3::text IS NULL OR (name, id) > ($3, $4::uuid))\nORDER BY name, id\nLIMIT $5\n        ",
   "describe": {
     "columns": [
       {
@@ -137,7 +137,10 @@
     "parameters": {
       "Left": [
         "Text",
-        "Text"
+        "Text",
+        "Text",
+        "Uuid",
+        "Int8"
       ]
     },
     "nullable": [
@@ -166,5 +169,5 @@
       true
     ]
   },
-  "hash": "e88bed30b7b11256c19c7eac4c25cc2522242930ce4f46033f1fa60a588c6e9a"
+  "hash": "140a90ec0670a61626a57585c677b854422df7d3b04b1f5a64f9f11342d83490"
 }

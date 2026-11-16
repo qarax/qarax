@@ -15,7 +15,7 @@ pub async fn list_pools(client: &Client, name: Option<&str>) -> anyhow::Result<V
         Some(n) => format!("/storage-pools?name={n}"),
         None => "/storage-pools".to_string(),
     };
-    client.get(&path).await
+    client.get_list(&path).await
 }
 
 pub async fn get_pool(client: &Client, pool_id: Uuid) -> anyhow::Result<StoragePool> {
@@ -82,7 +82,7 @@ pub async fn list_objects(
     } else {
         format!("/storage-objects?{}", params.join("&"))
     };
-    client.get(&path).await
+    client.get_list(&path).await
 }
 
 pub async fn get_object(client: &Client, object_id: Uuid) -> anyhow::Result<StorageObject> {

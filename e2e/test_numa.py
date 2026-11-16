@@ -37,7 +37,7 @@ def client():
 async def test_host_numa_topology_discovered(client):
     """After host init the control plane should have at least one NUMA node stored."""
     async with client as c:
-        hosts = _up_hosts(await call_api(list_hosts, client=c))
+        hosts = _up_hosts((await call_api(list_hosts, client=c)).items)
         assert hosts, "No UP hosts registered — run conftest ensure_host_registered first"
 
         host_id = hosts[0].id

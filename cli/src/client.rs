@@ -1,6 +1,11 @@
 use anyhow::{Context, anyhow};
 use serde::{Serialize, de::DeserializeOwned};
 
+use crate::api::models::Page;
+
+/// Items per request when following a list's pages: the most the API serves.
+const PAGE_LIMIT: usize = 1000;
+
 pub struct Client {
     inner: reqwest::Client,
     base_url: String,
@@ -70,6 +75,47 @@ impl Client {
             .json()
             .await
             .context("failed to parse response")
+    }
+
+    /// GET every item of the paginated list at `path` (which may have a
+    /// query string), following `next_cursor` to the last page.
+    pub async fn get_list<T: DeserializeOwned>(&self, path: &str) -> anyhow::Result<Vec<T>> {
+        self.get_list_up_to(path, usize::MAX).await
+    }
+
+    /// GET the first `max` items of the paginated list at `path`, in the
+    /// list's order, following `next_cursor` until there are that many.
+    pub async fn get_list_up_to<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        max: usize,
+    ) -> anyhow::Result<Vec<T>> {
+        let mut items = Vec::new();
+        let mut cursor: Option<String> = None;
+        while items.len() < max {
+            let mut query = vec![("limit", PAGE_LIMIT.min(max - items.len()).to_string())];
+            if let Some(cursor) = cursor.take() {
+                query.push(("cursor", cursor));
+            }
+            let resp = self
+                .inner
+                .get(self.url(path))
+                .query(&query)
+                .send()
+                .await
+                .with_context(|| format!("GET {path}"))?;
+            let page: Page<T> = Self::check_error(resp)
+                .await?
+                .json()
+                .await
+                .context("failed to parse response")?;
+            items.extend(page.items);
+            match page.next_cursor {
+                Some(next) => cursor = Some(next),
+                None => break,
+            }
+        }
+        Ok(items)
     }
 
     /// GET request, returning the response body as plain text.
@@ -242,6 +288,43 @@ mod tests {
         let request = server.await.unwrap();
         assert!(request.starts_with("get /v1/ "), "{request}");
         assert!(request.contains("authorization: bearer my-token"));
+    }
+
+    #[tokio::test]
+    async fn get_list_follows_next_cursor_to_the_last_page() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let mut request_lines = Vec::new();
+            for body in [
+                r#"{"items":[1,2],"next_cursor":"abc"}"#,
+                r#"{"items":[3],"next_cursor":null}"#,
+            ] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut buf = vec![0u8; 4096];
+                let n = socket.read(&mut buf).await.unwrap();
+                let request = String::from_utf8_lossy(&buf[..n]).into_owned();
+                request_lines.push(request.lines().next().unwrap().to_string());
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                socket.write_all(response.as_bytes()).await.unwrap();
+            }
+            request_lines
+        });
+
+        let client = Client::new(&format!("http://{addr}"), None);
+        let items: Vec<u32> = client.get_list("/vms?name=x").await.unwrap();
+
+        assert_eq!(items, [1, 2, 3]);
+        assert_eq!(
+            server.await.unwrap(),
+            [
+                "GET /v1/vms?name=x&limit=1000 HTTP/1.1",
+                "GET /v1/vms?name=x&limit=1000&cursor=abc HTTP/1.1",
+            ]
+        );
     }
 
     #[tokio::test]

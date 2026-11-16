@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\nSELECT id,\n       name,\n       backup_type AS \"backup_type: _\",\n       status AS \"status: _\",\n       vm_id,\n       snapshot_id,\n       storage_object_id,\n       error_message,\n       created_at,\n       updated_at\nFROM backups\nWHERE ($1::text IS NULL OR name = $1)\n  AND ($2::backup_type IS NULL OR backup_type = $2)\nORDER BY created_at DESC\n        ",
+  "query": "\nSELECT id,\n       name,\n       backup_type AS \"backup_type: _\",\n       status AS \"status: _\",\n       vm_id,\n       snapshot_id,\n       storage_object_id,\n       error_message,\n       created_at,\n       updated_at\nFROM backups\nWHERE ($1::text IS NULL OR name = $1)\n  AND ($2::backup_type IS NULL OR backup_type = $2)\n  AND ($3::text IS NULL OR (created_at, id) < ($3::timestamptz, $4::uuid))\nORDER BY created_at DESC, id DESC\nLIMIT $5\n        ",
   "describe": {
     "columns": [
       {
@@ -88,7 +88,10 @@
               ]
             }
           }
-        }
+        },
+        "Text",
+        "Uuid",
+        "Int8"
       ]
     },
     "nullable": [
@@ -104,5 +107,5 @@
       false
     ]
   },
-  "hash": "e1bbd8ff97b1bd08875e92b636be9919d020101ae42c91e35457af88b5f55c95"
+  "hash": "ad26a9ca211432184b15781d84883e2013562609ec94aaee1a6f385a1161941b"
 }

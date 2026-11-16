@@ -4,6 +4,14 @@ use serde::{Deserialize, Serialize};
 use serde_with::rust::double_option;
 use uuid::Uuid;
 
+/// One page of a list endpoint; [`crate::client::Client::get_list`] follows
+/// `next_cursor` to the end.
+#[derive(Debug, Deserialize)]
+pub struct Page<T> {
+    pub items: Vec<T>,
+    pub next_cursor: Option<String>,
+}
+
 // VMs
 
 #[derive(Debug, Serialize, Deserialize)]

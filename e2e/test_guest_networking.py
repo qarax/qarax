@@ -39,7 +39,7 @@ class GuestNetwork:
         self.sg_ids = []
 
     async def create(self):
-        hosts = (await self.api.get("/hosts")).json()
+        hosts = (await self.api.get("/hosts")).json()["items"]
         host = next(
             (
                 h

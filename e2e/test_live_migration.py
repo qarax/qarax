@@ -326,7 +326,7 @@ async def test_failed_migration_leaves_nothing_on_the_destination(client, two_ho
             )
             source_host_id = vm.host_id
             target_host_id = host2_id if source_host_id == host1_id else host1_id
-            hosts = {h.id: h for h in await call_api(list_hosts, client=c)}
+            hosts = {h.id: h for h in (await call_api(list_hosts, client=c)).items}
             target = compose_container(hosts[target_host_id].address)
             vsock_path = f"{NODE_RUNTIME_DIR}/{vm_id}.vsock"
             docker("exec", target, "mkdir", "-p", vsock_path)

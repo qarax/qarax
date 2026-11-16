@@ -8,6 +8,7 @@ use crate::{
         storage_objects::{self, NewStorageObject, StorageObjectType},
         storage_pools::{self, NewStoragePool, PoolHost, StoragePool},
     },
+    pagination::{PageQuery, PageRequest},
 };
 use axum::{Extension, Json, extract::Path};
 use http::StatusCode;
@@ -19,9 +20,10 @@ use uuid::Uuid;
 #[utoipa::path(
     get,
     path = "/v1/storage-pools",
-    params(crate::handlers::NameQuery),
+    params(crate::handlers::NameQuery, PageQuery),
     responses(
-        (status = 200, description = "List all storage pools", body = Vec<StoragePool>),
+        (status = 200, description = "Storage pools, by name", body = crate::pagination::StoragePoolPage),
+        (status = 422, description = "Invalid limit or cursor"),
         (status = 500, description = "Internal server error")
     ),
     tag = "storage-pools"
@@ -30,10 +32,14 @@ use uuid::Uuid;
 pub async fn list(
     Extension(env): Extension<App>,
     axum::extract::Query(query): axum::extract::Query<crate::handlers::NameQuery>,
-) -> Result<ApiResponse<Vec<StoragePool>>> {
-    let pools = storage_pools::list(env.pool(), query.name.as_deref()).await?;
+    axum::extract::Query(page): axum::extract::Query<PageQuery>,
+) -> Result<ApiResponse<crate::pagination::StoragePoolPage>> {
+    let page = PageRequest::try_from(page)?;
+    let pools = storage_pools::list(env.pool(), query.name.as_deref(), &page).await?;
     Ok(ApiResponse {
-        data: pools,
+        data: crate::pagination::StoragePoolPage::new(pools, &page, |pool| {
+            (pool.name.clone(), pool.id)
+        }),
         code: StatusCode::OK,
     })
 }
@@ -688,7 +694,8 @@ pub async fn register_lun(
         ));
     }
 
-    let existing = storage_objects::list(env.pool(), None, Some(pool_id), None).await?;
+    let existing =
+        storage_objects::list(env.pool(), None, Some(pool_id), None, &PageRequest::all()).await?;
     let lun_already_registered = existing.iter().any(|obj| {
         obj.config
             .get("lun")

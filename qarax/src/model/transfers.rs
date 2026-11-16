@@ -6,6 +6,7 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use super::storage_objects::StorageObjectType;
+use crate::pagination::PageRequest;
 
 #[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
 pub struct Transfer {
@@ -171,10 +172,12 @@ WHERE id = $1
     Ok(row.into())
 }
 
+/// Ordered by name.
 pub async fn list_by_pool(
     pool: &PgPool,
     pool_id: Uuid,
     name_filter: Option<&str>,
+    page: &PageRequest,
 ) -> Result<Vec<Transfer>, sqlx::Error> {
     let rows: Vec<TransferRow> = sqlx::query_as!(
         TransferRow,
@@ -196,10 +199,15 @@ SELECT id,
        completed_at as "completed_at?"
 FROM transfers
 WHERE storage_pool_id = $1 AND ($2::text IS NULL OR name = $2)
-ORDER BY created_at DESC
+  AND ($3::text IS NULL OR (name, id) > ($3, $4::uuid))
+ORDER BY name, id
+LIMIT $5
         "#,
         pool_id,
-        name_filter
+        name_filter,
+        page.after_key(),
+        page.after_id(),
+        page.fetch_limit()
     )
     .fetch_all(pool)
     .await?;

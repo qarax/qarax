@@ -59,7 +59,8 @@ async fn hook_crud_round_trips() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
-    let hooks: Vec<Value> = res.json().await.unwrap();
+    let page: Value = res.json().await.unwrap();
+    let hooks = page["items"].as_array().unwrap();
     assert_eq!(hooks.len(), 1);
     assert_eq!(hooks[0]["name"], "crud-hook");
 

@@ -21,7 +21,7 @@ pub async fn list(
     } else {
         format!("/backups?{}", params.join("&"))
     };
-    client.get(&path).await
+    client.get_list(&path).await
 }
 
 pub async fn get(client: &Client, backup_id: Uuid) -> anyhow::Result<Backup> {

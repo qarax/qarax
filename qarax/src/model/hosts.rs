@@ -9,7 +9,7 @@ use strum_macros::{Display, EnumString};
 use utoipa::ToSchema;
 use validator::{Validate, ValidationError, ValidationErrors};
 
-use crate::errors;
+use crate::{errors, pagination::PageRequest};
 
 /// The version of the control-plane binary, used to detect out-of-date nodes.
 pub const CONTROL_PLANE_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -412,10 +412,12 @@ fn validate_placement_fields(
     Ok(())
 }
 
+/// Ordered by name.
 pub async fn list(
     pool: &PgPool,
     name_filter: Option<&str>,
     architecture_filter: Option<&str>,
+    page: &PageRequest,
 ) -> Result<Vec<Host>, sqlx::Error> {
     let rows = sqlx::query_as!(
         HostRow,
@@ -427,9 +429,15 @@ SELECT id, name, address, port, host_user, credential_ref, status AS "status: _"
        disk_total_bytes, disk_available_bytes, resources_updated_at, installation_error
 FROM hosts
 WHERE ($1::text IS NULL OR name = $1) AND ($2::text IS NULL OR architecture = $2)
+  AND ($3::text IS NULL OR (name, id) > ($3, $4::uuid))
+ORDER BY name, id
+LIMIT $5
         "#,
         name_filter,
         architecture_filter,
+        page.after_key(),
+        page.after_id(),
+        page.fetch_limit(),
     )
     .fetch_all(pool)
     .await?;

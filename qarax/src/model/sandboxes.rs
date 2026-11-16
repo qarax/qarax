@@ -7,6 +7,7 @@ use uuid::Uuid;
 
 use crate::errors::Error;
 use crate::model::vms::VmStatus;
+use crate::pagination::PageRequest;
 
 #[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
 pub struct Sandbox {
@@ -228,7 +229,11 @@ impl From<SandboxWithDetailsRow> for Sandbox {
     }
 }
 
-pub async fn list_with_details(pool: &PgPool) -> Result<Vec<SandboxWithDetailsRow>, sqlx::Error> {
+/// Newest first.
+pub async fn list_with_details(
+    pool: &PgPool,
+    page: &PageRequest,
+) -> Result<Vec<SandboxWithDetailsRow>, sqlx::Error> {
     sqlx::query_as!(
         SandboxWithDetailsRow,
         r#"
@@ -251,8 +256,13 @@ LEFT JOIN LATERAL (
     WHERE vm_id = s.vm_id AND ip_address IS NOT NULL
     LIMIT 1
 ) ni ON TRUE
-ORDER BY s.created_at DESC
-        "#
+WHERE ($1::text IS NULL OR (s.created_at, s.id) < ($1::timestamptz, $2::uuid))
+ORDER BY s.created_at DESC, s.id DESC
+LIMIT $3
+        "#,
+        page.after_key(),
+        page.after_id(),
+        page.fetch_limit()
     )
     .fetch_all(pool)
     .await

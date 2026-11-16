@@ -5,6 +5,7 @@ use crate::{
         sandbox_pools,
         vm_templates::{self, NewVmTemplate, VmTemplate},
     },
+    pagination::{PageQuery, PageRequest},
 };
 use axum::{Extension, Json, extract::Path};
 use http::StatusCode;
@@ -14,9 +15,10 @@ use uuid::Uuid;
 #[utoipa::path(
     get,
     path = "/v1/vm-templates",
-    params(crate::handlers::NameQuery),
+    params(crate::handlers::NameQuery, PageQuery),
     responses(
-        (status = 200, description = "List all VM templates", body = Vec<VmTemplate>),
+        (status = 200, description = "VM templates, by name", body = crate::pagination::VmTemplatePage),
+        (status = 422, description = "Invalid limit or cursor"),
         (status = 500, description = "Internal server error")
     ),
     tag = "vm-templates"
@@ -25,10 +27,14 @@ use uuid::Uuid;
 pub async fn list(
     Extension(env): Extension<App>,
     axum::extract::Query(query): axum::extract::Query<crate::handlers::NameQuery>,
-) -> Result<ApiResponse<Vec<VmTemplate>>> {
-    let vm_templates = vm_templates::list(env.pool(), query.name.as_deref()).await?;
+    axum::extract::Query(page): axum::extract::Query<PageQuery>,
+) -> Result<ApiResponse<crate::pagination::VmTemplatePage>> {
+    let page = PageRequest::try_from(page)?;
+    let vm_templates = vm_templates::list(env.pool(), query.name.as_deref(), &page).await?;
     Ok(ApiResponse {
-        data: vm_templates,
+        data: crate::pagination::VmTemplatePage::new(vm_templates, &page, |template| {
+            (template.name.clone(), template.id)
+        }),
         code: StatusCode::OK,
     })
 }

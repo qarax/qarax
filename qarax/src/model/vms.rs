@@ -9,6 +9,7 @@ use uuid::Uuid;
 use crate::{
     errors::Error,
     model::{instance_types, vm_templates},
+    pagination::PageRequest,
 };
 
 use crate::model::network_interfaces::{InterfaceType, RateLimiterConfig, VhostMode};
@@ -1000,10 +1001,12 @@ pub async fn resolve_create_request(pool: &PgPool, request: NewVm) -> Result<Res
     })
 }
 
+/// Ordered by name.
 pub async fn list(
     pool: &PgPool,
     name_filter: Option<&str>,
     tags_filter: &[String],
+    page: &PageRequest,
 ) -> Result<Vec<Vm>, sqlx::Error> {
     let vms: Vec<VmRow> = sqlx::query_as!(
         VmRow,
@@ -1037,9 +1040,15 @@ SELECT id,
 FROM vms
 WHERE ($1::text IS NULL OR name = $1)
   AND (cardinality($2::text[]) = 0 OR tags @> $2)
+  AND ($3::text IS NULL OR (name, id) > ($3, $4::uuid))
+ORDER BY name, id
+LIMIT $5
         "#,
         name_filter,
-        tags_filter
+        tags_filter,
+        page.after_key(),
+        page.after_id(),
+        page.fetch_limit()
     )
     .fetch_all(pool)
     .await?;

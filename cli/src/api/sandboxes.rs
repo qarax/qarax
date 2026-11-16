@@ -11,7 +11,7 @@ pub async fn create(client: &Client, req: &NewSandbox) -> anyhow::Result<CreateS
 }
 
 pub async fn list(client: &Client) -> anyhow::Result<Vec<Sandbox>> {
-    client.get("/sandboxes").await
+    client.get_list("/sandboxes").await
 }
 
 pub async fn get(client: &Client, id: Uuid) -> anyhow::Result<Sandbox> {

@@ -4,6 +4,8 @@ use strum_macros::{Display, EnumString};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+use crate::pagination::PageRequest;
+
 pub type PgTransaction<'a> = Transaction<'a, Postgres>;
 
 #[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
@@ -114,9 +116,11 @@ pub struct NewSecurityGroupRule {
     pub description: Option<String>,
 }
 
+/// Ordered by name.
 pub async fn list(
     pool: &PgPool,
     name_filter: Option<&str>,
+    page: &PageRequest,
 ) -> Result<Vec<SecurityGroup>, sqlx::Error> {
     let rows: Vec<SecurityGroupRow> = sqlx::query_as!(
         SecurityGroupRow,
@@ -124,9 +128,14 @@ pub async fn list(
 SELECT id, name, description
 FROM security_groups
 WHERE ($1::text IS NULL OR name = $1)
-ORDER BY name
+  AND ($2::text IS NULL OR (name, id) > ($2, $3::uuid))
+ORDER BY name, id
+LIMIT $4
         "#,
-        name_filter
+        name_filter,
+        page.after_key(),
+        page.after_id(),
+        page.fetch_limit()
     )
     .fetch_all(pool)
     .await?;

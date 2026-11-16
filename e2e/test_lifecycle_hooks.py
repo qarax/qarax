@@ -150,7 +150,7 @@ def delete_hook(http_client, hook_id):
 def list_executions(http_client, hook_id):
     resp = http_client.get(f"/hooks/{hook_id}/executions")
     assert resp.status_code == 200
-    return resp.json()
+    return resp.json()["items"]
 
 
 # ---------------------------------------------------------------------------

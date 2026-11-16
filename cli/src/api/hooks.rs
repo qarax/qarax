@@ -9,7 +9,7 @@ pub async fn list(client: &Client, name: Option<&str>) -> anyhow::Result<Vec<Lif
         Some(n) => format!("/hooks?name={n}"),
         None => "/hooks".to_string(),
     };
-    client.get(&path).await
+    client.get_list(&path).await
 }
 
 pub async fn get(client: &Client, id: Uuid) -> anyhow::Result<LifecycleHook> {
@@ -33,5 +33,7 @@ pub async fn delete(client: &Client, id: Uuid) -> anyhow::Result<()> {
 }
 
 pub async fn list_executions(client: &Client, hook_id: Uuid) -> anyhow::Result<Vec<HookExecution>> {
-    client.get(&format!("/hooks/{hook_id}/executions")).await
+    client
+        .get_list(&format!("/hooks/{hook_id}/executions"))
+        .await
 }

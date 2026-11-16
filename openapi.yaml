@@ -39,25 +39,29 @@ paths:
           - type: 'null'
       - name: limit
         in: query
-        description: 'Maximum number of entries to return (default: 100, max: 1000)'
+        description: Maximum number of items to return, 1 to 1000 (default 100)
         required: false
         schema:
-          type:
-          - integer
-          - 'null'
+          type: integer
           format: int32
           minimum: 0
+      - name: cursor
+        in: query
+        description: The `next_cursor` of the previous page; omit it for the first page
+        required: false
+        schema:
+          type: string
       responses:
         '200':
-          description: List audit log entries
+          description: Audit log entries, newest first
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/AuditLog'
+                $ref: '#/components/schemas/AuditLogPage'
         '400':
           description: Invalid query parameters
+        '422':
+          description: Invalid limit or cursor
         '500':
           description: Internal server error
   /v1/audit-logs/{audit_log_id}:
@@ -106,15 +110,29 @@ paths:
           oneOf:
           - $ref: '#/components/schemas/BackupType'
           - type: 'null'
+      - name: limit
+        in: query
+        description: Maximum number of items to return, 1 to 1000 (default 100)
+        required: false
+        schema:
+          type: integer
+          format: int32
+          minimum: 0
+      - name: cursor
+        in: query
+        description: The `next_cursor` of the previous page; omit it for the first page
+        required: false
+        schema:
+          type: string
       responses:
         '200':
-          description: List backups
+          description: Backups, newest first
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Backup'
+                $ref: '#/components/schemas/BackupPage'
+        '422':
+          description: Invalid limit or cursor
         '500':
           description: Internal server error
     post:
@@ -227,15 +245,29 @@ paths:
           type:
           - string
           - 'null'
+      - name: limit
+        in: query
+        description: Maximum number of items to return, 1 to 1000 (default 100)
+        required: false
+        schema:
+          type: integer
+          format: int32
+          minimum: 0
+      - name: cursor
+        in: query
+        description: The `next_cursor` of the previous page; omit it for the first page
+        required: false
+        schema:
+          type: string
       responses:
         '200':
-          description: List all boot sources
+          description: Boot sources, by name
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/BootSource'
+                $ref: '#/components/schemas/BootSourcePage'
+        '422':
+          description: Invalid limit or cursor
         '500':
           description: Internal server error
     post:
@@ -316,15 +348,29 @@ paths:
           type:
           - string
           - 'null'
+      - name: limit
+        in: query
+        description: Maximum number of items to return, 1 to 1000 (default 100)
+        required: false
+        schema:
+          type: integer
+          format: int32
+          minimum: 0
+      - name: cursor
+        in: query
+        description: The `next_cursor` of the previous page; omit it for the first page
+        required: false
+        schema:
+          type: string
       responses:
         '200':
-          description: List all lifecycle hooks
+          description: Lifecycle hooks, by name
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/LifecycleHook'
+                $ref: '#/components/schemas/LifecycleHookPage'
+        '422':
+          description: Invalid limit or cursor
         '500':
           description: Internal server error
     post:
@@ -435,17 +481,31 @@ paths:
         schema:
           type: string
           format: uuid
+      - name: limit
+        in: query
+        description: Maximum number of items to return, 1 to 1000 (default 100)
+        required: false
+        schema:
+          type: integer
+          format: int32
+          minimum: 0
+      - name: cursor
+        in: query
+        description: The `next_cursor` of the previous page; omit it for the first page
+        required: false
+        schema:
+          type: string
       responses:
         '200':
-          description: List hook executions
+          description: Hook executions, newest first
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/HookExecution'
+                $ref: '#/components/schemas/HookExecutionPage'
         '404':
           description: Lifecycle hook not found
+        '422':
+          description: Invalid limit or cursor
         '500':
           description: Internal server error
   /v1/hosts:
@@ -470,15 +530,29 @@ paths:
           type:
           - string
           - 'null'
+      - name: limit
+        in: query
+        description: Maximum number of items to return, 1 to 1000 (default 100)
+        required: false
+        schema:
+          type: integer
+          format: int32
+          minimum: 0
+      - name: cursor
+        in: query
+        description: The `next_cursor` of the previous page; omit it for the first page
+        required: false
+        schema:
+          type: string
       responses:
         '200':
-          description: List all hosts
+          description: Hosts, by name
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Host'
+                $ref: '#/components/schemas/HostPage'
+        '422':
+          description: Invalid limit or cursor
         '500':
           description: Internal server error
     post:
@@ -783,15 +857,29 @@ paths:
           type:
           - string
           - 'null'
+      - name: limit
+        in: query
+        description: Maximum number of items to return, 1 to 1000 (default 100)
+        required: false
+        schema:
+          type: integer
+          format: int32
+          minimum: 0
+      - name: cursor
+        in: query
+        description: The `next_cursor` of the previous page; omit it for the first page
+        required: false
+        schema:
+          type: string
       responses:
         '200':
-          description: List all instance types
+          description: Instance types, by name
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/InstanceType'
+                $ref: '#/components/schemas/InstanceTypePage'
+        '422':
+          description: Invalid limit or cursor
         '500':
           description: Internal server error
     post:
@@ -898,15 +986,29 @@ paths:
           type:
           - string
           - 'null'
+      - name: limit
+        in: query
+        description: Maximum number of items to return, 1 to 1000 (default 100)
+        required: false
+        schema:
+          type: integer
+          format: int32
+          minimum: 0
+      - name: cursor
+        in: query
+        description: The `next_cursor` of the previous page; omit it for the first page
+        required: false
+        schema:
+          type: string
       responses:
         '200':
-          description: List all networks
+          description: Networks, by name
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Network'
+                $ref: '#/components/schemas/NetworkPage'
+        '422':
+          description: Invalid limit or cursor
         '500':
           description: Internal server error
     post:
@@ -1088,15 +1190,30 @@ paths:
       tags:
       - sandbox-pools
       operationId: list
+      parameters:
+      - name: limit
+        in: query
+        description: Maximum number of items to return, 1 to 1000 (default 100)
+        required: false
+        schema:
+          type: integer
+          format: int32
+          minimum: 0
+      - name: cursor
+        in: query
+        description: The `next_cursor` of the previous page; omit it for the first page
+        required: false
+        schema:
+          type: string
       responses:
         '200':
-          description: List configured sandbox pools
+          description: Configured sandbox pools, by template name
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/SandboxPool'
+                $ref: '#/components/schemas/SandboxPoolPage'
+        '422':
+          description: Invalid limit or cursor
         '500':
           description: Internal server error
   /v1/sandboxes:
@@ -1104,15 +1221,30 @@ paths:
       tags:
       - sandboxes
       operationId: list
+      parameters:
+      - name: limit
+        in: query
+        description: Maximum number of items to return, 1 to 1000 (default 100)
+        required: false
+        schema:
+          type: integer
+          format: int32
+          minimum: 0
+      - name: cursor
+        in: query
+        description: The `next_cursor` of the previous page; omit it for the first page
+        required: false
+        schema:
+          type: string
       responses:
         '200':
-          description: List all sandboxes
+          description: Sandboxes, newest first
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Sandbox'
+                $ref: '#/components/schemas/SandboxPage'
+        '422':
+          description: Invalid limit or cursor
         '500':
           description: Internal server error
     post:
@@ -1257,15 +1389,29 @@ paths:
           type:
           - string
           - 'null'
+      - name: limit
+        in: query
+        description: Maximum number of items to return, 1 to 1000 (default 100)
+        required: false
+        schema:
+          type: integer
+          format: int32
+          minimum: 0
+      - name: cursor
+        in: query
+        description: The `next_cursor` of the previous page; omit it for the first page
+        required: false
+        schema:
+          type: string
       responses:
         '200':
-          description: List security groups
+          description: Security groups, by name
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/SecurityGroup'
+                $ref: '#/components/schemas/SecurityGroupPage'
+        '422':
+          description: Invalid limit or cursor
         '500':
           description: Internal server error
     post:
@@ -1447,15 +1593,29 @@ paths:
           oneOf:
           - $ref: '#/components/schemas/StorageObjectType'
           - type: 'null'
+      - name: limit
+        in: query
+        description: Maximum number of items to return, 1 to 1000 (default 100)
+        required: false
+        schema:
+          type: integer
+          format: int32
+          minimum: 0
+      - name: cursor
+        in: query
+        description: The `next_cursor` of the previous page; omit it for the first page
+        required: false
+        schema:
+          type: string
       responses:
         '200':
-          description: List all storage objects
+          description: Storage objects, by name
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/StorageObject'
+                $ref: '#/components/schemas/StorageObjectPage'
+        '422':
+          description: Invalid limit or cursor
         '500':
           description: Internal server error
     post:
@@ -1545,15 +1705,29 @@ paths:
           type:
           - string
           - 'null'
+      - name: limit
+        in: query
+        description: Maximum number of items to return, 1 to 1000 (default 100)
+        required: false
+        schema:
+          type: integer
+          format: int32
+          minimum: 0
+      - name: cursor
+        in: query
+        description: The `next_cursor` of the previous page; omit it for the first page
+        required: false
+        schema:
+          type: string
       responses:
         '200':
-          description: List all storage pools
+          description: Storage pools, by name
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/StoragePool'
+                $ref: '#/components/schemas/StoragePoolPage'
+        '422':
+          description: Invalid limit or cursor
         '500':
           description: Internal server error
     post:
@@ -1834,15 +2008,29 @@ paths:
           type:
           - string
           - 'null'
+      - name: limit
+        in: query
+        description: Maximum number of items to return, 1 to 1000 (default 100)
+        required: false
+        schema:
+          type: integer
+          format: int32
+          minimum: 0
+      - name: cursor
+        in: query
+        description: The `next_cursor` of the previous page; omit it for the first page
+        required: false
+        schema:
+          type: string
       responses:
         '200':
-          description: List transfers for this pool
+          description: This pool's transfers, by name
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Transfer'
+                $ref: '#/components/schemas/TransferPage'
+        '422':
+          description: Invalid limit or cursor
         '500':
           description: Internal server error
     post:
@@ -1921,15 +2109,29 @@ paths:
           type:
           - string
           - 'null'
+      - name: limit
+        in: query
+        description: Maximum number of items to return, 1 to 1000 (default 100)
+        required: false
+        schema:
+          type: integer
+          format: int32
+          minimum: 0
+      - name: cursor
+        in: query
+        description: The `next_cursor` of the previous page; omit it for the first page
+        required: false
+        schema:
+          type: string
       responses:
         '200':
-          description: List all VM templates
+          description: VM templates, by name
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/VmTemplate'
+                $ref: '#/components/schemas/VmTemplatePage'
+        '422':
+          description: Invalid limit or cursor
         '500':
           description: Internal server error
     post:
@@ -2094,15 +2296,29 @@ paths:
           type:
           - string
           - 'null'
+      - name: limit
+        in: query
+        description: Maximum number of items to return, 1 to 1000 (default 100)
+        required: false
+        schema:
+          type: integer
+          format: int32
+          minimum: 0
+      - name: cursor
+        in: query
+        description: The `next_cursor` of the previous page; omit it for the first page
+        required: false
+        schema:
+          type: string
       responses:
         '200':
-          description: List all VMs
+          description: VMs, by name
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Vm'
+                $ref: '#/components/schemas/VmPage'
+        '422':
+          description: Invalid limit or cursor
         '500':
           description: Internal server error
     post:
@@ -3085,6 +3301,22 @@ components:
           - 'null'
         resource_type:
           $ref: '#/components/schemas/AuditResourceType'
+    AuditLogPage:
+      type: object
+      description: |-
+        One page of a list. Pass `next_cursor` as `cursor` to get the next
+        page; it is null on the last one.
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditLog'
+        next_cursor:
+          type:
+          - string
+          - 'null'
     AuditResourceType:
       type: string
       enum:
@@ -3144,6 +3376,22 @@ components:
           - string
           - 'null'
           format: uuid
+    BackupPage:
+      type: object
+      description: |-
+        One page of a list. Pass `next_cursor` as `cursor` to get the next
+        page; it is null on the last one.
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Backup'
+        next_cursor:
+          type:
+          - string
+          - 'null'
     BackupStatus:
       type: string
       enum:
@@ -3188,6 +3436,22 @@ components:
           - 'null'
         name:
           type: string
+    BootSourcePage:
+      type: object
+      description: |-
+        One page of a list. Pass `next_cursor` as `cursor` to get the next
+        page; it is null on the last one.
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/BootSource'
+        next_cursor:
+          type:
+          - string
+          - 'null'
     CommitVmRequest:
       type: object
       required:
@@ -3518,6 +3782,22 @@ components:
         vm_id:
           type: string
           format: uuid
+    HookExecutionPage:
+      type: object
+      description: |-
+        One page of a list. Pass `next_cursor` as `cursor` to get the next
+        page; it is null on the last one.
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/HookExecution'
+        next_cursor:
+          type:
+          - string
+          - 'null'
     HookExecutionStatus:
       type: string
       enum:
@@ -3733,6 +4013,22 @@ components:
           - string
           - 'null'
           format: date-time
+    HostPage:
+      type: object
+      description: |-
+        One page of a list. Pass `next_cursor` as `cursor` to get the next
+        page; it is null on the last one.
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Host'
+        next_cursor:
+          type:
+          - string
+          - 'null'
     HostResourceCapacity:
       type: object
       required:
@@ -3886,6 +4182,22 @@ components:
         name:
           type: string
         numa_config: {}
+    InstanceTypePage:
+      type: object
+      description: |-
+        One page of a list. Pass `next_cursor` as `cursor` to get the next
+        page; it is null on the last one.
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/InstanceType'
+        next_cursor:
+          type:
+          - string
+          - 'null'
     InterfaceType:
       type: string
       enum:
@@ -4030,6 +4342,22 @@ components:
           format: date-time
         url:
           type: string
+    LifecycleHookPage:
+      type: object
+      description: |-
+        One page of a list. Pass `next_cursor` as `cursor` to get the next
+        page; it is null on the last one.
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/LifecycleHook'
+        next_cursor:
+          type:
+          - string
+          - 'null'
     MigrationMemoryMode:
       type: string
       description: How a live migration moves guest memory.
@@ -4206,6 +4534,22 @@ components:
         vm_id:
           type: string
           format: uuid
+    NetworkPage:
+      type: object
+      description: |-
+        One page of a list. Pass `next_cursor` as `cursor` to get the next
+        page; it is null on the last one.
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Network'
+        next_cursor:
+          type:
+          - string
+          - 'null'
     NetworkStatus:
       type: string
       enum:
@@ -5078,6 +5422,22 @@ components:
           - string
           - 'null'
           format: uuid
+    SandboxPage:
+      type: object
+      description: |-
+        One page of a list. Pass `next_cursor` as `cursor` to get the next
+        page; it is null on the last one.
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Sandbox'
+        next_cursor:
+          type:
+          - string
+          - 'null'
     SandboxPool:
       type: object
       required:
@@ -5117,6 +5477,22 @@ components:
           format: uuid
         vm_template_name:
           type: string
+    SandboxPoolPage:
+      type: object
+      description: |-
+        One page of a list. Pass `next_cursor` as `cursor` to get the next
+        page; it is null on the last one.
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SandboxPool'
+        next_cursor:
+          type:
+          - string
+          - 'null'
     SandboxStatus:
       type: string
       enum:
@@ -5159,6 +5535,22 @@ components:
       enum:
       - ingress
       - egress
+    SecurityGroupPage:
+      type: object
+      description: |-
+        One page of a list. Pass `next_cursor` as `cursor` to get the next
+        page; it is null on the last one.
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SecurityGroup'
+        next_cursor:
+          type:
+          - string
+          - 'null'
     SecurityGroupProtocol:
       type: string
       enum:
@@ -5263,6 +5655,22 @@ components:
         storage_pool_id:
           type: string
           format: uuid
+    StorageObjectPage:
+      type: object
+      description: |-
+        One page of a list. Pass `next_cursor` as `cursor` to get the next
+        page; it is null on the last one.
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/StorageObject'
+        next_cursor:
+          type:
+          - string
+          - 'null'
     StorageObjectType:
       type: string
       enum:
@@ -5303,6 +5711,22 @@ components:
           $ref: '#/components/schemas/StoragePoolType'
         status:
           $ref: '#/components/schemas/StoragePoolStatus'
+    StoragePoolPage:
+      type: object
+      description: |-
+        One page of a list. Pass `next_cursor` as `cursor` to get the next
+        page; it is null on the last one.
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/StoragePool'
+        next_cursor:
+          type:
+          - string
+          - 'null'
     StoragePoolStatus:
       type: string
       enum:
@@ -5408,6 +5832,22 @@ components:
           - string
           - 'null'
           format: date-time
+    TransferPage:
+      type: object
+      description: |-
+        One page of a list. Pass `next_cursor` as `cursor` to get the next
+        page; it is null on the last one.
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Transfer'
+        next_cursor:
+          type:
+          - string
+          - 'null'
     TransferStatus:
       type: string
       enum:
@@ -5772,6 +6212,22 @@ components:
         job_id:
           type: string
           format: uuid
+    VmPage:
+      type: object
+      description: |-
+        One page of a list. Pass `next_cursor` as `cursor` to get the next
+        page; it is null on the last one.
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Vm'
+        next_cursor:
+          type:
+          - string
+          - 'null'
     VmResizeRequest:
       type: object
       description: |-
@@ -5925,6 +6381,22 @@ components:
           - string
           - 'null'
           format: uuid
+    VmTemplatePage:
+      type: object
+      description: |-
+        One page of a list. Pass `next_cursor` as `cursor` to get the next
+        page; it is null on the last one.
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/VmTemplate'
+        next_cursor:
+          type:
+          - string
+          - 'null'
   securitySchemes:
     bearerAuth:
       type: http

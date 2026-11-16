@@ -4,6 +4,7 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use super::storage_objects;
+use crate::pagination::PageRequest;
 
 #[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
 pub struct BootSource {
@@ -46,9 +47,11 @@ pub struct NewBootSource {
     pub initrd_image_id: Option<Uuid>,
 }
 
+/// Ordered by name.
 pub async fn list(
     pool: &PgPool,
     name_filter: Option<&str>,
+    page: &PageRequest,
 ) -> Result<Vec<BootSource>, sqlx::Error> {
     let boot_sources: Vec<BootSourceRow> = sqlx::query_as!(
         BootSourceRow,
@@ -61,8 +64,14 @@ SELECT id,
         initrd_image_id as "initrd_image_id?"
 FROM boot_sources
 WHERE ($1::text IS NULL OR name = $1)
+  AND ($2::text IS NULL OR (name, id) > ($2, $3::uuid))
+ORDER BY name, id
+LIMIT $4
         "#,
-        name_filter
+        name_filter,
+        page.after_key(),
+        page.after_id(),
+        page.fetch_limit()
     )
     .fetch_all(pool)
     .await?;

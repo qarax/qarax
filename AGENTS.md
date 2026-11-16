@@ -119,6 +119,7 @@ Handlers in `qarax/src/handlers/` follow a consistent pattern:
 - Extract `Extension(env: App)` for DB pool access, request bodies via `Json(model)`
 - Return `ApiResponse<T>` wrapping data with a `StatusCode`
 - Annotate with `#[utoipa::path(...)]` for OpenAPI generation — all new handlers must include this
+- Lists that grow with use return their page type (`VmPage`, ...; declare a new one in `page_types!` in `crate::pagination`, which keeps the docs and SDK referring to the item type): the handler takes a second `Query<PageQuery>`, the model query filters on `PageRequest`'s cursor and orders by a unique key (`name, id`, or `created_at DESC, id DESC`), and internal callers that need every row pass `PageRequest::all()`. Bounded sub-lists (a host's GPUs, a VM's NICs) stay plain arrays
 - Routes defined declaratively in `handlers/mod.rs` using `Router::new()` with merged sub-routers
 
 ### Model Pattern

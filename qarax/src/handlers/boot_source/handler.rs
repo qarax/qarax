@@ -2,6 +2,7 @@ use super::*;
 use crate::{
     App,
     model::boot_sources::{self, BootSource, NewBootSource},
+    pagination::{PageQuery, PageRequest},
 };
 use axum::{Extension, Json, extract::Path};
 use http::StatusCode;
@@ -11,9 +12,10 @@ use uuid::Uuid;
 #[utoipa::path(
     get,
     path = "/v1/boot-sources",
-    params(crate::handlers::NameQuery),
+    params(crate::handlers::NameQuery, PageQuery),
     responses(
-        (status = 200, description = "List all boot sources", body = Vec<BootSource>),
+        (status = 200, description = "Boot sources, by name", body = crate::pagination::BootSourcePage),
+        (status = 422, description = "Invalid limit or cursor"),
         (status = 500, description = "Internal server error")
     ),
     tag = "boot-sources"
@@ -22,10 +24,14 @@ use uuid::Uuid;
 pub async fn list(
     Extension(env): Extension<App>,
     axum::extract::Query(query): axum::extract::Query<crate::handlers::NameQuery>,
-) -> Result<ApiResponse<Vec<BootSource>>> {
-    let boot_sources = boot_sources::list(env.pool(), query.name.as_deref()).await?;
+    axum::extract::Query(page): axum::extract::Query<PageQuery>,
+) -> Result<ApiResponse<crate::pagination::BootSourcePage>> {
+    let page = PageRequest::try_from(page)?;
+    let boot_sources = boot_sources::list(env.pool(), query.name.as_deref(), &page).await?;
     Ok(ApiResponse {
-        data: boot_sources,
+        data: crate::pagination::BootSourcePage::new(boot_sources, &page, |source| {
+            (source.name.clone(), source.id)
+        }),
         code: StatusCode::OK,
     })
 }

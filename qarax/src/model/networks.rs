@@ -4,6 +4,8 @@ use strum_macros::{Display, EnumString};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+use crate::pagination::PageRequest;
+
 #[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
 pub struct Network {
     pub id: Uuid,
@@ -157,15 +159,26 @@ impl Ipv4Subnet {
 
 // CRUD
 
-pub async fn list(pool: &PgPool, name_filter: Option<&str>) -> Result<Vec<Network>, sqlx::Error> {
+/// Ordered by name.
+pub async fn list(
+    pool: &PgPool,
+    name_filter: Option<&str>,
+    page: &PageRequest,
+) -> Result<Vec<Network>, sqlx::Error> {
     let rows: Vec<NetworkRow> = sqlx::query_as!(
         NetworkRow,
         r#"
 SELECT id, name, subnet::text AS "subnet!", gateway::text, dns::text, vpc_name, type AS network_type, status AS "status: _"
 FROM networks
 WHERE ($1::text IS NULL OR name = $1)
+  AND ($2::text IS NULL OR (name, id) > ($2, $3::uuid))
+ORDER BY name, id
+LIMIT $4
         "#,
         name_filter,
+        page.after_key(),
+        page.after_id(),
+        page.fetch_limit(),
     )
     .fetch_all(pool)
     .await?;

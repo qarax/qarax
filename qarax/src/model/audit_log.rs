@@ -5,6 +5,8 @@ use strum_macros::{Display, EnumString};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+use crate::pagination::PageRequest;
+
 #[derive(Serialize, Deserialize, Debug, Clone, Display, EnumString, ToSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
@@ -146,27 +148,18 @@ pub async fn record_best_effort(pool: &PgPool, entry: NewAuditLog) {
     }
 }
 
+#[derive(Default)]
 pub struct AuditLogQuery {
     pub resource_type: Option<AuditResourceType>,
     pub resource_id: Option<Uuid>,
     pub action: Option<AuditAction>,
-    pub limit: i64,
 }
 
-impl Default for AuditLogQuery {
-    fn default() -> Self {
-        AuditLogQuery {
-            resource_type: None,
-            resource_id: None,
-            action: None,
-            limit: 100,
-        }
-    }
-}
-
+/// Newest first.
 pub async fn list(
     pool: &PgPool,
     query: AuditLogQuery,
+    page: &PageRequest,
 ) -> Result<Vec<AuditLog>, crate::errors::Error> {
     let mut qb = QueryBuilder::<Postgres>::new(
         "SELECT id, action, resource_type, resource_id, resource_name, metadata, created_at FROM audit_logs WHERE 1=1 ",
@@ -190,8 +183,16 @@ pub async fn list(
         qb.push(' ');
     }
 
-    qb.push("ORDER BY created_at DESC LIMIT ");
-    qb.push_bind(query.limit);
+    if let Some(after) = page.after_key() {
+        qb.push("AND (created_at, id) < (");
+        qb.push_bind(after.to_string());
+        qb.push("::timestamptz, ");
+        qb.push_bind(page.after_id());
+        qb.push(") ");
+    }
+
+    qb.push("ORDER BY created_at DESC, id DESC LIMIT ");
+    qb.push_bind(page.fetch_limit());
 
     let rows = qb.build_query_as::<AuditLogRow>().fetch_all(pool).await?;
 

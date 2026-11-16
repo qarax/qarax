@@ -171,7 +171,7 @@ async fn test_failed_deploy_records_why() {
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     let host = loop {
-        let hosts: Vec<serde_json::Value> = client
+        let page: serde_json::Value = client
             .get(format!("{}/hosts", app.address))
             .send()
             .await
@@ -179,10 +179,13 @@ async fn test_failed_deploy_records_why() {
             .json()
             .await
             .unwrap();
-        let host = hosts
-            .into_iter()
+        let host = page["items"]
+            .as_array()
+            .unwrap()
+            .iter()
             .find(|h| h["id"] == host_id.to_string())
-            .unwrap();
+            .unwrap()
+            .clone();
         if host["status"] != "installing" {
             break host;
         }

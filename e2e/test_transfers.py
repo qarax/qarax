@@ -67,7 +67,7 @@ async def test_local_copy_transfer(client):
     test_id = uuid.uuid4().hex[:8]
     async with client as c:
         # 1. Find the e2e-node host
-        hosts = _up_hosts(await list_hosts.asyncio(client=c))
+        hosts = _up_hosts((await list_hosts.asyncio(client=c)).items)
         assert hosts, "No UP hosts registered"
         host = hosts[0]
 
@@ -141,7 +141,7 @@ async def test_local_copy_transfer(client):
                 client=c, pool_id=pool_id_str
             )
             assert transfers_list is not None
-            assert any(str(t.id) == transfer_id_str for t in transfers_list)
+            assert any(str(t.id) == transfer_id_str for t in transfers_list.items)
 
         finally:
             if transfer is not None and transfer.storage_object_id is not None:

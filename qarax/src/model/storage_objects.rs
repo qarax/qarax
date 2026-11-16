@@ -4,7 +4,7 @@ use strum_macros::{Display, EnumString};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use crate::model::storage_pools;
+use crate::{model::storage_pools, pagination::PageRequest};
 
 pub type PgTransaction<'a> = Transaction<'a, Postgres>;
 
@@ -78,11 +78,13 @@ pub struct NewStorageObject {
     pub parent_id: Option<Uuid>,
 }
 
+/// Ordered by name.
 pub async fn list(
     pool: &PgPool,
     name_filter: Option<&str>,
     pool_id_filter: Option<Uuid>,
     type_filter: Option<StorageObjectType>,
+    page: &PageRequest,
 ) -> Result<Vec<StorageObject>, sqlx::Error> {
     let storage_objects: Vec<StorageObjectRow> = sqlx::query_as!(
         StorageObjectRow,
@@ -98,10 +100,16 @@ FROM storage_objects
 WHERE ($1::text IS NULL OR name = $1)
   AND ($2::uuid IS NULL OR storage_pool_id = $2)
   AND ($3::storage_object_type IS NULL OR object_type = $3)
+  AND ($4::text IS NULL OR (name, id) > ($4, $5::uuid))
+ORDER BY name, id
+LIMIT $6
         "#,
         name_filter,
         pool_id_filter,
         type_filter as Option<StorageObjectType>,
+        page.after_key(),
+        page.after_id(),
+        page.fetch_limit(),
     )
     .fetch_all(pool)
     .await?;

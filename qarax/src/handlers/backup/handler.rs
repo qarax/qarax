@@ -25,6 +25,7 @@ use crate::{
         storage_objects::{self, NewStorageObject, StorageObjectType},
         storage_pools, vms,
     },
+    pagination::{PageQuery, PageRequest, time_key},
 };
 
 use super::{ApiResponse, Result};
@@ -247,9 +248,10 @@ async fn create_database_backup(env: &App, request: &CreateBackupRequest) -> Res
 #[utoipa::path(
     get,
     path = "/v1/backups",
-    params(crate::handlers::BackupListQuery),
+    params(crate::handlers::BackupListQuery, PageQuery),
     responses(
-        (status = 200, description = "List backups", body = Vec<Backup>),
+        (status = 200, description = "Backups, newest first", body = crate::pagination::BackupPage),
+        (status = 422, description = "Invalid limit or cursor"),
         (status = 500, description = "Internal server error")
     ),
     tag = "backups"
@@ -258,10 +260,15 @@ async fn create_database_backup(env: &App, request: &CreateBackupRequest) -> Res
 pub async fn list(
     Extension(env): Extension<App>,
     axum::extract::Query(query): axum::extract::Query<crate::handlers::BackupListQuery>,
-) -> Result<ApiResponse<Vec<Backup>>> {
-    let backups = backups::list(env.pool(), query.name.as_deref(), query.backup_type).await?;
+    axum::extract::Query(page): axum::extract::Query<PageQuery>,
+) -> Result<ApiResponse<crate::pagination::BackupPage>> {
+    let page = PageRequest::try_from(page)?;
+    let backups =
+        backups::list(env.pool(), query.name.as_deref(), query.backup_type, &page).await?;
     Ok(ApiResponse {
-        data: backups,
+        data: crate::pagination::BackupPage::new(backups, &page, |backup| {
+            (time_key(backup.created_at), backup.id)
+        }),
         code: StatusCode::OK,
     })
 }

@@ -3,6 +3,8 @@ use sqlx::{PgPool, types::Json};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+use crate::pagination::PageRequest;
+
 fn empty_json_object() -> serde_json::Value {
     serde_json::json!({})
 }
@@ -97,9 +99,11 @@ pub struct NewInstanceType {
     pub numa_config: Option<serde_json::Value>,
 }
 
+/// Ordered by name.
 pub async fn list(
     pool: &PgPool,
     name_filter: Option<&str>,
+    page: &PageRequest,
 ) -> Result<Vec<InstanceType>, sqlx::Error> {
     let rows = sqlx::query_as!(
         InstanceTypeRow,
@@ -124,9 +128,14 @@ SELECT id,
        numa_config AS "numa_config: _"
 FROM instance_types
 WHERE ($1::text IS NULL OR name = $1)
-ORDER BY name
+  AND ($2::text IS NULL OR (name, id) > ($2, $3::uuid))
+ORDER BY name, id
+LIMIT $4
         "#,
-        name_filter
+        name_filter,
+        page.after_key(),
+        page.after_id(),
+        page.fetch_limit()
     )
     .fetch_all(pool)
     .await?;

@@ -139,7 +139,7 @@ async def _cleanup(c, vm_id, object_name_prefixes, pool_ids):
         await delete_vm.asyncio_detailed(client=c, vm_id=vm_id)
     for prefix in object_name_prefixes:
         objects = await list_storage_objects.asyncio(client=c, name=prefix)
-        for obj in objects or []:
+        for obj in objects.items if objects else []:
             await delete_storage_object.asyncio_detailed(client=c, object_id=obj.id)
     for pool_id in pool_ids:
         await delete_pool.asyncio_detailed(client=c, pool_id=pool_id)
@@ -163,7 +163,7 @@ async def test_create_vm_with_oci_image(client, oci_image_ref):
     """VM created with image_ref should trigger an async job and reach CREATED state."""
     test_id = str(uuid.uuid4())[:8]
     async with client as c:
-        hosts = _up_hosts(await list_hosts.asyncio(client=c))
+        hosts = _up_hosts((await list_hosts.asyncio(client=c)).items)
         assert hosts, "No UP hosts registered"
 
         overlaybd_pool_id = await _create_pool(
@@ -221,7 +221,7 @@ async def test_preflight_oci_image(client, oci_image_ref):
     """Preflight should mark the test image bootable via OverlayBD."""
     test_id = str(uuid.uuid4())[:8]
     async with client as c:
-        hosts = _up_hosts(await list_hosts.asyncio(client=c))
+        hosts = _up_hosts((await list_hosts.asyncio(client=c)).items)
         assert hosts, "No UP hosts registered"
 
         overlaybd_pool_id = await _create_pool(
@@ -269,7 +269,7 @@ async def test_create_vm_with_persistent_overlaybd_upper_has_storage_object(
     """Persistent OverlayBD upper layers should be provisioned on the requested pool and resize should fail explicitly."""
     test_id = str(uuid.uuid4())[:8]
     async with client as c:
-        hosts = _up_hosts(await list_hosts.asyncio(client=c))
+        hosts = _up_hosts((await list_hosts.asyncio(client=c)).items)
         assert hosts, "No UP hosts registered"
 
         upper_pool_id = await _create_pool(
@@ -307,10 +307,10 @@ async def test_create_vm_with_persistent_overlaybd_upper_has_storage_object(
             await wait_for_job(c, result.job_id)
 
             upper_name = f"overlaybd-upper-{vm_id}"
-            upper_objects = await list_storage_objects.asyncio(
-                client=c, name=upper_name
-            )
-            assert upper_objects is not None and len(upper_objects) == 1, (
+            upper_objects = (
+                await call_api(list_storage_objects, client=c, name=upper_name)
+            ).items
+            assert len(upper_objects) == 1, (
                 f"Expected one persistent upper storage object named {upper_name}"
             )
             upper_object = upper_objects[0]
@@ -325,7 +325,9 @@ async def test_create_vm_with_persistent_overlaybd_upper_has_storage_object(
                 client=c, object_id=upper_object.id
             )
             assert delete_resp.status_code == 409, delete_resp.content.decode()
-            remaining = await list_storage_objects.asyncio(client=c, name=upper_name)
+            remaining = (
+                await call_api(list_storage_objects, client=c, name=upper_name)
+            ).items
             assert remaining and remaining[0].id == upper_object.id
 
             resize_resp = await resize_disk.asyncio_detailed(
@@ -357,7 +359,7 @@ async def test_vm_commit_converts_oci_to_raw_disk(client, oci_image_ref):
     """Commit should convert an OCI image VM to a standalone raw disk VM."""
     test_id = str(uuid.uuid4())[:8]
     async with client as c:
-        hosts = _up_hosts(await list_hosts.asyncio(client=c))
+        hosts = _up_hosts((await list_hosts.asyncio(client=c)).items)
         assert hosts, "No UP hosts registered"
 
         overlaybd_pool_id = await _create_pool(
@@ -425,7 +427,7 @@ async def test_vm_commit_converts_oci_to_raw_disk(client, oci_image_ref):
                 params={"name": f"committed-{vm_id}"},
             )
             assert disks_resp.status_code == 200
-            disk_objects = disks_resp.json()
+            disk_objects = disks_resp.json()["items"]
             assert len(disk_objects) == 1, (
                 f"Expected exactly one committed disk object, got {len(disk_objects)}"
             )

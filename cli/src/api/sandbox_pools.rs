@@ -5,7 +5,7 @@ use crate::client::Client;
 use super::models::{ConfigureSandboxPoolRequest, SandboxPool};
 
 pub async fn list(client: &Client) -> anyhow::Result<Vec<SandboxPool>> {
-    client.get("/sandbox-pools").await
+    client.get_list("/sandbox-pools").await
 }
 
 pub async fn get(client: &Client, vm_template_id: Uuid) -> anyhow::Result<SandboxPool> {

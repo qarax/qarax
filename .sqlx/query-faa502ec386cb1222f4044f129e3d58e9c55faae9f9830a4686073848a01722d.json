@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\nSELECT id,\n       name,\n       description,\n       architecture,\n       boot_vcpus,\n       max_vcpus,\n       cpu_topology AS \"cpu_topology: _\",\n       kvm_hyperv,\n       memory_size,\n       memory_hotplug_size,\n       memory_mergeable,\n       memory_shared,\n       memory_hugepages,\n       memory_hugepage_size,\n       memory_prefault,\n       memory_thp,\n       accelerator_config AS \"accelerator_config: _\",\n       numa_config AS \"numa_config: _\"\nFROM instance_types\nWHERE ($1::text IS NULL OR name = $1)\nORDER BY name\n        ",
+  "query": "\nSELECT id,\n       name,\n       description,\n       architecture,\n       boot_vcpus,\n       max_vcpus,\n       cpu_topology AS \"cpu_topology: _\",\n       kvm_hyperv,\n       memory_size,\n       memory_hotplug_size,\n       memory_mergeable,\n       memory_shared,\n       memory_hugepages,\n       memory_hugepage_size,\n       memory_prefault,\n       memory_thp,\n       accelerator_config AS \"accelerator_config: _\",\n       numa_config AS \"numa_config: _\"\nFROM instance_types\nWHERE ($1::text IS NULL OR name = $1)\n  AND ($2::text IS NULL OR (name, id) > ($2, $3::uuid))\nORDER BY name, id\nLIMIT $4\n        ",
   "describe": {
     "columns": [
       {
@@ -96,7 +96,10 @@
     ],
     "parameters": {
       "Left": [
-        "Text"
+        "Text",
+        "Text",
+        "Uuid",
+        "Int8"
       ]
     },
     "nullable": [
@@ -120,5 +123,5 @@
       true
     ]
   },
-  "hash": "e2fcbd246d1dd46ef79c62bfe40eb1427f5b2bfcbf662ae764767bb5dd80327e"
+  "hash": "faa502ec386cb1222f4044f129e3d58e9c55faae9f9830a4686073848a01722d"
 }

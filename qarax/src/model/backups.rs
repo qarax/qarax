@@ -5,6 +5,8 @@ use strum_macros::{Display, EnumString};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+use crate::pagination::PageRequest;
+
 #[derive(
     Deserialize, Serialize, Debug, Clone, Eq, PartialEq, Type, EnumString, Display, ToSchema,
 )]
@@ -242,10 +244,12 @@ ON CONFLICT (id) DO NOTHING
     tx.commit().await
 }
 
+/// Newest first.
 pub async fn list(
     pool: &PgPool,
     name_filter: Option<&str>,
     type_filter: Option<BackupType>,
+    page: &PageRequest,
 ) -> Result<Vec<Backup>, sqlx::Error> {
     let rows = sqlx::query_as!(
         BackupRow,
@@ -263,10 +267,15 @@ SELECT id,
 FROM backups
 WHERE ($1::text IS NULL OR name = $1)
   AND ($2::backup_type IS NULL OR backup_type = $2)
-ORDER BY created_at DESC
+  AND ($3::text IS NULL OR (created_at, id) < ($3::timestamptz, $4::uuid))
+ORDER BY created_at DESC, id DESC
+LIMIT $5
         "#,
         name_filter,
-        type_filter as Option<BackupType>
+        type_filter as Option<BackupType>,
+        page.after_key(),
+        page.after_id(),
+        page.fetch_limit()
     )
     .fetch_all(pool)
     .await?;
@@ -343,9 +352,14 @@ mod tests {
             .unwrap();
         assert!(failed.is_empty(), "{failed:?}");
 
-        let mut after = list(&db.pool, None, Some(BackupType::Database))
-            .await
-            .unwrap();
+        let mut after = list(
+            &db.pool,
+            None,
+            Some(BackupType::Database),
+            &PageRequest::all(),
+        )
+        .await
+        .unwrap();
         after.sort_by_key(|b| b.created_at);
         let ids: Vec<_> = after.iter().map(|b| (b.id, b.storage_object_id)).collect();
         assert_eq!(
