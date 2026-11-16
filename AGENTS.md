@@ -217,6 +217,9 @@ E2E tests run automatically on push to master. On PRs, apply the `run-e2e` label
 
 ## Versioning
 
+Releases: pushing a tag `vX.Y.Z` runs `.github/workflows/release.yml`, which refuses a tag that doesn't match every crate's `version` or has no `## [X.Y.Z]` section in `CHANGELOG.md` (`scripts/release-notes.sh` extracts it), then publishes the binaries tarball as a GitHub release and the control-plane image `ghcr.io/<owner>/qarax` (`deployments/Containerfile.qarax`, which the e2e stack also runs); `appliance-release.yml` publishes the node appliance for the same tag. Add user-visible changes to `CHANGELOG.md` as they land. `docs/INSTALL.md` covers installing and upgrading a release.
+
+
 Cloud Hypervisor and Firecracker versions are pinned in `versions/` (the `Makefile` reads them and passes them to `deployments/Containerfile.qarax-vmm` as build args); OverlayBD, the ACI convertor, CLOUDHV.fd and the guest kernel are pinned in `versions/node-artifacts.env`, which the node Containerfiles read through a build-time bind mount. The Cloud Hypervisor and Firecracker SDKs are pinned via git tags in `qarax-node/Cargo.toml`; their repos (`qarax/cloud-hypervisor-sdk`, `qarax/firecracker-rust-sdk`) regenerate and tag a release automatically when upstream ships one (CH `vX.Y` becomes SDK `vX.Y.0`, Firecracker tags are used as is). Bump the matching `versions/` file together with each SDK tag (`cloud-hypervisor-version` with the CH SDK, `firecracker-version` with the Firecracker SDK), since each SDK serializes that release's API. After bumping an SDK tag, always run `cargo build -p qarax-node`: releases can rename/move types (e.g., v54 moved `disk_config::ImageType` to `models::ImageType` and turned the device `iommu` flags into `IommuType`).
 
 ## E2E Test Patterns

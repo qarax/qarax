@@ -1,0 +1,97 @@
+name: Release
+
+# Publishes a version: pushing a tag vX.Y.Z (matching the crates' version)
+# builds the release binaries, publishes them with checksums as the GitHub
+# release vX.Y.Z (notes from CHANGELOG.md), and pushes the control-plane image
+# ghcr.io/<owner>/qarax:vX.Y.Z. appliance-release.yml publishes the node
+# appliance image for the same tag.
+on:
+  push:
+    tags: ["v*"]
+
+env:
+  CARGO_TERM_COLOR: always
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/qarax
+  TARGET_TRIPLE: x86_64-unknown-linux-musl
+
+jobs:
+  release:
+    name: Publish release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: release
+
+      - name: Check the tag against the crate versions and the changelog
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          cargo metadata --no-deps --format-version 1 |
+            jq -r '.packages[] | "\(.name) \(.version)"' |
+            while read -r name crate_version; do
+              if [ "$crate_version" != "$version" ]; then
+                echo "$name is $crate_version, but the tag is $GITHUB_REF_NAME" >&2
+                exit 1
+              fi
+            done
+          scripts/release-notes.sh "$version" > release-notes.md
+
+      - name: Build release binaries
+        run: make build-release
+
+      - name: Package
+        run: |
+          name="qarax-${GITHUB_REF_NAME}-x86_64-linux-musl"
+          mkdir -p "dist/${name}/bin"
+          for bin in qarax-server qarax-node qarax-init qarax; do
+            cp "target/${TARGET_TRIPLE}/release/${bin}" "dist/${name}/bin/"
+          done
+          cp -r configuration "dist/${name}/"
+          cp CHANGELOG.md scripts/gen-node-tls.sh deployments/qarax.service \
+            deployments/qarax-node.service "dist/${name}/"
+          tar -C dist -czf "dist/${name}.tar.gz" "${name}"
+          rm -r "dist/${name}"
+          (cd dist && sha256sum -- * > SHA256SUMS)
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push the control-plane image
+        id: image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deployments/Containerfile.qarax
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+      - uses: sigstore/cosign-installer@v3.7.0
+
+      - name: Sign the image (keyless)
+        env:
+          COSIGN_YES: "true"
+        run: cosign sign "${REGISTRY}/${IMAGE_NAME}@${{ steps.image.outputs.digest }}"
+
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --verify-tag \
+            --title "qarax $GITHUB_REF_NAME" \
+            --notes-file release-notes.md \
+            dist/*

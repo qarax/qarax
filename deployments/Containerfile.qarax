@@ -1,0 +1,21 @@
+# The control plane (qarax-server) as a container image, built from the
+# release binary (`make build-release` first; the Release workflow does).
+# The e2e stack runs this image too, with APP_ENVIRONMENT=local.
+#
+# Configure it with environment variables (see docs/INSTALL.md): DATABASE_*,
+# AUTH_TOKENS, NODE_TLS_DIR (mount the control plane's node TLS files) and the
+# VM_* boot defaults.
+FROM alpine:3.22
+
+# pg_dump and pg_restore for database backups, curl for health checks.
+RUN apk add --no-cache postgresql16-client curl
+
+COPY --chmod=0755 target/x86_64-unknown-linux-musl/release/qarax-server /usr/local/bin/qarax-server
+COPY configuration /etc/qarax/configuration
+
+ENV APP_ENVIRONMENT=production \
+    QARAX_CONFIG_DIR=/etc/qarax/configuration
+
+EXPOSE 8000
+
+CMD ["/usr/local/bin/qarax-server"]
