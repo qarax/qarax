@@ -74,7 +74,7 @@ def client():
 def backup_storage_pool():
     """Create a local storage pool backed by the control-plane filesystem."""
     with Client(base_url=QARAX_URL, headers=AUTH_HEADERS) as c:
-        hosts = [h for h in (list_hosts.sync(client=c) or []) if h.status == HostStatus.UP]
+        hosts = [h for h in list_hosts.sync(client=c).items if h.status == HostStatus.UP]
         assert hosts, "No UP hosts registered"
         host_id = hosts[0].id
 
@@ -138,7 +138,7 @@ async def test_vm_backup_lifecycle(client, backup_storage_pool):
                 f"{QARAX_URL}/v1/backups", params={"name": backup["name"]}
             )
             assert list_resp.status_code == 200, list_resp.text
-            backups = list_resp.json()
+            backups = list_resp.json()["items"]
             assert len(backups) == 1
             assert backups[0]["id"] == backup["id"]
 

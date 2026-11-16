@@ -209,7 +209,7 @@ async def test_attach_remove_disk_shutdown_vm(client):
     """Attach and remove a disk on a Shutdown VM — applied to CH immediately."""
     test_id = uuid.uuid4().hex[:8]
     async with client as c:
-        hosts = _up_hosts(await call_api(list_hosts, client=c))
+        hosts = _up_hosts((await call_api(list_hosts, client=c)).items)
         assert hosts, "No UP hosts available"
         pool_id = disk_id = vm_id = disk_path = None
         try:
@@ -273,7 +273,7 @@ async def test_disk_hotplug_running_vm(client):
     pool_id = disk_id = vm_id = disk_path = None
     async with client as c:
         try:
-            hosts = _up_hosts(await call_api(list_hosts, client=c))
+            hosts = _up_hosts((await call_api(list_hosts, client=c)).items)
             assert hosts, "No UP hosts available"
             pool_id, disk_id, disk_path = await _make_local_disk(
                 c, test_id, hosts, "hp"
@@ -332,7 +332,7 @@ async def test_nic_hotplug_running_vm(client):
     test_id = uuid.uuid4().hex[:8]
     vm_id = None
     async with client as c:
-        hosts = _up_hosts(await call_api(list_hosts, client=c))
+        hosts = _up_hosts((await call_api(list_hosts, client=c)).items)
         assert hosts, "No UP hosts available"
         async with _isolated_network(c, test_id, hosts, 97) as net_id:
             try:
@@ -406,7 +406,7 @@ async def test_rate_limits_throttle_hotplugged_disk_and_nic(client):
     test_id = uuid.uuid4().hex[:8]
     pool_id = disk_id = vm_id = disk_path = None
     async with client as c:
-        hosts = _up_hosts(await call_api(list_hosts, client=c))
+        hosts = _up_hosts((await call_api(list_hosts, client=c)).items)
         assert hosts, "No UP hosts available"
         async with _isolated_network(c, test_id, hosts, 96) as net_id:
             try:
@@ -499,7 +499,7 @@ async def test_vm_disk_limit_is_shared_by_its_disks(client):
     vm_id = None
     async with client as c:
         try:
-            hosts = _up_hosts(await call_api(list_hosts, client=c))
+            hosts = _up_hosts((await call_api(list_hosts, client=c)).items)
             assert hosts, "No UP hosts available"
             for prefix in ("rla", "rlb"):
                 made.append(await _make_local_disk(c, test_id, hosts, prefix))

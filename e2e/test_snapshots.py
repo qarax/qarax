@@ -71,7 +71,7 @@ def client():
 def snapshot_storage_pool():
     """Create a local storage pool for snapshot tests and attach it to the host."""
     with Client(base_url=QARAX_URL, headers=AUTH_HEADERS) as c:
-        hosts = [h for h in (list_hosts.sync(client=c) or []) if h.status == HostStatus.UP]
+        hosts = [h for h in list_hosts.sync(client=c).items if h.status == HostStatus.UP]
         assert hosts and len(hosts) > 0, "No UP hosts registered"
         host_id = hosts[0].id
 
@@ -232,7 +232,7 @@ async def test_snapshot_delete_removes_its_data(client, snapshot_storage_pool):
             assert await list_snapshots.asyncio(client=c, vm_id=vm_id) == []
             resp = await httpx_client.get(f"{QARAX_URL}/v1/backups", params={"backup_type": "vm"})
             assert resp.status_code == 200, resp.text
-            assert all(b["snapshot_id"] != str(snapshot.id) for b in resp.json())
+            assert all(b["snapshot_id"] != str(snapshot.id) for b in resp.json()["items"])
             resp = await httpx_client.get(
                 f"{QARAX_URL}/v1/storage-objects/{snapshot.storage_object_id}"
             )

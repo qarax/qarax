@@ -4,6 +4,8 @@ use strum_macros::{Display, EnumString};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+use crate::pagination::PageRequest;
+
 /// Configuration for an OverlayBD storage pool, extracted from the JSONB `config` column.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct OverlayBdPoolConfig {
@@ -127,9 +129,11 @@ pub struct NewStoragePool {
     pub capacity_bytes: Option<i64>,
 }
 
+/// Ordered by name.
 pub async fn list(
     pool: &PgPool,
     name_filter: Option<&str>,
+    page: &PageRequest,
 ) -> Result<Vec<StoragePool>, sqlx::Error> {
     let rows: Vec<StoragePoolRow> = sqlx::query_as!(
         StoragePoolRow,
@@ -137,8 +141,14 @@ pub async fn list(
 SELECT id, name, pool_type AS "pool_type: _", status AS "status: _", config, capacity_bytes, allocated_bytes
 FROM storage_pools
 WHERE ($1::text IS NULL OR name = $1)
+  AND ($2::text IS NULL OR (name, id) > ($2, $3::uuid))
+ORDER BY name, id
+LIMIT $4
         "#,
         name_filter,
+        page.after_key(),
+        page.after_id(),
+        page.fetch_limit(),
     )
     .fetch_all(pool)
     .await?;

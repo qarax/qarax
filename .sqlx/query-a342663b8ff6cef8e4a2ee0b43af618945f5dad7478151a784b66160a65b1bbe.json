@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\nSELECT id, hook_id, vm_id, previous_status, new_status, status AS \"status: _\",\n       attempt_count, max_attempts, next_retry_at, payload,\n       response_status, response_body, last_error,\n       created_at, delivered_at\nFROM hook_executions\nWHERE hook_id = $1\nORDER BY created_at DESC\n        ",
+  "query": "\nSELECT id, hook_id, vm_id, previous_status, new_status, status AS \"status: _\",\n       attempt_count, max_attempts, next_retry_at, payload,\n       response_status, response_body, last_error,\n       created_at, delivered_at\nFROM hook_executions\nWHERE hook_id = $1\n  AND ($2::text IS NULL OR (created_at, id) < ($2::timestamptz, $3::uuid))\nORDER BY created_at DESC, id DESC\nLIMIT $4\n        ",
   "describe": {
     "columns": [
       {
@@ -93,7 +93,10 @@
     ],
     "parameters": {
       "Left": [
-        "Uuid"
+        "Uuid",
+        "Text",
+        "Uuid",
+        "Int8"
       ]
     },
     "nullable": [
@@ -114,5 +117,5 @@
       true
     ]
   },
-  "hash": "6e9c51efaccbefcc044bd79ee7bc377d63c7f662a9e3e7d8c11e20539b4a0e65"
+  "hash": "a342663b8ff6cef8e4a2ee0b43af618945f5dad7478151a784b66160a65b1bbe"
 }

@@ -27,7 +27,7 @@ pub async fn list(
     } else {
         format!("/hosts?{}", params.join("&"))
     };
-    client.get(&path).await
+    client.get_list(&path).await
 }
 
 /// Get a single host by name or UUID string.

@@ -11,6 +11,7 @@ use crate::{
         sandbox_pools::{self, SandboxPool},
         sandboxes::NewSandbox,
     },
+    pagination::PageRequest,
     sandbox_runtime::{self, ReadyOutcome, ReadyWait, destroy_vm, resolve_sandbox_vm},
 };
 
@@ -31,7 +32,7 @@ pub async fn start_sandbox_pool_manager(env: App) {
 }
 
 async fn sync_all_pools(env: &App) -> Result<(), sqlx::Error> {
-    let pools = sandbox_pools::list(env.pool()).await?;
+    let pools = sandbox_pools::list(env.pool(), &PageRequest::all()).await?;
     for pool in pools {
         sync_pool(env, pool).await;
     }

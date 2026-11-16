@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\nSELECT id,\n        name,\n        tags as \"tags!\",\n        status as \"status: _\",\n        host_id as \"host_id?\",\n        hypervisor as \"hypervisor: _\",\n        boot_source_id as \"boot_source_id?\",\n        boot_mode as \"boot_mode: _\",\n        description as \"description?\",\n        boot_vcpus,\n        max_vcpus,\n        cpu_topology as \"cpu_topology: _\",\n        kvm_hyperv as \"kvm_hyperv!\",\n        memory_size,\n        memory_hotplug_size as \"memory_hotplug_size?\",\n        memory_mergeable as \"memory_mergeable!\",\n        memory_shared as \"memory_shared!\",\n        memory_hugepages as \"memory_hugepages!\",\n        memory_hugepage_size as \"memory_hugepage_size?\",\n        memory_prefault as \"memory_prefault!\",\n        memory_thp as \"memory_thp!\",\n        image_ref as \"image_ref?\",\n        cloud_init_user_data as \"cloud_init_user_data?\",\n        cloud_init_meta_data as \"cloud_init_meta_data?\",\n        cloud_init_network_config as \"cloud_init_network_config?\",\n        config as \"config: _\"\nFROM vms\nWHERE ($1::text IS NULL OR name = $1)\n  AND (cardinality($2::text[]) = 0 OR tags @> $2)\n        ",
+  "query": "\nSELECT id,\n        name,\n        tags as \"tags!\",\n        status as \"status: _\",\n        host_id as \"host_id?\",\n        hypervisor as \"hypervisor: _\",\n        boot_source_id as \"boot_source_id?\",\n        boot_mode as \"boot_mode: _\",\n        description as \"description?\",\n        boot_vcpus,\n        max_vcpus,\n        cpu_topology as \"cpu_topology: _\",\n        kvm_hyperv as \"kvm_hyperv!\",\n        memory_size,\n        memory_hotplug_size as \"memory_hotplug_size?\",\n        memory_mergeable as \"memory_mergeable!\",\n        memory_shared as \"memory_shared!\",\n        memory_hugepages as \"memory_hugepages!\",\n        memory_hugepage_size as \"memory_hugepage_size?\",\n        memory_prefault as \"memory_prefault!\",\n        memory_thp as \"memory_thp!\",\n        image_ref as \"image_ref?\",\n        cloud_init_user_data as \"cloud_init_user_data?\",\n        cloud_init_meta_data as \"cloud_init_meta_data?\",\n        cloud_init_network_config as \"cloud_init_network_config?\",\n        config as \"config: _\"\nFROM vms\nWHERE ($1::text IS NULL OR name = $1)\n  AND (cardinality($2::text[]) = 0 OR tags @> $2)\n  AND ($3::text IS NULL OR (name, id) > ($3, $4::uuid))\nORDER BY name, id\nLIMIT $5\n        ",
   "describe": {
     "columns": [
       {
@@ -174,7 +174,10 @@
     "parameters": {
       "Left": [
         "Text",
-        "TextArray"
+        "TextArray",
+        "Text",
+        "Uuid",
+        "Int8"
       ]
     },
     "nullable": [
@@ -206,5 +209,5 @@
       false
     ]
   },
-  "hash": "0891ed014d51c3d8ef568216ac8dda540b549fa6ecead1306f09fbe9b1d957d1"
+  "hash": "249a7995c01b585cdd437b20855c98726707098f241050e2fcb8c235e9b982eb"
 }

@@ -9,7 +9,7 @@ pub async fn list(client: &Client, name: Option<&str>) -> anyhow::Result<Vec<Boo
         Some(n) => format!("/boot-sources?name={n}"),
         None => "/boot-sources".to_string(),
     };
-    client.get(&path).await
+    client.get_list(&path).await
 }
 
 pub async fn get(client: &Client, id: Uuid) -> anyhow::Result<BootSource> {

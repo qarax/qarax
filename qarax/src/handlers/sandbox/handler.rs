@@ -16,6 +16,7 @@ use crate::{
         },
         vms::{self, VmStatus},
     },
+    pagination::{PageQuery, PageRequest, time_key},
     sandbox_pool_manager,
     sandbox_runtime::{self, ReadyOutcome, ReadyWait, destroy_vm, resolve_sandbox_vm},
 };
@@ -278,20 +279,31 @@ fn spawn_sandbox_ready_watcher(env: App, sandbox_id: Uuid, vm_id: Uuid, wait: Re
 #[utoipa::path(
     get,
     path = "/v1/sandboxes",
+    params(PageQuery),
     responses(
-        (status = 200, description = "List all sandboxes", body = Vec<Sandbox>),
+        (status = 200, description = "Sandboxes, newest first", body = crate::pagination::SandboxPage),
+        (status = 422, description = "Invalid limit or cursor"),
         (status = 500, description = "Internal server error")
     ),
     tag = "sandboxes"
 )]
 #[instrument(skip(env))]
-pub async fn list(Extension(env): Extension<App>) -> Result<ApiResponse<Vec<Sandbox>>> {
-    let rows = sandboxes::list_with_details(env.pool())
+pub async fn list(
+    Extension(env): Extension<App>,
+    axum::extract::Query(page): axum::extract::Query<PageQuery>,
+) -> Result<ApiResponse<crate::pagination::SandboxPage>> {
+    let page = PageRequest::try_from(page)?;
+    let sandboxes: Vec<Sandbox> = sandboxes::list_with_details(env.pool(), &page)
         .await
-        .map_err(crate::errors::Error::Sqlx)?;
+        .map_err(crate::errors::Error::Sqlx)?
+        .into_iter()
+        .map(Into::into)
+        .collect();
 
     Ok(ApiResponse {
-        data: rows.into_iter().map(Into::into).collect(),
+        data: crate::pagination::SandboxPage::new(sandboxes, &page, |sandbox| {
+            (time_key(sandbox.created_at), sandbox.id)
+        }),
         code: StatusCode::OK,
     })
 }

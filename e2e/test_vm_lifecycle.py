@@ -160,7 +160,9 @@ async def test_vm_exec_runs_command(client):
     """VM exec runs a command inside a guest-agent-enabled VM."""
     async with client as c:
         up_hosts = [
-            host for host in await list_hosts.asyncio(client=c) if host.status == HostStatus.UP
+            host
+            for host in (await list_hosts.asyncio(client=c)).items
+            if host.status == HostStatus.UP
         ]
         assert up_hosts, "Expected at least one UP host"
         parked_hosts = up_hosts[1:]

@@ -83,7 +83,7 @@ async def create_bootable_sandbox_template(
 ):
     """Create a bootable sandbox template and return (template_id, cleanup_resources)."""
     test_id = uuid.uuid4().hex[:8]
-    hosts = up_hosts(await call_api(list_hosts, client=client))
+    hosts = up_hosts((await call_api(list_hosts, client=client)).items)
     assert hosts, "Expected at least one UP host"
 
     pool_name = f"e2e-sandbox-pool-{test_id}"
@@ -154,7 +154,9 @@ async def create_bootable_sandbox_template(
         client=client, name=f"e2e-sandbox-kernel-{test_id}"
     )
     assert objects is not None
-    kernel = next((obj for obj in objects if obj.id == transfer.storage_object_id), None)
+    kernel = next(
+        (obj for obj in objects.items if obj.id == transfer.storage_object_id), None
+    )
     assert kernel is not None, "Expected transferred kernel storage object"
 
     initrd_deadline = time.time() + TRANSFER_TIMEOUT
@@ -312,7 +314,7 @@ async def test_sandbox_get_returns_details(client, sandbox_template):
             assert sandbox.idle_timeout_secs == 600
             assert sandbox.status in (SandboxStatus.PROVISIONING, SandboxStatus.READY)
 
-            sandboxes = await call_api(list_sandboxes, client=c)
+            sandboxes = (await call_api(list_sandboxes, client=c)).items
             ids = [s.id for s in sandboxes]
             assert resp.id in ids, f"Sandbox {resp.id} not found in list: {ids}"
         finally:

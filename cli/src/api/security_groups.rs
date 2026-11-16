@@ -12,7 +12,7 @@ pub async fn list(client: &Client, name: Option<&str>) -> anyhow::Result<Vec<Sec
         Some(name) => format!("/security-groups?name={}", urlencoding::encode(name)),
         None => "/security-groups".to_string(),
     };
-    client.get(&path).await
+    client.get_list(&path).await
 }
 
 pub async fn get(client: &Client, security_group_id: Uuid) -> anyhow::Result<SecurityGroup> {

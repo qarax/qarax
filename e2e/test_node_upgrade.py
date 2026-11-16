@@ -76,9 +76,9 @@ def _is_truthy(value: str | None) -> bool:
 
 def get_host(client: Client, host_id: uuid.UUID):
     """Fetch a single host by ID via the list endpoint."""
-    hosts = list_hosts.sync(client=client)
-    assert hosts is not None, "Failed to list hosts"
-    match = next((h for h in hosts if h.id == host_id), None)
+    page = list_hosts.sync(client=client)
+    assert page is not None, "Failed to list hosts"
+    match = next((h for h in page.items if h.id == host_id), None)
     assert match is not None, f"Host {host_id} not found"
     return match
 

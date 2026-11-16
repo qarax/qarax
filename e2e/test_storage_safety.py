@@ -18,7 +18,7 @@ async def test_pool_capacity_accounts_for_create_resize_and_delete(pool_type):
     mib = 1024 * 1024
     name = f"e2e-capacity-{uuid.uuid4().hex[:8]}"
     async with httpx2.AsyncClient(base_url=f"{QARAX_URL}/v1", headers=AUTH_HEADERS, timeout=30) as client:
-        hosts = (await client.get("/hosts")).json()
+        hosts = (await client.get("/hosts")).json()["items"]
         host = next(h for h in hosts if h["status"] == "up")
         response = await client.post("/storage-pools", json={
             "name": name, "pool_type": pool_type, "capacity_bytes": 2 * mib,

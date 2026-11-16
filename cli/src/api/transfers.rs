@@ -13,7 +13,7 @@ pub async fn list(
         Some(n) => format!("/storage-pools/{pool_id}/transfers?name={n}"),
         None => format!("/storage-pools/{pool_id}/transfers"),
     };
-    client.get(&path).await
+    client.get_list(&path).await
 }
 
 pub async fn get(client: &Client, pool_id: Uuid, transfer_id: Uuid) -> anyhow::Result<Transfer> {

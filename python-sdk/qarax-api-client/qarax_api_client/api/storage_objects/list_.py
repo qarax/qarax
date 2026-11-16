@@ -6,7 +6,7 @@ import httpx2
 
 from ... import errors
 from ...client import AuthenticatedClient, Client
-from ...models.storage_object import StorageObject
+from ...models.storage_object_page import StorageObjectPage
 from ...models.storage_object_type import StorageObjectType
 from ...types import UNSET, Response, Unset
 
@@ -16,6 +16,8 @@ def _get_kwargs(
     name: None | str | Unset = UNSET,
     pool_id: None | Unset | UUID = UNSET,
     object_type: None | StorageObjectType | Unset = UNSET,
+    limit: int | Unset = UNSET,
+    cursor: str | Unset = UNSET,
 ) -> dict[str, Any]:
 
     params: dict[str, Any] = {}
@@ -45,6 +47,10 @@ def _get_kwargs(
         json_object_type = object_type
     params["object_type"] = json_object_type
 
+    params["limit"] = limit
+
+    params["cursor"] = cursor
+
     params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
     _kwargs: dict[str, Any] = {
@@ -58,16 +64,15 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: AuthenticatedClient | Client, response: httpx2.Response
-) -> Any | list[StorageObject] | None:
+) -> Any | StorageObjectPage | None:
     if response.status_code == 200:
-        response_200 = []
-        _response_200 = response.json()
-        for response_200_item_data in _response_200:
-            response_200_item = StorageObject.from_dict(response_200_item_data)
-
-            response_200.append(response_200_item)
+        response_200 = StorageObjectPage.from_dict(response.json())
 
         return response_200
+
+    if response.status_code == 422:
+        response_422 = cast(Any, None)
+        return response_422
 
     if response.status_code == 500:
         response_500 = cast(Any, None)
@@ -81,7 +86,7 @@ def _parse_response(
 
 def _build_response(
     *, client: AuthenticatedClient | Client, response: httpx2.Response
-) -> Response[Any | list[StorageObject]]:
+) -> Response[Any | StorageObjectPage]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -96,25 +101,31 @@ def sync_detailed(
     name: None | str | Unset = UNSET,
     pool_id: None | Unset | UUID = UNSET,
     object_type: None | StorageObjectType | Unset = UNSET,
-) -> Response[Any | list[StorageObject]]:
+    limit: int | Unset = UNSET,
+    cursor: str | Unset = UNSET,
+) -> Response[Any | StorageObjectPage]:
     """
     Args:
         name (None | str | Unset):
         pool_id (None | Unset | UUID):
         object_type (None | StorageObjectType | Unset):
+        limit (int | Unset):
+        cursor (str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx2.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Any | list[StorageObject]]
+        Response[Any | StorageObjectPage]
     """
 
     kwargs = _get_kwargs(
         name=name,
         pool_id=pool_id,
         object_type=object_type,
+        limit=limit,
+        cursor=cursor,
     )
 
     response = client.get_httpx_client().request(
@@ -130,19 +141,23 @@ def sync(
     name: None | str | Unset = UNSET,
     pool_id: None | Unset | UUID = UNSET,
     object_type: None | StorageObjectType | Unset = UNSET,
-) -> Any | list[StorageObject] | None:
+    limit: int | Unset = UNSET,
+    cursor: str | Unset = UNSET,
+) -> Any | StorageObjectPage | None:
     """
     Args:
         name (None | str | Unset):
         pool_id (None | Unset | UUID):
         object_type (None | StorageObjectType | Unset):
+        limit (int | Unset):
+        cursor (str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx2.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Any | list[StorageObject]
+        Any | StorageObjectPage
     """
 
     return sync_detailed(
@@ -150,6 +165,8 @@ def sync(
         name=name,
         pool_id=pool_id,
         object_type=object_type,
+        limit=limit,
+        cursor=cursor,
     ).parsed
 
 
@@ -159,25 +176,31 @@ async def asyncio_detailed(
     name: None | str | Unset = UNSET,
     pool_id: None | Unset | UUID = UNSET,
     object_type: None | StorageObjectType | Unset = UNSET,
-) -> Response[Any | list[StorageObject]]:
+    limit: int | Unset = UNSET,
+    cursor: str | Unset = UNSET,
+) -> Response[Any | StorageObjectPage]:
     """
     Args:
         name (None | str | Unset):
         pool_id (None | Unset | UUID):
         object_type (None | StorageObjectType | Unset):
+        limit (int | Unset):
+        cursor (str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx2.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Any | list[StorageObject]]
+        Response[Any | StorageObjectPage]
     """
 
     kwargs = _get_kwargs(
         name=name,
         pool_id=pool_id,
         object_type=object_type,
+        limit=limit,
+        cursor=cursor,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -191,19 +214,23 @@ async def asyncio(
     name: None | str | Unset = UNSET,
     pool_id: None | Unset | UUID = UNSET,
     object_type: None | StorageObjectType | Unset = UNSET,
-) -> Any | list[StorageObject] | None:
+    limit: int | Unset = UNSET,
+    cursor: str | Unset = UNSET,
+) -> Any | StorageObjectPage | None:
     """
     Args:
         name (None | str | Unset):
         pool_id (None | Unset | UUID):
         object_type (None | StorageObjectType | Unset):
+        limit (int | Unset):
+        cursor (str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx2.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Any | list[StorageObject]
+        Any | StorageObjectPage
     """
 
     return (
@@ -212,5 +239,7 @@ async def asyncio(
             name=name,
             pool_id=pool_id,
             object_type=object_type,
+            limit=limit,
+            cursor=cursor,
         )
     ).parsed

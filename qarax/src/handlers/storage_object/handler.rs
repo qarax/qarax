@@ -2,6 +2,7 @@ use super::*;
 use crate::{
     App,
     model::storage_objects::{self, NewStorageObject, StorageObject},
+    pagination::{PageQuery, PageRequest},
 };
 use axum::{Extension, Json, extract::Path};
 use http::StatusCode;
@@ -11,9 +12,10 @@ use uuid::Uuid;
 #[utoipa::path(
     get,
     path = "/v1/storage-objects",
-    params(crate::handlers::StorageObjectListQuery),
+    params(crate::handlers::StorageObjectListQuery, PageQuery),
     responses(
-        (status = 200, description = "List all storage objects", body = Vec<StorageObject>),
+        (status = 200, description = "Storage objects, by name", body = crate::pagination::StorageObjectPage),
+        (status = 422, description = "Invalid limit or cursor"),
         (status = 500, description = "Internal server error")
     ),
     tag = "storage-objects"
@@ -22,16 +24,21 @@ use uuid::Uuid;
 pub async fn list(
     Extension(env): Extension<App>,
     axum::extract::Query(query): axum::extract::Query<crate::handlers::StorageObjectListQuery>,
-) -> Result<ApiResponse<Vec<StorageObject>>> {
+    axum::extract::Query(page): axum::extract::Query<PageQuery>,
+) -> Result<ApiResponse<crate::pagination::StorageObjectPage>> {
+    let page = PageRequest::try_from(page)?;
     let objects = storage_objects::list(
         env.pool(),
         query.name.as_deref(),
         query.pool_id,
         query.object_type,
+        &page,
     )
     .await?;
     Ok(ApiResponse {
-        data: objects,
+        data: crate::pagination::StorageObjectPage::new(objects, &page, |object| {
+            (object.name.clone(), object.id)
+        }),
         code: StatusCode::OK,
     })
 }

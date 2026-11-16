@@ -4,6 +4,8 @@ use sqlx::{PgPool, Postgres, Transaction};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+use crate::pagination::PageRequest;
+
 #[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
 pub struct SandboxPool {
     pub id: Uuid,
@@ -60,7 +62,8 @@ pub struct SandboxPoolConfig {
     pub updated_at: DateTime<Utc>,
 }
 
-pub async fn list(pool: &PgPool) -> Result<Vec<SandboxPool>, sqlx::Error> {
+/// Ordered by template name.
+pub async fn list(pool: &PgPool, page: &PageRequest) -> Result<Vec<SandboxPool>, sqlx::Error> {
     let rows = sqlx::query_as!(
         SandboxPoolRow,
         r#"
@@ -78,9 +81,14 @@ JOIN vm_templates vt
   ON vt.id = sp.vm_template_id
 LEFT JOIN sandbox_pool_members spm
   ON spm.sandbox_pool_id = sp.id
+WHERE ($1::text IS NULL OR (vt.name, sp.id) > ($1, $2::uuid))
 GROUP BY sp.id, vt.name
-ORDER BY vt.name
-        "#
+ORDER BY vt.name, sp.id
+LIMIT $3
+        "#,
+        page.after_key(),
+        page.after_id(),
+        page.fetch_limit()
     )
     .fetch_all(pool)
     .await?;

@@ -10,6 +10,7 @@ use crate::{
         sandbox_pools::{self, ConfigureSandboxPoolRequest, SandboxPool},
         vm_templates,
     },
+    pagination::{PageQuery, PageRequest},
     sandbox_pool_manager,
 };
 
@@ -18,17 +19,25 @@ use super::super::{ApiResponse, Result};
 #[utoipa::path(
     get,
     path = "/v1/sandbox-pools",
+    params(PageQuery),
     responses(
-        (status = 200, description = "List configured sandbox pools", body = Vec<SandboxPool>),
+        (status = 200, description = "Configured sandbox pools, by template name", body = crate::pagination::SandboxPoolPage),
+        (status = 422, description = "Invalid limit or cursor"),
         (status = 500, description = "Internal server error")
     ),
     tag = "sandbox-pools"
 )]
 #[instrument(skip(env))]
-pub async fn list(Extension(env): Extension<App>) -> Result<ApiResponse<Vec<SandboxPool>>> {
-    let pools = sandbox_pools::list(env.pool()).await?;
+pub async fn list(
+    Extension(env): Extension<App>,
+    axum::extract::Query(page): axum::extract::Query<PageQuery>,
+) -> Result<ApiResponse<crate::pagination::SandboxPoolPage>> {
+    let page = PageRequest::try_from(page)?;
+    let pools = sandbox_pools::list(env.pool(), &page).await?;
     Ok(ApiResponse {
-        data: pools,
+        data: crate::pagination::SandboxPoolPage::new(pools, &page, |pool| {
+            (pool.vm_template_name.clone(), pool.id)
+        }),
         code: StatusCode::OK,
     })
 }

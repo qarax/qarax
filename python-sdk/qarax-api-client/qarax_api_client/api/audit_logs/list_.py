@@ -7,7 +7,7 @@ import httpx2
 from ... import errors
 from ...client import AuthenticatedClient, Client
 from ...models.audit_action import AuditAction
-from ...models.audit_log import AuditLog
+from ...models.audit_log_page import AuditLogPage
 from ...models.audit_resource_type import AuditResourceType
 from ...types import UNSET, Response, Unset
 
@@ -17,7 +17,8 @@ def _get_kwargs(
     resource_type: AuditResourceType | None | Unset = UNSET,
     resource_id: None | Unset | UUID = UNSET,
     action: AuditAction | None | Unset = UNSET,
-    limit: int | None | Unset = UNSET,
+    limit: int | Unset = UNSET,
+    cursor: str | Unset = UNSET,
 ) -> dict[str, Any]:
 
     params: dict[str, Any] = {}
@@ -49,12 +50,9 @@ def _get_kwargs(
         json_action = action
     params["action"] = json_action
 
-    json_limit: int | None | Unset
-    if isinstance(limit, Unset):
-        json_limit = UNSET
-    else:
-        json_limit = limit
-    params["limit"] = json_limit
+    params["limit"] = limit
+
+    params["cursor"] = cursor
 
     params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
@@ -67,20 +65,19 @@ def _get_kwargs(
     return _kwargs
 
 
-def _parse_response(*, client: AuthenticatedClient | Client, response: httpx2.Response) -> Any | list[AuditLog] | None:
+def _parse_response(*, client: AuthenticatedClient | Client, response: httpx2.Response) -> Any | AuditLogPage | None:
     if response.status_code == 200:
-        response_200 = []
-        _response_200 = response.json()
-        for response_200_item_data in _response_200:
-            response_200_item = AuditLog.from_dict(response_200_item_data)
-
-            response_200.append(response_200_item)
+        response_200 = AuditLogPage.from_dict(response.json())
 
         return response_200
 
     if response.status_code == 400:
         response_400 = cast(Any, None)
         return response_400
+
+    if response.status_code == 422:
+        response_422 = cast(Any, None)
+        return response_422
 
     if response.status_code == 500:
         response_500 = cast(Any, None)
@@ -92,9 +89,7 @@ def _parse_response(*, client: AuthenticatedClient | Client, response: httpx2.Re
         return None
 
 
-def _build_response(
-    *, client: AuthenticatedClient | Client, response: httpx2.Response
-) -> Response[Any | list[AuditLog]]:
+def _build_response(*, client: AuthenticatedClient | Client, response: httpx2.Response) -> Response[Any | AuditLogPage]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -109,21 +104,23 @@ def sync_detailed(
     resource_type: AuditResourceType | None | Unset = UNSET,
     resource_id: None | Unset | UUID = UNSET,
     action: AuditAction | None | Unset = UNSET,
-    limit: int | None | Unset = UNSET,
-) -> Response[Any | list[AuditLog]]:
+    limit: int | Unset = UNSET,
+    cursor: str | Unset = UNSET,
+) -> Response[Any | AuditLogPage]:
     """
     Args:
         resource_type (AuditResourceType | None | Unset):
         resource_id (None | Unset | UUID):
         action (AuditAction | None | Unset):
-        limit (int | None | Unset):
+        limit (int | Unset):
+        cursor (str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx2.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Any | list[AuditLog]]
+        Response[Any | AuditLogPage]
     """
 
     kwargs = _get_kwargs(
@@ -131,6 +128,7 @@ def sync_detailed(
         resource_id=resource_id,
         action=action,
         limit=limit,
+        cursor=cursor,
     )
 
     response = client.get_httpx_client().request(
@@ -146,21 +144,23 @@ def sync(
     resource_type: AuditResourceType | None | Unset = UNSET,
     resource_id: None | Unset | UUID = UNSET,
     action: AuditAction | None | Unset = UNSET,
-    limit: int | None | Unset = UNSET,
-) -> Any | list[AuditLog] | None:
+    limit: int | Unset = UNSET,
+    cursor: str | Unset = UNSET,
+) -> Any | AuditLogPage | None:
     """
     Args:
         resource_type (AuditResourceType | None | Unset):
         resource_id (None | Unset | UUID):
         action (AuditAction | None | Unset):
-        limit (int | None | Unset):
+        limit (int | Unset):
+        cursor (str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx2.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Any | list[AuditLog]
+        Any | AuditLogPage
     """
 
     return sync_detailed(
@@ -169,6 +169,7 @@ def sync(
         resource_id=resource_id,
         action=action,
         limit=limit,
+        cursor=cursor,
     ).parsed
 
 
@@ -178,21 +179,23 @@ async def asyncio_detailed(
     resource_type: AuditResourceType | None | Unset = UNSET,
     resource_id: None | Unset | UUID = UNSET,
     action: AuditAction | None | Unset = UNSET,
-    limit: int | None | Unset = UNSET,
-) -> Response[Any | list[AuditLog]]:
+    limit: int | Unset = UNSET,
+    cursor: str | Unset = UNSET,
+) -> Response[Any | AuditLogPage]:
     """
     Args:
         resource_type (AuditResourceType | None | Unset):
         resource_id (None | Unset | UUID):
         action (AuditAction | None | Unset):
-        limit (int | None | Unset):
+        limit (int | Unset):
+        cursor (str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx2.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Any | list[AuditLog]]
+        Response[Any | AuditLogPage]
     """
 
     kwargs = _get_kwargs(
@@ -200,6 +203,7 @@ async def asyncio_detailed(
         resource_id=resource_id,
         action=action,
         limit=limit,
+        cursor=cursor,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -213,21 +217,23 @@ async def asyncio(
     resource_type: AuditResourceType | None | Unset = UNSET,
     resource_id: None | Unset | UUID = UNSET,
     action: AuditAction | None | Unset = UNSET,
-    limit: int | None | Unset = UNSET,
-) -> Any | list[AuditLog] | None:
+    limit: int | Unset = UNSET,
+    cursor: str | Unset = UNSET,
+) -> Any | AuditLogPage | None:
     """
     Args:
         resource_type (AuditResourceType | None | Unset):
         resource_id (None | Unset | UUID):
         action (AuditAction | None | Unset):
-        limit (int | None | Unset):
+        limit (int | Unset):
+        cursor (str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx2.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Any | list[AuditLog]
+        Any | AuditLogPage
     """
 
     return (
@@ -237,5 +243,6 @@ async def asyncio(
             resource_id=resource_id,
             action=action,
             limit=limit,
+            cursor=cursor,
         )
     ).parsed

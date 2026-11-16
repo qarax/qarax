@@ -3,9 +3,12 @@ use sqlx::{PgPool, types::Json};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use crate::model::{
-    network_interfaces, vm_disks,
-    vms::{self, BootMode, Hypervisor, NewVmNetwork},
+use crate::{
+    model::{
+        network_interfaces, vm_disks,
+        vms::{self, BootMode, Hypervisor, NewVmNetwork},
+    },
+    pagination::PageRequest,
 };
 
 fn empty_json_object() -> serde_json::Value {
@@ -140,9 +143,11 @@ pub struct CreateVmTemplateFromVmRequest {
     pub description: Option<String>,
 }
 
+/// Ordered by name.
 pub async fn list(
     pool: &PgPool,
     name_filter: Option<&str>,
+    page: &PageRequest,
 ) -> Result<Vec<VmTemplate>, sqlx::Error> {
     let rows = sqlx::query_as!(
         VmTemplateRow,
@@ -175,9 +180,14 @@ SELECT id,
        config AS "config: _"
 FROM vm_templates
 WHERE ($1::text IS NULL OR name = $1)
-ORDER BY name
+  AND ($2::text IS NULL OR (name, id) > ($2, $3::uuid))
+ORDER BY name, id
+LIMIT $4
         "#,
-        name_filter
+        name_filter,
+        page.after_key(),
+        page.after_id(),
+        page.fetch_limit()
     )
     .fetch_all(pool)
     .await?;

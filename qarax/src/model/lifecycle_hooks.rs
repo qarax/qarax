@@ -7,6 +7,7 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use super::vms::Vm;
+use crate::pagination::PageRequest;
 
 #[derive(
     Deserialize, Serialize, Debug, Clone, Eq, PartialEq, Type, EnumString, Display, ToSchema,
@@ -145,9 +146,11 @@ WHERE id = $1
     Ok(hook)
 }
 
+/// Ordered by name.
 pub async fn list(
     pool: &PgPool,
     name_filter: Option<&str>,
+    page: &PageRequest,
 ) -> Result<Vec<LifecycleHook>, sqlx::Error> {
     let hooks = sqlx::query_as!(
         LifecycleHook,
@@ -156,9 +159,14 @@ SELECT id, name, url, secret, scope AS "scope: _", scope_value, events, active,
        created_at, updated_at
 FROM lifecycle_hooks
 WHERE ($1::text IS NULL OR name = $1)
-ORDER BY created_at
+  AND ($2::text IS NULL OR (name, id) > ($2, $3::uuid))
+ORDER BY name, id
+LIMIT $4
         "#,
-        name_filter
+        name_filter,
+        page.after_key(),
+        page.after_id(),
+        page.fetch_limit()
     )
     .fetch_all(pool)
     .await?;
@@ -409,9 +417,11 @@ WHERE id = $1 AND status = 'PROCESSING'
     Ok(())
 }
 
+/// Newest first.
 pub async fn list_executions(
     pool: &PgPool,
     hook_id: Uuid,
+    page: &PageRequest,
 ) -> Result<Vec<HookExecution>, sqlx::Error> {
     let executions = sqlx::query_as!(
         HookExecution,
@@ -422,9 +432,14 @@ SELECT id, hook_id, vm_id, previous_status, new_status, status AS "status: _",
        created_at, delivered_at
 FROM hook_executions
 WHERE hook_id = $1
-ORDER BY created_at DESC
+  AND ($2::text IS NULL OR (created_at, id) < ($2::timestamptz, $3::uuid))
+ORDER BY created_at DESC, id DESC
+LIMIT $4
         "#,
-        hook_id
+        hook_id,
+        page.after_key(),
+        page.after_id(),
+        page.fetch_limit()
     )
     .fetch_all(pool)
     .await?;

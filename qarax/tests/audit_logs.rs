@@ -47,7 +47,8 @@ async fn test_host_create_is_recorded_in_audit_log() {
         async move {
             let res = client.get(url).send().await.unwrap();
             assert_eq!(res.status(), StatusCode::OK);
-            res.json::<Vec<Value>>().await.unwrap()
+            let page: Value = res.json().await.unwrap();
+            page["items"].as_array().unwrap().clone()
         }
     };
 
@@ -137,7 +138,8 @@ async fn test_failed_host_create_does_not_record_audit_log() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
-    let logs: Vec<Value> = res.json().await.unwrap();
+    let page: Value = res.json().await.unwrap();
+    let logs = page["items"].as_array().unwrap();
 
     let duplicates = logs
         .iter()
@@ -178,7 +180,8 @@ async fn test_rejected_vm_start_is_not_audited() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
-    let logs: Vec<Value> = res.json().await.unwrap();
+    let page: Value = res.json().await.unwrap();
+    let logs = page["items"].as_array().unwrap();
     assert!(logs.is_empty());
 }
 
@@ -218,7 +221,8 @@ async fn test_oci_vm_create_is_recorded_in_audit_log() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
-    let logs: Vec<Value> = res.json().await.unwrap();
+    let page: Value = res.json().await.unwrap();
+    let logs = page["items"].as_array().unwrap();
     assert_eq!(logs.len(), 1);
     assert_eq!(logs[0]["resource_id"], vm_id);
     assert_eq!(logs[0]["resource_name"], "audit-oci-vm");

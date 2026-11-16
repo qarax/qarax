@@ -86,7 +86,7 @@ def client():
 def fc_snapshot_storage_pool():
     """Create a local storage pool for FC snapshot tests and attach it to a UP host."""
     with Client(base_url=QARAX_URL, headers=AUTH_HEADERS) as c:
-        hosts = [h for h in (list_hosts.sync(client=c) or []) if h.status == HostStatus.UP]
+        hosts = [h for h in list_hosts.sync(client=c).items if h.status == HostStatus.UP]
         assert hosts, "No UP hosts registered"
         host_id = hosts[0].id
 
@@ -128,7 +128,7 @@ def new_fc_vm(name: str, **kwargs) -> NewVm:
 async def test_host_reports_firecracker_version(client, two_hosts):
     """Initialized e2e hosts report their Firecracker and node versions through the REST API."""
     async with client as c:
-        hosts = {h.id: h for h in await call_api(list_hosts, client=c)}
+        hosts = {h.id: h for h in (await call_api(list_hosts, client=c)).items}
         for host_id in two_hosts:
             host = hosts[host_id]
             assert host.firecracker_version, (
@@ -225,7 +225,7 @@ async def test_fc_stop_ends_the_vm(client, guest_agent):
                 # Up, so it can take the shutdown request.
                 await exec_when_ready(c, vm_id, "true")
             vm = await call_api(get_vm, client=c, vm_id=vm_id)
-            hosts = await call_api(list_hosts, client=c)
+            hosts = (await call_api(list_hosts, client=c)).items
             container = compose_container(
                 next(h for h in hosts if h.id == vm.host_id).address
             )

@@ -79,9 +79,9 @@ async def demonstrate_vm_lifecycle():
         await delete_vm.asyncio_detailed(vm_id=vm_id, client=c)
         print(f"VM {vm_id} deleted successfully")
 
-        print("\n=== Listing all VMs ===")
+        print("\n=== Listing VMs ===")
         vms = await list_vms.asyncio(client=c)
-        print(f"Total VMs: {len(vms) if vms else 0}")
+        print(f"VMs on the first page: {len(vms.items) if vms else 0}")
 
 
 if __name__ == "__main__":

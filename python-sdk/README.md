@@ -81,10 +81,11 @@ from qarax_api_client.api.vms import list_ as list_vms
 # Create client
 client = Client(base_url="http://localhost:8000")
 
-# List VMs (synchronous)
+# List VMs (synchronous). Lists come a page at a time (`limit`, default
+# 100); pass the page's `next_cursor` as `cursor` for the next one.
 with client as c:
     vms = list_vms.sync(client=c)
-    for vm in vms:
+    for vm in vms.items:
         print(f"VM: {vm.name} - Status: {vm.status}")
 ```
 
@@ -100,7 +101,7 @@ async def main():
     client = Client(base_url="http://localhost:8000")
     async with client as c:
         vms = await list_vms.asyncio(client=c)
-        for vm in vms:
+        for vm in vms.items:
             print(f"VM: {vm.name} - Status: {vm.status}")
 
 

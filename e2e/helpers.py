@@ -105,7 +105,7 @@ async def wait_for_host_status(
     """Poll until a host reaches the expected status or the timeout expires."""
     deadline = time.time() + timeout
     while True:
-        hosts = await call_api(list_hosts, client=client)
+        hosts = (await call_api(list_hosts, client=client)).items
         host = next((h for h in hosts if h.id == host_id), None)
         assert host is not None, f"Host {host_id} is not registered"
         if host.status == expected_status:

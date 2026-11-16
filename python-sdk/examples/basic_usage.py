@@ -20,8 +20,8 @@ async def main():
     async with client as c:
         print("=== Listing Hosts ===")
         hosts = await list_hosts.asyncio(client=c)
-        if hosts:
-            for host in hosts:
+        if hosts and hosts.items:
+            for host in hosts.items:
                 print(
                     f"Host: {host.name} ({host.address}:{host.port}) - Status: {host.status}"
                 )
@@ -30,8 +30,8 @@ async def main():
 
         print("\n=== Listing VMs ===")
         vms = await list_vms.asyncio(client=c)
-        if vms:
-            for vm in vms:
+        if vms and vms.items:
+            for vm in vms.items:
                 print(f"VM: {vm.name} (ID: {vm.id}) - Status: {vm.status}")
                 print(f"  CPU: {vm.boot_vcpus} vCPUs, Memory: {vm.memory_size} bytes")
                 print(f"  Hypervisor: {vm.hypervisor}")
@@ -46,8 +46,8 @@ def sync_example():
     with client as c:
         print("\n=== Synchronous Host Listing ===")
         hosts = list_hosts.sync(client=c)
-        if hosts:
-            for host in hosts:
+        if hosts and hosts.items:
+            for host in hosts.items:
                 print(f"Host: {host.name} - Status: {host.status}")
         else:
             print("No hosts found")

@@ -9,6 +9,7 @@ use crate::{
         },
     },
     network_policy,
+    pagination::{PageQuery, PageRequest},
 };
 use axum::{Extension, Json, extract::Path};
 use http::StatusCode;
@@ -18,9 +19,10 @@ use uuid::Uuid;
 #[utoipa::path(
     get,
     path = "/v1/security-groups",
-    params(crate::handlers::NameQuery),
+    params(crate::handlers::NameQuery, PageQuery),
     responses(
-        (status = 200, description = "List security groups", body = Vec<SecurityGroup>),
+        (status = 200, description = "Security groups, by name", body = crate::pagination::SecurityGroupPage),
+        (status = 422, description = "Invalid limit or cursor"),
         (status = 500, description = "Internal server error")
     ),
     tag = "security-groups"
@@ -29,10 +31,14 @@ use uuid::Uuid;
 pub async fn list(
     Extension(env): Extension<App>,
     axum::extract::Query(query): axum::extract::Query<crate::handlers::NameQuery>,
-) -> Result<ApiResponse<Vec<SecurityGroup>>> {
-    let groups = security_groups::list(env.pool(), query.name.as_deref()).await?;
+    axum::extract::Query(page): axum::extract::Query<PageQuery>,
+) -> Result<ApiResponse<crate::pagination::SecurityGroupPage>> {
+    let page = PageRequest::try_from(page)?;
+    let groups = security_groups::list(env.pool(), query.name.as_deref(), &page).await?;
     Ok(ApiResponse {
-        data: groups,
+        data: crate::pagination::SecurityGroupPage::new(groups, &page, |group| {
+            (group.name.clone(), group.id)
+        }),
         code: StatusCode::OK,
     })
 }

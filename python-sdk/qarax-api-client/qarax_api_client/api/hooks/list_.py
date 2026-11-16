@@ -5,13 +5,15 @@ import httpx2
 
 from ... import errors
 from ...client import AuthenticatedClient, Client
-from ...models.lifecycle_hook import LifecycleHook
+from ...models.lifecycle_hook_page import LifecycleHookPage
 from ...types import UNSET, Response, Unset
 
 
 def _get_kwargs(
     *,
     name: None | str | Unset = UNSET,
+    limit: int | Unset = UNSET,
+    cursor: str | Unset = UNSET,
 ) -> dict[str, Any]:
 
     params: dict[str, Any] = {}
@@ -22,6 +24,10 @@ def _get_kwargs(
     else:
         json_name = name
     params["name"] = json_name
+
+    params["limit"] = limit
+
+    params["cursor"] = cursor
 
     params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
@@ -36,16 +42,15 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: AuthenticatedClient | Client, response: httpx2.Response
-) -> Any | list[LifecycleHook] | None:
+) -> Any | LifecycleHookPage | None:
     if response.status_code == 200:
-        response_200 = []
-        _response_200 = response.json()
-        for response_200_item_data in _response_200:
-            response_200_item = LifecycleHook.from_dict(response_200_item_data)
-
-            response_200.append(response_200_item)
+        response_200 = LifecycleHookPage.from_dict(response.json())
 
         return response_200
+
+    if response.status_code == 422:
+        response_422 = cast(Any, None)
+        return response_422
 
     if response.status_code == 500:
         response_500 = cast(Any, None)
@@ -59,7 +64,7 @@ def _parse_response(
 
 def _build_response(
     *, client: AuthenticatedClient | Client, response: httpx2.Response
-) -> Response[Any | list[LifecycleHook]]:
+) -> Response[Any | LifecycleHookPage]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -72,21 +77,27 @@ def sync_detailed(
     *,
     client: AuthenticatedClient | Client,
     name: None | str | Unset = UNSET,
-) -> Response[Any | list[LifecycleHook]]:
+    limit: int | Unset = UNSET,
+    cursor: str | Unset = UNSET,
+) -> Response[Any | LifecycleHookPage]:
     """
     Args:
         name (None | str | Unset):
+        limit (int | Unset):
+        cursor (str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx2.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Any | list[LifecycleHook]]
+        Response[Any | LifecycleHookPage]
     """
 
     kwargs = _get_kwargs(
         name=name,
+        limit=limit,
+        cursor=cursor,
     )
 
     response = client.get_httpx_client().request(
@@ -100,22 +111,28 @@ def sync(
     *,
     client: AuthenticatedClient | Client,
     name: None | str | Unset = UNSET,
-) -> Any | list[LifecycleHook] | None:
+    limit: int | Unset = UNSET,
+    cursor: str | Unset = UNSET,
+) -> Any | LifecycleHookPage | None:
     """
     Args:
         name (None | str | Unset):
+        limit (int | Unset):
+        cursor (str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx2.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Any | list[LifecycleHook]
+        Any | LifecycleHookPage
     """
 
     return sync_detailed(
         client=client,
         name=name,
+        limit=limit,
+        cursor=cursor,
     ).parsed
 
 
@@ -123,21 +140,27 @@ async def asyncio_detailed(
     *,
     client: AuthenticatedClient | Client,
     name: None | str | Unset = UNSET,
-) -> Response[Any | list[LifecycleHook]]:
+    limit: int | Unset = UNSET,
+    cursor: str | Unset = UNSET,
+) -> Response[Any | LifecycleHookPage]:
     """
     Args:
         name (None | str | Unset):
+        limit (int | Unset):
+        cursor (str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx2.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Any | list[LifecycleHook]]
+        Response[Any | LifecycleHookPage]
     """
 
     kwargs = _get_kwargs(
         name=name,
+        limit=limit,
+        cursor=cursor,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -149,22 +172,28 @@ async def asyncio(
     *,
     client: AuthenticatedClient | Client,
     name: None | str | Unset = UNSET,
-) -> Any | list[LifecycleHook] | None:
+    limit: int | Unset = UNSET,
+    cursor: str | Unset = UNSET,
+) -> Any | LifecycleHookPage | None:
     """
     Args:
         name (None | str | Unset):
+        limit (int | Unset):
+        cursor (str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx2.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Any | list[LifecycleHook]
+        Any | LifecycleHookPage
     """
 
     return (
         await asyncio_detailed(
             client=client,
             name=name,
+            limit=limit,
+            cursor=cursor,
         )
     ).parsed

@@ -53,6 +53,7 @@ use crate::{
         },
     },
     network_policy,
+    pagination::{PageQuery, PageRequest},
 };
 
 use super::{ApiResponse, Result};
@@ -736,9 +737,10 @@ pub async fn preflight_image(
 #[utoipa::path(
     get,
     path = "/v1/vms",
-    params(crate::handlers::VmListQuery),
+    params(crate::handlers::VmListQuery, PageQuery),
     responses(
-        (status = 200, description = "List all VMs", body = Vec<Vm>),
+        (status = 200, description = "VMs, by name", body = crate::pagination::VmPage),
+        (status = 422, description = "Invalid limit or cursor"),
         (status = 500, description = "Internal server error")
     ),
     tag = "vms"
@@ -747,7 +749,9 @@ pub async fn preflight_image(
 pub async fn list(
     Extension(env): Extension<App>,
     axum::extract::Query(query): axum::extract::Query<crate::handlers::VmListQuery>,
-) -> Result<ApiResponse<Vec<Vm>>> {
+    axum::extract::Query(page): axum::extract::Query<PageQuery>,
+) -> Result<ApiResponse<crate::pagination::VmPage>> {
+    let page = PageRequest::try_from(page)?;
     let tags: Vec<String> = query
         .tags
         .as_deref()
@@ -756,9 +760,9 @@ pub async fn list(
         .filter(|s| !s.is_empty())
         .map(String::from)
         .collect();
-    let vms = vms::list(env.pool(), query.name.as_deref(), &tags).await?;
+    let vms = vms::list(env.pool(), query.name.as_deref(), &tags, &page).await?;
     Ok(ApiResponse {
-        data: vms,
+        data: crate::pagination::VmPage::new(vms, &page, |vm| (vm.name.clone(), vm.id)),
         code: StatusCode::OK,
     })
 }

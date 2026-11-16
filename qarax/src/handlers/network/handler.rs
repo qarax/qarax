@@ -8,6 +8,7 @@ use crate::{
         networks::{self, IpAllocation, Ipv4Subnet, Network, NetworkHost, NewNetwork},
     },
     network_policy,
+    pagination::{PageQuery, PageRequest},
 };
 use anyhow::Context;
 use axum::{Extension, Json, extract::Path};
@@ -20,9 +21,10 @@ use uuid::Uuid;
 #[utoipa::path(
     get,
     path = "/v1/networks",
-    params(crate::handlers::NameQuery),
+    params(crate::handlers::NameQuery, PageQuery),
     responses(
-        (status = 200, description = "List all networks", body = Vec<Network>),
+        (status = 200, description = "Networks, by name", body = crate::pagination::NetworkPage),
+        (status = 422, description = "Invalid limit or cursor"),
         (status = 500, description = "Internal server error")
     ),
     tag = "networks"
@@ -31,10 +33,12 @@ use uuid::Uuid;
 pub async fn list(
     Extension(env): Extension<App>,
     axum::extract::Query(query): axum::extract::Query<crate::handlers::NameQuery>,
-) -> Result<ApiResponse<Vec<Network>>> {
-    let nets = networks::list(env.pool(), query.name.as_deref()).await?;
+    axum::extract::Query(page): axum::extract::Query<PageQuery>,
+) -> Result<ApiResponse<crate::pagination::NetworkPage>> {
+    let page = PageRequest::try_from(page)?;
+    let nets = networks::list(env.pool(), query.name.as_deref(), &page).await?;
     Ok(ApiResponse {
-        data: nets,
+        data: crate::pagination::NetworkPage::new(nets, &page, |net| (net.name.clone(), net.id)),
         code: StatusCode::OK,
     })
 }

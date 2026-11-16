@@ -228,13 +228,15 @@ def ensure_host_registered():
 
     Returns the host's id. Tests that need a real node should use it instead
     of picking from list_hosts(): other tests register hosts with unreachable
-    addresses (the API has no host delete), and the list has no fixed order.
+    addresses (the API has no host delete), and the list is ordered by name,
+    not by reachability.
     """
     client = Client(base_url=QARAX_URL, headers=AUTH_HEADERS)
 
-    hosts = list_hosts.sync(client=client)
-    if hosts is None:
+    page = list_hosts.sync(client=client)
+    if page is None:
         raise RuntimeError("Failed to list hosts")
+    hosts = page.items
 
     last_error: str | None = None
     for address in _candidate_node_hosts():
@@ -252,11 +254,12 @@ def ensure_host_registered():
             if result.status_code.value == 201:
                 host_id = uuid.UUID(result.parsed.strip())
             else:
-                hosts = list_hosts.sync(client=client)
-                if hosts is None:
+                page = list_hosts.sync(client=client)
+                if page is None:
                     raise RuntimeError(
                         "Failed to list hosts after registration attempt"
                     )
+                hosts = page.items
                 selected_host = next((h for h in hosts if h.address == address), None)
                 host_id = selected_host.id if selected_host is not None else None
 
@@ -282,9 +285,10 @@ def ensure_host_registered():
 
 def _register_and_init_host(client, address, port, name):
     """Register a host if not already present and initialize it. Returns host_id."""
-    hosts = list_hosts.sync(client=client)
-    if hosts is None:
+    page = list_hosts.sync(client=client)
+    if page is None:
         raise RuntimeError("Failed to list hosts")
+    hosts = page.items
 
     existing = next((h for h in hosts if h.address == address), None)
     if existing is not None:
@@ -295,7 +299,7 @@ def _register_and_init_host(client, address, port, name):
         if result.status_code.value == 201:
             host_id = uuid.UUID(result.parsed.strip())
         else:
-            hosts = list_hosts.sync(client=client)
+            hosts = list_hosts.sync(client=client).items
             existing = next((h for h in hosts if h.address == address), None)
             if existing is None:
                 raise RuntimeError(f"Could not register host at {address}:{port}")

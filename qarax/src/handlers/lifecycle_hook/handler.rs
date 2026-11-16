@@ -1,9 +1,8 @@
 use super::*;
 use crate::{
     App,
-    model::lifecycle_hooks::{
-        self, HookExecution, LifecycleHook, NewLifecycleHook, UpdateLifecycleHook,
-    },
+    model::lifecycle_hooks::{self, LifecycleHook, NewLifecycleHook, UpdateLifecycleHook},
+    pagination::{PageQuery, PageRequest, time_key},
 };
 use axum::{Extension, Json, extract::Path};
 use http::StatusCode;
@@ -13,9 +12,10 @@ use uuid::Uuid;
 #[utoipa::path(
     get,
     path = "/v1/hooks",
-    params(crate::handlers::NameQuery),
+    params(crate::handlers::NameQuery, PageQuery),
     responses(
-        (status = 200, description = "List all lifecycle hooks", body = Vec<LifecycleHook>),
+        (status = 200, description = "Lifecycle hooks, by name", body = crate::pagination::LifecycleHookPage),
+        (status = 422, description = "Invalid limit or cursor"),
         (status = 500, description = "Internal server error")
     ),
     tag = "hooks"
@@ -24,10 +24,14 @@ use uuid::Uuid;
 pub async fn list(
     Extension(env): Extension<App>,
     axum::extract::Query(query): axum::extract::Query<crate::handlers::NameQuery>,
-) -> Result<ApiResponse<Vec<LifecycleHook>>> {
-    let hooks = lifecycle_hooks::list(env.pool(), query.name.as_deref()).await?;
+    axum::extract::Query(page): axum::extract::Query<PageQuery>,
+) -> Result<ApiResponse<crate::pagination::LifecycleHookPage>> {
+    let page = PageRequest::try_from(page)?;
+    let hooks = lifecycle_hooks::list(env.pool(), query.name.as_deref(), &page).await?;
     Ok(ApiResponse {
-        data: hooks,
+        data: crate::pagination::LifecycleHookPage::new(hooks, &page, |hook| {
+            (hook.name.clone(), hook.id)
+        }),
         code: StatusCode::OK,
     })
 }
@@ -131,11 +135,13 @@ pub async fn delete(
     get,
     path = "/v1/hooks/{hook_id}/executions",
     params(
-        ("hook_id" = uuid::Uuid, Path, description = "Lifecycle hook unique identifier")
+        ("hook_id" = uuid::Uuid, Path, description = "Lifecycle hook unique identifier"),
+        PageQuery
     ),
     responses(
-        (status = 200, description = "List hook executions", body = Vec<HookExecution>),
+        (status = 200, description = "Hook executions, newest first", body = crate::pagination::HookExecutionPage),
         (status = 404, description = "Lifecycle hook not found"),
+        (status = 422, description = "Invalid limit or cursor"),
         (status = 500, description = "Internal server error")
     ),
     tag = "hooks"
@@ -144,13 +150,17 @@ pub async fn delete(
 pub async fn list_executions(
     Extension(env): Extension<App>,
     Path(hook_id): Path<Uuid>,
-) -> Result<ApiResponse<Vec<HookExecution>>> {
+    axum::extract::Query(page): axum::extract::Query<PageQuery>,
+) -> Result<ApiResponse<crate::pagination::HookExecutionPage>> {
+    let page = PageRequest::try_from(page)?;
     // Verify the hook exists
     lifecycle_hooks::get(env.pool(), hook_id).await?;
 
-    let executions = lifecycle_hooks::list_executions(env.pool(), hook_id).await?;
+    let executions = lifecycle_hooks::list_executions(env.pool(), hook_id, &page).await?;
     Ok(ApiResponse {
-        data: executions,
+        data: crate::pagination::HookExecutionPage::new(executions, &page, |execution| {
+            (time_key(execution.created_at), execution.id)
+        }),
         code: StatusCode::OK,
     })
 }

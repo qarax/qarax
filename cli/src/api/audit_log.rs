@@ -9,7 +9,7 @@ pub async fn list(
     resource_type: Option<&str>,
     resource_id: Option<Uuid>,
     action: Option<&str>,
-    limit: Option<i64>,
+    limit: usize,
 ) -> anyhow::Result<Vec<AuditLog>> {
     let mut params = vec![];
     if let Some(rt) = resource_type {
@@ -21,17 +21,13 @@ pub async fn list(
     if let Some(a) = action {
         params.push(format!("action={}", urlencoding::encode(a)));
     }
-    if let Some(l) = limit {
-        params.push(format!("limit={l}"));
-    }
-
     let path = if params.is_empty() {
         "/audit-logs".to_string()
     } else {
         format!("/audit-logs?{}", params.join("&"))
     };
 
-    client.get(&path).await
+    client.get_list_up_to(&path, limit).await
 }
 
 pub async fn get(client: &Client, id: Uuid) -> anyhow::Result<AuditLog> {

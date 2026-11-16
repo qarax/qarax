@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\nSELECT id, name, pool_type AS \"pool_type: _\", status AS \"status: _\", config, capacity_bytes, allocated_bytes\nFROM storage_pools\nWHERE ($1::text IS NULL OR name = $1)\n        ",
+  "query": "\nSELECT id, name, pool_type AS \"pool_type: _\", status AS \"status: _\", config, capacity_bytes, allocated_bytes\nFROM storage_pools\nWHERE ($1::text IS NULL OR name = $1)\n  AND ($2::text IS NULL OR (name, id) > ($2, $3::uuid))\nORDER BY name, id\nLIMIT $4\n        ",
   "describe": {
     "columns": [
       {
@@ -64,7 +64,10 @@
     ],
     "parameters": {
       "Left": [
-        "Text"
+        "Text",
+        "Text",
+        "Uuid",
+        "Int8"
       ]
     },
     "nullable": [
@@ -77,5 +80,5 @@
       false
     ]
   },
-  "hash": "e7a82da7bbb83e61922e64c70b2992945435b36e031ff84ee989198c9e77ddd2"
+  "hash": "5e41bfd95eb0ff1b10954002d7c027a9ab0e6da4d86cfff788115210e8ee385c"
 }

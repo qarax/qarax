@@ -2,6 +2,7 @@ use super::*;
 use crate::{
     App,
     model::instance_types::{self, InstanceType, NewInstanceType},
+    pagination::{PageQuery, PageRequest},
 };
 use axum::{Extension, Json, extract::Path};
 use http::StatusCode;
@@ -11,9 +12,10 @@ use uuid::Uuid;
 #[utoipa::path(
     get,
     path = "/v1/instance-types",
-    params(crate::handlers::NameQuery),
+    params(crate::handlers::NameQuery, PageQuery),
     responses(
-        (status = 200, description = "List all instance types", body = Vec<InstanceType>),
+        (status = 200, description = "Instance types, by name", body = crate::pagination::InstanceTypePage),
+        (status = 422, description = "Invalid limit or cursor"),
         (status = 500, description = "Internal server error")
     ),
     tag = "instance-types"
@@ -22,10 +24,14 @@ use uuid::Uuid;
 pub async fn list(
     Extension(env): Extension<App>,
     axum::extract::Query(query): axum::extract::Query<crate::handlers::NameQuery>,
-) -> Result<ApiResponse<Vec<InstanceType>>> {
-    let instance_types = instance_types::list(env.pool(), query.name.as_deref()).await?;
+    axum::extract::Query(page): axum::extract::Query<PageQuery>,
+) -> Result<ApiResponse<crate::pagination::InstanceTypePage>> {
+    let page = PageRequest::try_from(page)?;
+    let instance_types = instance_types::list(env.pool(), query.name.as_deref(), &page).await?;
     Ok(ApiResponse {
-        data: instance_types,
+        data: crate::pagination::InstanceTypePage::new(instance_types, &page, |t| {
+            (t.name.clone(), t.id)
+        }),
         code: StatusCode::OK,
     })
 }

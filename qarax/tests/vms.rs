@@ -40,7 +40,7 @@ async fn get_json(client: &reqwest::Client, url: String) -> Value {
 
 async fn list_vm_names(client: &reqwest::Client, url: String) -> Vec<String> {
     let vms = get_json(client, url).await;
-    let mut names: Vec<String> = vms
+    let mut names: Vec<String> = vms["items"]
         .as_array()
         .unwrap()
         .iter()
@@ -191,7 +191,7 @@ async fn test_boot_mode_defaults_to_kernel_and_round_trips() {
     }
 
     let vms = get_json(&client, format!("{}/vms", app.address)).await;
-    let vms = vms.as_array().unwrap();
+    let vms = vms["items"].as_array().unwrap();
     assert_eq!(vms.len(), cases.len());
     for (name, _, expected) in cases {
         let vm = vms.iter().find(|vm| vm["name"] == name).unwrap();
@@ -217,7 +217,7 @@ async fn test_tags_round_trip_through_get_and_list() {
     assert_eq!(vm["tags"], json!(["batch", "blue"]));
 
     let vms = get_json(&client, format!("{}/vms", app.address)).await;
-    let vms = vms.as_array().unwrap();
+    let vms = vms["items"].as_array().unwrap();
     let tagged_vm = vms.iter().find(|v| v["name"] == "vm-tagged").unwrap();
     assert_eq!(tagged_vm["tags"], json!(["batch", "blue"]));
     let untagged_vm = vms.iter().find(|v| v["name"] == "vm-untagged").unwrap();

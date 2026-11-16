@@ -25,9 +25,9 @@ enum AuditLogCommand {
         /// Filter by action (create, start, stop, delete, ...)
         #[arg(long)]
         action: Option<String>,
-        /// Maximum number of entries to return (default: 100)
-        #[arg(long)]
-        limit: Option<i64>,
+        /// Maximum number of entries to return, newest first
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
     },
     /// Get a single audit log entry by ID
     Get {

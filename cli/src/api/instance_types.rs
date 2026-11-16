@@ -9,7 +9,7 @@ pub async fn list(client: &Client, name: Option<&str>) -> anyhow::Result<Vec<Ins
         Some(n) => format!("/instance-types?name={n}"),
         None => "/instance-types".to_string(),
     };
-    client.get(&path).await
+    client.get_list(&path).await
 }
 
 pub async fn get(client: &Client, id: Uuid) -> anyhow::Result<InstanceType> {

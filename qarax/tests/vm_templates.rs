@@ -108,7 +108,7 @@ async fn instance_types_and_vm_templates_support_crud() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
     let instance_types: serde_json::Value = res.json().await.unwrap();
-    assert_eq!(instance_types.as_array().unwrap().len(), 1);
+    assert_eq!(instance_types["items"].as_array().unwrap().len(), 1);
 
     let res = client
         .get(format!("{}/vm-templates", app.address))
@@ -117,7 +117,7 @@ async fn instance_types_and_vm_templates_support_crud() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
     let vm_templates: serde_json::Value = res.json().await.unwrap();
-    assert_eq!(vm_templates.as_array().unwrap().len(), 1);
+    assert_eq!(vm_templates["items"].as_array().unwrap().len(), 1);
 
     let res = client
         .delete(format!("{}/vm-templates/{}", app.address, vm_template_id))

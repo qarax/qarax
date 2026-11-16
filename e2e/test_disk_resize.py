@@ -170,7 +170,7 @@ async def test_resize_disk_stopped_vm(client, image_format, started):
     """
     test_id = uuid.uuid4().hex[:8]
     async with client as c:
-        hosts = _up_hosts(await call_api(list_hosts, client=c))
+        hosts = _up_hosts((await call_api(list_hosts, client=c)).items)
         assert hosts, "No UP hosts available"
         pool_id = disk_id = vm_id = None
         disk_path = f"/var/lib/qarax/e2e-drs-{test_id}/resize-disk.{image_format}"
@@ -247,7 +247,7 @@ async def test_resize_disk_running_vm(client):
     """
     test_id = uuid.uuid4().hex[:8]
     async with client as c:
-        hosts = _up_hosts(await call_api(list_hosts, client=c))
+        hosts = _up_hosts((await call_api(list_hosts, client=c)).items)
         assert hosts, "No UP hosts available"
         pool_id = disk_id = vm_id = None
         disk_path = f"/var/lib/qarax/e2e-drs-{test_id}/resize-disk.raw"
@@ -312,7 +312,7 @@ async def test_guest_cannot_turn_its_raw_disk_into_qcow2(client):
     """
     test_id = uuid.uuid4().hex[:8]
     async with client as c:
-        hosts = _up_hosts(await call_api(list_hosts, client=c))
+        hosts = _up_hosts((await call_api(list_hosts, client=c)).items)
         assert hosts, "No UP hosts available"
         pool_id = disk_id = vm_id = None
         disk_path = f"/var/lib/qarax/e2e-drs-{test_id}/planted.raw"

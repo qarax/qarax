@@ -103,8 +103,7 @@ async def test_network_crud(client):
             assert net.subnet == "10.88.0.0/24"
             
             # List networks
-            nets = await call_api(list_networks, client=c)
-            assert nets is not None
+            nets = (await call_api(list_networks, client=c)).items
             assert any(n.id == net.id for n in nets)
 
         finally:
@@ -127,7 +126,7 @@ async def test_deleting_an_attached_network_removes_its_bridge(client):
     test_id = uuid.uuid4().hex[:6]
     bridge_name = f"br87{test_id}"
     async with client as c:
-        hosts = _up_hosts(await call_api(list_hosts, client=c))
+        hosts = _up_hosts((await call_api(list_hosts, client=c)).items)
         assert hosts, "No UP hosts available"
         host = hosts[0]
         container = compose_container(str(host.address))
@@ -174,7 +173,7 @@ async def test_host_init_recreates_lost_network_bridges(client):
     test_id = uuid.uuid4().hex[:6]
     bridge_name = f"br86{test_id}"
     async with client as c:
-        hosts = _up_hosts(await call_api(list_hosts, client=c))
+        hosts = _up_hosts((await call_api(list_hosts, client=c)).items)
         assert hosts, "No UP hosts available"
         host = hosts[0]
         container = compose_container(str(host.address))
@@ -230,7 +229,7 @@ async def test_vm_with_network(client):
         net_id_str = str(net_id)
         
         # Attach to one deterministic host to avoid cross-node network drift.
-        hosts = _up_hosts(await call_api(list_hosts, client=c))
+        hosts = _up_hosts((await call_api(list_hosts, client=c)).items)
         assert hosts, "No UP hosts available"
         primary_host = next(
             (h for h in hosts if h.name == "local-node" or str(h.address) == "qarax-node"),
@@ -376,7 +375,7 @@ async def test_vpc_routing_and_security_group_updates(client):
         subnet_b = "10.121.2.0/24"
         gateway_b = "10.121.2.1"
 
-        hosts = _up_hosts(await call_api(list_hosts, client=c))
+        hosts = _up_hosts((await call_api(list_hosts, client=c)).items)
         assert hosts, "No UP hosts available"
         primary_host = next(
             (h for h in hosts if h.name == "local-node" or str(h.address) == "qarax-node"),

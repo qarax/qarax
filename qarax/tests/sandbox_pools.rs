@@ -57,7 +57,7 @@ async fn sandbox_pool_supports_crud() {
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
     let pools: serde_json::Value = res.json().await.unwrap();
-    assert_eq!(pools.as_array().unwrap().len(), 1);
+    assert_eq!(pools["items"].as_array().unwrap().len(), 1);
 
     // The template can't go while a pool still draws from it.
     let res = client.delete(&template_url).send().await.unwrap();
