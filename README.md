@@ -40,9 +40,18 @@ The API is served under `/v1` (e.g. `http://localhost:8000/v1/vms`), with Swagge
 `http://localhost:8000/swagger-ui`. Lists return one page, `{"items": [...], "next_cursor": ...}`:
 pass `limit` (1 to 1000, default 100) and the previous page's `next_cursor` as `cursor` for the next.
 
-See [docs/HOME_LAB.md](docs/HOME_LAB.md) for a verified cloud-image walkthrough,
-an explanation of compose mode vs VM mode, and the steps to turn the same CLI
-flow into a LAN-reachable home-lab deployment.
+## Installing a release
+
+Releases are published as static binaries (GitHub releases) and images
+(`ghcr.io/qarax/qarax` for the control plane, `ghcr.io/qarax/qarax-vmm-host`
+for nodes). [docs/INSTALL.md](docs/INSTALL.md) sets one up on real hosts, and
+[CHANGELOG.md](CHANGELOG.md) lists what each release changes and what an
+upgrade needs.
+
+## More documentation
+
+See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for running the node as a bootc
+microVM (`make run-local VM=1`).
 
 See [docs/NETWORK_ISOLATION.md](docs/NETWORK_ISOLATION.md) for VPC-style subnet
 grouping, cross-host VXLAN-backed private routing, VM security groups, and the

@@ -15,6 +15,8 @@ qarax uses **bootc** (bootable containers) to deploy VMM hosts. This provides:
 
 - `Containerfile.qarax-vmm`: Defines the bootc image for VMM hosts
 - `qarax-node.service`: systemd unit for running qarax-node
+- `Containerfile.qarax`: the control-plane image (`ghcr.io/<owner>/qarax`), also run by the e2e stack
+- `qarax.service`: systemd unit for running the control plane on a host (see `docs/INSTALL.md`)
 - `vm-network.conf`: sysctl configuration for VM networking
 - `vm-modules.conf`: Kernel modules to load for VM support
 - `README.md`: This file
@@ -124,40 +126,21 @@ bootc switch quay.io/yourorg/qarax-vmm-host:v1.0.0
 systemctl reboot
 ```
 
-### Deploy via Qarax API (Bootc)
+### Deploy via qarax
 
 You can trigger the same flow through qarax instead of running SSH commands manually.
 
 ```bash
-# 1) Register the host in qarax (port is qarax-node gRPC port)
-curl -s -X POST http://localhost:8000/v1/hosts \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "name": "vmm-host-1",
-    "address": "10.0.0.42",
-    "port": 50051,
-    "host_user": "root",
-    "password": ""
-  }'
+# 1) Register the host (the port is qarax-node's gRPC port, 50051 by default)
+qarax host add --name vmm-host-1 --address 10.0.0.42 --user root
 
-# 2) Start bootc deployment over SSH
-curl -s -X POST http://localhost:8000/v1/hosts/<host-id>/deploy \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "image": "quay.io/yourorg/qarax-vmm-host:v1.0.0",
-    "ssh_port": 22,
-    "ssh_user": "root",
-    "ssh_private_key_path": "/home/qarax/.ssh/id_ed25519",
-    "install_bootc": true,
-    "reboot": true
-  }'
+# 2) Start the bootc deployment over SSH
+qarax host deploy vmm-host-1 --image ghcr.io/qarax/qarax-vmm-host:vX.Y.Z --ssh-key ~/.ssh/id_ed25519
 ```
 
-Deployment runs asynchronously. Track progress with:
-
-```bash
-curl -s http://localhost:8000/v1/hosts | jq
-```
+Deployment runs asynchronously. Track progress with `qarax host list`.
+[docs/INSTALL.md](../docs/INSTALL.md) has the whole sequence, certificates and
+`qarax host init` included.
 
 Host status transitions:
 - `down` -> `installing` when deployment starts
@@ -277,18 +260,14 @@ podman build \
   .
 ```
 
-### Modify qarax-node Configuration
+### Change qarax-node's flags
 
-Add a configuration file:
-
-```dockerfile
-# In Containerfile
-COPY deployments/qarax-node-config.yaml /etc/qarax-node/config.yaml
-```
-
-Update the service file to use it:
+qarax-node takes its settings as flags (see `qarax-node/README.md`). Change
+them with a systemd drop-in, in the image or on the host:
 
 ```ini
-# In qarax-node.service
-ExecStart=/usr/local/bin/qarax-node --port 50051 --config /etc/qarax-node/config.yaml
+# /etc/systemd/system/qarax-node.service.d/10-flags.conf
+[Service]
+ExecStart=
+ExecStart=/usr/local/bin/qarax-node --port 50051 --migration-tls-dir /etc/qarax-node/migration-tls
 ```
