@@ -54,3 +54,8 @@ These need action if you ran a build from before them:
   `DELETE /v1/vms/{id}/snapshots/{snapshot_id}` deletes a single snapshot.
 - Restoring a database backup keeps the database backups' records as they
   were before the restore.
+- An OverlayBD import writes the converted image to `<tag>_overlaybd` and
+  leaves the mirrored image as it was; earlier builds converted the mirror in
+  place, so importing it again gave an empty disk. An image you pushed to the
+  local registry that an earlier build imported holds OverlayBD layers under
+  its own tag now: push it again before importing it.

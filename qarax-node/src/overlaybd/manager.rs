@@ -125,14 +125,23 @@ impl OverlayBdManager {
         image_ref: &str,
         registry_url: &str,
     ) -> Result<(String, i64), OverlayBdError> {
-        let target_ref = build_target_ref(image_ref, registry_url)?;
-
-        info!("Copying OCI image {} → {}", image_ref, target_ref);
-        self.copy_image(image_ref, &target_ref, registry_url)
+        // The image is mirrored into the local registry as it is, and its
+        // conversion goes to a tag of its own. Converted in place, the mirror
+        // would hold OverlayBD layers, and importing the image again (as a
+        // preflight does) would convert those as if they were tar layers: a
+        // disk with no files.
+        let mirror_ref = build_target_ref(image_ref, registry_url)?;
+        info!("Copying OCI image {} → {}", image_ref, mirror_ref);
+        self.copy_image(image_ref, &mirror_ref, registry_url)
             .await?;
 
-        info!("Converting {} to OverlayBD format", target_ref);
-        self.convert_to_overlaybd(&target_ref).await?;
+        let conversion = Conversion::of(&mirror_ref)?;
+        let target_ref = conversion.output_ref();
+        info!(
+            "Converting {} to OverlayBD format as {}",
+            mirror_ref, target_ref
+        );
+        self.convert_to_overlaybd(&conversion).await?;
 
         let size_bytes = self
             .fetch_image_size(&target_ref, registry_url)
@@ -252,23 +261,16 @@ impl OverlayBdManager {
         Ok(())
     }
 
-    /// Convert the image at `target_ref` to OverlayBD format in-place.
-    async fn convert_to_overlaybd(&self, target_ref: &str) -> Result<(), OverlayBdError> {
-        let reference = Reference::try_from(target_ref)
-            .map_err(|e| OverlayBdError::InvalidImageRef(e.to_string()))?;
-
-        let registry = reference.registry();
-        let repository = reference.repository();
-        let tag = reference.tag().unwrap_or("latest");
-
+    /// Run the convertor for `conversion`.
+    async fn convert_to_overlaybd(&self, conversion: &Conversion) -> Result<(), OverlayBdError> {
         let output = tokio::process::Command::new(&self.convertor_binary)
             .args([
                 "--repository",
-                &format!("{}/{}", registry, repository),
+                &conversion.repository,
                 "--input-tag",
-                tag,
+                &conversion.input_tag,
                 "--overlaybd",
-                tag,
+                &conversion.output_tag,
                 "--plain",
             ])
             .output()
@@ -1219,6 +1221,34 @@ impl OverlayBdManager {
 /// e.g. image_ref = "public.ecr.aws/docker/library/ubuntu:22.04",
 ///      registry_url = "http://registry:5000"
 /// ->   "registry:5000/docker/library/ubuntu:22.04"
+/// An OverlayBD conversion of an image in the local registry: it reads the
+/// image's tag and writes `<tag>_overlaybd` (the convertor's own convention)
+/// in the same repository, never the tag it reads.
+#[derive(Debug, PartialEq, Eq)]
+struct Conversion {
+    /// `registry/repository`, as the convertor takes it.
+    repository: String,
+    input_tag: String,
+    output_tag: String,
+}
+
+impl Conversion {
+    fn of(mirror_ref: &str) -> Result<Self, OverlayBdError> {
+        let reference = Reference::try_from(mirror_ref)
+            .map_err(|e| OverlayBdError::InvalidImageRef(e.to_string()))?;
+        let input_tag = reference.tag().unwrap_or("latest").to_string();
+        Ok(Self {
+            repository: format!("{}/{}", reference.registry(), reference.repository()),
+            output_tag: format!("{input_tag}_overlaybd"),
+            input_tag,
+        })
+    }
+
+    fn output_ref(&self) -> String {
+        format!("{}:{}", self.repository, self.output_tag)
+    }
+}
+
 fn build_target_ref(image_ref: &str, registry_url: &str) -> Result<String, OverlayBdError> {
     let host_owned = registry_host(registry_url);
     let host = host_owned.as_str();
@@ -1280,7 +1310,30 @@ fn looks_like_device_path(path: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::looks_like_device_path;
+    use super::{Conversion, looks_like_device_path};
+
+    #[test]
+    fn a_conversion_writes_a_tag_of_its_own() {
+        let conversion = Conversion::of("registry:5000/test/alpine:3.20").unwrap();
+        assert_eq!(
+            conversion,
+            Conversion {
+                repository: "registry:5000/test/alpine".into(),
+                input_tag: "3.20".into(),
+                output_tag: "3.20_overlaybd".into(),
+            }
+        );
+        assert_eq!(
+            conversion.output_ref(),
+            "registry:5000/test/alpine:3.20_overlaybd"
+        );
+        assert_eq!(
+            Conversion::of("registry:5000/test/alpine")
+                .unwrap()
+                .output_ref(),
+            "registry:5000/test/alpine:latest_overlaybd"
+        );
+    }
 
     #[test]
     fn accepts_dev_paths_for_recovery() {

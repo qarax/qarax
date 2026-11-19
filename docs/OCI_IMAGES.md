@@ -42,12 +42,14 @@ This triggers an async background job that:
 1. Copies the source image to the pool's local OCI registry (`registry_url` from pool config)
    via `oci-client`.
 2. Converts it to OverlayBD format using the `convertor` binary
-   (from [accelerated-container-image](https://github.com/containerd/accelerated-container-image)).
-   This rewrites the layer manifests into the lazy-loadable OverlayBD format.
+   (from [accelerated-container-image](https://github.com/containerd/accelerated-container-image)),
+   which writes the lazy-loadable OverlayBD layers to the tag `<tag>_overlaybd` in the same
+   repository. The mirrored image itself stays as it is, so importing it again converts it
+   afresh.
 3. Stores a `StorageObject` of type `OciImage` in the database:
    ```json
    {
-     "image_ref": "registry:5000/docker/library/alpine:latest",
+     "image_ref": "registry:5000/docker/library/alpine:latest_overlaybd",
      "registry_url": "http://registry:5000",
      "digest": "sha256:..."
    }
