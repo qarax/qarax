@@ -90,6 +90,7 @@ from helpers import (
     call_api_detailed,
     docker,
     exec_when_ready,
+    vm_diagnostics,
     wait_for_start,
 )
 from helpers import up_hosts as _up_hosts
@@ -271,7 +272,10 @@ async def test_vm_boots_an_oci_image(client, bootable_oci_image_ref, hypervisor)
             started = await call_api(start_vm, client=c, vm_id=vm_id)
             await wait_for_start(c, vm_id, started.job_id)
 
-            os_release = await exec_when_ready(c, vm_id, "cat /etc/os-release")
+            try:
+                os_release = await exec_when_ready(c, vm_id, "cat /etc/os-release")
+            except AssertionError as e:
+                raise AssertionError(f"{e}\n{vm_diagnostics(vm_id)}") from e
             assert os_release.exit_code == 0, os_release.stderr
             assert "Alpine" in os_release.stdout, os_release.stdout
         finally:

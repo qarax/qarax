@@ -154,6 +154,30 @@ def compose_container(service):
     return container
 
 
+def vm_diagnostics(vm_id, max_bytes=6000):
+    """What a node knows of a VM, for a failure message: the end of its serial
+    console (Cloud Hypervisor writes <vm>.console.log, Firecracker <vm>.fc.log)
+    and the node's log lines that mention it."""
+    for container in containers(NODE_CONTAINER_PREFIX):
+        for name in (f"{vm_id}.console.log", f"{vm_id}.fc.log"):
+            console = docker(
+                "exec", container, "tail", "-c", str(max_bytes), f"/var/lib/qarax/vms/{name}",
+                check=False,
+            )
+            if console.returncode == 0:
+                logs = docker("logs", container, check=False)
+                mentions = [
+                    line
+                    for line in (logs.stdout + logs.stderr).splitlines()
+                    if str(vm_id) in line
+                ]
+                return (
+                    f"--- {name} on {container} ---\n{console.stdout}\n"
+                    f"--- {container} log lines for the VM ---\n" + "\n".join(mentions[-40:])
+                )
+    return f"(no console log for VM {vm_id} on any node)"
+
+
 def path_exists_in_any(prefix, path):
     """True if `path` exists in any running container whose name starts with prefix."""
     return any(
