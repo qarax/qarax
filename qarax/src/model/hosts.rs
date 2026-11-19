@@ -326,6 +326,9 @@ pub struct SchedulingRequest {
     pub placement_policy: Option<crate::model::vms::PlacementPolicy>,
     #[serde(default)]
     pub excluded_host_ids: Vec<Uuid>,
+    /// Only this host can take the VMs: a fork runs where its source does.
+    #[serde(default)]
+    pub required_host_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -599,6 +602,17 @@ pub async fn pick_host_tx(
     request: &SchedulingRequest,
     config: &crate::configuration::SchedulingSettings,
 ) -> Result<Option<Host>, sqlx::Error> {
+    if let Some(host_id) = request.required_host_id {
+        // With one candidate, wait for a placement on it to commit rather than
+        // skip it as the query below would (SKIP LOCKED). Lock it in a
+        // statement of its own: a statement that waited for a row lock still
+        // reads the rest from the snapshot it started with, which would miss
+        // that placement's VMs.
+        sqlx::query_scalar!("SELECT id FROM hosts WHERE id = $1 FOR UPDATE", host_id)
+            .fetch_optional(tx.as_mut())
+            .await?;
+    }
+
     let mut qb = QueryBuilder::<Postgres>::new(
         r#"
 SELECT h.id, h.name, h.address, h.port, h.host_user, h.credential_ref,
@@ -639,6 +653,12 @@ LEFT JOIN (
         qb.push("AND NOT (h.id = ANY(");
         qb.push_bind(&request.excluded_host_ids);
         qb.push(")) ");
+    }
+
+    if let Some(host_id) = request.required_host_id {
+        qb.push("AND h.id = ");
+        qb.push_bind(host_id);
+        qb.push(' ');
     }
 
     for network_id in &request.required_network_ids {
@@ -1144,6 +1164,7 @@ mod tests {
                 gpu: None,
                 placement_policy: None,
                 excluded_host_ids: vec![],
+                required_host_id: None,
             },
             &scheduling_config(),
         )
@@ -1179,6 +1200,7 @@ mod tests {
                 gpu: None,
                 placement_policy: None,
                 excluded_host_ids: vec![],
+                required_host_id: None,
             },
             &scheduling_config(),
         )
@@ -1207,6 +1229,7 @@ mod tests {
             gpu: None,
             placement_policy: None,
             excluded_host_ids: vec![],
+            required_host_id: None,
         };
 
         let mut tx1 = db.pool.begin().await.expect("begin tx1");
@@ -1256,6 +1279,105 @@ mod tests {
         .expect("pick host")
         .expect("expected host");
         assert_eq!(remaining_capacity.id, host_id);
+    }
+
+    #[tokio::test]
+    async fn pick_host_with_a_required_host_considers_only_it() {
+        let db = TestDatabase::new().await;
+        // Busier and smaller: the scheduler alone would pick the other host.
+        let required_id = db
+            .insert_up_host("required-host", Some("x86_64"), 8, 1024, 10_000, 0.9)
+            .await;
+        db.insert_up_host("idle-host", Some("x86_64"), 8, 4096, 10_000, 0.1)
+            .await;
+        let request = SchedulingRequest {
+            memory_bytes: 512,
+            vcpus: 1,
+            disk_bytes: 0,
+            architecture: None,
+            storage_pool_id: None,
+            required_network_ids: vec![],
+            requires_overlaybd: false,
+            gpu: None,
+            placement_policy: None,
+            excluded_host_ids: vec![],
+            required_host_id: Some(required_id),
+        };
+
+        let mut tx = db.pool.begin().await.expect("begin tx");
+        let host = super::pick_host_tx(&mut tx, &request, &scheduling_config())
+            .await
+            .expect("pick host")
+            .expect("expected the required host");
+        assert_eq!(host.id, required_id);
+        drop(tx);
+
+        // What doesn't fit on the required host goes nowhere else.
+        let mut tx = db.pool.begin().await.expect("begin tx");
+        let too_big = super::pick_host_tx(
+            &mut tx,
+            &SchedulingRequest {
+                memory_bytes: 2048,
+                ..request
+            },
+            &scheduling_config(),
+        )
+        .await
+        .expect("pick host");
+        assert!(too_big.is_none(), "placed on {:?}", too_big.map(|h| h.name));
+    }
+
+    #[tokio::test]
+    async fn pick_host_with_a_required_host_waits_for_a_placement_on_it() {
+        let db = TestDatabase::new().await;
+        let host_id = db
+            .insert_up_host("pinned-host", Some("x86_64"), 8, 1024, 10_000, 0.1)
+            .await;
+        let request = SchedulingRequest {
+            memory_bytes: 600,
+            vcpus: 1,
+            disk_bytes: 0,
+            architecture: None,
+            storage_pool_id: None,
+            required_network_ids: vec![],
+            requires_overlaybd: false,
+            gpu: None,
+            placement_policy: None,
+            excluded_host_ids: vec![],
+            required_host_id: None,
+        };
+
+        // A placement on the host, not committed yet.
+        let mut tx1 = db.pool.begin().await.expect("begin tx1");
+        super::pick_host_tx(&mut tx1, &request, &scheduling_config())
+            .await
+            .expect("pick host")
+            .expect("expected host");
+        vms::create_tx(&mut tx1, &resolved_vm("vm-a", 600, 1), Some(host_id))
+            .await
+            .expect("insert vm");
+
+        let pool = db.pool.clone();
+        let pinned = SchedulingRequest {
+            required_host_id: Some(host_id),
+            ..request
+        };
+        let waiting = tokio::spawn(async move {
+            let mut tx2 = pool.begin().await.expect("begin tx2");
+            super::pick_host_tx(&mut tx2, &pinned, &scheduling_config())
+                .await
+                .expect("pick host")
+                .map(|host| host.id)
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        assert!(
+            !waiting.is_finished(),
+            "the pinned placement didn't wait for the one in progress"
+        );
+
+        tx1.commit().await.expect("commit tx1");
+        // Then it counts that placement: 600 + 600 doesn't fit in 1024.
+        assert_eq!(waiting.await.expect("join"), None);
     }
 
     #[tokio::test]
@@ -1311,6 +1433,7 @@ mod tests {
                 gpu: None,
                 placement_policy: None,
                 excluded_host_ids: vec![],
+                required_host_id: None,
             },
             &scheduling_config(),
         )
@@ -1358,6 +1481,7 @@ mod tests {
             gpu: None,
             placement_policy: None,
             excluded_host_ids: vec![],
+            required_host_id: None,
         };
         for (requires_overlaybd, expected) in [(true, with_pool), (false, without_pool)] {
             let mut tx = db.pool.begin().await.expect("begin tx");
@@ -1394,6 +1518,7 @@ mod tests {
                 gpu: None,
                 placement_policy: None,
                 excluded_host_ids: vec![excluded_host_id],
+                required_host_id: None,
             },
             &scheduling_config(),
         )
@@ -1440,6 +1565,7 @@ mod tests {
                     spread_tags: vec![],
                 }),
                 excluded_host_ids: vec![],
+                required_host_id: None,
             },
             &scheduling_config(),
         )
@@ -1490,6 +1616,7 @@ mod tests {
                     spread_tags: vec![],
                 }),
                 excluded_host_ids: vec![],
+                required_host_id: None,
             },
             &scheduling_config(),
         )
@@ -1540,6 +1667,7 @@ mod tests {
                     spread_tags: vec![],
                 }),
                 excluded_host_ids: vec![],
+                required_host_id: None,
             },
             &scheduling_config(),
         )
@@ -1590,6 +1718,7 @@ mod tests {
                     spread_tags: vec![],
                 }),
                 excluded_host_ids: vec![],
+                required_host_id: None,
             },
             &scheduling_config(),
         )
@@ -1642,6 +1771,7 @@ mod tests {
                     spread_tags: vec!["spread:web".to_string()],
                 }),
                 excluded_host_ids: vec![],
+                required_host_id: None,
             },
             &scheduling_config(),
         )
@@ -1693,6 +1823,7 @@ mod tests {
                         gpu: Some(gpu),
                         placement_policy: None,
                         excluded_host_ids: vec![],
+                        required_host_id: None,
                     },
                     &scheduling_config(),
                 )

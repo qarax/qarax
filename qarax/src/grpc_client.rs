@@ -131,8 +131,8 @@ use node::{
     BlankDiskSource, CloudInitConfig, ConsoleConfig, ConsoleInput, ConsoleLogResponse,
     CopyFileRequest, CpusConfig, CreateDiskRequest, DeleteSnapshotRequest, DetachNetworkRequest,
     DetachStoragePoolRequest, DiskConfig, DownloadFileRequest, ExecVmRequest, ExecVmResponse,
-    HypervisorType, ImportOverlayBdRequest, ImportOverlayBdResponse, MemoryConfig, NetConfig,
-    NodeInfo, NumaPlacement, OverlayBdDiskSource, PayloadConfig, PreflightImageRequest,
+    ForkVmRequest, HypervisorType, ImportOverlayBdRequest, ImportOverlayBdResponse, MemoryConfig,
+    NetConfig, NodeInfo, NumaPlacement, OverlayBdDiskSource, PayloadConfig, PreflightImageRequest,
     PreflightImageResponse, ReceiveMigrationRequest, RemoveDeviceRequest, ResizeDiskRequest,
     ResizeVmRequest, RestoreVmRequest, SendMigrationRequest, SnapshotVmRequest, StoragePoolKind,
     SyncNetworkIsolationRequest, SyncVmFirewallRequest, SyncVpcOverlaysRequest, TransferResponse,
@@ -657,6 +657,29 @@ impl NodeClient {
             })
             .await
             .context("Failed to restore VM on qarax-node")?;
+        Ok(())
+    }
+
+    /// Start `fork_ids` on the node, new VMs that continue from `source_id`'s
+    /// current state. Either all of them start or none does.
+    #[instrument(skip(self))]
+    pub async fn fork_vm(&self, source_id: Uuid, fork_ids: &[Uuid]) -> Result<()> {
+        let mut client = self.connect_vm_service().await?;
+        client
+            .fork_vm(ForkVmRequest {
+                source_vm_id: source_id.to_string(),
+                fork_vm_ids: fork_ids.iter().map(Uuid::to_string).collect(),
+            })
+            .await
+            .map_err(|status| match status.code() {
+                tonic::Code::NotFound
+                | tonic::Code::InvalidArgument
+                | tonic::Code::FailedPrecondition
+                | tonic::Code::Unimplemented => {
+                    crate::errors::Error::UnprocessableEntity(status.message().to_string()).into()
+                }
+                _ => anyhow::anyhow!("Failed to fork VM on qarax-node: {}", status),
+            })?;
         Ok(())
     }
 

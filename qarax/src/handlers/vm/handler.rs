@@ -260,6 +260,7 @@ async fn scheduling_request_for_vm(
         gpu: gpu_request(accel),
         placement_policy: vm.placement_policy.clone(),
         excluded_host_ids: vec![],
+        required_host_id: None,
     })
 }
 
@@ -330,6 +331,7 @@ async fn select_preflight_host(
                     gpu: None,
                     placement_policy: None,
                     excluded_host_ids: vec![],
+                    required_host_id: None,
                 },
             )
             .await

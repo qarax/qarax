@@ -27,7 +27,9 @@ The first release.
   and NUMA placement.
 - Live migration (TLS, postcopy), HA failover of VMs from dead hosts.
 - Snapshots and backups of VMs, and backups of the control-plane database.
-- Sandboxes: short-lived VMs with idle reaping and prewarmed pools.
+- Sandboxes: short-lived VMs with idle reaping and prewarmed pools, and forks of
+  a running Firecracker sandbox that continue from its state
+  ([docs/SANDBOX_FORKING.md](docs/SANDBOX_FORKING.md)).
 - Lifecycle hooks (webhooks), a Server-Sent Events stream of VM changes, an
   audit log of API mutations, OpenTelemetry traces and metrics.
 - A CLI (`qarax`) and a generated Python SDK.

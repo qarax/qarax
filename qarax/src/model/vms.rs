@@ -1212,6 +1212,49 @@ VALUES (
     Ok(id)
 }
 
+/// A row for a VM forked from `source_id`: the source's host and
+/// configuration under a new name, `PENDING` until its node has started it.
+pub async fn create_fork_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    source_id: Uuid,
+    name: &str,
+) -> Result<Uuid, sqlx::Error> {
+    let id = Uuid::new_v4();
+    let inserted = sqlx::query!(
+        r#"
+INSERT INTO vms (
+    id, name, tags, status, host_id, hypervisor,
+    boot_vcpus, max_vcpus, cpu_topology, kvm_hyperv,
+    memory_size, memory_hotplug_size, memory_mergeable, memory_shared,
+    memory_hugepages, memory_hugepage_size, memory_prefault, memory_thp,
+    boot_source_id, boot_mode, description, image_ref,
+    cloud_init_user_data, cloud_init_meta_data, cloud_init_network_config,
+    config
+)
+SELECT
+    $1, $2, tags, 'PENDING', host_id, hypervisor,
+    boot_vcpus, max_vcpus, cpu_topology, kvm_hyperv,
+    memory_size, memory_hotplug_size, memory_mergeable, memory_shared,
+    memory_hugepages, memory_hugepage_size, memory_prefault, memory_thp,
+    boot_source_id, boot_mode, description, image_ref,
+    cloud_init_user_data, cloud_init_meta_data, cloud_init_network_config,
+    config
+FROM vms
+WHERE id = $3
+        "#,
+        id,
+        name,
+        source_id
+    )
+    .execute(tx.as_mut())
+    .await?
+    .rows_affected();
+    if inserted == 0 {
+        return Err(sqlx::Error::RowNotFound);
+    }
+    Ok(id)
+}
+
 /// VMs the VM monitor reconciles against their node. VMs held by a job
 /// (`Pending`, `Migrating`, `Committing`) are left to that job.
 pub async fn list_active(pool: &PgPool) -> Result<Vec<Vm>, sqlx::Error> {

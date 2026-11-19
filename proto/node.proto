@@ -426,6 +426,15 @@ message RestoreVmRequest {
   HypervisorType hypervisor = 3; // defaults to CLOUD_HV (0) for backward compatibility
 }
 
+// ForkVmRequest starts new VMs that continue from a running VM's current
+// state: its memory, devices and guest processes. The source is paused for a
+// snapshot and resumes. Each fork has the source's config under its own ID.
+// Firecracker VMs with the guest agent and without disks or NICs only.
+message ForkVmRequest {
+  string source_vm_id          = 1;
+  repeated string fork_vm_ids  = 2;
+}
+
 // ReceiveMigrationRequest is sent to the *destination* node to prepare it for
 // an incoming live migration.  The destination spawns a Cloud Hypervisor
 // process, sets up the required TAP devices using the supplied VmConfig, then
@@ -489,6 +498,7 @@ service VmService {
   rpc ResumeVM(VmID) returns (google.protobuf.Empty) {}
   rpc SnapshotVM(SnapshotVmRequest) returns (google.protobuf.Empty) {}
   rpc RestoreVM(RestoreVmRequest) returns (google.protobuf.Empty) {}
+  rpc ForkVM(ForkVmRequest) returns (google.protobuf.Empty) {}
   // Remove a snapshot directory written by SnapshotVM. Missing is not an error.
   rpc DeleteSnapshot(DeleteSnapshotRequest) returns (google.protobuf.Empty) {}
   rpc DeleteVM(VmID) returns (google.protobuf.Empty) {}

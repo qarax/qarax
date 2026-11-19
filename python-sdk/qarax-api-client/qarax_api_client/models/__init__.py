@@ -32,6 +32,7 @@ from .exec_sandbox_request import ExecSandboxRequest
 from .exec_sandbox_response import ExecSandboxResponse
 from .exec_vm_request import ExecVmRequest
 from .exec_vm_response import ExecVmResponse
+from .fork_sandbox_request import ForkSandboxRequest
 from .hook_execution import HookExecution
 from .hook_execution_page import HookExecutionPage
 from .hook_execution_status import HookExecutionStatus
@@ -167,6 +168,7 @@ __all__ = (
     "ExecSandboxResponse",
     "ExecVmRequest",
     "ExecVmResponse",
+    "ForkSandboxRequest",
     "HookExecution",
     "HookExecutionPage",
     "HookExecutionStatus",

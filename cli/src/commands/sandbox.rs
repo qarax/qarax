@@ -5,7 +5,10 @@ use uuid::Uuid;
 use crate::{
     api::{
         self,
-        models::{ConfigureSandboxPoolRequest, ExecSandboxRequest, NewSandbox},
+        models::{
+            ConfigureSandboxPoolRequest, ExecSandboxRequest, ForkSandboxRequest, NewSandbox,
+            Sandbox,
+        },
     },
     client::Client,
 };
@@ -60,6 +63,15 @@ enum SandboxCommand {
     Keepalive {
         /// Sandbox name or ID
         sandbox: String,
+    },
+    /// Fork a running sandbox: new sandboxes on its host that continue from its
+    /// current state (memory, processes, files)
+    Fork {
+        /// Sandbox name or ID
+        sandbox: String,
+        /// How many forks to make, from 1 to 16
+        #[arg(long, default_value_t = 1)]
+        count: u32,
     },
     /// Execute a command inside a running sandbox
     Exec {
@@ -138,18 +150,7 @@ pub async fn run(args: SandboxArgs, client: &Client, output: OutputFormat) -> an
             if !matches!(output, OutputFormat::Table) {
                 print_output(&sandboxes, output)?;
             } else {
-                let rows: Vec<SandboxRow> = sandboxes
-                    .iter()
-                    .map(|s| SandboxRow {
-                        id: s.id.to_string()[..8].to_string(),
-                        name: s.name.clone(),
-                        status: s.status.clone(),
-                        vm_status: s.vm_status.clone().unwrap_or_else(|| "-".to_string()),
-                        ip: s.ip_address.clone().unwrap_or_else(|| "-".to_string()),
-                        idle_timeout: format!("{}s", s.idle_timeout_secs),
-                    })
-                    .collect();
-                println!("{}", Table::new(rows).with(Style::psql()));
+                print_sandbox_table(&sandboxes);
             }
         }
         SandboxCommand::Pool { command } => match command {
@@ -283,6 +284,15 @@ pub async fn run(args: SandboxArgs, client: &Client, output: OutputFormat) -> an
             api::sandboxes::keepalive(client, id).await?;
             println!("Kept sandbox alive: {id}");
         }
+        SandboxCommand::Fork { sandbox, count } => {
+            let id = resolve_sandbox_id(client, &sandbox).await?;
+            let forks = api::sandboxes::fork(client, id, &ForkSandboxRequest { count }).await?;
+            if !matches!(output, OutputFormat::Table) {
+                print_output(&forks, output)?;
+            } else {
+                print_sandbox_table(&forks);
+            }
+        }
         SandboxCommand::Exec {
             sandbox,
             timeout,
@@ -319,6 +329,21 @@ pub async fn run(args: SandboxArgs, client: &Client, output: OutputFormat) -> an
     }
 
     Ok(())
+}
+
+fn print_sandbox_table(sandboxes: &[Sandbox]) {
+    let rows: Vec<SandboxRow> = sandboxes
+        .iter()
+        .map(|s| SandboxRow {
+            id: s.id.to_string()[..8].to_string(),
+            name: s.name.clone(),
+            status: s.status.clone(),
+            vm_status: s.vm_status.clone().unwrap_or_else(|| "-".to_string()),
+            ip: s.ip_address.clone().unwrap_or_else(|| "-".to_string()),
+            idle_timeout: format!("{}s", s.idle_timeout_secs),
+        })
+        .collect();
+    println!("{}", Table::new(rows).with(Style::psql()));
 }
 
 /// Resolve a sandbox name or UUID string to a UUID.
