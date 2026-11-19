@@ -3,6 +3,7 @@ E2E tests for OCI image storage (OverlayBD).
 
 These tests verify:
 - Creating VMs with an OCI image_ref (async job path)
+- Booting an OCI image on each hypervisor
 - Image preflight marks the test image bootable
 - Persistent OverlayBD upper layers and their resize/delete guards
 - Committing an OCI-backed VM to a raw disk
@@ -45,6 +46,7 @@ from qarax_api_client.api.vms import (
 from qarax_api_client.api.vms import (
     resize_disk,
 )
+from qarax_api_client.api.vms import start as start_vm
 from qarax_api_client.models import Hypervisor, NewStoragePool, NewVm, StoragePoolType
 from qarax_api_client.models.attach_pool_host_request import AttachPoolHostRequest
 from qarax_api_client.models.create_vm_response import CreateVmResponse
@@ -82,7 +84,15 @@ async def wait_for_job(c, job_id, timeout=JOB_TIMEOUT):
     raise TimeoutError(f"Job {job_id} did not complete within {timeout}s")
 
 
-from helpers import AUTH_HEADERS, call_api, call_api_detailed, docker
+from helpers import (
+    AUTH_HEADERS,
+    call_api,
+    call_api_detailed,
+    docker,
+    exec_when_ready,
+    vm_diagnostics,
+    wait_for_start,
+)
 from helpers import up_hosts as _up_hosts
 
 
@@ -155,6 +165,20 @@ def oci_image_ref():
     return f"{REGISTRY_INTERNAL_URL}/test/busybox:latest"
 
 
+@pytest.fixture(scope="session")
+def bootable_oci_image_ref():
+    """Push alpine to the local test registry; return its internal ref.
+
+    Unlike busybox (see test_preflight_oci_image), its /bin/sh is a symlink,
+    which the OverlayBD conversion keeps, so a VM can boot it.
+    """
+    tag = f"{REGISTRY_PUSH_URL}/test/alpine:latest"
+    docker("pull", "alpine:latest")
+    docker("tag", "alpine:latest", tag)
+    docker("push", tag)
+    return f"{REGISTRY_INTERNAL_URL}/test/alpine:latest"
+
+
 # OCI image tests
 
 
@@ -207,15 +231,62 @@ async def test_create_vm_with_oci_image(client, oci_image_ref):
             )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Known product bug: busybox ships /bin/sh as a tar hard link (to bin/[), and the "
-        "OverlayBD-converted rootfs the preflight mounts has no executable sh on PATH. "
-        "It failed this way in every run since 889804c, hidden by a skip until now. "
-        "strict: remove this marker once conversion keeps hard links."
-    ),
-)
+@pytest.mark.parametrize("hypervisor", [Hypervisor.CLOUD_HV, Hypervisor.FIRECRACKER])
+@pytest.mark.asyncio
+async def test_vm_boots_an_oci_image(client, bootable_oci_image_ref, hypervisor):
+    """A VM boots an OCI image on either hypervisor: its root disk is the
+    image through OverlayBD, with qarax-init, the guest agent, injected."""
+    test_id = str(uuid.uuid4())[:8]
+    async with client as c:
+        hosts = _up_hosts((await list_hosts.asyncio(client=c)).items)
+        assert hosts, "No UP hosts registered"
+
+        overlaybd_pool_id = await _create_pool(
+            c,
+            f"e2e-oci-boot-obd-{test_id}",
+            StoragePoolType.OVERLAY_BD,
+            {"url": f"http://{REGISTRY_INTERNAL_URL}"},
+        )
+
+        vm_id = None
+        try:
+            await _attach_overlaybd_pool(c, hosts, overlaybd_pool_id)
+
+            result = await call_api(
+                create_vm,
+                client=c,
+                body=NewVm(
+                    name=f"e2e-oci-boot-{hypervisor.value}-{test_id}",
+                    hypervisor=hypervisor,
+                    boot_vcpus=1,
+                    max_vcpus=1,
+                    memory_size=268435456,
+                    image_ref=bootable_oci_image_ref,
+                    guest_agent=True,
+                ),
+            )
+            assert isinstance(result, CreateVmResponse), type(result)
+            vm_id = UUID(str(result.vm_id))
+            await wait_for_job(c, result.job_id)
+
+            started = await call_api(start_vm, client=c, vm_id=vm_id)
+            await wait_for_start(c, vm_id, started.job_id)
+
+            try:
+                os_release = await exec_when_ready(c, vm_id, "cat /etc/os-release")
+            except AssertionError as e:
+                raise AssertionError(f"{e}\n{vm_diagnostics(vm_id)}") from e
+            assert os_release.exit_code == 0, os_release.stderr
+            assert "Alpine" in os_release.stdout, os_release.stdout
+        finally:
+            await _cleanup(
+                c,
+                vm_id,
+                [f"overlaybd-{vm_id}"] if vm_id else [],
+                [overlaybd_pool_id],
+            )
+
+
 @pytest.mark.asyncio
 async def test_preflight_oci_image(client, oci_image_ref):
     """Preflight should mark the test image bootable via OverlayBD."""

@@ -276,8 +276,12 @@ mod tests {
     #[tokio::test]
     async fn exec_vm_rejects_empty_command() {
         let runtime_dir = tempfile::TempDir::new().unwrap();
-        let manager =
-            FirecrackerManager::new(runtime_dir.path(), "/bin/true", Duration::from_secs(1));
+        let manager = FirecrackerManager::new(
+            runtime_dir.path(),
+            "/bin/true",
+            Duration::from_secs(1),
+            None,
+        );
 
         let err = manager
             .exec_vm("test-vm", Vec::new(), None)

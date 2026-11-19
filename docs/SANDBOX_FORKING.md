@@ -69,10 +69,10 @@ inherits stays shared.
 - **NICs.** Forks keep their source's MAC and IP addresses, so each would need
   a network namespace of its own with those addresses inside and its own
   address outside.
-- **Disks.** Firecracker VMs don't boot OverlayBD images yet. Once they do, a
-  fork's disk can be the source's upper layer frozen in place: write back its
+- **Disks.** A Firecracker sandbox can boot an OCI image, but forking it needs
+  its disk forked too: the source's upper layer frozen in place (write back its
   dirty pages, reflink-clone it during the pause and `overlaybd-commit --seal`
-  the clone, with a fresh upper for each fork on top. A prototype measured
+  the clone) with a fresh upper for each fork on top. A prototype measured
   8–31 ms of extra pause for that.
 - **Cloud Hypervisor** sandboxes.
 - **Diff snapshots**, so that forking a source again writes only the memory it

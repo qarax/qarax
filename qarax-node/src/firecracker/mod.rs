@@ -5,7 +5,8 @@
 //! client over the Firecracker Unix API socket.
 //!
 //! Lifecycle mapping:
-//!   create_vm   — spawn process + configure via SDK (Machine)
+//!   create_vm   — map an OCI image disk through OverlayBD, then spawn the
+//!                 process + configure via SDK (Machine)
 //!   start_vm    — Machine::start_instance() → MicroVm; a stopped VM gets
 //!                 a fresh process first, since a microVM can't boot twice
 //!   stop_vm     — shut down through the guest agent, else kill the process
@@ -38,6 +39,8 @@ use crate::rpc::node::{
     RateLimiterConfig as ProtoRateLimiterConfig, TokenBucket as ProtoTokenBucket,
     VmConfig as ProtoVmConfig, VmState, VmStatus,
 };
+use crate::storage::StorageBackend;
+use crate::storage::overlaybd::map_oci_disks;
 use crate::vmm::{VmmError, VmmManager};
 
 mod exec;
@@ -141,6 +144,9 @@ pub struct FirecrackerManager {
     /// How long `stop_vm` waits for a guest to shut down before killing its
     /// VMM.
     graceful_stop_timeout: Duration,
+    /// Presents OCI image disks as block devices; `None` on a node without
+    /// OverlayBD.
+    overlaybd: Option<Arc<dyn StorageBackend>>,
 }
 
 impl FirecrackerManager {
@@ -148,6 +154,7 @@ impl FirecrackerManager {
         runtime_dir: impl Into<PathBuf>,
         fc_binary: impl Into<PathBuf>,
         graceful_stop_timeout: Duration,
+        overlaybd: Option<Arc<dyn StorageBackend>>,
     ) -> Self {
         let runtime_dir = runtime_dir.into();
         let fc_binary = fc_binary.into();
@@ -161,6 +168,20 @@ impl FirecrackerManager {
             fc_binary,
             vms: Arc::new(Mutex::new(HashMap::new())),
             graceful_stop_timeout,
+            overlaybd,
+        }
+    }
+
+    /// Release `vm_id`'s OverlayBD device, if it has one.
+    async fn unmap_oci_disk(&self, vm_id: &str) {
+        if let Some(backend) = &self.overlaybd
+            && backend.has_mapping(vm_id).await
+            && let Err(e) = backend.unmap(vm_id).await
+        {
+            warn!(
+                "FC: Failed to unmap the OverlayBD disk of VM {}: {}",
+                vm_id, e
+            );
         }
     }
 
@@ -471,11 +492,27 @@ impl VmmManager for FirecrackerManager {
 
         let config_path = self.config_path(&vm_id);
 
+        // Present an OCI image disk as an OverlayBD block device. Last before
+        // the spawn, so that only a failed spawn leaves a mapping to undo.
+        let oci_mapped =
+            match map_oci_disks(self.overlaybd.as_ref(), &vm_id, &mut config.disks).await {
+                Ok(mapped) => mapped,
+                Err(e) => {
+                    for tap in &tap_devices {
+                        Self::delete_tap_device(tap).await;
+                    }
+                    return Err(VmmError::StorageError(e.to_string()));
+                }
+            };
+
         let (process, machine) = match self.spawn_configured(&vm_id, &config).await {
             Ok(spawned) => spawned,
             Err(e) => {
                 for tap in &tap_devices {
                     Self::delete_tap_device(tap).await;
+                }
+                if oci_mapped {
+                    self.unmap_oci_disk(&vm_id).await;
                 }
                 return Err(e);
             }
@@ -692,6 +729,8 @@ impl VmmManager for FirecrackerManager {
         for tap in &instance.tap_devices {
             Self::delete_tap_device(tap).await;
         }
+
+        self.unmap_oci_disk(vm_id).await;
 
         info!("FC: VM {} deleted", vm_id);
         Ok(())

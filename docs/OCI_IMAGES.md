@@ -18,7 +18,7 @@ overlaybd-tcmu (kernel TCMU daemon)
        └── Upper layers: writable .data + .index files   ← one set per VM
                   │
                   ▼
-           /dev/vda  (presented to Cloud Hypervisor as a normal block device)
+           /dev/vda  (presented to Cloud Hypervisor or Firecracker as a normal block device)
 ```
 
 Multiple VMs can run from the same OCI image simultaneously. They share the read-only
@@ -42,12 +42,14 @@ This triggers an async background job that:
 1. Copies the source image to the pool's local OCI registry (`registry_url` from pool config)
    via `oci-client`.
 2. Converts it to OverlayBD format using the `convertor` binary
-   (from [accelerated-container-image](https://github.com/containerd/accelerated-container-image)).
-   This rewrites the layer manifests into the lazy-loadable OverlayBD format.
+   (from [accelerated-container-image](https://github.com/containerd/accelerated-container-image)),
+   which writes the lazy-loadable OverlayBD layers to the tag `<tag>_overlaybd` in the same
+   repository. The mirrored image itself stays as it is, so importing it again converts it
+   afresh.
 3. Stores a `StorageObject` of type `OciImage` in the database:
    ```json
    {
-     "image_ref": "registry:5000/docker/library/alpine:latest",
+     "image_ref": "registry:5000/docker/library/alpine:latest_overlaybd",
      "registry_url": "http://registry:5000",
      "digest": "sha256:..."
    }
@@ -117,8 +119,8 @@ The node's `OverlayBdManager::mount()` then:
 5. **Sets up a loopback SCSI fabric** via `tcm_loop`. A LUN symlink connects the fabric
    to the TCMU backstore. The kernel creates a `/dev/sd*` block device.
 
-6. Returns the device path (`/dev/sdb`, etc.) to Cloud Hypervisor, which presents it to
-   the VM as `/dev/vda`.
+6. Returns the device path (`/dev/sdb`, etc.) to the VM's hypervisor, Cloud Hypervisor
+   or Firecracker, which presents it to the VM as `/dev/vda`.
 
 The kernel command line is set to:
 ```
