@@ -3,7 +3,8 @@ use uuid::Uuid;
 use crate::client::Client;
 
 use super::models::{
-    CreateSandboxResponse, ExecSandboxRequest, ExecSandboxResponse, NewSandbox, Sandbox,
+    CreateSandboxResponse, ExecSandboxRequest, ExecSandboxResponse, ForkSandboxRequest, NewSandbox,
+    Sandbox,
 };
 
 pub async fn create(client: &Client, req: &NewSandbox) -> anyhow::Result<CreateSandboxResponse> {
@@ -28,6 +29,14 @@ pub async fn exec(
     req: &ExecSandboxRequest,
 ) -> anyhow::Result<ExecSandboxResponse> {
     client.post(&format!("/sandboxes/{id}/exec"), req).await
+}
+
+pub async fn fork(
+    client: &Client,
+    id: Uuid,
+    req: &ForkSandboxRequest,
+) -> anyhow::Result<Vec<Sandbox>> {
+    client.post(&format!("/sandboxes/{id}/fork"), req).await
 }
 
 pub async fn keepalive(client: &Client, id: Uuid) -> anyhow::Result<()> {

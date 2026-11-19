@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nINSERT INTO vms (\n    id, name, tags, status, host_id, hypervisor,\n    boot_vcpus, max_vcpus, cpu_topology, kvm_hyperv,\n    memory_size, memory_hotplug_size, memory_mergeable, memory_shared,\n    memory_hugepages, memory_hugepage_size, memory_prefault, memory_thp,\n    boot_source_id, boot_mode, description, image_ref,\n    cloud_init_user_data, cloud_init_meta_data, cloud_init_network_config,\n    config\n)\nSELECT\n    $1, $2, tags, 'PENDING', host_id, hypervisor,\n    boot_vcpus, max_vcpus, cpu_topology, kvm_hyperv,\n    memory_size, memory_hotplug_size, memory_mergeable, memory_shared,\n    memory_hugepages, memory_hugepage_size, memory_prefault, memory_thp,\n    boot_source_id, boot_mode, description, image_ref,\n    cloud_init_user_data, cloud_init_meta_data, cloud_init_network_config,\n    config\nFROM vms\nWHERE id = $3\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Varchar",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "877de72a7a1de73c465012835aa91a57ecb38fb424c47031c19f5d2bea0a71aa"
+}

@@ -21,7 +21,7 @@ use crate::rpc::node::{
     AttachNetworkResponse, AttachStoragePoolRequest, AttachStoragePoolResponse, ConsoleInput,
     ConsoleLogResponse, ConsoleOutput, ConsolePtyPathResponse, DeleteSnapshotRequest,
     DetachNetworkRequest, DetachNetworkResponse, DetachStoragePoolRequest, DeviceCounters,
-    ExecVmRequest, ExecVmResponse, GpuInfo, HypervisorType, ImportOverlayBdRequest,
+    ExecVmRequest, ExecVmResponse, ForkVmRequest, GpuInfo, HypervisorType, ImportOverlayBdRequest,
     ImportOverlayBdResponse, NodeInfo, NumaNode, PreflightCheck, PreflightImageRequest,
     PreflightImageResponse, ProbeImageFormatRequest, ProbeImageFormatResponse,
     ReceiveMigrationRequest, ReceiveMigrationResponse, RemoveDeviceRequest, ResizeDiskRequest,
@@ -357,6 +357,29 @@ impl VmService for VmServiceImpl {
             }
             Err(e) => {
                 error!("Failed to restore VM {}: {}", req.vm_id, e);
+                Err(map_vmm_error(e))
+            }
+        }
+    }
+
+    async fn fork_vm(&self, request: Request<ForkVmRequest>) -> Result<Response<()>, Status> {
+        let req = request.into_inner();
+        info!("Forking VM {} into {:?}", req.source_vm_id, req.fork_vm_ids);
+        let manager = self
+            .find_manager(&req.source_vm_id)
+            .await
+            .ok_or_else(|| Status::not_found(format!("VM {} not found", req.source_vm_id)))?;
+        match manager.fork_vm(&req.source_vm_id, &req.fork_vm_ids).await {
+            Ok(()) => {
+                info!(
+                    "VM {} forked into {} VMs",
+                    req.source_vm_id,
+                    req.fork_vm_ids.len()
+                );
+                Ok(Response::new(()))
+            }
+            Err(e) => {
+                error!("Failed to fork VM {}: {}", req.source_vm_id, e);
                 Err(map_vmm_error(e))
             }
         }

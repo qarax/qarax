@@ -5,16 +5,19 @@ use uuid::Uuid;
 
 use crate::{
     App,
+    errors::Error,
+    grpc_client::NodeClient,
     handlers::{ApiResponse, Result},
     model::{
-        hosts,
+        hosts::{self, SchedulingRequest},
         jobs::{self, JobType, NewJob},
-        sandbox_pool_members,
+        network_interfaces, sandbox_pool_members,
         sandboxes::{
-            self, CreateSandboxResponse, ExecSandboxRequest, ExecSandboxResponse, NewSandbox,
-            Sandbox, SandboxStatus,
+            self, CreateSandboxResponse, ExecSandboxRequest, ExecSandboxResponse,
+            ForkSandboxRequest, NewSandbox, Sandbox, SandboxStatus,
         },
-        vms::{self, VmStatus},
+        vm_disks,
+        vms::{self, Hypervisor, Vm, VmStatus},
     },
     pagination::{PageQuery, PageRequest, time_key},
     sandbox_pool_manager,
@@ -182,6 +185,188 @@ pub async fn exec(
         },
         code: StatusCode::OK,
     })
+}
+
+/// The most forks one request makes.
+const MAX_FORKS: u32 = 16;
+
+/// `vms.name` is VARCHAR(50).
+const MAX_VM_NAME_CHARS: usize = 50;
+
+/// Fork a running sandbox
+///
+/// Makes `count` new sandboxes that continue from this one's current state:
+/// its memory, its running processes and its files. They run on the same host
+/// and are ready when this returns; this one keeps running. Each fork's random
+/// generator is reseeded and its clock set. Only Firecracker sandboxes without
+/// network interfaces or disks fork.
+#[utoipa::path(
+    post,
+    path = "/v1/sandboxes/{sandbox_id}/fork",
+    params(
+        ("sandbox_id" = uuid::Uuid, Path, description = "Sandbox unique identifier")
+    ),
+    request_body = ForkSandboxRequest,
+    responses(
+        (status = 201, description = "The forks, ready", body = Vec<Sandbox>),
+        (status = 404, description = "Sandbox not found"),
+        (status = 422, description = "The sandbox can't be forked, or its host has no room for the forks"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "sandboxes"
+)]
+#[instrument(skip(env))]
+pub async fn fork(
+    Extension(env): Extension<App>,
+    Path(sandbox_id): Path<Uuid>,
+    Json(req): Json<ForkSandboxRequest>,
+) -> Result<ApiResponse<Vec<Sandbox>>> {
+    let count = req.count.unwrap_or(1);
+    if !(1..=MAX_FORKS).contains(&count) {
+        return Err(Error::UnprocessableEntity(format!(
+            "count must be between 1 and {MAX_FORKS}"
+        )));
+    }
+
+    let source = sandboxes::get(env.pool(), sandbox_id).await?;
+    if source.status != SandboxStatus::Ready {
+        return Err(Error::UnprocessableEntity(format!(
+            "sandbox {sandbox_id} is not ready"
+        )));
+    }
+    let vm = vms::get(env.pool(), source.vm_id).await?;
+    ensure_forkable(&env, &vm).await?;
+    let host_id = vm
+        .host_id
+        .ok_or_else(|| Error::UnprocessableEntity("sandbox VM has no assigned host".into()))?;
+
+    // The forks' rows, made with the capacity check that keeps their host
+    // from taking more than it holds. The VMs stay PENDING, out of the VM
+    // monitor's way, until the node has started them.
+    let mut tx = env.pool().begin().await?;
+    let host = hosts::pick_host_tx(
+        &mut tx,
+        &SchedulingRequest {
+            memory_bytes: vm.memory_size * i64::from(count),
+            vcpus: vm.boot_vcpus * count as i32,
+            disk_bytes: 0,
+            architecture: None,
+            storage_pool_id: None,
+            required_network_ids: vec![],
+            requires_overlaybd: false,
+            gpu: None,
+            placement_policy: None,
+            excluded_host_ids: vec![],
+            required_host_id: Some(host_id),
+        },
+        env.scheduling(),
+    )
+    .await?
+    .ok_or_else(|| {
+        Error::UnprocessableEntity(format!(
+            "the sandbox's host is not up or has no room for {count} more VMs like it"
+        ))
+    })?;
+    let mut forks = Vec::with_capacity(count as usize);
+    for _ in 0..count {
+        let fork_sandbox_id = Uuid::new_v4();
+        let name = fork_name(&source.name, fork_sandbox_id);
+        let fork_vm_id = vms::create_fork_tx(&mut tx, vm.id, &name).await?;
+        sandboxes::create_tx_with_status(
+            &mut tx,
+            fork_sandbox_id,
+            fork_vm_id,
+            source.vm_template_id,
+            &name,
+            source.idle_timeout_secs,
+            SandboxStatus::Provisioning,
+        )
+        .await?;
+        forks.push((fork_sandbox_id, fork_vm_id));
+    }
+    tx.commit().await?;
+    sandboxes::touch_activity(env.pool(), sandbox_id).await?;
+
+    let fork_vm_ids: Vec<Uuid> = forks.iter().map(|(_, vm_id)| *vm_id).collect();
+    let client = NodeClient::new(&host.address, host.port as u16);
+    if let Err(e) = client.fork_vm(vm.id, &fork_vm_ids).await {
+        // The node starts all of the forks or none: no VM is left to stop.
+        for vm_id in &fork_vm_ids {
+            if let Err(e) = vms::delete(env.pool(), *vm_id).await {
+                tracing::error!(vm_id = %vm_id, error = %e, "Failed to delete the row of a failed fork");
+            }
+        }
+        return Err(match e.downcast::<Error>() {
+            Ok(err) => err,
+            Err(err) => {
+                tracing::error!(sandbox_id = %sandbox_id, error = %err, "sandbox fork failed");
+                Error::InternalServerError
+            }
+        });
+    }
+
+    let mut forked = Vec::with_capacity(forks.len());
+    for (fork_sandbox_id, fork_vm_id) in forks {
+        vms::transition(
+            env.pool(),
+            fork_vm_id,
+            &[VmStatus::Pending],
+            VmStatus::Running,
+        )
+        .await?;
+        sandboxes::mark_ready(env.pool(), fork_sandbox_id).await?;
+        forked.push(
+            sandboxes::get_with_details(env.pool(), fork_sandbox_id)
+                .await?
+                .into(),
+        );
+    }
+
+    Ok(ApiResponse {
+        data: forked,
+        code: StatusCode::CREATED,
+    })
+}
+
+/// A fork shares everything but its memory with its source, so only a VM
+/// with nothing else to share forks: no NICs (the forks would have their MAC
+/// and IP addresses) and no disks (they would write to the same files).
+async fn ensure_forkable(env: &App, vm: &Vm) -> Result<()> {
+    let refusal = if vm.status != VmStatus::Running {
+        format!("sandbox VM {} is not running", vm.id)
+    } else if vm.hypervisor != Hypervisor::Firecracker {
+        "only Firecracker sandboxes can be forked".to_string()
+    } else if !vm.guest_agent {
+        "a sandbox without the guest agent can't be forked: the agent reseeds each fork's \
+         random generator"
+            .to_string()
+    } else if !network_interfaces::list_by_vm(env.pool(), vm.id)
+        .await?
+        .is_empty()
+    {
+        "a sandbox with network interfaces can't be forked yet: its forks would have their MAC \
+         and IP addresses"
+            .to_string()
+    } else if vm.cloud_init_user_data.is_some()
+        || !vm_disks::list_by_vm(env.pool(), vm.id).await?.is_empty()
+    {
+        "a sandbox with disks (cloud-init's included) can't be forked yet: its forks would \
+         write to the same files"
+            .to_string()
+    } else {
+        return Ok(());
+    };
+    Err(Error::UnprocessableEntity(refusal))
+}
+
+/// `<source>-fork-<8 hex>`, with the source's name cut to fit a VM name.
+fn fork_name(source: &str, fork_id: Uuid) -> String {
+    let suffix = format!("-fork-{}", &fork_id.simple().to_string()[..8]);
+    let source: String = source
+        .chars()
+        .take(MAX_VM_NAME_CHARS - suffix.len())
+        .collect();
+    format!("{source}{suffix}")
 }
 
 async fn try_claim_prewarmed_sandbox(
@@ -399,4 +584,18 @@ pub async fn delete(
         data: (),
         code: StatusCode::NO_CONTENT,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_fork_name_fits_a_vm_name() {
+        let fork_id = Uuid::new_v4();
+        let name = fork_name(&"a".repeat(80), fork_id);
+        assert_eq!(name.chars().count(), MAX_VM_NAME_CHARS);
+        assert!(name.ends_with(&format!("-fork-{}", &fork_id.simple().to_string()[..8])));
+        assert_eq!(fork_name("agent", fork_id).len(), "agent".len() + 14);
+    }
 }

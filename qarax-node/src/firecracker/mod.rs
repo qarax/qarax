@@ -15,6 +15,7 @@
 //!   delete_vm   — kill + cleanup
 //!   snapshot_vm — MicroVm::create_snapshot()
 //!   restore_vm  — spawn + Machine::load_and_resume()
+//!   fork_vm     — snapshot, then load it into new processes (see `fork`)
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -41,6 +42,7 @@ use crate::vmm::{VmmError, VmmManager};
 
 mod exec;
 use exec::GuestAgentAck;
+mod fork;
 mod helpers;
 
 /// Where a Firecracker VM is in its lifecycle, with the SDK handle that
@@ -173,14 +175,26 @@ impl FirecrackerManager {
         vm_id: &str,
         config: &ProtoVmConfig,
     ) -> Result<(Child, Machine<'static>), VmmError> {
-        let socket_path = self.socket_path(vm_id);
-        if socket_path.exists() {
-            let _ = tokio::fs::remove_file(&socket_path).await;
-        }
         if let Some(path) = Self::vsock_socket_path_from_config(&config.vsock)
             && path.exists()
         {
             let _ = tokio::fs::remove_file(path).await;
+        }
+        let process = self.spawn_process(vm_id).await?;
+
+        // Machine::attach waits for the socket to be ready.
+        let socket_path = self.socket_path(vm_id);
+        let mut machine = Machine::attach(&socket_path).await.map_err(sdk_err)?;
+        Self::configure_vm(&mut machine, &socket_path, config).await?;
+        Ok((process, machine))
+    }
+
+    /// Launch a bare Firecracker process on `vm_id`'s API socket, its output
+    /// appended to the VM's log. Dropping the returned process kills it.
+    async fn spawn_process(&self, vm_id: &str) -> Result<Child, VmmError> {
+        let socket_path = self.socket_path(vm_id);
+        if socket_path.exists() {
+            let _ = tokio::fs::remove_file(&socket_path).await;
         }
 
         // Append, so a restart keeps the log of the boot before it.
@@ -203,11 +217,7 @@ impl FirecrackerManager {
             .spawn()
             .map_err(VmmError::SpawnError)?;
         info!("FC: process started with PID {:?}", process.id());
-
-        // Machine::attach waits for the socket to be ready.
-        let mut machine = Machine::attach(&socket_path).await.map_err(sdk_err)?;
-        Self::configure_vm(&mut machine, &socket_path, config).await?;
-        Ok((process, machine))
+        Ok(process)
     }
 
     /// Configure a freshly-attached [`Machine`] from a proto VmConfig using
@@ -842,6 +852,10 @@ impl VmmManager for FirecrackerManager {
         timeout_secs: Option<u64>,
     ) -> Result<ExecVmResponse, VmmError> {
         FirecrackerManager::exec_vm(self, vm_id, command, timeout_secs).await
+    }
+
+    async fn fork_vm(&self, source_id: &str, fork_ids: &[String]) -> Result<(), VmmError> {
+        self.fork(source_id, fork_ids).await
     }
 
     async fn recover_vms(&self) {

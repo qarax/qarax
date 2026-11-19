@@ -1343,6 +1343,47 @@ paths:
           description: Sandbox is not ready or guest exec is unavailable
         '500':
           description: Internal server error
+  /v1/sandboxes/{sandbox_id}/fork:
+    post:
+      tags:
+      - sandboxes
+      summary: Fork a running sandbox
+      description: |-
+        Makes `count` new sandboxes that continue from this one's current state:
+        its memory, its running processes and its files. They run on the same host
+        and are ready when this returns; this one keeps running. Each fork's random
+        generator is reseeded and its clock set. Only Firecracker sandboxes without
+        network interfaces or disks fork.
+      operationId: fork
+      parameters:
+      - name: sandbox_id
+        in: path
+        description: Sandbox unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ForkSandboxRequest'
+        required: true
+      responses:
+        '201':
+          description: The forks, ready
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Sandbox'
+        '404':
+          description: Sandbox not found
+        '422':
+          description: The sandbox can't be forked, or its host has no room for the forks
+        '500':
+          description: Internal server error
   /v1/sandboxes/{sandbox_id}/keepalive:
     post:
       tags:
@@ -3721,6 +3762,16 @@ components:
           type: string
         timed_out:
           type: boolean
+    ForkSandboxRequest:
+      type: object
+      properties:
+        count:
+          type:
+          - integer
+          - 'null'
+          format: int32
+          description: How many forks to make, from 1 to 16 (default 1).
+          minimum: 0
     HookExecution:
       type: object
       required:

@@ -867,6 +867,11 @@ pub struct ExecSandboxRequest {
     pub timeout_secs: Option<u64>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct ForkSandboxRequest {
+    pub count: u32,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ExecSandboxResponse {
     pub exit_code: i32,

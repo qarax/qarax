@@ -125,6 +125,7 @@ pub(crate) async fn evacuation_scheduling_request(
         gpu,
         placement_policy: persisted_vm_placement_policy(vm),
         excluded_host_ids: vec![source_host_id],
+        required_host_id: None,
     })
 }
 

@@ -196,6 +196,12 @@ pub trait VmmManager: Send + Sync + 'static {
         Err(VmmError::Unsupported("exec_vm"))
     }
 
+    /// Start `fork_ids`, new VMs that continue from `source_id`'s current
+    /// state. The source keeps running.
+    async fn fork_vm(&self, _source_id: &str, _fork_ids: &[String]) -> Result<(), VmmError> {
+        Err(VmmError::Unsupported("fork_vm"))
+    }
+
     async fn get_vm_counters(
         &self,
         _vm_id: &str,

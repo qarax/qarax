@@ -196,6 +196,7 @@ pub struct BackupListQuery {
         sandbox::handler::list,
         sandbox::handler::get,
         sandbox::handler::exec,
+        sandbox::handler::fork,
         sandbox::handler::keepalive,
         sandbox::handler::delete,
         sandbox::pool_handler::list,
@@ -305,6 +306,7 @@ pub struct BackupListQuery {
             crate::model::sandboxes::CreateSandboxResponse,
             crate::model::sandboxes::ExecSandboxRequest,
             crate::model::sandboxes::ExecSandboxResponse,
+            crate::model::sandboxes::ForkSandboxRequest,
             crate::model::sandbox_pools::SandboxPool,
             crate::model::sandbox_pools::ConfigureSandboxPoolRequest,
             crate::configuration::SchedulingSettings,
@@ -742,6 +744,7 @@ fn sandboxes() -> Router {
             get(sandbox::handler::get).delete(sandbox::handler::delete),
         )
         .route("/sandboxes/{sandbox_id}/exec", post(sandbox::handler::exec))
+        .route("/sandboxes/{sandbox_id}/fork", post(sandbox::handler::fork))
         .route(
             "/sandboxes/{sandbox_id}/keepalive",
             post(sandbox::handler::keepalive),

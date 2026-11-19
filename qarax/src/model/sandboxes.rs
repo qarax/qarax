@@ -86,6 +86,12 @@ pub struct CreateSandboxResponse {
     pub job_id: Uuid,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Default, ToSchema)]
+pub struct ForkSandboxRequest {
+    /// How many forks to make, from 1 to 16 (default 1).
+    pub count: Option<u32>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
 pub struct ExecSandboxRequest {
     pub command: Vec<String>,

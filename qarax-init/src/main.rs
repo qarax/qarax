@@ -57,6 +57,11 @@ enum ControlRequest {
         #[serde(default)]
         reboot: bool,
     },
+    /// This guest is a fork: it resumed from another VM's snapshot, with
+    /// that VM's random generator state and clock. Mix in `entropy` (hex,
+    /// fresh from the node), reseed the kernel's generator, and set the clock
+    /// to `unix_time_ns`.
+    Forked { entropy: String, unix_time_ns: u64 },
 }
 
 #[derive(Deserialize, Default)]
@@ -354,23 +359,50 @@ fn serve_exec_connection(stream_fd: OwnedFd, exit_registry: ExitRegistry) {
             return;
         }
         Ok(_) => {
-            if let Ok(ControlRequest::Shutdown { reboot }) = serde_json::from_str(&request_line) {
-                let body = serde_json::to_vec(&ExecResponse {
-                    exit_code: 0,
-                    stdout: String::new(),
-                    stderr: String::new(),
-                    timed_out: false,
-                })
-                .unwrap_or_default();
-                let _ = stream.write_all(&body);
-                drop(stream);
-                let ending = if reboot {
-                    Ending::Reboot
-                } else {
-                    Ending::PowerOff
-                };
-                shut_down("qarax-node asked to shut down", ending);
-                return;
+            match serde_json::from_str(&request_line) {
+                Ok(ControlRequest::Shutdown { reboot }) => {
+                    let body = serde_json::to_vec(&ExecResponse {
+                        exit_code: 0,
+                        stdout: String::new(),
+                        stderr: String::new(),
+                        timed_out: false,
+                    })
+                    .unwrap_or_default();
+                    let _ = stream.write_all(&body);
+                    drop(stream);
+                    let ending = if reboot {
+                        Ending::Reboot
+                    } else {
+                        Ending::PowerOff
+                    };
+                    shut_down("qarax-node asked to shut down", ending);
+                    return;
+                }
+                Ok(ControlRequest::Forked {
+                    entropy,
+                    unix_time_ns,
+                }) => {
+                    let (exit_code, stderr) = match resume_as_fork(&entropy, unix_time_ns) {
+                        Ok(()) => {
+                            log("forked: reseeded the random generator and set the clock");
+                            (0, String::new())
+                        }
+                        Err(e) => {
+                            log(format!("fork notice failed: {e}"));
+                            (1, e)
+                        }
+                    };
+                    let body = serde_json::to_vec(&ExecResponse {
+                        exit_code,
+                        stdout: String::new(),
+                        stderr,
+                        timed_out: false,
+                    })
+                    .unwrap_or_default();
+                    let _ = stream.write_all(&body);
+                    return;
+                }
+                Err(_) => {}
             }
             match serde_json::from_str(&request_line) {
                 Ok(req) => req,
@@ -464,6 +496,77 @@ fn serve_exec_connection(stream_fd: OwnedFd, exit_registry: ExitRegistry) {
     if let Err(e) = stream.write_all(&body) {
         log(format!("sandbox exec write failed: {e}"));
     }
+}
+
+/// See [`ControlRequest::Forked`].
+fn resume_as_fork(entropy_hex: &str, unix_time_ns: u64) -> Result<(), String> {
+    let entropy = decode_hex(entropy_hex).ok_or("the entropy is not hex")?;
+    add_entropy_and_reseed(&entropy).map_err(|e| format!("reseeding the random generator: {e}"))?;
+    set_realtime_clock(unix_time_ns).map_err(|e| format!("setting the clock: {e}"))?;
+    Ok(())
+}
+
+fn decode_hex(hex: &str) -> Option<Vec<u8>> {
+    if !hex.len().is_multiple_of(2) || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok())
+        .collect()
+}
+
+/// Credit `entropy` to the kernel's input pool, then reseed its CRNG from
+/// the pool now rather than at its next scheduled reseed, which could be a
+/// minute away.
+fn add_entropy_and_reseed(entropy: &[u8]) -> std::io::Result<()> {
+    // From <linux/random.h>: _IOW('R', 0x03, int[2]) and _IO('R', 0x07).
+    const RNDADDENTROPY: libc::Ioctl = 0x4008_5203;
+    const RNDRESEEDCRNG: libc::Ioctl = 0x5207;
+    const MAX_BYTES: usize = 256;
+    /// `struct rand_pool_info` with room for `MAX_BYTES`.
+    #[repr(C)]
+    struct RandPoolInfo {
+        entropy_count: libc::c_int,
+        buf_size: libc::c_int,
+        buf: [u8; MAX_BYTES],
+    }
+
+    if entropy.len() > MAX_BYTES {
+        return Err(std::io::Error::other(format!(
+            "{} bytes of entropy, more than {MAX_BYTES}",
+            entropy.len()
+        )));
+    }
+    let mut info = RandPoolInfo {
+        entropy_count: (entropy.len() * 8) as libc::c_int,
+        buf_size: entropy.len() as libc::c_int,
+        buf: [0; MAX_BYTES],
+    };
+    info.buf[..entropy.len()].copy_from_slice(entropy);
+
+    let urandom = std::fs::File::open("/dev/urandom")?;
+    // SAFETY: `info` is a valid rand_pool_info whose buf holds buf_size bytes,
+    // and both ioctls only read their argument.
+    if unsafe { libc::ioctl(urandom.as_raw_fd(), RNDADDENTROPY, &info) } < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if unsafe { libc::ioctl(urandom.as_raw_fd(), RNDRESEEDCRNG) } < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+fn set_realtime_clock(unix_time_ns: u64) -> std::io::Result<()> {
+    // SAFETY: an all-zero timespec is valid; the fields are set below.
+    let mut time: libc::timespec = unsafe { std::mem::zeroed() };
+    time.tv_sec = (unix_time_ns / 1_000_000_000) as _;
+    time.tv_nsec = (unix_time_ns % 1_000_000_000) as _;
+    // SAFETY: `time` is a valid timespec.
+    if unsafe { libc::clock_settime(libc::CLOCK_REALTIME, &time) } < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 fn spawn_exec_server(exit_registry: ExitRegistry) {
@@ -669,6 +772,32 @@ fn main() {
         Err(e) => {
             log(format!("fork failed: {e}"));
             std::process::exit(1);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_fork_notice_is_a_control_request() {
+        let line = r#"{"forked":{"entropy":"00ff10","unix_time_ns":1763568000000000000}}"#;
+        let Ok(ControlRequest::Forked {
+            entropy,
+            unix_time_ns,
+        }) = serde_json::from_str(line)
+        else {
+            panic!("not a fork notice");
+        };
+        assert_eq!(decode_hex(&entropy), Some(vec![0x00, 0xff, 0x10]));
+        assert_eq!(unix_time_ns, 1_763_568_000_000_000_000);
+    }
+
+    #[test]
+    fn entropy_that_is_not_hex_is_refused() {
+        for bad in ["abc", "zz", "+f"] {
+            assert_eq!(decode_hex(bad), None, "{bad:?}");
         }
     }
 }

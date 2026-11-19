@@ -24,6 +24,7 @@ from qarax_api_client.api.sandboxes import (
 from qarax_api_client.api.sandboxes import (
     exec_ as exec_sandbox,
 )
+from qarax_api_client.api.sandboxes import fork as fork_sandbox
 from qarax_api_client.api.sandboxes import get as get_sandbox
 from qarax_api_client.api.sandboxes import list_ as list_sandboxes
 from qarax_api_client.api.storage_objects import delete as delete_storage_object
@@ -48,6 +49,7 @@ from qarax_api_client.api.vm_templates import (
 from qarax_api_client.api.vms import get as get_vm
 from qarax_api_client.models import (
     ExecSandboxRequest,
+    ForkSandboxRequest,
     Hypervisor,
     NewBootSource,
     NewStoragePool,
@@ -387,6 +389,80 @@ async def test_sandbox_defaults_to_firecracker_when_template_omits_hypervisor(cl
             assert result.stderr == ""
         finally:
             if sandbox_id is not None:
+                await delete_sandbox.asyncio_detailed(client=c, sandbox_id=sandbox_id)
+            await cleanup_bootable_sandbox_template(c, resources)
+
+
+@pytest.mark.asyncio
+async def test_sandbox_fork_continues_from_its_source(client):
+    """A fork continues from its source's state, files and running processes
+    included, with a random generator of its own; afterwards each one's
+    changes are its own."""
+    # The test initramfs symlinks only some busybox applets.
+    random_bytes = "/bin/busybox head -c 16 /dev/urandom | /bin/busybox md5sum"
+    counter = (
+        "/bin/busybox setsid /bin/sh -c "
+        "'i=0; while :; do i=$((i+1)); echo $i > /root/counter; sleep 0.1; done' "
+        "</dev/null >/dev/null 2>&1 &"
+    )
+
+    async with client as c:
+        template_id, resources = await create_bootable_sandbox_template(c, "firecracker")
+        sandbox_ids = []
+
+        async def sh(sandbox_id, script):
+            result = await call_api(
+                exec_sandbox,
+                client=c,
+                sandbox_id=sandbox_id,
+                body=ExecSandboxRequest(command=["/bin/sh", "-c", script], timeout_secs=15),
+            )
+            assert result.exit_code == 0, result.stderr
+            return result.stdout.strip()
+
+        try:
+            source = await call_api(
+                create_sandbox,
+                client=c,
+                body=NewSandbox(
+                    name=f"e2e-sandbox-fork-{uuid.uuid4().hex[:8]}",
+                    vm_template_id=template_id,
+                    idle_timeout_secs=300,
+                ),
+            )
+            sandbox_ids.append(source.id)
+            await wait_for_sandbox_status(c, source.id, SandboxStatus.READY)
+            await sh(source.id, f"echo source > /root/state && {counter}")
+
+            forks = await call_api(
+                fork_sandbox,
+                client=c,
+                sandbox_id=source.id,
+                body=ForkSandboxRequest(count=2),
+            )
+            sandbox_ids.extend(fork.id for fork in forks)
+            assert len(forks) == 2
+            for fork in forks:
+                assert fork.status == SandboxStatus.READY, fork.status
+                assert fork.vm_status == VmStatus.RUNNING, fork.vm_status
+
+            randoms = set()
+            for fork in forks:
+                assert await sh(fork.id, "cat /root/state") == "source"
+                before = int(await sh(fork.id, "cat /root/counter"))
+                await asyncio.sleep(1)
+                after = int(await sh(fork.id, "cat /root/counter"))
+                assert after > before, "the source's counting process didn't continue in the fork"
+                randoms.add(await sh(fork.id, random_bytes))
+                await sh(fork.id, f"echo {fork.id} > /root/state")
+            randoms.add(await sh(source.id, random_bytes))
+            assert len(randoms) == 3, "forks share their source's random generator"
+
+            assert await sh(source.id, "cat /root/state") == "source"
+            for fork in forks:
+                assert await sh(fork.id, "cat /root/state") == str(fork.id)
+        finally:
+            for sandbox_id in reversed(sandbox_ids):
                 await delete_sandbox.asyncio_detailed(client=c, sandbox_id=sandbox_id)
             await cleanup_bootable_sandbox_template(c, resources)
 
