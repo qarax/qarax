@@ -507,7 +507,7 @@ fn resume_as_fork(entropy_hex: &str, unix_time_ns: u64) -> Result<(), String> {
 }
 
 fn decode_hex(hex: &str) -> Option<Vec<u8>> {
-    if hex.len() % 2 != 0 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+    if !hex.len().is_multiple_of(2) || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
         return None;
     }
     (0..hex.len())
