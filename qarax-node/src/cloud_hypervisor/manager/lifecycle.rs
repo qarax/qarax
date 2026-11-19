@@ -235,43 +235,14 @@ impl VmManager {
 
         // Resolve storage-backed disks: map each disk that has oci_image_ref set
         // through the appropriate storage backend.
-        let mut storage_backend_kind = None;
-        for disk in config.disks.iter_mut() {
-            if let (Some(image_ref), Some(registry_url)) =
-                (disk.oci_image_ref.clone(), disk.registry_url.clone())
-            {
-                let backend = self
-                    .storage_backends
-                    .get(StoragePoolKind::Overlaybd)
-                    .ok_or_else(|| {
-                        VmManagerError::StorageError(format!(
-                            "Disk {} requests OverlayBD but no OverlayBD backend is configured",
-                            disk.id
-                        ))
-                    })?;
-
-                let mut disk_config = serde_json::json!({
-                    "image_ref": image_ref,
-                    "registry_url": registry_url,
-                });
-                if let Some(ref upper_data) = disk.upper_data_path {
-                    disk_config["upper_data_path"] = serde_json::Value::String(upper_data.clone());
-                }
-                if let Some(ref upper_index) = disk.upper_index_path {
-                    disk_config["upper_index_path"] =
-                        serde_json::Value::String(upper_index.clone());
-                }
-                let mapped = backend
-                    .map(&vm_id, &disk_config)
-                    .await
-                    .map_err(|e| VmManagerError::StorageError(e.to_string()))?;
-
-                disk.path = Some(mapped.device_path);
-                disk.oci_image_ref = None;
-                disk.registry_url = None;
-                storage_backend_kind = Some(StoragePoolKind::Overlaybd);
-            }
-        }
+        let storage_backend_kind = crate::storage::overlaybd::map_oci_disks(
+            self.storage_backends.get(StoragePoolKind::Overlaybd),
+            &vm_id,
+            &mut config.disks,
+        )
+        .await
+        .map_err(|e| VmManagerError::StorageError(e.to_string()))?
+        .then_some(StoragePoolKind::Overlaybd);
 
         // Generate a cloud-init NoCloud seed image and attach it as a read-only
         // disk if the VM has cloud-init data configured.

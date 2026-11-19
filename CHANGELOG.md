@@ -15,8 +15,9 @@ The first release.
 - VMs on Cloud Hypervisor and Firecracker: create, start, stop, pause, resume,
   resize (CPU, memory, disks), hot-plug disks and NICs, console and `exec`
   through the guest agent, cloud-init.
-- Images: OCI images booted lazily through OverlayBD, cloud and disk images,
-  kernel boot sources, instance types and VM templates.
+- Images: OCI images booted lazily through OverlayBD (on Cloud Hypervisor and
+  Firecracker), cloud and disk images, kernel boot sources, instance types and
+  VM templates.
 - Storage pools: local, NFS, OverlayBD and iSCSI block, with capacity
   accounting and durable cleanup of the files qarax provisions.
 - Networking: bridged and isolated networks with IPAM, DHCP and DNS,

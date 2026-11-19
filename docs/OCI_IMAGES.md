@@ -18,7 +18,7 @@ overlaybd-tcmu (kernel TCMU daemon)
        └── Upper layers: writable .data + .index files   ← one set per VM
                   │
                   ▼
-           /dev/vda  (presented to Cloud Hypervisor as a normal block device)
+           /dev/vda  (presented to Cloud Hypervisor or Firecracker as a normal block device)
 ```
 
 Multiple VMs can run from the same OCI image simultaneously. They share the read-only
@@ -117,8 +117,8 @@ The node's `OverlayBdManager::mount()` then:
 5. **Sets up a loopback SCSI fabric** via `tcm_loop`. A LUN symlink connects the fabric
    to the TCMU backstore. The kernel creates a `/dev/sd*` block device.
 
-6. Returns the device path (`/dev/sdb`, etc.) to Cloud Hypervisor, which presents it to
-   the VM as `/dev/vda`.
+6. Returns the device path (`/dev/sdb`, etc.) to the VM's hypervisor, Cloud Hypervisor
+   or Firecracker, which presents it to the VM as `/dev/vda`.
 
 The kernel command line is set to:
 ```

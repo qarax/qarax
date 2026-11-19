@@ -5,6 +5,7 @@ use tracing::info;
 
 use super::{MappedDisk, StorageBackend};
 use crate::overlaybd::OverlayBdManager;
+use crate::rpc::node::DiskConfig;
 
 pub struct OverlayBdBackend {
     manager: Arc<OverlayBdManager>,
@@ -133,6 +134,48 @@ impl StorageBackend for OverlayBdBackend {
     }
 }
 
+/// Present each disk of `disks` that names an OCI image as an OverlayBD
+/// block device of `vm_id`: its image fields give way to the device's path.
+/// Returns whether a disk was mapped, so that a caller that then fails to
+/// start the VM can unmap it. Both hypervisors' backends map OCI disks so.
+pub async fn map_oci_disks(
+    backend: Option<&Arc<dyn StorageBackend>>,
+    vm_id: &str,
+    disks: &mut [DiskConfig],
+) -> anyhow::Result<bool> {
+    let mut mapped = false;
+    for disk in disks.iter_mut() {
+        let (Some(image_ref), Some(registry_url)) = (&disk.oci_image_ref, &disk.registry_url)
+        else {
+            continue;
+        };
+        let backend = backend.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Disk {} requests OverlayBD but no OverlayBD backend is configured",
+                disk.id
+            )
+        })?;
+
+        let mut disk_config = serde_json::json!({
+            "image_ref": image_ref,
+            "registry_url": registry_url,
+        });
+        if let Some(upper_data) = &disk.upper_data_path {
+            disk_config["upper_data_path"] = upper_data.clone().into();
+        }
+        if let Some(upper_index) = &disk.upper_index_path {
+            disk_config["upper_index_path"] = upper_index.clone().into();
+        }
+        let device = backend.map(vm_id, &disk_config).await?;
+
+        disk.path = Some(device.device_path);
+        disk.oci_image_ref = None;
+        disk.registry_url = None;
+        mapped = true;
+    }
+    Ok(mapped)
+}
+
 /// Whether an overlaybd-tcmu process is running on this node.
 async fn tcmu_daemon_running() -> bool {
     let Ok(mut entries) = tokio::fs::read_dir("/proc").await else {
@@ -146,4 +189,101 @@ async fn tcmu_daemon_running() -> bool {
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use super::*;
+
+    /// Maps every image to `/dev/fake-<vm>` and keeps the configs it was given.
+    #[derive(Default)]
+    struct FakeBackend {
+        mapped: Mutex<Vec<serde_json::Value>>,
+    }
+
+    #[tonic::async_trait]
+    impl StorageBackend for FakeBackend {
+        async fn attach(&self, _: &str, _: &str) -> anyhow::Result<String> {
+            unreachable!()
+        }
+        async fn detach(&self, _: &str, _: &str) -> anyhow::Result<()> {
+            unreachable!()
+        }
+        async fn map(&self, vm_id: &str, config: &serde_json::Value) -> anyhow::Result<MappedDisk> {
+            self.mapped.lock().unwrap().push(config.clone());
+            Ok(MappedDisk {
+                device_path: format!("/dev/fake-{vm_id}"),
+            })
+        }
+        async fn unmap(&self, _: &str) -> anyhow::Result<()> {
+            unreachable!()
+        }
+    }
+
+    fn oci_disk() -> DiskConfig {
+        DiskConfig {
+            id: "rootfs".into(),
+            oci_image_ref: Some("registry:5000/test/alpine:latest".into()),
+            registry_url: Some("http://registry:5000".into()),
+            upper_data_path: Some("/pool/upper.data".into()),
+            upper_index_path: Some("/pool/upper.index".into()),
+            ..Default::default()
+        }
+    }
+
+    fn file_disk() -> DiskConfig {
+        DiskConfig {
+            id: "data".into(),
+            path: Some("/pool/data.raw".into()),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn an_oci_disk_becomes_its_overlaybd_device() {
+        let fake = Arc::new(FakeBackend::default());
+        let backend: Arc<dyn StorageBackend> = fake.clone();
+        let mut disks = vec![oci_disk(), file_disk()];
+
+        assert!(
+            map_oci_disks(Some(&backend), "vm1", &mut disks)
+                .await
+                .unwrap()
+        );
+
+        assert_eq!(disks[0].path.as_deref(), Some("/dev/fake-vm1"));
+        assert_eq!(disks[0].oci_image_ref, None);
+        assert_eq!(disks[0].registry_url, None);
+        assert_eq!(disks[1], file_disk());
+        let mapped = fake.mapped.lock().unwrap();
+        assert_eq!(
+            *mapped,
+            vec![serde_json::json!({
+                "image_ref": "registry:5000/test/alpine:latest",
+                "registry_url": "http://registry:5000",
+                "upper_data_path": "/pool/upper.data",
+                "upper_index_path": "/pool/upper.index",
+            })]
+        );
+    }
+
+    #[tokio::test]
+    async fn disks_without_an_image_need_no_backend() {
+        let mut disks = vec![file_disk()];
+        assert!(!map_oci_disks(None, "vm1", &mut disks).await.unwrap());
+        assert_eq!(disks, vec![file_disk()]);
+    }
+
+    #[tokio::test]
+    async fn an_oci_disk_without_an_overlaybd_backend_is_refused() {
+        let error = map_oci_disks(None, "vm1", &mut [oci_disk()])
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("no OverlayBD backend"),
+            "{error}"
+        );
+    }
 }
