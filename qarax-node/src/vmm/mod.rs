@@ -5,7 +5,7 @@
 //! `HypervisorType` field in the VM config.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 
@@ -14,6 +14,8 @@ use crate::rpc::node::{
     SendMigrationRequest, VfioDeviceConfig as ProtoVfioDeviceConfig, VmConfig as ProtoVmConfig,
     VmState,
 };
+
+pub mod guest_agent;
 
 #[derive(Debug, thiserror::Error)]
 pub enum VmmError {
@@ -195,6 +197,9 @@ pub trait VmmManager: Send + Sync + 'static {
     ) -> Result<ExecVmResponse, VmmError> {
         Err(VmmError::Unsupported("exec_vm"))
     }
+
+    /// The host end of a running VM's guest-agent vsock.
+    async fn guest_agent_socket(&self, vm_id: &str) -> Result<PathBuf, VmmError>;
 
     /// Start `fork_ids`, new VMs that continue from `source_id`'s current
     /// state. The source keeps running.

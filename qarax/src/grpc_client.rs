@@ -137,8 +137,8 @@ use node::{
     ResizeVmRequest, RestoreVmRequest, SendMigrationRequest, SnapshotVmRequest, StoragePoolKind,
     SyncNetworkIsolationRequest, SyncVmFirewallRequest, SyncVpcOverlaysRequest, TransferResponse,
     UrlDiskSource, VfioDeviceConfig, VmConfig, VmCounters, VmFirewallInterface, VmId, VmState,
-    VpcOverlayConfig, VsockConfig, file_transfer_service_client::FileTransferServiceClient,
-    vm_service_client::VmServiceClient,
+    VpcOverlayConfig, VsockConfig, WaitForGuestAgentRequest,
+    file_transfer_service_client::FileTransferServiceClient, vm_service_client::VmServiceClient,
 };
 
 /// Client for communicating with qarax-node via gRPC.
@@ -1278,6 +1278,20 @@ impl NodeClient {
             })?;
 
         Ok(response.into_inner())
+    }
+
+    /// Wait until the guest agent of a VM answers, at most `timeout`.
+    #[instrument(skip(self))]
+    pub async fn wait_for_guest_agent(&self, vm_id: Uuid, timeout: Duration) -> Result<()> {
+        let mut client = self.connect_vm_service().await?;
+        client
+            .wait_for_guest_agent(WaitForGuestAgentRequest {
+                vm_id: vm_id.to_string(),
+                timeout_secs: timeout.as_secs().max(1),
+            })
+            .await
+            .map_err(|status| anyhow::anyhow!("{}", status.message()))?;
+        Ok(())
     }
 
     /// Get node information (versions, hostname) from the qarax-node

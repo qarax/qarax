@@ -56,6 +56,9 @@ impl From<SandboxRow> for Sandbox {
     }
 }
 
+/// `provisioning` until its VM runs and its guest agent answers, then
+/// `ready`, when `exec` works; `error` (see `error_message`) if it
+/// doesn't get there, and `destroying` while it is deleted.
 #[derive(
     Deserialize, Serialize, Debug, Clone, Eq, PartialEq, Type, EnumString, Display, ToSchema,
 )]

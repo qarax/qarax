@@ -3,6 +3,7 @@ use std::net::Ipv4Addr;
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tonic::{Request, Response, Status};
 use tracing::{debug, error, info, instrument, warn};
@@ -27,9 +28,9 @@ use crate::rpc::node::{
     ReceiveMigrationRequest, ReceiveMigrationResponse, RemoveDeviceRequest, ResizeDiskRequest,
     ResizeVmRequest, RestoreVmRequest, SendMigrationRequest, SnapshotVmRequest, StoragePoolKind,
     SyncNetworkIsolationRequest, SyncVmFirewallRequest, SyncVpcOverlaysRequest, VmConfig,
-    VmCounters, VmId, VmList, VmState, vm_service_server::VmService,
+    VmCounters, VmId, VmList, VmState, WaitForGuestAgentRequest, vm_service_server::VmService,
 };
-use crate::vmm::{VmmError, VmmManager};
+use crate::vmm::{VmmError, VmmManager, guest_agent};
 use common::cpu_list::expand_cpu_list;
 
 /// Give every NIC without a MAC its derived one, so the node knows the MAC of
@@ -487,6 +488,30 @@ impl VmService for VmServiceImpl {
                 Err(map_vmm_error(e))
             }
         }
+    }
+
+    async fn wait_for_guest_agent(
+        &self,
+        request: Request<WaitForGuestAgentRequest>,
+    ) -> Result<Response<()>, Status> {
+        let req = request.into_inner();
+        info!("Waiting for the guest agent of VM: {}", req.vm_id);
+
+        let manager = self
+            .find_manager(&req.vm_id)
+            .await
+            .ok_or_else(|| Status::not_found(format!("VM {} not found", req.vm_id)))?;
+        guest_agent::wait_until_up(
+            manager.as_ref(),
+            &req.vm_id,
+            Duration::from_secs(req.timeout_secs),
+        )
+        .await
+        .map_err(|e| {
+            warn!("Guest agent of VM {} did not answer: {}", req.vm_id, e);
+            map_vmm_error(e)
+        })?;
+        Ok(Response::new(()))
     }
 
     async fn add_network_device(

@@ -24,7 +24,9 @@ class Sandbox:
         idle_timeout_secs (int):
         last_activity_at (datetime.datetime):
         name (str):
-        status (SandboxStatus):
+        status (SandboxStatus): `provisioning` until its VM runs and its guest agent answers, then
+            `ready`, when `exec` works; `error` (see `error_message`) if it
+            doesn't get there, and `destroying` while it is deleted.
         vm_id (UUID):
         error_message (None | str | Unset):
         ip_address (None | str | Unset):

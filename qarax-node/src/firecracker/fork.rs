@@ -420,9 +420,9 @@ impl FirecrackerManager {
         loop {
             // A fresh notice per attempt, so the time it carries is current.
             let notice = fork_notice()?;
-            match Self::guest_agent_request(vsock_path, &notice, ATTEMPT_TIMEOUT).await {
+            match guest_agent::request(vsock_path, &notice, ATTEMPT_TIMEOUT).await {
                 Ok(response) => {
-                    let ack: GuestAgentAck = serde_json::from_slice(&response).map_err(|e| {
+                    let ack: guest_agent::Ack = serde_json::from_slice(&response).map_err(|e| {
                         VmmError::ExecError(format!(
                             "invalid answer to the fork notice from the guest agent: {e}"
                         ))

@@ -1,23 +1,14 @@
-use std::{path::Path, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use bytes::Bytes;
 use firecracker_rust_sdk::{client::TokioIo, models::Vsock};
 use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use hyper::Request;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 
 use super::*;
-
-const MAX_GUEST_AGENT_HANDSHAKE_BYTES: u64 = 4096;
-const MAX_GUEST_AGENT_RESPONSE_BYTES: u64 = 10 * 1024 * 1024;
-const SANDBOX_EXEC_PORT: u32 = 7000;
-
-/// The agent's answer to a request other than exec: an exec response, whose
-/// exit code is 0 when it accepted.
-#[derive(serde::Deserialize)]
-pub(super) struct GuestAgentAck {
-    pub(super) exit_code: i32,
-}
 
 #[derive(serde::Deserialize)]
 struct GuestExecResponse {
@@ -138,87 +129,24 @@ impl FirecrackerManager {
         Ok(())
     }
 
-    /// Send one request line to the guest agent behind `vsock_socket_path`
-    /// and read its whole response, within `timeout`.
-    pub(super) async fn guest_agent_request(
-        vsock_socket_path: &Path,
-        request_json: &[u8],
-        timeout: Duration,
-    ) -> Result<Vec<u8>, VmmError> {
-        tokio::time::timeout(timeout, async {
-            let mut stream = tokio::net::UnixStream::connect(&vsock_socket_path)
-                .await
-                .map_err(|e| {
-                    VmmError::ExecError(format!(
-                        "failed to connect to guest-agent socket {}: {}",
-                        vsock_socket_path.display(),
-                        e
-                    ))
-                })?;
-
-            stream
-                .write_all(format!("CONNECT {}\n", SANDBOX_EXEC_PORT).as_bytes())
-                .await
-                .map_err(|e| {
-                    VmmError::ExecError(format!(
-                        "failed to open vsock stream to guest agent: {}",
-                        e
-                    ))
-                })?;
-
-            let mut handshake = Vec::new();
-            {
-                let mut reader = tokio::io::BufReader::new(&mut stream);
-                let mut limited = (&mut reader).take(MAX_GUEST_AGENT_HANDSHAKE_BYTES + 1);
-                limited
-                    .read_until(b'\n', &mut handshake)
-                    .await
-                    .map_err(|e| {
-                        VmmError::ExecError(format!("failed to read guest-agent handshake: {}", e))
-                    })?;
-            }
-
-            if !handshake.ends_with(b"\n")
-                || handshake.len() > MAX_GUEST_AGENT_HANDSHAKE_BYTES as usize
-            {
-                return Err(VmmError::ExecError(format!(
-                    "guest-agent handshake exceeds {} bytes or is missing a newline terminator",
-                    MAX_GUEST_AGENT_HANDSHAKE_BYTES
-                )));
-            }
-
-            let handshake = String::from_utf8(handshake).map_err(|e| {
-                VmmError::ExecError(format!("guest-agent handshake was not valid UTF-8: {}", e))
-            })?;
-            if !handshake.starts_with("OK") {
-                return Err(VmmError::ExecError(format!(
-                    "guest-agent connect failed: {}",
-                    handshake.trim_end()
-                )));
-            }
-
-            stream.write_all(request_json).await.map_err(|e| {
-                VmmError::ExecError(format!("failed to send exec request to guest agent: {}", e))
-            })?;
-
-            let mut response = Vec::new();
-            stream
-                .take(MAX_GUEST_AGENT_RESPONSE_BYTES + 1)
-                .read_to_end(&mut response)
-                .await
-                .map_err(|e| {
-                    VmmError::ExecError(format!("failed to read guest-agent response: {}", e))
-                })?;
-            if response.len() > MAX_GUEST_AGENT_RESPONSE_BYTES as usize {
-                return Err(VmmError::ExecError(format!(
-                    "guest-agent response exceeds {} bytes",
-                    MAX_GUEST_AGENT_RESPONSE_BYTES
-                )));
-            }
-            Ok::<_, VmmError>(response)
+    /// The host end of `vm_id`'s guest-agent vsock, while the VM runs.
+    pub(super) async fn guest_agent_socket(&self, vm_id: &str) -> Result<PathBuf, VmmError> {
+        let vms = self.vms.lock().await;
+        let instance = vms
+            .get(vm_id)
+            .ok_or_else(|| VmmError::VmNotFound(vm_id.to_string()))?;
+        if instance.status() != VmStatus::Running {
+            return Err(VmmError::ExecUnavailable(format!(
+                "VM {} is not running",
+                vm_id
+            )));
+        }
+        Self::vsock_socket_path_from_config(&instance.proto_config.vsock).ok_or_else(|| {
+            VmmError::ExecUnavailable(format!(
+                "exec guest agent is not configured for VM {}",
+                vm_id
+            ))
         })
-        .await
-        .map_err(|_| VmmError::ExecTimeout(timeout.as_secs()))?
     }
 
     pub async fn exec_vm(
@@ -233,36 +161,11 @@ impl FirecrackerManager {
             ));
         }
 
-        let (status, vsock_socket_path) = {
-            let vms = self.vms.lock().await;
-            let instance = vms
-                .get(vm_id)
-                .ok_or_else(|| VmmError::VmNotFound(vm_id.to_string()))?;
-
-            (
-                instance.status(),
-                Self::vsock_socket_path_from_config(&instance.proto_config.vsock),
-            )
-        };
-
-        if status != VmStatus::Running {
-            return Err(VmmError::ExecUnavailable(format!(
-                "VM {} is not running",
-                vm_id
-            )));
-        }
-
-        let vsock_socket_path = vsock_socket_path.ok_or_else(|| {
-            VmmError::ExecUnavailable(format!(
-                "exec guest agent is not configured for VM {}",
-                vm_id
-            ))
-        })?;
-
+        let vsock_socket_path = self.guest_agent_socket(vm_id).await?;
         let request_json = Self::build_guest_exec_request(command, timeout_secs)?;
         let timeout = Self::exec_timeout(timeout_secs);
         let response_bytes =
-            Self::guest_agent_request(&vsock_socket_path, &request_json, timeout).await?;
+            guest_agent::request(&vsock_socket_path, &request_json, timeout).await?;
 
         let response: GuestExecResponse = serde_json::from_slice(&response_bytes)
             .map_err(|e| VmmError::ExecError(format!("invalid guest-agent response: {}", e)))?;

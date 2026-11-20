@@ -62,6 +62,9 @@ enum ControlRequest {
     /// fresh from the node), reseed the kernel's generator, and set the clock
     /// to `unix_time_ns`.
     Forked { entropy: String, unix_time_ns: u64 },
+    /// qarax-node asks whether the agent is up, before it reports a sandbox
+    /// ready.
+    Ping {},
 }
 
 #[derive(Deserialize, Default)]
@@ -376,6 +379,17 @@ fn serve_exec_connection(stream_fd: OwnedFd, exit_registry: ExitRegistry) {
                         Ending::PowerOff
                     };
                     shut_down("qarax-node asked to shut down", ending);
+                    return;
+                }
+                Ok(ControlRequest::Ping {}) => {
+                    let body = serde_json::to_vec(&ExecResponse {
+                        exit_code: 0,
+                        stdout: String::new(),
+                        stderr: String::new(),
+                        timed_out: false,
+                    })
+                    .unwrap_or_default();
+                    let _ = stream.write_all(&body);
                     return;
                 }
                 Ok(ControlRequest::Forked {
@@ -792,6 +806,14 @@ mod tests {
         };
         assert_eq!(decode_hex(&entropy), Some(vec![0x00, 0xff, 0x10]));
         assert_eq!(unix_time_ns, 1_763_568_000_000_000_000);
+    }
+
+    #[test]
+    fn a_ping_is_a_control_request() {
+        assert!(matches!(
+            serde_json::from_str(r#"{"ping":{}}"#),
+            Ok(ControlRequest::Ping {})
+        ));
     }
 
     #[test]

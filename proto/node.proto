@@ -341,6 +341,11 @@ message ExecVmResponse {
   bool timed_out = 4;
 }
 
+message WaitForGuestAgentRequest {
+  string vm_id = 1;
+  uint64 timeout_secs = 2;
+}
+
 message NodeInfo {
   string hostname = 1;
   string cloud_hypervisor_version = 2;
@@ -513,6 +518,9 @@ service VmService {
   rpc GetVmCounters(VmID) returns (VmCounters) {}
   rpc ReadConsoleLog(VmID) returns (ConsoleLogResponse) {}
   rpc ExecVM(ExecVmRequest) returns (ExecVmResponse) {}
+  // Returns once the VM's guest agent answers. Fails if it hasn't within
+  // timeout_secs, or as soon as the VM stops running.
+  rpc WaitForGuestAgent(WaitForGuestAgentRequest) returns (google.protobuf.Empty) {}
 
   // Console streaming (for PTY/interactive console access)
   rpc AttachConsole(stream ConsoleInput) returns (stream ConsoleOutput) {}

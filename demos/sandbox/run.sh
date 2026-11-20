@@ -41,7 +41,6 @@ SANDBOX2="${PREFIX}2"
 IDLE_TIMEOUT="${SANDBOX_IDLE_TIMEOUT:-30}"
 POOL_MIN_READY="${SANDBOX_POOL_MIN_READY:-1}"
 READY_TIMEOUT="${SANDBOX_READY_TIMEOUT:-300}"
-GUEST_AGENT_TIMEOUT=30
 TEMPLATE="$FC_TEMPLATE"
 MANAGED_TEMPLATES=1
 CLEANUP_ONLY=0
@@ -152,13 +151,6 @@ create_timed() {
 	READY_MS=$(($(now_ms) - start))
 }
 
-# READY means the sandbox VM is running, not that the guest has booted far
-# enough for its agent to listen: `sandbox exec` fails until then, so errors
-# are expected here.
-sandbox_agent_ready() {
-	qarax sandbox exec "$1" -- true >/dev/null 2>&1
-}
-
 pool_filled() {
 	local ready
 	ready=$(qarax sandbox pool get --template "$TEMPLATE_ID" -o json | jq .current_ready) ||
@@ -257,8 +249,6 @@ run qarax sandbox get "$SANDBOX1"
 step "Run a command inside ${SANDBOX1}"
 info "exec and keepalive reset a sandbox's idle clock; get does not."
 run qarax sandbox keepalive "$SANDBOX1"
-wait_until "$GUEST_AGENT_TIMEOUT" sandbox_agent_ready "$SANDBOX1" ||
-	die "the guest agent in ${SANDBOX1} did not answer within ${GUEST_AGENT_TIMEOUT}s"
 run qarax sandbox exec "$SANDBOX1" -- uname -a
 
 step "Wait for the pool's standby sandbox"

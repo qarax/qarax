@@ -41,10 +41,9 @@ use crate::rpc::node::{
 };
 use crate::storage::StorageBackend;
 use crate::storage::overlaybd::{OverlayBdBackend, map_oci_disks};
-use crate::vmm::{VmmError, VmmManager};
+use crate::vmm::{VmmError, VmmManager, guest_agent};
 
 mod exec;
-use exec::GuestAgentAck;
 mod fork;
 mod helpers;
 
@@ -340,19 +339,19 @@ impl FirecrackerManager {
         const POLL_INTERVAL: Duration = Duration::from_millis(250);
 
         // An older qarax-init answers it as an invalid exec request.
-        let accepted = Self::guest_agent_request(
+        let accepted = guest_agent::request(
             agent_socket,
             b"{\"shutdown\":{\"reboot\":true}}\n",
             AGENT_TIMEOUT,
         )
         .await
         .and_then(|response| {
-            serde_json::from_slice::<GuestAgentAck>(&response)
+            serde_json::from_slice::<guest_agent::Ack>(&response)
                 .map_err(|e| VmmError::ExecError(format!("invalid guest-agent response: {e}")))
         });
         match accepted {
-            Ok(GuestAgentAck { exit_code: 0 }) => {}
-            Ok(GuestAgentAck { exit_code }) => {
+            Ok(guest_agent::Ack { exit_code: 0 }) => {}
+            Ok(guest_agent::Ack { exit_code }) => {
                 warn!("FC: VM {vm_id}'s guest agent refused to shut down (exit code {exit_code})");
                 return false;
             }
@@ -898,6 +897,10 @@ impl VmmManager for FirecrackerManager {
         timeout_secs: Option<u64>,
     ) -> Result<ExecVmResponse, VmmError> {
         FirecrackerManager::exec_vm(self, vm_id, command, timeout_secs).await
+    }
+
+    async fn guest_agent_socket(&self, vm_id: &str) -> Result<PathBuf, VmmError> {
+        FirecrackerManager::guest_agent_socket(self, vm_id).await
     }
 
     async fn fork_vm(&self, source_id: &str, fork_ids: &[String]) -> Result<(), VmmError> {
