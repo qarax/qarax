@@ -95,19 +95,7 @@ impl VmManager {
             process.id()
         );
 
-        // Wait for socket to be ready.
-        let max_retries = 50;
-        let mut retries = 0;
-        loop {
-            match UnixStream::connect(&socket_path).await {
-                Ok(_) => break,
-                Err(_) if retries < max_retries => {
-                    retries += 1;
-                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                }
-                Err(e) => return Err(VmManagerError::SpawnError(e)),
-            }
-        }
+        Self::wait_for_api_socket(&socket_path).await?;
 
         // Call vm.restore — Cloud Hypervisor reads all config from the snapshot.
         // After vm.restore, CH leaves the VM in paused state; vm.resume is required.

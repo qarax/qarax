@@ -88,13 +88,12 @@ def sync_detailed(
     generator is reseeded and its clock set. A fork of a sandbox booted from an
     OCI image gets the image and the sandbox's changes to it as they were, and a
     copy of each of its writable disks on local and NFS pools, of its own;
-    read-only disks are shared. Each
-    of a fork's network interfaces is on its source's network with an address of
-    its own, and the fork has its source's security groups; a sandbox's
-    cloud-init seed disk is each fork's own. Only Firecracker sandboxes with no
-    network interface outside a managed bridge or isolated network (nor one
-    whose network config comes from cloud-init) and no writable disk on another
-    kind of pool fork.
+    read-only disks are shared. Each of a fork's network interfaces is on its
+    source's network with an address of its own, and the fork has its source's
+    security groups; a sandbox's cloud-init seed disk is each fork's own. Only
+    sandboxes with the guest agent, no network interface outside a managed
+    bridge or isolated network (nor one whose network config comes from
+    cloud-init) and no writable disk on another kind of pool fork.
 
     Args:
         sandbox_id (UUID):
@@ -134,13 +133,12 @@ def sync(
     generator is reseeded and its clock set. A fork of a sandbox booted from an
     OCI image gets the image and the sandbox's changes to it as they were, and a
     copy of each of its writable disks on local and NFS pools, of its own;
-    read-only disks are shared. Each
-    of a fork's network interfaces is on its source's network with an address of
-    its own, and the fork has its source's security groups; a sandbox's
-    cloud-init seed disk is each fork's own. Only Firecracker sandboxes with no
-    network interface outside a managed bridge or isolated network (nor one
-    whose network config comes from cloud-init) and no writable disk on another
-    kind of pool fork.
+    read-only disks are shared. Each of a fork's network interfaces is on its
+    source's network with an address of its own, and the fork has its source's
+    security groups; a sandbox's cloud-init seed disk is each fork's own. Only
+    sandboxes with the guest agent, no network interface outside a managed
+    bridge or isolated network (nor one whose network config comes from
+    cloud-init) and no writable disk on another kind of pool fork.
 
     Args:
         sandbox_id (UUID):
@@ -175,13 +173,12 @@ async def asyncio_detailed(
     generator is reseeded and its clock set. A fork of a sandbox booted from an
     OCI image gets the image and the sandbox's changes to it as they were, and a
     copy of each of its writable disks on local and NFS pools, of its own;
-    read-only disks are shared. Each
-    of a fork's network interfaces is on its source's network with an address of
-    its own, and the fork has its source's security groups; a sandbox's
-    cloud-init seed disk is each fork's own. Only Firecracker sandboxes with no
-    network interface outside a managed bridge or isolated network (nor one
-    whose network config comes from cloud-init) and no writable disk on another
-    kind of pool fork.
+    read-only disks are shared. Each of a fork's network interfaces is on its
+    source's network with an address of its own, and the fork has its source's
+    security groups; a sandbox's cloud-init seed disk is each fork's own. Only
+    sandboxes with the guest agent, no network interface outside a managed
+    bridge or isolated network (nor one whose network config comes from
+    cloud-init) and no writable disk on another kind of pool fork.
 
     Args:
         sandbox_id (UUID):
@@ -219,13 +216,12 @@ async def asyncio(
     generator is reseeded and its clock set. A fork of a sandbox booted from an
     OCI image gets the image and the sandbox's changes to it as they were, and a
     copy of each of its writable disks on local and NFS pools, of its own;
-    read-only disks are shared. Each
-    of a fork's network interfaces is on its source's network with an address of
-    its own, and the fork has its source's security groups; a sandbox's
-    cloud-init seed disk is each fork's own. Only Firecracker sandboxes with no
-    network interface outside a managed bridge or isolated network (nor one
-    whose network config comes from cloud-init) and no writable disk on another
-    kind of pool fork.
+    read-only disks are shared. Each of a fork's network interfaces is on its
+    source's network with an address of its own, and the fork has its source's
+    security groups; a sandbox's cloud-init seed disk is each fork's own. Only
+    sandboxes with the guest agent, no network interface outside a managed
+    bridge or isolated network (nor one whose network config comes from
+    cloud-init) and no writable disk on another kind of pool fork.
 
     Args:
         sandbox_id (UUID):

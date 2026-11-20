@@ -452,8 +452,9 @@ async def test_sandbox_defaults_to_firecracker_when_template_omits_hypervisor(cl
             await cleanup_bootable_sandbox_template(c, resources)
 
 
+@pytest.mark.parametrize("hypervisor", ["firecracker", "cloud_hv"])
 @pytest.mark.asyncio
-async def test_sandbox_fork_continues_from_its_source(client):
+async def test_sandbox_fork_continues_from_its_source(client, hypervisor):
     """A fork continues from its source's state, files and running processes
     included, with a random generator of its own; afterwards each one's
     changes are its own."""
@@ -466,7 +467,7 @@ async def test_sandbox_fork_continues_from_its_source(client):
     )
 
     async with client as c:
-        template_id, resources = await create_bootable_sandbox_template(c, "firecracker")
+        template_id, resources = await create_bootable_sandbox_template(c, hypervisor)
         sandbox_ids = []
 
         async def sh(sandbox_id, script):
@@ -664,8 +665,9 @@ async def test_sandbox_fork_of_an_oci_sandbox_forks_its_disk(client, bootable_oc
             await delete_storage_pool.asyncio_detailed(client=c, pool_id=pool_id)
 
 
+@pytest.mark.parametrize("hypervisor", ["firecracker", "cloud_hv"])
 @pytest.mark.asyncio
-async def test_sandbox_fork_on_a_network_gets_addresses_of_its_own(client):
+async def test_sandbox_fork_on_a_network_gets_addresses_of_its_own(client, hypervisor):
     """Each fork of a sandbox on a network has a NIC of its own there: its
     guest takes the fork's MAC and address in place of its source's, keeps its
     default route, and the source reaches it."""
@@ -705,7 +707,7 @@ async def test_sandbox_fork_on_a_network_gets_addresses_of_its_own(client):
             return nics[0].ip_address.split("/")[0]
 
         async with isolated_network(c, test_id, hosts, 95) as network_id:
-            template_id, resources = await create_bootable_sandbox_template(c, "firecracker")
+            template_id, resources = await create_bootable_sandbox_template(c, hypervisor)
             sandbox_ids = []
             try:
                 source = await call_api(

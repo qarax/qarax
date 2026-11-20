@@ -695,6 +695,13 @@ impl VmManager {
             }
         }
 
+        // A fork's snapshot, which its memory mapped.
+        if let Err(e) = tokio::fs::remove_dir_all(self.fork_dir(vm_id)).await
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            warn!("Failed to remove the fork snapshot of VM {}: {}", vm_id, e);
+        }
+
         // Clean up cloud-init seed image if present
         let seed_path = self.cloud_init_seed_path(vm_id);
         if tokio::fs::try_exists(&seed_path).await.unwrap_or(false) {

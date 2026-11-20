@@ -119,10 +119,6 @@ async fn a_sandbox_that_cant_fork_is_refused_before_the_node() {
     set_vm_status(&app.pool, stopped_vm, "SHUTDOWN").await;
     assert_refused(&app, &client, stopped, "is not running").await;
 
-    let (cloud_hv, _) =
-        running_sandbox(&app, &client, "fork-cloud-hv", "cloud_hv", json!({})).await;
-    assert_refused(&app, &client, cloud_hv, "only Firecracker").await;
-
     let (no_agent, _) = running_sandbox(
         &app,
         &client,
@@ -198,8 +194,8 @@ async fn a_sandbox_that_cant_fork_is_refused_before_the_node() {
     .await;
 
     // Nothing refused made a row.
-    assert_eq!(count(&app, "vms").await, 8);
-    assert_eq!(count(&app, "sandboxes").await, 8);
+    assert_eq!(count(&app, "vms").await, 7);
+    assert_eq!(count(&app, "sandboxes").await, 7);
 }
 
 /// An isolated network attached to `host_id`, and a NIC of `vm_id` on it with

@@ -36,9 +36,8 @@ use tracing::{debug, info, warn};
 
 use crate::rpc::node::ExecVmResponse;
 use crate::rpc::node::{
-    CloudInitConfig, Fork, NetConfig as ProtoNetConfig,
-    RateLimiterConfig as ProtoRateLimiterConfig, TokenBucket as ProtoTokenBucket,
-    VmConfig as ProtoVmConfig, VmState, VmStatus,
+    Fork, NetConfig as ProtoNetConfig, RateLimiterConfig as ProtoRateLimiterConfig,
+    TokenBucket as ProtoTokenBucket, VmConfig as ProtoVmConfig, VmState, VmStatus,
 };
 use crate::storage::StorageBackend;
 use crate::storage::overlaybd::{OverlayBdBackend, map_oci_disks};
@@ -420,34 +419,7 @@ fn sdk_err(e: firecracker_rust_sdk::error::Error) -> VmmError {
     VmmError::ProcessError(e.to_string())
 }
 
-/// The drive of a VM's cloud-init seed image.
-const CLOUD_INIT_DRIVE: &str = "cidata";
-
-/// The cloud-init config a VM gets a seed image for, if it gets one.
-fn cloud_init_seed(config: &ProtoVmConfig) -> Option<&CloudInitConfig> {
-    config
-        .cloud_init
-        .as_ref()
-        .filter(|ci| !ci.user_data.is_empty())
-}
-
 impl FirecrackerManager {
-    /// Write `vm_id`'s cloud-init seed image for `ci`, and return its path.
-    async fn write_cloud_init_seed(
-        &self,
-        vm_id: &str,
-        ci: &CloudInitConfig,
-    ) -> Result<PathBuf, VmmError> {
-        let seed_path = self.cloud_init_seed_path(vm_id);
-        let network_config = (!ci.network_config.is_empty()).then_some(ci.network_config.as_str());
-        let buf = crate::cloud_init::build_seed_image(&ci.user_data, &ci.meta_data, network_config)
-            .map_err(|e| VmmError::InvalidConfig(e.to_string()))?;
-        tokio::fs::write(&seed_path, buf)
-            .await
-            .map_err(VmmError::SpawnError)?;
-        Ok(seed_path)
-    }
-
     /// Create a TAP for each of `networks` that has none, named for `vm_id`,
     /// and attach the TAPs to their bridges. Returns the TAPs it created, of
     /// which none is left if it fails.
@@ -515,10 +487,11 @@ impl VmmManager for FirecrackerManager {
             self.resolve_vsock_config(&vm_id, vsock);
         }
 
-        if let Some(ci) = cloud_init_seed(&config) {
-            let seed_path = self.write_cloud_init_seed(&vm_id, ci).await?;
+        if let Some(ci) = crate::cloud_init::seed_config(&config) {
+            let seed_path = self.cloud_init_seed_path(&vm_id);
+            crate::cloud_init::write_seed_image(&seed_path, ci).await?;
             config.disks.push(crate::rpc::node::DiskConfig {
-                id: CLOUD_INIT_DRIVE.to_string(),
+                id: crate::cloud_init::SEED_DRIVE.to_string(),
                 path: Some(seed_path.display().to_string()),
                 readonly: Some(true),
                 ..Default::default()

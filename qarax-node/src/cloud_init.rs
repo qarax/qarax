@@ -7,6 +7,12 @@
 //! by the volume label.
 
 use std::io::{Cursor, Write};
+use std::path::Path;
+
+use crate::rpc::node::{CloudInitConfig, VmConfig};
+
+/// The drive a VM's seed image is attached as.
+pub const SEED_DRIVE: &str = "cidata";
 
 /// 512 KiB — plenty for any reasonable cloud-init payload.
 const SEED_IMAGE_SIZE: usize = 512 * 1024;
@@ -17,6 +23,22 @@ pub enum CloudInitError {
     Io(#[from] std::io::Error),
     #[error("FAT filesystem error: {0}")]
     Fat(String),
+}
+
+/// The cloud-init config a VM gets a seed image for, if it gets one.
+pub fn seed_config(config: &VmConfig) -> Option<&CloudInitConfig> {
+    config
+        .cloud_init
+        .as_ref()
+        .filter(|ci| !ci.user_data.is_empty())
+}
+
+/// Write the seed image for `ci` to `path`.
+pub async fn write_seed_image(path: &Path, ci: &CloudInitConfig) -> Result<(), CloudInitError> {
+    let network_config = (!ci.network_config.is_empty()).then_some(ci.network_config.as_str());
+    let image = build_seed_image(&ci.user_data, &ci.meta_data, network_config)?;
+    tokio::fs::write(path, image).await?;
+    Ok(())
 }
 
 /// Build a NoCloud seed image in memory and return the raw bytes.
