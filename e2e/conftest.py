@@ -24,7 +24,7 @@ from qarax_api_client.api.hosts import init as init_host
 from qarax_api_client.api.hosts import list_ as list_hosts
 from qarax_api_client.models.new_host import NewHost
 
-from helpers import AUTH_HEADERS
+from helpers import AUTH_HEADERS, REGISTRY_INTERNAL_URL, REGISTRY_PUSH_URL, docker
 
 QARAX_URL = os.getenv("QARAX_URL", "http://localhost:8000")
 # Address of qarax-node as seen from the qarax control plane (inside docker network)
@@ -195,6 +195,20 @@ class _TelemetryHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format, *args):
         return
+
+
+@pytest.fixture(scope="session")
+def bootable_oci_image_ref():
+    """Push alpine to the local test registry; return its internal ref.
+
+    Unlike busybox (see test_preflight_oci_image), its /bin/sh is a symlink,
+    which the OverlayBD conversion keeps, so a VM can boot it.
+    """
+    tag = f"{REGISTRY_PUSH_URL}/test/alpine:latest"
+    docker("pull", "alpine:latest")
+    docker("tag", "alpine:latest", tag)
+    docker("push", tag)
+    return f"{REGISTRY_INTERNAL_URL}/test/alpine:latest"
 
 
 @pytest.fixture(scope="session")

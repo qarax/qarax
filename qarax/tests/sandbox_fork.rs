@@ -153,11 +153,80 @@ async fn only_a_running_firecracker_sandbox_with_only_memory_to_share_forks() {
         json!({ "cloud_init_user_data": "#cloud-config\n" }),
     )
     .await;
-    assert_refused(&app, &client, with_cloud_init, "disks").await;
+    assert_refused(&app, &client, with_cloud_init, "cloud-init").await;
+
+    let pool = storage_pool(&app, "OVERLAYBD").await;
+    let (with_data_disk, data_vm) =
+        running_sandbox(&app, &client, "fork-data-disk", "firecracker", json!({})).await;
+    add_disk(
+        &app,
+        data_vm,
+        storage_object(&app, pool, "DISK").await,
+        None,
+    )
+    .await;
+    assert_refused(&app, &client, with_data_disk, "besides its OCI image's").await;
+
+    let (with_persistent_layer, persistent_vm) =
+        running_sandbox(&app, &client, "fork-persistent", "firecracker", json!({})).await;
+    let image = storage_object(&app, pool, "OCI_IMAGE").await;
+    let upper = storage_object(&app, pool, "OVERLAYBD_UPPER").await;
+    add_disk(&app, persistent_vm, image, Some(upper)).await;
+    assert_refused(
+        &app,
+        &client,
+        with_persistent_layer,
+        "persistent disk layer",
+    )
+    .await;
 
     // Nothing refused made a row.
-    assert_eq!(count(&app, "vms").await, 6);
-    assert_eq!(count(&app, "sandboxes").await, 6);
+    assert_eq!(count(&app, "vms").await, 8);
+    assert_eq!(count(&app, "sandboxes").await, 8);
+}
+
+async fn storage_pool(app: &TestApp, pool_type: &str) -> Uuid {
+    let id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO storage_pools (id, name, pool_type, status) \
+         VALUES ($1, $2, $3::storage_pool_type, 'ACTIVE')",
+    )
+    .bind(id)
+    .bind(format!("pool-{id}"))
+    .bind(pool_type)
+    .execute(&app.pool)
+    .await
+    .unwrap();
+    id
+}
+
+async fn storage_object(app: &TestApp, pool: Uuid, object_type: &str) -> Uuid {
+    let id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO storage_objects (id, name, storage_pool_id, object_type, size_bytes) \
+         VALUES ($1, $2, $3, $4::storage_object_type, 1)",
+    )
+    .bind(id)
+    .bind(format!("object-{id}"))
+    .bind(pool)
+    .bind(object_type)
+    .execute(&app.pool)
+    .await
+    .unwrap();
+    id
+}
+
+async fn add_disk(app: &TestApp, vm_id: Uuid, object: Uuid, upper: Option<Uuid>) {
+    sqlx::query(
+        "INSERT INTO vm_disks (vm_id, storage_object_id, logical_name, device_path, \
+         upper_storage_object_id) VALUES ($1, $2, 'rootfs', '/dev/vda', $3)",
+    )
+    .bind(vm_id)
+    .bind(object)
+    .bind(upper)
+    .execute(&app.pool)
+    .await
+    .unwrap();
 }
 
 #[tokio::test]
@@ -172,8 +241,17 @@ async fn a_fork_needs_room_on_its_source_host_and_a_failed_one_leaves_no_rows() 
         .execute(&app.pool)
         .await
         .unwrap();
-    let (sandbox_id, _) =
+    // Booted from an OCI image: its image disk forks with it.
+    let (sandbox_id, vm_id) =
         running_sandbox(&app, &client, "fork-room", "firecracker", json!({})).await;
+    let pool = storage_pool(&app, "OVERLAYBD").await;
+    add_disk(
+        &app,
+        vm_id,
+        storage_object(&app, pool, "OCI_IMAGE").await,
+        None,
+    )
+    .await;
 
     let (status, body) = fork(&app, &client, sandbox_id, json!({ "count": 2 })).await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
@@ -184,4 +262,5 @@ async fn a_fork_needs_room_on_its_source_host_and_a_failed_one_leaves_no_rows() 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
     assert_eq!(count(&app, "vms").await, 1);
     assert_eq!(count(&app, "sandboxes").await, 1);
+    assert_eq!(count(&app, "vm_disks").await, 1);
 }

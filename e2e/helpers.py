@@ -7,10 +7,12 @@ import subprocess
 import time
 
 from qarax_api_client.api.hosts import list_ as list_hosts
+from qarax_api_client.api.storage_pools import attach_host as attach_pool_host
 from qarax_api_client.api.jobs import get as get_job
 from qarax_api_client.api.vms import exec_ as exec_vm
 from qarax_api_client.api.vms import get as get_vm
 from qarax_api_client.models import ExecVmRequest, HostStatus, VmStatus
+from qarax_api_client.models.attach_pool_host_request import AttachPoolHostRequest
 
 QARAX_URL = os.getenv("QARAX_URL", "http://localhost:8000")
 QARAX_TEST_TOKEN = os.getenv("QARAX_TEST_TOKEN", "e2e-test-token")
@@ -24,6 +26,10 @@ NODE_CONTAINER_PREFIX = f"{COMPOSE_PROJECT}-qarax-node"
 DOCKER_TIMEOUT = 120
 # qarax-node --runtime-dir default: VM sockets, logs and cloud-init seed images.
 NODE_RUNTIME_DIR = "/var/lib/qarax/vms"
+# The test registry as seen from the test runner (host-side port mapping), and
+# from inside the docker network.
+REGISTRY_PUSH_URL = os.getenv("REGISTRY_PUSH_URL", "localhost:5001")
+REGISTRY_INTERNAL_URL = os.getenv("REGISTRY_INTERNAL_URL", "registry:5000")
 
 
 async def call_api(endpoint_module, **kwargs):
@@ -58,6 +64,30 @@ async def exec_when_ready(client, vm_id, script):
         assert response.status_code == 422, response.content.decode()
         assert time.monotonic() < deadline, "the guest agent never answered"
         await asyncio.sleep(1)
+
+
+async def attach_overlaybd_pool(c, hosts, pool_id):
+    """Attach an OverlayBD pool to every UP host whose node accepts it.
+
+    A node refuses OverlayBD without an overlaybd-tcmu daemon, which the
+    compose stack runs on qarax-node only (two daemons can't share a kernel's
+    TCMU handler). The scheduler then places image VMs on a host that has it.
+    """
+    accepted = []
+    for host in up_hosts(hosts):
+        resp = await call_api_detailed(
+            attach_pool_host,
+            client=c,
+            pool_id=pool_id,
+            body=AttachPoolHostRequest(host_id=host.id),
+        )
+        if resp.status_code == 204:
+            accepted.append(host.name)
+        else:
+            assert resp.status_code == 422 and b"overlaybd-tcmu" in resp.content, (
+                f"attaching OverlayBD pool to {host.name}: {resp.status_code} {resp.content}"
+            )
+    assert accepted, "no host accepted the OverlayBD pool"
 
 
 def up_hosts(hosts):

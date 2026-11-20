@@ -16,6 +16,7 @@ use crate::{
             self, CreateSandboxResponse, ExecSandboxRequest, ExecSandboxResponse,
             ForkSandboxRequest, NewSandbox, Sandbox, SandboxStatus,
         },
+        storage_objects::{self, StorageObjectType},
         vm_disks,
         vms::{self, Hypervisor, Vm, VmStatus},
     },
@@ -198,8 +199,10 @@ const MAX_VM_NAME_CHARS: usize = 50;
 /// Makes `count` new sandboxes that continue from this one's current state:
 /// its memory, its running processes and its files. They run on the same host
 /// and are ready when this returns; this one keeps running. Each fork's random
-/// generator is reseeded and its clock set. Only Firecracker sandboxes without
-/// network interfaces or disks fork.
+/// generator is reseeded and its clock set. A fork of a sandbox booted from an
+/// OCI image gets the image and the sandbox's changes to it as they were.
+/// Only Firecracker sandboxes without network interfaces, cloud-init or disks
+/// besides their image's fork.
 #[utoipa::path(
     post,
     path = "/v1/sandboxes/{sandbox_id}/fork",
@@ -272,6 +275,7 @@ pub async fn fork(
         let fork_sandbox_id = Uuid::new_v4();
         let name = fork_name(&source.name, fork_sandbox_id);
         let fork_vm_id = vms::create_fork_tx(&mut tx, vm.id, &name).await?;
+        vm_disks::copy_for_fork_tx(&mut tx, vm.id, fork_vm_id).await?;
         sandboxes::create_tx_with_status(
             &mut tx,
             fork_sandbox_id,
@@ -347,16 +351,43 @@ async fn ensure_forkable(env: &App, vm: &Vm) -> Result<()> {
         "a sandbox with network interfaces can't be forked yet: its forks would have their MAC \
          and IP addresses"
             .to_string()
-    } else if vm.cloud_init_user_data.is_some()
-        || !vm_disks::list_by_vm(env.pool(), vm.id).await?.is_empty()
-    {
-        "a sandbox with disks (cloud-init's included) can't be forked yet: its forks would \
-         write to the same files"
+    } else if vm.cloud_init_user_data.is_some() {
+        "a sandbox with cloud-init can't be forked yet: its forks would share its seed disk"
             .to_string()
+    } else if let Some(refusal) = disk_refusal(env, vm).await? {
+        refusal
     } else {
         return Ok(());
     };
     Err(Error::UnprocessableEntity(refusal))
+}
+
+/// Why `vm`'s disks keep it from forking, if they do. Its OCI image disk
+/// forks: each fork gets the image and the VM's writable layer as it was, and a
+/// writable layer of its own. A persistent writable layer belongs to its
+/// storage object, and other disks would have the forks write to the same file.
+async fn disk_refusal(env: &App, vm: &Vm) -> Result<Option<String>> {
+    for disk in vm_disks::list_by_vm(env.pool(), vm.id).await? {
+        if disk.upper_storage_object_id.is_some() {
+            return Ok(Some(
+                "a sandbox with a persistent disk layer can't be forked: its forks would \
+                 write to the same layer"
+                    .into(),
+            ));
+        }
+        let image = match disk.storage_object_id {
+            Some(id) => Some(storage_objects::get(env.pool(), id).await?),
+            None => None,
+        };
+        if !image.is_some_and(|object| object.object_type == StorageObjectType::OciImage) {
+            return Ok(Some(format!(
+                "a sandbox with disks besides its OCI image's can't be forked yet: its forks \
+                 would write to the same files (disk {})",
+                disk.logical_name
+            )));
+        }
+    }
+    Ok(None)
 }
 
 /// `<source>-fork-<8 hex>`, with the source's name cut to fit a VM name.

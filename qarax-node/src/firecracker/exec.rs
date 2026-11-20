@@ -61,6 +61,17 @@ impl FirecrackerManager {
         socket_path: &Path,
         vsock: &Vsock,
     ) -> Result<(), VmmError> {
+        Self::api_request(socket_path, "PUT", "/vsock", vsock).await
+    }
+
+    /// One request to the Firecracker API at `socket_path`, for what the SDK
+    /// has no call for.
+    pub(super) async fn api_request(
+        socket_path: &Path,
+        method: &str,
+        path: &str,
+        body: &impl serde::Serialize,
+    ) -> Result<(), VmmError> {
         let stream = tokio::net::UnixStream::connect(socket_path)
             .await
             .map_err(|e| {
@@ -90,22 +101,20 @@ impl FirecrackerManager {
             ))
         })?;
 
-        let body = serde_json::to_vec(vsock)
-            .map_err(|e| VmmError::InvalidConfig(format!("invalid vsock config: {}", e)))?;
+        let body = serde_json::to_vec(body)
+            .map_err(|e| VmmError::InvalidConfig(format!("invalid body for {path}: {e}")))?;
         let request = Request::builder()
-            .method("PUT")
-            .uri("http://localhost/vsock")
+            .method(method)
+            .uri(format!("http://localhost{path}"))
             .header("Accept", "application/json")
             .header("Content-Type", "application/json")
             .body(BoxBody::new(Full::<Bytes>::new(Bytes::from(body))))
-            .map_err(|e| VmmError::ProcessError(format!("failed to build vsock request: {}", e)))?;
+            .map_err(|e| VmmError::ProcessError(format!("failed to build {method} {path}: {e}")))?;
 
-        let response = sender.send_request(request).await.map_err(|e| {
-            VmmError::ProcessError(format!(
-                "failed to configure Firecracker vsock device: {}",
-                e
-            ))
-        })?;
+        let response = sender
+            .send_request(request)
+            .await
+            .map_err(|e| VmmError::ProcessError(format!("Firecracker {method} {path}: {e}")))?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -115,13 +124,12 @@ impl FirecrackerManager {
                 .await
                 .map_err(|e| {
                     VmmError::ProcessError(format!(
-                        "failed to read Firecracker vsock error response: {}",
-                        e
+                        "failed to read Firecracker's answer to {method} {path}: {e}"
                     ))
                 })?
                 .to_bytes();
             return Err(VmmError::ProcessError(format!(
-                "Firecracker vsock configuration failed ({}): {}",
+                "Firecracker {method} {path} failed ({}): {}",
                 status,
                 String::from_utf8_lossy(&body)
             )));

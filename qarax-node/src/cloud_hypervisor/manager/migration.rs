@@ -249,7 +249,9 @@ impl VmManager {
         // backend needs to mount a TCMU device on this host for the same image
         // the source node was using.
         let storage_backend_kind = crate::storage::overlaybd::map_oci_disks(
-            self.storage_backends.get(StoragePoolKind::Overlaybd),
+            self.storage_backends
+                .get(StoragePoolKind::Overlaybd)
+                .map(|backend| backend.as_ref()),
             vm_id,
             &mut mutable_config.disks,
         )

@@ -139,7 +139,7 @@ impl StorageBackend for OverlayBdBackend {
 /// Returns whether a disk was mapped, so that a caller that then fails to
 /// start the VM can unmap it. Both hypervisors' backends map OCI disks so.
 pub async fn map_oci_disks(
-    backend: Option<&Arc<dyn StorageBackend>>,
+    backend: Option<&dyn StorageBackend>,
     vm_id: &str,
     disks: &mut [DiskConfig],
 ) -> anyhow::Result<bool> {
@@ -248,7 +248,7 @@ mod tests {
         let mut disks = vec![oci_disk(), file_disk()];
 
         assert!(
-            map_oci_disks(Some(&backend), "vm1", &mut disks)
+            map_oci_disks(Some(backend.as_ref()), "vm1", &mut disks)
                 .await
                 .unwrap()
         );

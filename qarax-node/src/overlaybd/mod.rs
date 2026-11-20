@@ -1,3 +1,3 @@
 pub mod manager;
 
-pub use manager::{MountedDevice, OverlayBdError, OverlayBdManager};
+pub use manager::{FrozenUpper, MountedDevice, OverlayBdError, OverlayBdManager};

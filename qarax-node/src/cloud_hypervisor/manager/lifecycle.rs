@@ -236,7 +236,9 @@ impl VmManager {
         // Resolve storage-backed disks: map each disk that has oci_image_ref set
         // through the appropriate storage backend.
         let storage_backend_kind = crate::storage::overlaybd::map_oci_disks(
-            self.storage_backends.get(StoragePoolKind::Overlaybd),
+            self.storage_backends
+                .get(StoragePoolKind::Overlaybd)
+                .map(|backend| backend.as_ref()),
             &vm_id,
             &mut config.disks,
         )
