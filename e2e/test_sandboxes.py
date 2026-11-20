@@ -49,6 +49,8 @@ from qarax_api_client.api.vm_templates import (
 )
 from qarax_api_client.api.vms import get as get_vm
 from qarax_api_client.api.vms import list_nics
+from qarax_api_client.api.vms import start as start_vm
+from qarax_api_client.api.vms import stop as stop_vm
 from qarax_api_client.models import (
     ExecSandboxRequest,
     ForkSandboxRequest,
@@ -72,11 +74,13 @@ from helpers import (
     attach_overlaybd_pool,
     call_api,
     call_api_detailed,
+    exec_when_ready,
     isolated_network,
     node_storage_diagnostics,
     overlaybd_disk_wwids,
     up_hosts,
     vm_diagnostics,
+    wait_for_start,
 )
 
 QARAX_URL = os.getenv("QARAX_URL", "http://localhost:8000")
@@ -94,7 +98,11 @@ def client():
 
 
 async def create_bootable_sandbox_template(
-    client, hypervisor: str | None, *, shared_pool: bool = False
+    client,
+    hypervisor: str | None,
+    *,
+    shared_pool: bool = False,
+    cloud_init_user_data: str | None = None,
 ):
     """Create a bootable sandbox template and return (template_id, cleanup_resources)."""
     test_id = uuid.uuid4().hex[:8]
@@ -211,6 +219,7 @@ async def create_bootable_sandbox_template(
         memory_size=256 * 1024 * 1024,
         boot_source_id=boot_source_id,
         boot_mode="kernel",
+        cloud_init_user_data=cloud_init_user_data,
     )
     template_id_str = await create_template.asyncio(client=client, body=new_template)
     assert template_id_str is not None
@@ -700,6 +709,53 @@ async def test_sandbox_fork_on_a_network_gets_addresses_of_its_own(client):
                 for sandbox_id in sandbox_ids:
                     await delete_sandbox.asyncio_detailed(client=c, sandbox_id=sandbox_id)
                 await cleanup_bootable_sandbox_template(c, resources)
+
+
+@pytest.mark.asyncio
+async def test_sandbox_fork_with_cloud_init_has_a_seed_of_its_own(client):
+    """A fork of a sandbox with cloud-init gets a seed image of its own: it
+    boots again after its source, and the source's seed, are gone."""
+    async with client as c:
+        template_id, resources = await create_bootable_sandbox_template(
+            c, "firecracker", cloud_init_user_data="#cloud-config\n"
+        )
+        sandbox_ids = []
+        try:
+            source = await call_api(
+                create_sandbox,
+                client=c,
+                body=NewSandbox(
+                    name=f"e2e-fork-ci-{uuid.uuid4().hex[:8]}",
+                    vm_template_id=template_id,
+                    idle_timeout_secs=300,
+                ),
+            )
+            sandbox_ids.append(source.id)
+            await wait_for_sandbox_status(c, source.id, SandboxStatus.READY)
+
+            response = await call_api_detailed(
+                fork_sandbox,
+                client=c,
+                sandbox_id=source.id,
+                body=ForkSandboxRequest(count=1),
+            )
+            assert response.status_code == 201, response.content.decode()
+            [fork] = response.parsed
+            sandbox_ids.append(fork.id)
+
+            await call_api(delete_sandbox, client=c, sandbox_id=source.id)
+            sandbox_ids.remove(source.id)
+
+            # A cold boot opens the seed again: the fork's own.
+            await call_api(stop_vm, client=c, vm_id=fork.vm_id)
+            started = await call_api(start_vm, client=c, vm_id=fork.vm_id)
+            await wait_for_start(c, fork.vm_id, started.job_id)
+            result = await exec_when_ready(c, fork.vm_id, "cat /sys/block/vda/size")
+            assert result.exit_code == 0 and int(result.stdout) > 0, result
+        finally:
+            for sandbox_id in sandbox_ids:
+                await delete_sandbox.asyncio_detailed(client=c, sandbox_id=sandbox_id)
+            await cleanup_bootable_sandbox_template(c, resources)
 
 
 @pytest.mark.asyncio

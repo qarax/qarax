@@ -204,9 +204,11 @@ const MAX_VM_NAME_CHARS: usize = 50;
 /// generator is reseeded and its clock set. A fork of a sandbox booted from an
 /// OCI image gets the image and the sandbox's changes to it as they were. Each
 /// of a fork's network interfaces is on its source's network with an address of
-/// its own, and the fork has its source's security groups. Only Firecracker
-/// sandboxes with no network interface outside a managed bridge or isolated
-/// network, no cloud-init and no disk besides their image's fork.
+/// its own, and the fork has its source's security groups; a sandbox's
+/// cloud-init seed disk is each fork's own. Only Firecracker sandboxes with no
+/// network interface outside a managed bridge or isolated network (nor one
+/// whose network config comes from cloud-init) and no disk besides their
+/// image's fork.
 #[utoipa::path(
     post,
     path = "/v1/sandboxes/{sandbox_id}/fork",
@@ -243,7 +245,7 @@ pub async fn fork(
     }
     let vm = vms::get(env.pool(), source.vm_id).await?;
     ensure_forkable(&env, &vm).await?;
-    let nics = forkable_nics(&env, vm.id).await?;
+    let nics = forkable_nics(&env, &vm).await?;
     let host_id = vm
         .host_id
         .ok_or_else(|| Error::UnprocessableEntity("sandbox VM has no assigned host".into()))?;
@@ -372,9 +374,9 @@ async fn start_forks(env: &App, host: &Host, source_id: Uuid, fork_vm_ids: &[Uui
         })
 }
 
-/// A fork shares everything but its memory, NICs and image disk with its
-/// source, so a VM with something else to share doesn't fork: a disk the forks
-/// would write to (see [`disk_refusal`]), or cloud-init's seed disk.
+/// A fork shares everything but its memory, NICs and disks with its source,
+/// so a VM with a disk the forks would write to doesn't fork (see
+/// [`disk_refusal`]).
 async fn ensure_forkable(env: &App, vm: &Vm) -> Result<()> {
     let refusal = if vm.status != VmStatus::Running {
         format!("sandbox VM {} is not running", vm.id)
@@ -383,9 +385,6 @@ async fn ensure_forkable(env: &App, vm: &Vm) -> Result<()> {
     } else if !vm.guest_agent {
         "a sandbox without the guest agent can't be forked: the agent reseeds each fork's \
          random generator"
-            .to_string()
-    } else if vm.cloud_init_user_data.is_some() {
-        "a sandbox with cloud-init can't be forked yet: its forks would share its seed disk"
             .to_string()
     } else if let Some(refusal) = disk_refusal(env, vm).await? {
         refusal
@@ -401,13 +400,22 @@ struct ForkNic {
     network_id: Uuid,
 }
 
-/// The NICs of `vm_id` its forks get copies of: each on a managed bridge or
+/// The NICs of `vm` its forks get copies of: each on a managed bridge or
 /// isolated network, where the fork gets an address of its own and its guest
-/// agent switches the guest to it. Any other NIC is refused: the forks would
-/// keep their source's addresses.
-async fn forkable_nics(env: &App, vm_id: Uuid) -> Result<Vec<ForkNic>> {
+/// agent switches the guest to it. Any other NIC is refused, as are NICs whose
+/// guest configures them from cloud-init rather than the kernel command line:
+/// the forks would keep their source's addresses.
+async fn forkable_nics(env: &App, vm: &Vm) -> Result<Vec<ForkNic>> {
+    let nics = network_interfaces::list_by_vm(env.pool(), vm.id).await?;
+    if !nics.is_empty() && vm.cloud_init_network_config.is_some() {
+        return Err(Error::UnprocessableEntity(
+            "a sandbox whose network config comes from cloud-init can't be forked with its \
+             network interfaces: its forks would keep its addresses"
+                .into(),
+        ));
+    }
     let mut forkable = Vec::new();
-    for nic in network_interfaces::list_by_vm(env.pool(), vm_id).await? {
+    for nic in nics {
         let managed = match nic.network_id {
             Some(network_id) => {
                 let network = networks::get(env.pool(), network_id).await?;
