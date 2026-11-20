@@ -23,8 +23,9 @@ qarax sandbox fork my-sandbox --count 3
   write to the same place. The image disk, the data disks, the NICs and the
   seed fork with the sandbox, and read-only disks are shared, see below.
 - Up to 16 forks per request. The source's host must have room for them: the
-  scheduler counts each fork at the source's full memory size and vCPUs, as it
-  does any VM, though a fork uses much less at first (see below).
+  scheduler counts each fork at the source's vCPUs, and at the memory it holds
+  of its own plus headroom rather than the source's memory size (see "What a
+  fork counts against its host").
 - A fork gets the source's template, idle timeout and VM configuration, and
   the name `<source>-fork-<8 hex digits>`.
 
