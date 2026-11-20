@@ -39,6 +39,14 @@ services:
       cache_to:
         - type=gha,mode=max,scope=e2e-qarax
 
+  iscsi-target:
+    image: qarax/e2e-iscsi-target:ci
+    build:
+      cache_from:
+        - type=gha,scope=e2e-iscsi-target
+      cache_to:
+        - type=gha,mode=max,scope=e2e-iscsi-target
+
   bootc-vm:
     image: qarax/e2e-bootc-vm:ci
     build:

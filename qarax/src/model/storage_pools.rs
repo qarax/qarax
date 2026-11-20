@@ -1,3 +1,5 @@
+use std::net::SocketAddr;
+
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Type, types::Json};
 use strum_macros::{Display, EnumString};
@@ -20,19 +22,64 @@ impl OverlayBdPoolConfig {
 
 /// Configuration for a BLOCK (iSCSI) storage pool, extracted from the JSONB `config` column.
 ///
-/// `portal` is the iSCSI target portal (host:port, e.g. `10.0.0.5:3260`).
+/// `portal` is the iSCSI target portal as `IP:port` (e.g. `10.0.0.5:3260`).
+/// It can't be a hostname: udev names each LUN's device after the address the
+/// node's session connected to, and VM disks are found by that name.
 /// `iqn` is the target IQN (e.g. `iqn.2024-01.qarax:target0`).
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct BlockPoolConfig {
-    pub portal: String,
+    pub portal: SocketAddr,
     pub iqn: String,
 }
 
 impl BlockPoolConfig {
-    pub fn from_value(v: &serde_json::Value) -> Option<Self> {
-        serde_json::from_value(v.clone()).ok()
+    /// Parse a new BLOCK pool's config. Its portal may leave out the port
+    /// (iSCSI's 3260), and its IQN must be one qarax-node accepts.
+    pub fn parse_new(config: &serde_json::Value) -> Result<Self, String> {
+        #[derive(Deserialize)]
+        struct Given {
+            portal: String,
+            iqn: String,
+        }
+        let given: Given = serde_json::from_value(config.clone())
+            .map_err(|e| format!("BLOCK pool config needs a portal and an iqn: {e}"))?;
+        let bare = given
+            .portal
+            .strip_prefix('[')
+            .and_then(|p| p.strip_suffix(']'))
+            .unwrap_or(&given.portal);
+        let portal = given
+            .portal
+            .parse()
+            .or_else(|_| bare.parse().map(|ip| SocketAddr::new(ip, ISCSI_PORT)))
+            .map_err(|_| {
+                format!(
+                    "portal {:?} must be an IP address, optionally with a port (e.g. 10.0.0.5:3260)",
+                    given.portal
+                )
+            })?;
+        // The node runs iscsiadm with it, and it is part of the LUN device
+        // paths VMs open.
+        if !given.iqn.starts_with("iqn.")
+            || given
+                .iqn
+                .chars()
+                .any(|c| !c.is_alphanumeric() && !matches!(c, '.' | ':' | '-'))
+        {
+            return Err(format!(
+                "iqn {:?} must start with \"iqn.\" and contain only letters, digits, '.', ':' and '-'",
+                given.iqn
+            ));
+        }
+        Ok(Self {
+            portal,
+            iqn: given.iqn,
+        })
     }
 }
+
+/// The iSCSI port, for a BLOCK pool portal given without one.
+const ISCSI_PORT: u16 = 3260;
 
 #[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
 pub struct StoragePool {

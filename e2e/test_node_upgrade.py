@@ -31,8 +31,6 @@ import uuid
 
 import pytest
 from qarax_api_client import Client
-from qarax_api_client.api.hosts import add as add_host
-from qarax_api_client.api.hosts import delete as delete_host
 from qarax_api_client.api.hosts import deploy as deploy_host
 from qarax_api_client.api.hosts import init as init_host
 from qarax_api_client.api.hosts import list_ as list_hosts
@@ -40,15 +38,11 @@ from qarax_api_client.api.hosts import node_upgrade
 from qarax_api_client.models import (
     DeployHostRequest,
     HostStatus,
-    NewHost,
 )
 
-from helpers import AUTH_HEADERS
+from helpers import AUTH_HEADERS, BOOTC_NODE_BOOT_TIMEOUT_SECONDS
 
 QARAX_URL = os.getenv("QARAX_URL", "http://localhost:8000")
-# bootc-vm is the container running the bootc node VM
-UPGRADE_TEST_NODE_HOST = os.getenv("UPGRADE_TEST_NODE_HOST", "bootc-vm")
-UPGRADE_TEST_NODE_PORT = int(os.getenv("UPGRADE_TEST_NODE_PORT", "50051"))
 
 # Registry address as seen from inside the VM (its gateway, where socat
 # proxies the compose registry)
@@ -62,16 +56,11 @@ EXPECTED_V2_VERSION = "0.2.0-test"
 DEPLOY_TIMEOUT_SECONDS = 600
 HOST_POLL_INTERVAL_SECONDS = 5
 
-# How long to wait for the bootc VM to become reachable after compose up.
-VM_BOOT_TIMEOUT_SECONDS = 600
-
 # A test may wait for the VM to boot and then for up to two deploy/upgrade
 # cycles, well past the suite-wide pytest-timeout.
-pytestmark = pytest.mark.timeout(VM_BOOT_TIMEOUT_SECONDS + 2 * DEPLOY_TIMEOUT_SECONDS + 300)
-
-
-def _is_truthy(value: str | None) -> bool:
-    return (value or "").lower() in {"1", "true", "yes", "on"}
+pytestmark = pytest.mark.timeout(
+    BOOTC_NODE_BOOT_TIMEOUT_SECONDS + 2 * DEPLOY_TIMEOUT_SECONDS + 300
+)
 
 
 def get_host(client: Client, host_id: uuid.UUID):
@@ -109,56 +98,7 @@ def wait_for_host_status(
     )
 
 
-@pytest.fixture(scope="module")
-def upgrade_host_id():
-    """
-    Register a dedicated host entry pointing at the real bootc VM.
-
-    Retries host init until the VM's gRPC port answers (it may still be booting
-    when the test suite starts), so node_version is populated. The address is
-    a compose service name that only the control plane can resolve, so there
-    is no probe from here.
-    """
-    if not _is_truthy(os.getenv("ENABLE_BOOTC_UPGRADE_E2E")):
-        pytest.skip("bootc upgrade e2e disabled (set ENABLE_BOOTC_UPGRADE_E2E=1 to run)")
-
-    client = Client(base_url=QARAX_URL, headers=AUTH_HEADERS)
-    host_name = f"bootc-vm-{uuid.uuid4().hex[:8]}"
-
-    result = add_host.sync_detailed(
-        client=client,
-        body=NewHost(
-            name=host_name,
-            address=UPGRADE_TEST_NODE_HOST,
-            port=UPGRADE_TEST_NODE_PORT,
-            host_user="root",
-            credential_ref="env://E2E_UPGRADE_SSH_PASSWORD",
-        ),
-    )
-    assert result.status_code.value == 201, (
-        f"Failed to register upgrade test host: HTTP {result.status_code}"
-    )
-    host_id = uuid.UUID(result.parsed.strip())
-
-    # The VM may still be booting — retry init until gRPC is reachable.
-    deadline = time.time() + VM_BOOT_TIMEOUT_SECONDS
-    while True:
-        init_result = init_host.sync_detailed(host_id=host_id, client=client)
-        if init_result.status_code.value == 200:
-            break
-        if time.time() >= deadline:
-            pytest.fail(
-                f"bootc-vm gRPC port did not become reachable within "
-                f"{VM_BOOT_TIMEOUT_SECONDS}s"
-            )
-        time.sleep(10)
-
-    yield host_id
-    # Remove the host so later tests don't schedule onto it.
-    delete_host.sync_detailed(host_id=host_id, client=client)
-
-
-def test_deploy_sets_last_deployed_image_and_node_version(upgrade_host_id):
+def test_deploy_sets_last_deployed_image_and_node_version(bootc_host_id):
     """
     Full deploy flow with v1 image using real bootc switch + systemctl reboot:
       - POST /hosts/{id}/deploy → 202 Accepted
@@ -172,7 +112,7 @@ def test_deploy_sets_last_deployed_image_and_node_version(upgrade_host_id):
     client = Client(base_url=QARAX_URL, headers=AUTH_HEADERS)
 
     result = deploy_host.sync_detailed(
-        host_id=upgrade_host_id,
+        host_id=bootc_host_id,
         client=client,
         body=DeployHostRequest(
             image=NODE_IMAGE_V1,
@@ -188,16 +128,16 @@ def test_deploy_sets_last_deployed_image_and_node_version(upgrade_host_id):
     )
 
     # Wait for the real reboot cycle to complete
-    wait_for_host_status(client, upgrade_host_id, HostStatus.UP)
+    wait_for_host_status(client, bootc_host_id, HostStatus.UP)
 
-    host = get_host(client, upgrade_host_id)
+    host = get_host(client, bootc_host_id)
     assert host.last_deployed_image == NODE_IMAGE_V1, (
         f"Expected last_deployed_image={NODE_IMAGE_V1!r}, got {host.last_deployed_image!r}"
     )
 
     # Re-init to capture fresh node_version from the restarted node
-    init_host.sync_detailed(host_id=upgrade_host_id, client=client)
-    host = get_host(client, upgrade_host_id)
+    init_host.sync_detailed(host_id=bootc_host_id, client=client)
+    host = get_host(client, bootc_host_id)
     assert host.node_version == "0.1.0", (
         f"Expected node_version=0.1.0 after v1 deploy, got {host.node_version!r}"
     )
@@ -206,7 +146,7 @@ def test_deploy_sets_last_deployed_image_and_node_version(upgrade_host_id):
     )
 
 
-def test_upgrade_uses_stored_credentials_and_updates_version(upgrade_host_id):
+def test_upgrade_uses_stored_credentials_and_updates_version(bootc_host_id):
     """
     Full upgrade flow with real bootc switch + systemctl reboot:
       - Deploy v2 image to set last_deployed_image
@@ -219,7 +159,7 @@ def test_upgrade_uses_stored_credentials_and_updates_version(upgrade_host_id):
 
     # Deploy v2 to set last_deployed_image
     result = deploy_host.sync_detailed(
-        host_id=upgrade_host_id,
+        host_id=bootc_host_id,
         client=client,
         body=DeployHostRequest(
             image=NODE_IMAGE_V2,
@@ -231,11 +171,11 @@ def test_upgrade_uses_stored_credentials_and_updates_version(upgrade_host_id):
         ),
     )
     assert result.status_code.value == 202
-    wait_for_host_status(client, upgrade_host_id, HostStatus.UP)
+    wait_for_host_status(client, bootc_host_id, HostStatus.UP)
 
     # Init to capture the v2 node_version
-    init_host.sync_detailed(host_id=upgrade_host_id, client=client)
-    host = get_host(client, upgrade_host_id)
+    init_host.sync_detailed(host_id=bootc_host_id, client=client)
+    host = get_host(client, bootc_host_id)
     assert host.node_version == EXPECTED_V2_VERSION, (
         f"Expected node_version={EXPECTED_V2_VERSION!r} after v2 deploy, "
         f"got {host.node_version!r}"
@@ -246,21 +186,21 @@ def test_upgrade_uses_stored_credentials_and_updates_version(upgrade_host_id):
     assert host.last_deployed_image == NODE_IMAGE_V2
 
     # Upgrade — no explicit credentials; uses password stored in DB
-    result = node_upgrade.sync_detailed(host_id=upgrade_host_id, client=client)
+    result = node_upgrade.sync_detailed(host_id=bootc_host_id, client=client)
     assert result.status_code.value == 202, (
         f"Expected 202 Accepted from /upgrade, got {result.status_code}"
     )
 
     # Wait for the real reboot cycle to complete
-    wait_for_host_status(client, upgrade_host_id, HostStatus.UP)
+    wait_for_host_status(client, bootc_host_id, HostStatus.UP)
 
     # last_deployed_image unchanged (same image re-deployed)
-    host = get_host(client, upgrade_host_id)
+    host = get_host(client, bootc_host_id)
     assert host.last_deployed_image == NODE_IMAGE_V2
 
     # Re-init to capture version after upgrade
-    init_host.sync_detailed(host_id=upgrade_host_id, client=client)
-    host = get_host(client, upgrade_host_id)
+    init_host.sync_detailed(host_id=bootc_host_id, client=client)
+    host = get_host(client, bootc_host_id)
     assert host.node_version == EXPECTED_V2_VERSION, (
         f"node_version should still be {EXPECTED_V2_VERSION!r} after upgrade, "
         f"got {host.node_version!r}"

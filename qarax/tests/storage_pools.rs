@@ -419,3 +419,59 @@ async fn test_list_pool_hosts() {
         .unwrap();
     assert_eq!(res.status(), reqwest::StatusCode::NOT_FOUND);
 }
+
+/// A BLOCK pool's portal is stored as `IP:port`, the address udev names the
+/// pool's LUN devices after, which is how VM disks find them. A hostname
+/// can't be resolved to that, and an IQN the node would refuse is refused.
+#[tokio::test]
+async fn test_block_pool_config_is_checked_and_portal_stored_as_ip_and_port() {
+    let app = spawn_app().await;
+    let client = reqwest::Client::new();
+    let iqn = "iqn.2024-01.io.qarax:test";
+    let cases = [
+        ("10.0.0.5", iqn, Some("10.0.0.5:3260")),
+        ("10.0.0.5:3261", iqn, Some("10.0.0.5:3261")),
+        ("fd00::5", iqn, Some("[fd00::5]:3260")),
+        ("[fd00::5]", iqn, Some("[fd00::5]:3260")),
+        ("[fd00::5]:3261", iqn, Some("[fd00::5]:3261")),
+        ("iscsi-target:3260", iqn, None),
+        ("iscsi-target", iqn, None),
+        ("10.0.0.5", "target0", None),
+        ("10.0.0.5", "iqn.2024-01.io.qarax:a/../b", None),
+    ];
+    for (i, (portal, iqn, stored)) in cases.into_iter().enumerate() {
+        let res = client
+            .post(format!("{}/storage-pools", app.address))
+            .json(&json!({
+                "name": format!("block-pool-{i}"),
+                "pool_type": "block",
+                "config": {"portal": portal, "iqn": iqn}
+            }))
+            .send()
+            .await
+            .unwrap();
+        let Some(stored) = stored else {
+            assert_eq!(
+                res.status(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "{portal} {iqn}"
+            );
+            continue;
+        };
+        assert_eq!(res.status(), StatusCode::CREATED, "{portal} {iqn}");
+        let pool_id: Uuid = res.text().await.unwrap().parse().unwrap();
+        let pool: serde_json::Value = client
+            .get(format!("{}/storage-pools/{pool_id}", app.address))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(
+            pool["config"],
+            json!({"portal": stored, "iqn": iqn}),
+            "{portal}"
+        );
+    }
+}

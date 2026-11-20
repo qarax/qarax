@@ -2,15 +2,17 @@
 #
 # Demo: BLOCK (iSCSI) storage pool backed by LIO targetcli
 #
-# Starts a LIO iSCSI target container in the qarax compose network, registers
-# it in qarax as a BLOCK storage pool (shared pools auto-attach to every UP
-# host), and registers the target's LUN 0 as a disk object.
+# Starts the local stack's LIO iSCSI target (compose service iscsi-target),
+# registers it in qarax as a BLOCK storage pool (shared pools auto-attach to
+# every UP host), and registers the target's LUN 0 as a disk object.
 #
-# On the local container stack this exercises the API only: the node can't log
-# in to the target from a container network namespace (see README.md).
+# With the node as a bootc microVM (make run-local VM=1), the node logs in to
+# the target and LUN 0 appears on it. The container stack's node can't log in
+# from its network namespace (see README.md), so there the demo exercises the
+# API only.
 #
 # Prerequisites:
-#   - local qarax stack in container mode (make run-local); started via
+#   - local qarax stack (make run-local, or make run-local VM=1); started via
 #     hack/run-local.sh if not running
 #   - jq, docker with docker compose
 #   - host kernel with LIO (target_core_mod, iscsi_target_mod)
@@ -22,10 +24,9 @@ REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 # shellcheck source=demos/lib.sh
 source "${REPO_ROOT}/demos/lib.sh"
 
-# Must match demos/block-storage/compose.yml.
-TARGET_IQN="iqn.2024-01.io.qarax:demo"
+# Must match the iscsi-target service in e2e/docker-compose.yml.
+TARGET_IQN="iqn.2024-01.io.qarax:e2e"
 LUN_SIZE_BYTES=1073741824
-PORTAL="iscsi-target:3260"
 
 PREFIX="demo-block-"
 POOL="${PREFIX}pool"
@@ -67,9 +68,14 @@ while [[ $# -gt 0 ]]; do
 	esac
 done
 
-# The local stack's compose project plus this demo's iscsi-target service.
+# The local stack's compose project, with the iscsi-target service's profile.
 block_compose() {
-	compose -f "${REPO_ROOT}/demos/block-storage/compose.yml" "$@"
+	compose --profile block "$@"
+}
+
+# Whether the demo pool is attached to host $1.
+pool_attached_to() {
+	qarax storage-pool hosts "$POOL" -o json | jq -e --arg h "$1" 'any(.[]; .host_name == $h)' >/dev/null
 }
 
 # Detach each demo pool from every UP host, then delete it. Detaching logs the
@@ -119,11 +125,11 @@ if ((CLEANUP_ONLY)); then
 fi
 
 # The target is only reachable on the compose network, so the node must be a
-# compose service.
+# compose service: a node container or the bootc microVM.
 host=$(first_up_host)
 address=$(qarax host get "$host" -o json | jq -r '.address')
-service=$(node_service_for_address "$address") && [[ "$service" != bootc-vm ]] ||
-	die "host ${host} (${address}) is not a local node container. This demo needs the container-mode stack ('make run-local', not VM=1): the iSCSI target is only reachable on the compose network."
+service=$(node_service_for_address "$address") ||
+	die "host ${host} (${address}) is not a local node. This demo needs the local stack ('make run-local' or 'make run-local VM=1'): the iSCSI target is only reachable on the compose network."
 
 # A target left running by a KEEP=1 run is reused as is.
 step "Clearing leftovers from earlier runs"
@@ -132,7 +138,12 @@ trap cleanup EXIT
 
 step "Starting the LIO iSCSI target container (compose service iscsi-target)"
 block_compose up -d --build --wait iscsi-target ||
-	die "iscsi-target did not become healthy (listening on 3260); see: docker compose -f e2e/docker-compose.yml -f demos/block-storage/compose.yml logs iscsi-target"
+	die "iscsi-target did not become healthy (listening on 3260); see: docker compose -f e2e/docker-compose.yml --profile block logs iscsi-target"
+# A portal is an IP address: udev names a LUN's device after the address the
+# node logged in to, and that is how a VM's disk is found.
+target_ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$(block_compose ps -q iscsi-target)")
+[[ -n "$target_ip" ]] || die "the iscsi-target container has no address"
+PORTAL="${target_ip}:3260"
 ok "iSCSI target ${TARGET_IQN} listening on ${PORTAL}"
 
 step "Creating the BLOCK storage pool"
@@ -140,10 +151,20 @@ run qarax storage-pool create --name "$POOL" --pool-type block \
 	--portal "$PORTAL" --iqn "$TARGET_IQN" --capacity "$LUN_SIZE_BYTES"
 run qarax storage-pool get "$POOL"
 info "Shared pools auto-attach to every UP host in the background (iscsiadm discovery + login)."
-info "The kernel only accepts iSCSI logins from the host network namespace, and the"
-info "compose qarax-node runs in a Docker bridge network, so no session forms here."
-info "On a real hypervisor host (bootc appliance or bare metal) the pool attaches and"
-info "each LUN appears under /dev/disk/by-path/."
+if [[ "$service" == bootc-vm ]]; then
+	wait_until 120 pool_attached_to "$host" ||
+		die "${POOL} did not attach to ${host}; see: docker compose -f e2e/docker-compose.yml exec bootc-vm node-ssh journalctl -u qarax-node -u iscsid"
+	run qarax storage-pool hosts "$POOL"
+	run node_exec bootc-vm iscsiadm -m session
+	device="/dev/disk/by-path/ip-${PORTAL}-iscsi-${TARGET_IQN}-lun-0"
+	run node_exec bootc-vm ls -l "$device"
+	ok "${host} is logged in to the target; LUN 0 is ${device} there"
+else
+	info "The kernel only accepts iSCSI logins from the host network namespace, and the"
+	info "compose qarax-node runs in a Docker bridge network, so no session forms here."
+	info "With the node as a bootc microVM (make run-local VM=1) the pool attaches and"
+	info "each LUN appears under /dev/disk/by-path/."
+fi
 
 step "Registering LUN 0 as a disk object"
 run qarax storage-pool register-lun --pool "$POOL" --name "$DISK" --lun 0 --size "$LUN_SIZE_BYTES"

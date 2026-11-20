@@ -11,9 +11,10 @@ persistence round trips belong in `qarax/tests/*.rs`, which run on every PR.
 ## Stack
 
 `run_e2e_tests.sh` starts these compose services and registers both nodes as
-UP hosts (`setup_host.sh`) before pytest runs. `nfs-server`, `qarax-node-2` and
-`bootc-vm` sit behind compose profiles, so `make run-local` (same compose
-project) leaves them out; the runner names them, which enables them:
+UP hosts (`setup_host.sh`) before pytest runs. `nfs-server`, `qarax-node-2`,
+`bootc-vm` and `iscsi-target` sit behind compose profiles, so `make run-local`
+(same compose project) leaves them out; the runner names them, which enables
+them:
 
 - **qarax**: control plane on `:8000`, with API token auth enabled
 - **qarax-node** and **qarax-node-2**: data plane nodes with `/dev/kvm`,
@@ -22,8 +23,12 @@ project) leaves them out; the runner names them, which enables them:
 - **nfs-server**: shared NFS export for shared-storage tests
 - **registry**: local OCI registry for OverlayBD image tests
 - **bootc-vm** (with `ENABLE_BOOTC_UPGRADE_E2E=1`): the appliance image as a
-  Cloud Hypervisor microVM node for `test_node_upgrade.py`, built by
-  `build-bootc-node.sh` (see `docs/DEVELOPMENT.md`)
+  Cloud Hypervisor microVM node for `test_node_upgrade.py` and
+  `test_block_storage.py`, built by `build-bootc-node.sh` (see
+  `docs/DEVELOPMENT.md`)
+- **iscsi-target** (with `bootc-vm`): a LIO iSCSI target for BLOCK storage
+  pools. Only `bootc-vm` can log in to it: the kernel's iSCSI initiator works
+  only in the host network namespace, not in the node containers'
 
 VMs boot the Cloud Hypervisor test kernel with a BusyBox initramfs that runs
 `qarax-init` and dropbear, built in `Dockerfile.qarax-node`.
@@ -55,7 +60,7 @@ runner reuses the compose project and leaves the stack up afterwards, as with
 | `KEEP` | Keep services running after the tests |
 | `SKIP_BUILD` | Use the existing release binaries (CI downloads them) |
 | `ENABLE_OTEL` | Build with `otel` and run the telemetry test against a local OTLP receiver |
-| `ENABLE_BOOTC_UPGRADE_E2E` | Build a bootc VM and run `test_node_upgrade.py` |
+| `ENABLE_BOOTC_UPGRADE_E2E` | Build a bootc VM and run `test_node_upgrade.py` and `test_block_storage.py` (naming either file also does) |
 
 Every test has a 600 s pytest-timeout (`pyproject.toml`), and skip reasons are
 printed in the summary (`-rs`).
@@ -66,6 +71,7 @@ printed in the summary (`-rs`).
 |------|--------|
 | `test_auth.py` | The deployed API rejects requests without a token |
 | `test_backups.py` | VM and database backups: create, restore, delete removes stored data |
+| `test_block_storage.py` | A BLOCK (iSCSI) pool attaches to the bootc microVM node, and a VM there boots with a LUN as its disk (`ENABLE_BOOTC_UPGRADE_E2E=1`, which CI sets) |
 | `test_cloud_init.py` | Cloud-init seed image written on start and removed on delete (Cloud Hypervisor) |
 | `test_disk_resize.py` | Disk resize on a Shutdown VM grows the backing file on the node |
 | `test_firecracker.py` | Firecracker lifecycle, force stop, cloud-init, snapshot/restore, unsupported disk hotplug, host versions |

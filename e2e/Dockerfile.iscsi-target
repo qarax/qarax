@@ -1,8 +1,9 @@
-# LIO iSCSI target container for the BLOCK storage demo.
+# LIO iSCSI target for BLOCK storage pools (compose service iscsi-target): the
+# e2e BLOCK tests and demos/block-storage use it.
 #
 # Provisions a fileio-backed LUN via targetcli at container start (see
-# entrypoint.sh) and listens on port 3260. The LIO objects live in the host
-# kernel via the bind-mounted /sys/kernel/config.
+# iscsi-target-entrypoint.sh) and listens on port 3260. The LIO objects live in
+# the host kernel via the bind-mounted /sys/kernel/config.
 FROM quay.io/centos/centos:stream9
 
 RUN dnf install -y --setopt=install_weak_deps=False \
@@ -16,7 +17,7 @@ RUN dnf install -y --setopt=install_weak_deps=False \
 
 RUN mkdir -p /var/lib/qarax-block /etc/target
 
-COPY demos/block-storage/entrypoint.sh /entrypoint.sh
+COPY e2e/iscsi-target-entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 EXPOSE 3260

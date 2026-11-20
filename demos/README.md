@@ -20,7 +20,7 @@ any of these. A demo also starts the stack itself if it isn't running.
 | [network-isolation/](network-isolation/) | VPC routing and isolation between managed subnets, plus VM security groups with live firewall updates | `./hack/run-local.sh` |
 | [sandbox/](sandbox/) | Ephemeral VMs from templates with idle-timeout auto-reap and prewarmed pool claims | `./hack/run-local.sh` |
 | [firecracker/](firecracker/) | Firecracker backend lifecycle (create/start/pause/resume/stop/delete) | `./hack/run-local.sh` |
-| [block-storage/](block-storage/) | Register an iSCSI (LIO) target as a shared `BLOCK` storage pool (API only on the container stack: the node can't log in to the target) | `./hack/run-local.sh` + Docker |
+| [block-storage/](block-storage/) | Register an iSCSI (LIO) target as a shared `BLOCK` storage pool; the bootc microVM node (`--vm`) logs in to it (API only on the container stack: its node can't log in) | `./hack/run-local.sh` + Docker |
 | [gpu-passthrough/](gpu-passthrough/) | GPU passthrough via VFIO to an OCI-booted VM | `./hack/run-local.sh` + VFIO GPU |
 
 ## Two-host demos

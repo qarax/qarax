@@ -2733,7 +2733,7 @@ async fn build_create_vm_request(env: &App, vm: &Vm) -> Result<CreateVmRequest> 
                 storage_pools::StoragePoolType::Block => {
                     let path = iscsi_by_path(&obj.config).ok_or_else(|| {
                         crate::errors::Error::UnprocessableEntity(format!(
-                            "Storage object {} has invalid iSCSI config",
+                            "Storage object {} has invalid iSCSI config (needs an IP:port portal, an iqn and a lun)",
                             obj.id
                         ))
                     })?;
@@ -3178,7 +3178,7 @@ async fn disk_config_for_hotplug(
         storage_pools::StoragePoolType::Block => {
             let path = iscsi_by_path(&obj.config).ok_or_else(|| {
                 crate::errors::Error::UnprocessableEntity(format!(
-                    "Storage object {} has invalid iSCSI config",
+                    "Storage object {} has invalid iSCSI config (needs an IP:port portal, an iqn and a lun)",
                     obj.id
                 ))
             })?;
@@ -3195,14 +3195,24 @@ async fn disk_config_for_hotplug(
     }
 }
 
-/// Build `/dev/disk/by-path/ip-<portal>-iscsi-<iqn>-lun-<N>` from a BLOCK
-/// storage object's config. Returns `None` if any field is missing.
+/// The link udev makes for a BLOCK storage object's LUN on a node logged in
+/// to its target, named as udev's path_id names it:
+/// `/dev/disk/by-path/ip-<IP>:<port>-iscsi-<iqn>-lun-<N>`, with an IPv6
+/// address unbracketed and a LUN from 256 up in its 64-bit hex form. Returns
+/// `None` unless the config has an `IP:port` portal, an IQN and a LUN.
 fn iscsi_by_path(config: &serde_json::Value) -> Option<String> {
-    let portal = config.get("portal")?.as_str()?;
+    let portal: std::net::SocketAddr = config.get("portal")?.as_str()?.parse().ok()?;
     let iqn = config.get("iqn")?.as_str()?;
-    let lun = config.get("lun")?.as_i64()?;
+    let lun = u32::try_from(config.get("lun")?.as_u64()?).ok()?;
+    let lun = if lun < 256 {
+        lun.to_string()
+    } else {
+        format!("0x{:04x}{:04x}00000000", lun & 0xffff, lun >> 16)
+    };
     Some(format!(
-        "/dev/disk/by-path/ip-{portal}-iscsi-{iqn}-lun-{lun}"
+        "/dev/disk/by-path/ip-{}:{}-iscsi-{iqn}-lun-{lun}",
+        portal.ip(),
+        portal.port()
     ))
 }
 
@@ -4861,6 +4871,50 @@ mod tests {
     };
     use std::assert_matches;
     use uuid::Uuid;
+
+    #[test]
+    fn iscsi_by_path_names_luns_as_udev_does() {
+        let iqn = "iqn.2024-01.io.qarax:t";
+        let by_path = |rest: &str| format!("/dev/disk/by-path/ip-{rest}");
+        for (portal, lun, path) in [
+            (
+                "10.0.0.5:3260",
+                0,
+                Some(by_path("10.0.0.5:3260-iscsi-iqn.2024-01.io.qarax:t-lun-0")),
+            ),
+            (
+                "[fd00::5]:3260",
+                7,
+                Some(by_path("fd00::5:3260-iscsi-iqn.2024-01.io.qarax:t-lun-7")),
+            ),
+            (
+                "10.0.0.5:3260",
+                255,
+                Some(by_path(
+                    "10.0.0.5:3260-iscsi-iqn.2024-01.io.qarax:t-lun-255",
+                )),
+            ),
+            (
+                "10.0.0.5:3260",
+                256,
+                Some(by_path(
+                    "10.0.0.5:3260-iscsi-iqn.2024-01.io.qarax:t-lun-0x0100000000000000",
+                )),
+            ),
+            (
+                "10.0.0.5:3260",
+                65537,
+                Some(by_path(
+                    "10.0.0.5:3260-iscsi-iqn.2024-01.io.qarax:t-lun-0x0001000100000000",
+                )),
+            ),
+            // A LUN registered on a pool created before portals had to be IPs.
+            ("iscsi-target:3260", 0, None),
+        ] {
+            let config = serde_json::json!({"portal": portal, "iqn": iqn, "lun": lun});
+            assert_eq!(iscsi_by_path(&config), path, "{portal} lun {lun}");
+        }
+    }
 
     fn make_disk(logical_name: &str) -> VmDisk {
         VmDisk {

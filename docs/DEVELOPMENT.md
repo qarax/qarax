@@ -77,8 +77,9 @@ marks `local-node` down, so new VMs land on `local-node-vm`.
 
 The demos run against it too. `node_exec` in `demos/lib.sh` runs commands for
 `bootc-vm` inside the guest, and `guest-ssh root@IP` (on both kinds of node)
-reaches a test-initramfs VM. `etcd-cluster` and `block-storage` need a node
-container on this machine and refuse VM mode. The two-host demos
+reaches a test-initramfs VM. `etcd-cluster` needs a node container on this
+machine and refuses VM mode. `block-storage` is the other way round: only the
+microVM node can log in to its iSCSI target. The two-host demos
 (`k8s-cluster`, `host-evacuation`, `network-isolation --cross-host`) add the
 `qarax-node-2` container next to the VM, a mix that isn't tested.
 

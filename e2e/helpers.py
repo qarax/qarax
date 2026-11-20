@@ -37,6 +37,15 @@ NODE_RUNTIME_DIR = "/var/lib/qarax/vms"
 # from inside the docker network.
 REGISTRY_PUSH_URL = os.getenv("REGISTRY_PUSH_URL", "localhost:5001")
 REGISTRY_INTERNAL_URL = os.getenv("REGISTRY_INTERNAL_URL", "registry:5000")
+# The bootc node VM (compose service bootc-vm) as the control plane reaches
+# it. run_e2e_tests.sh starts it, and sets ENABLE_BOOTC_UPGRADE_E2E, for the
+# tests that use it (fixture bootc_host_id).
+BOOTC_NODE_HOST = os.getenv("UPGRADE_TEST_NODE_HOST", "bootc-vm")
+BOOTC_NODE_PORT = int(os.getenv("UPGRADE_TEST_NODE_PORT", "50051"))
+# How long to wait for the bootc VM to become reachable after compose up.
+BOOTC_NODE_BOOT_TIMEOUT_SECONDS = 600
+# The placement label of the bootc node's host: VMs that require it run there.
+BOOTC_NODE_LABEL = {"e2e-node": "bootc-vm"}
 
 
 async def call_api(endpoint_module, **kwargs):
@@ -59,10 +68,10 @@ async def call_api_detailed(endpoint_module, **kwargs):
     return await endpoint_module.asyncio_detailed(**kwargs)
 
 
-async def exec_when_ready(client, vm_id, script):
-    """Run a shell script in the guest once its agent answers."""
+async def exec_when_ready(client, vm_id, script, timeout=60):
+    """Run a shell script in the guest once its agent answers, within timeout seconds."""
     request = ExecVmRequest(command=["/bin/sh", "-c", script], timeout_secs=20)
-    deadline = time.monotonic() + 60
+    deadline = time.monotonic() + timeout
     while True:
         response = await call_api_detailed(exec_vm, client=client, vm_id=vm_id, body=request)
         if response.status_code == 200:
