@@ -20,11 +20,22 @@ from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (
 )
 from qarax_api_client import Client
 from qarax_api_client.api.hosts import add as add_host
+from qarax_api_client.api.hosts import delete as delete_host
 from qarax_api_client.api.hosts import init as init_host
 from qarax_api_client.api.hosts import list_ as list_hosts
 from qarax_api_client.models.new_host import NewHost
+from qarax_api_client.models.new_host_placement_labels import NewHostPlacementLabels
 
-from helpers import AUTH_HEADERS, REGISTRY_INTERNAL_URL, REGISTRY_PUSH_URL, docker
+from helpers import (
+    AUTH_HEADERS,
+    BOOTC_NODE_BOOT_TIMEOUT_SECONDS,
+    BOOTC_NODE_HOST,
+    BOOTC_NODE_LABEL,
+    BOOTC_NODE_PORT,
+    REGISTRY_INTERNAL_URL,
+    REGISTRY_PUSH_URL,
+    docker,
+)
 
 QARAX_URL = os.getenv("QARAX_URL", "http://localhost:8000")
 # Address of qarax-node as seen from the qarax control plane (inside docker network)
@@ -342,3 +353,52 @@ def two_hosts():
         c, QARAX_NODE_2_HOST, QARAX_NODE_2_PORT, "e2e-node-2"
     )
     return host1_id, host2_id
+
+
+@pytest.fixture(scope="module")
+def bootc_host_id():
+    """
+    Register a host for the bootc node VM, with BOOTC_NODE_LABEL and the SSH
+    credentials deploys use, and remove it after the module so later tests
+    don't schedule onto it.
+
+    Retries host init until the VM's gRPC port answers (it may still be booting
+    when the test suite starts), so node_version is populated. The address is
+    a compose service name that only the control plane can resolve, so there
+    is no probe from here.
+    """
+    if not _is_truthy(os.getenv("ENABLE_BOOTC_UPGRADE_E2E")):
+        pytest.skip("bootc node e2e disabled (set ENABLE_BOOTC_UPGRADE_E2E=1 to run)")
+
+    client = Client(base_url=QARAX_URL, headers=AUTH_HEADERS)
+    result = add_host.sync_detailed(
+        client=client,
+        body=NewHost(
+            name=f"bootc-vm-{uuid.uuid4().hex[:8]}",
+            address=BOOTC_NODE_HOST,
+            port=BOOTC_NODE_PORT,
+            host_user="root",
+            credential_ref="env://E2E_UPGRADE_SSH_PASSWORD",
+            placement_labels=NewHostPlacementLabels.from_dict(BOOTC_NODE_LABEL),
+        ),
+    )
+    assert result.status_code.value == 201, (
+        f"Failed to register the bootc node host: HTTP {result.status_code}"
+    )
+    host_id = uuid.UUID(result.parsed.strip())
+
+    # The VM may still be booting — retry init until gRPC is reachable.
+    deadline = time.time() + BOOTC_NODE_BOOT_TIMEOUT_SECONDS
+    while True:
+        init_result = init_host.sync_detailed(host_id=host_id, client=client)
+        if init_result.status_code.value == 200:
+            break
+        if time.time() >= deadline:
+            pytest.fail(
+                f"bootc-vm gRPC port did not become reachable within "
+                f"{BOOTC_NODE_BOOT_TIMEOUT_SECONDS}s"
+            )
+        time.sleep(10)
+
+    yield host_id
+    delete_host.sync_detailed(host_id=host_id, client=client)

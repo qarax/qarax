@@ -1,25 +1,26 @@
 #!/usr/bin/env bash
-# LIO iSCSI target bootstrap for the BLOCK storage demo.
+# LIO iSCSI target bootstrap for BLOCK storage pools (compose service
+# iscsi-target, used by the e2e BLOCK tests and demos/block-storage).
 #
 # Exports one fileio-backed LUN (default: 1 GiB) over iSCSI with a wide-open
 # ACL (demo_mode enabled). IQN and LUN size are configurable via env vars:
 #
-#   TARGET_IQN   iSCSI target IQN (default: iqn.2024-01.io.qarax:demo)
+#   TARGET_IQN   iSCSI target IQN (default: iqn.2024-01.io.qarax:e2e)
 #   LUN_SIZE     backing file size in bytes (default: 1073741824 = 1 GiB)
 #   LUN_PATH     backing file path (default: /var/lib/qarax-block/lun0.img)
 #
 # LIO state lives in the host kernel (configfs), not in the container, so it
-# outlives the container unless removed. The script removes this demo's target
+# outlives the container unless removed. The script removes this target
 # and backstore on start (stale state from an earlier run) and on SIGTERM.
 
 set -euo pipefail
 
-TARGET_IQN="${TARGET_IQN:-iqn.2024-01.io.qarax:demo}"
+TARGET_IQN="${TARGET_IQN:-iqn.2024-01.io.qarax:e2e}"
 LUN_PATH="${LUN_PATH:-/var/lib/qarax-block/lun0.img}"
 LUN_SIZE="${LUN_SIZE:-1073741824}"
-BACKSTORE="demo_lun0"
+BACKSTORE="qarax_e2e_lun0"
 
-# Only ever delete this demo's objects. Never use `clearconfig`: the host's LIO
+# Only ever delete this target's objects. Never use `clearconfig`: the host's LIO
 # instance is shared with qarax-node (OverlayBD TCMU devices).
 remove_target() {
 	targetcli /iscsi delete "${TARGET_IQN}" >/dev/null 2>&1 || true
@@ -32,7 +33,7 @@ shutdown() {
 	exit 0
 }
 
-echo "==> BLOCK demo target: ${TARGET_IQN}  path=${LUN_PATH}  size=${LUN_SIZE}"
+echo "==> BLOCK target: ${TARGET_IQN}  path=${LUN_PATH}  size=${LUN_SIZE}"
 
 modprobe target_core_mod 2>/dev/null || true
 modprobe target_core_file 2>/dev/null || true

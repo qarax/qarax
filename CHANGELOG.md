@@ -63,3 +63,8 @@ These need action if you ran a build from before them:
   place, so importing it again gave an empty disk. An image you pushed to the
   local registry that an earlier build imported holds OverlayBD layers under
   its own tag now: push it again before importing it.
+- A BLOCK pool's portal is an IP address, optionally with a port (3260 when
+  left out); a hostname is refused. A VM opens a LUN by the device name udev
+  gives it, which holds the address and port the node logged in to. A LUN of
+  a pool created with a hostname portal can't be used: create the pool again
+  with the target's address and register its LUNs again.

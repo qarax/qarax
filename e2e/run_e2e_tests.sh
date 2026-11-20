@@ -61,7 +61,7 @@ needs_bootc_vm() {
 
 	for arg in "$@"; do
 		case "$arg" in
-		*test_node_upgrade.py*)
+		*test_node_upgrade.py* | *test_block_storage.py*)
 			return 0
 			;;
 		esac
@@ -182,12 +182,15 @@ build_bootc_vm() {
 BOOTC_VM_ENABLED=0
 if needs_bootc_vm "$@"; then
 	BOOTC_VM_ENABLED=1
+	# The tests that need bootc-vm skip without it.
+	export ENABLE_BOOTC_UPGRADE_E2E=1
 	build_bootc_vm
 fi
 
 SERVICES=(postgres nfs-server registry qarax-node qarax-node-2 qarax)
 if [ "$BOOTC_VM_ENABLED" -eq 1 ]; then
-	SERVICES+=(bootc-vm)
+	# iscsi-target: BLOCK pools, which only bootc-vm can log in to.
+	SERVICES+=(bootc-vm iscsi-target)
 fi
 
 # Build and start services

@@ -64,7 +64,8 @@ enum StoragePoolCommand {
         /// Shorthand for --config '{"url":"..."}' with --pool-type nfs or overlaybd.
         #[arg(long, conflicts_with = "config")]
         url: Option<String>,
-        /// iSCSI target portal (host:port) for a block pool.
+        /// iSCSI target portal for a block pool: an IP address, optionally with
+        /// a port (default 3260).
         #[arg(long, conflicts_with = "config", requires = "iqn")]
         portal: Option<String>,
         /// iSCSI target IQN for a block pool.

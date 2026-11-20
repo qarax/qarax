@@ -83,8 +83,13 @@ pub async fn get(
 #[instrument(skip(env))]
 pub async fn create(
     Extension(env): Extension<App>,
-    Json(new_pool): Json<NewStoragePool>,
+    Json(mut new_pool): Json<NewStoragePool>,
 ) -> Result<(StatusCode, String)> {
+    if new_pool.pool_type == storage_pools::StoragePoolType::Block {
+        let block = storage_pools::BlockPoolConfig::parse_new(&new_pool.config)
+            .map_err(crate::errors::Error::UnprocessableEntity)?;
+        new_pool.config["portal"] = block.portal.to_string().into();
+    }
     let id = storage_pools::create(env.pool(), new_pool.clone()).await?;
 
     // For shared pool types (NFS, OverlayBD), auto-attach every UP host.

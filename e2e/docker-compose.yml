@@ -3,7 +3,8 @@
 #   e2e         nfs-server (NFS storage-pool tests)
 #   multi-node  qarax-node-2 (two-host tests and demos; demos/lib.sh
 #               ensure_up_hosts starts it on demand)
-#   bootc       bootc-vm (node upgrade tests)
+#   bootc       bootc-vm (node upgrade and BLOCK storage tests)
+#   block       iscsi-target (BLOCK storage tests, demos/block-storage)
 # Tear everything down with: docker compose --profile '*' down -v
 services:
   nfs-server:
@@ -21,6 +22,34 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+  # A LIO iSCSI target exporting one 1 GiB LUN (Dockerfile.iscsi-target) for
+  # BLOCK storage pools. Only bootc-vm can log in to it: the kernel's iSCSI
+  # initiator works only in the host network namespace, which the node
+  # containers don't run in. Portals are IP addresses, so callers look up this
+  # container's address. The target lives in the host kernel's LIO (configfs).
+  iscsi-target:
+    profiles: [ block ]
+    build:
+      context: ..
+      dockerfile: e2e/Dockerfile.iscsi-target
+    privileged: true
+    volumes:
+      - iscsi_target_storage:/var/lib/qarax-block
+      - /lib/modules:/lib/modules:ro
+      - /sys/kernel/config:/sys/kernel/config
+    environment:
+      TARGET_IQN: iqn.2024-01.io.qarax:e2e
+      LUN_SIZE: "1073741824"
+    # `up --wait` returns once this passes: probed every second while the
+    # target starts, unhealthy after ~45 s.
+    healthcheck:
+      test: [ "CMD", "sh", "-c", "ss -ltn | grep -q :3260" ]
+      start_period: 30s
+      start_interval: 1s
+      interval: 5s
+      timeout: 5s
+      retries: 3
 
   registry:
     image: registry:2
@@ -260,3 +289,4 @@ volumes:
   migration_tls:
   node_tls:
   nfs_export:
+  iscsi_target_storage:
