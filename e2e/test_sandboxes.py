@@ -70,6 +70,7 @@ from helpers import (
     attach_overlaybd_pool,
     call_api,
     call_api_detailed,
+    exec_when_ready,
     up_hosts,
     vm_diagnostics,
 )
@@ -545,6 +546,8 @@ async def test_sandbox_fork_of_an_oci_sandbox_forks_its_disk(client, bootable_oc
             sandbox_ids.append(source.id)
             source_vm_id = source.vm_id
             await wait_for_sandbox_status(c, source.id, SandboxStatus.READY)
+            # READY means its VM runs; an image's guest agent comes up later.
+            await exec_when_ready(c, source.vm_id, "true")
             await sh(
                 source.id,
                 f"echo source > /root/state && sync && echo unsynced > /root/unsynced && {counter}",
