@@ -16,7 +16,9 @@ T = TypeVar("T", bound="HostResourceCapacity")
 class HostResourceCapacity:
     """
     Attributes:
-        allocated_memory_bytes (int):
+        allocated_memory_bytes (int): The memory of the host's VMs that aren't shut down: each one's memory
+            size, a fork's the memory it holds of its own plus headroom (see
+            `scheduling.fork_memory_headroom_ratio`).
         allocated_vcpus (int):
         host_id (UUID):
         architecture (None | str | Unset):

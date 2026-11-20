@@ -346,6 +346,9 @@ pub struct HostResourceCapacity {
     pub total_cpus: Option<i32>,
     pub allocated_vcpus: i64,
     pub total_memory_bytes: Option<i64>,
+    /// The memory of the host's VMs that aren't shut down: each one's memory
+    /// size, a fork's the memory it holds of its own plus headroom (see
+    /// `scheduling.fork_memory_headroom_ratio`).
     pub allocated_memory_bytes: i64,
     pub available_memory_bytes: Option<i64>,
     pub disk_total_bytes: Option<i64>,
@@ -626,15 +629,19 @@ SELECT h.id, h.name, h.address, h.port, h.host_user, h.credential_ref,
 FROM hosts h
 LEFT JOIN (
     SELECT host_id,
-           SUM(memory_size)::bigint AS allocated_memory_bytes,
+           SUM(vm_memory_charge(memory_size, memory_copy_on_write, memory_private_bytes, "#
+            .to_string(),
+    );
+    qb.push_bind(config.fork_memory_headroom_ratio);
+    qb.push(
+        r#"))::bigint AS allocated_memory_bytes,
            SUM(boot_vcpus)::bigint AS allocated_vcpus
     FROM vms
     WHERE status NOT IN ('SHUTDOWN', 'UNKNOWN')
       AND host_id IS NOT NULL
     GROUP BY host_id
 ) alloc ON alloc.host_id = h.id
-"#
-        .to_string(),
+"#,
     );
 
     if request.storage_pool_id.is_some() {
@@ -957,6 +964,7 @@ WHERE name = $1
 pub async fn get_resource_capacity(
     pool: &PgPool,
     host_id: Uuid,
+    config: &crate::configuration::SchedulingSettings,
 ) -> Result<Option<HostResourceCapacity>, sqlx::Error> {
     sqlx::query_as!(
         HostResourceCapacity,
@@ -973,7 +981,8 @@ SELECT h.id AS host_id,
 FROM hosts h
 LEFT JOIN (
     SELECT host_id,
-           SUM(memory_size)::bigint AS allocated_memory_bytes,
+           SUM(vm_memory_charge(memory_size, memory_copy_on_write, memory_private_bytes, $2))::bigint
+               AS allocated_memory_bytes,
            SUM(boot_vcpus)::bigint AS allocated_vcpus
     FROM vms
     WHERE status NOT IN ('SHUTDOWN', 'UNKNOWN')
@@ -982,7 +991,8 @@ LEFT JOIN (
 ) alloc ON alloc.host_id = h.id
 WHERE h.id = $1
         "#,
-        host_id
+        host_id,
+        config.fork_memory_headroom_ratio
     )
     .fetch_optional(pool)
     .await
@@ -1002,7 +1012,7 @@ mod tests {
         model::{
             host_gpus::{self, GpuDiscovery},
             networks::{self, NewNetwork},
-            vms::{self, PlacementPolicy, ResolvedNewVm},
+            vms::{self, PlacementPolicy, ResolvedNewVm, VmStatus},
         },
         test_support::TestDatabase,
     };
@@ -1076,6 +1086,7 @@ mod tests {
             cpu_oversubscription_ratio: 1.0,
             disk_headroom_bytes: 10,
             memory_health_floor_bytes: 0,
+            fork_memory_headroom_ratio: 0.25,
         }
     }
 
@@ -1381,6 +1392,87 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_fork_is_charged_the_memory_it_holds_of_its_own_plus_headroom() {
+        async fn allocated(db: &TestDatabase, host_id: Uuid) -> i64 {
+            super::get_resource_capacity(&db.pool, host_id, &scheduling_config())
+                .await
+                .expect("get capacity")
+                .expect("expected capacity")
+                .allocated_memory_bytes
+        }
+
+        let db = TestDatabase::new().await;
+        let host_id = db
+            .insert_up_host("fork-host", Some("x86_64"), 8, 4096, 10_000, 0.1)
+            .await;
+        let mut tx = db.pool.begin().await.expect("begin tx");
+        let source = vms::create_tx(&mut tx, &resolved_vm("source", 1024, 1), Some(host_id))
+            .await
+            .expect("insert source");
+        let fork = vms::create_fork_tx(&mut tx, source, "fork", true)
+            .await
+            .expect("insert fork");
+        // A fork with a copy of its source's memory is charged in full.
+        vms::create_fork_tx(&mut tx, source, "copy", false)
+            .await
+            .expect("insert copy");
+        tx.commit().await.expect("commit tx");
+
+        // Before its node has measured it, the fork is charged its headroom.
+        assert_eq!(allocated(&db, host_id).await, 1024 + 256 + 1024);
+        vms::record_private_memory(&db.pool, host_id, &[(fork, 100)])
+            .await
+            .expect("record memory");
+        assert_eq!(allocated(&db, host_id).await, 1024 + 356 + 1024);
+
+        // The scheduler places by the same charge.
+        let room = 4096 - (1024 + 356 + 1024);
+        for (memory_bytes, fits) in [(room, true), (room + 1, false)] {
+            let mut tx = db.pool.begin().await.expect("begin tx");
+            let picked = super::pick_host_tx(
+                &mut tx,
+                &SchedulingRequest {
+                    memory_bytes,
+                    vcpus: 1,
+                    disk_bytes: 0,
+                    architecture: None,
+                    storage_pool_id: None,
+                    required_network_ids: vec![],
+                    requires_overlaybd: false,
+                    gpu: None,
+                    placement_policy: None,
+                    excluded_host_ids: vec![],
+                    required_host_id: Some(host_id),
+                },
+                &scheduling_config(),
+            )
+            .await
+            .expect("pick host");
+            assert_eq!(picked.is_some(), fits, "{memory_bytes} bytes");
+        }
+
+        // Never more than its memory size.
+        vms::record_private_memory(&db.pool, host_id, &[(fork, 2000)])
+            .await
+            .expect("record memory");
+        assert_eq!(allocated(&db, host_id).await, 3 * 1024);
+
+        // Its memory stays its source's while it runs, until it moves on to a
+        // hypervisor process of its own.
+        vms::record_private_memory(&db.pool, host_id, &[(fork, 100)])
+            .await
+            .expect("record memory");
+        vms::transition(&db.pool, fork, &[VmStatus::Pending], VmStatus::Running)
+            .await
+            .expect("start fork");
+        assert_eq!(allocated(&db, host_id).await, 1024 + 356 + 1024);
+        vms::transition(&db.pool, fork, &[VmStatus::Running], VmStatus::Migrating)
+            .await
+            .expect("migrate fork");
+        assert_eq!(allocated(&db, host_id).await, 3 * 1024);
+    }
+
+    #[tokio::test]
     async fn get_resource_capacity_returns_integer_allocations() {
         let db = TestDatabase::new().await;
         let host_id = db
@@ -1393,7 +1485,7 @@ mod tests {
             .expect("insert vm");
         tx.commit().await.expect("commit tx");
 
-        let capacity = super::get_resource_capacity(&db.pool, host_id)
+        let capacity = super::get_resource_capacity(&db.pool, host_id, &scheduling_config())
             .await
             .expect("get capacity")
             .expect("expected capacity");

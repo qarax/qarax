@@ -7,6 +7,7 @@ use tracing::warn;
 use crate::model::host_gpus::{self, GpuDiscovery};
 use crate::model::host_numa::{self, NumaNodeDiscovery};
 use crate::model::hosts::{self, Host, HostStatus};
+use crate::model::vms;
 use crate::{
     App,
     grpc_client::{NodeClient, node::NodeInfo},
@@ -46,6 +47,19 @@ async fn handle_probe_result(env: &App, host: &Host, node_info: Result<NodeInfo>
             {
                 warn!(
                     "Resource monitor: failed to update resources for host {}: {}",
+                    host.name, e
+                );
+            }
+
+            // A VM id that isn't a UUID matches no VM.
+            let memory: Vec<(uuid::Uuid, i64)> = info
+                .vm_memory
+                .iter()
+                .filter_map(|vm| Some((vm.vm_id.parse().ok()?, vm.private_bytes)))
+                .collect();
+            if let Err(e) = vms::record_private_memory(env.pool(), host.id, &memory).await {
+                warn!(
+                    "Resource monitor: failed to record the memory of the VMs on host {}: {}",
                     host.name, e
                 );
             }
@@ -164,9 +178,12 @@ mod tests {
 
     use super::handle_probe_result;
     use crate::{
-        grpc_client::node::NodeInfo,
-        model::hosts::{self, Host, HostStatus},
-        test_support::TestDatabase,
+        grpc_client::node::{NodeInfo, VmMemory},
+        model::{
+            hosts::{self, Host, HostStatus},
+            vms,
+        },
+        test_support::{TestDatabase, resolved_vm},
     };
 
     async fn insert_up_host(db: &TestDatabase) -> Host {
@@ -221,6 +238,15 @@ mod tests {
     async fn successful_probe_keeps_host_up_and_updates_resources() {
         let db = TestDatabase::new().await;
         let host = insert_up_host(&db).await;
+        let other_host = db.add_host("other-host", HostStatus::Up).await;
+        let mut tx = db.pool.begin().await.unwrap();
+        let vm = vms::create_tx(&mut tx, &resolved_vm("here"), Some(host.id))
+            .await
+            .unwrap();
+        let elsewhere = vms::create_tx(&mut tx, &resolved_vm("elsewhere"), Some(other_host))
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
 
         handle_probe_result(
             &db.app(),
@@ -241,6 +267,12 @@ mod tests {
                 gpus: vec![],
                 numa_nodes: vec![],
                 architecture: "x86_64".to_string(),
+                vm_memory: [vm, elsewhere]
+                    .map(|id| VmMemory {
+                        vm_id: id.to_string(),
+                        private_bytes: 7 * 1024 * 1024,
+                    })
+                    .to_vec(),
             }),
         )
         .await;
@@ -257,5 +289,14 @@ mod tests {
             updated.firecracker_version.as_deref(),
             Some("Firecracker v1.11.0")
         );
+        // A VM's memory comes from its own host's node.
+        let memory: Vec<Option<i64>> = sqlx::query_scalar(
+            "SELECT memory_private_bytes FROM vms WHERE id = ANY($1) ORDER BY name DESC",
+        )
+        .bind([vm, elsewhere])
+        .fetch_all(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(memory, [Some(7 * 1024 * 1024), None]);
     }
 }

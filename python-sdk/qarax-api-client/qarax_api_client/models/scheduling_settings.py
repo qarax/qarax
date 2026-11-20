@@ -17,12 +17,17 @@ class SchedulingSettings:
     Attributes:
         cpu_oversubscription_ratio (float | Unset):
         disk_headroom_bytes (int | Unset):
+        fork_memory_headroom_ratio (float | Unset): A fork's memory is its source's, copy-on-write: it is charged the
+            memory it was last measured to hold of its own plus this fraction of
+            its memory size, room for what it writes before the next measurement,
+            and never more than its size. 1 charges forks in full, as other VMs.
         memory_health_floor_bytes (int | Unset):
         memory_oversubscription_ratio (float | Unset):
     """
 
     cpu_oversubscription_ratio: float | Unset = UNSET
     disk_headroom_bytes: int | Unset = UNSET
+    fork_memory_headroom_ratio: float | Unset = UNSET
     memory_health_floor_bytes: int | Unset = UNSET
     memory_oversubscription_ratio: float | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
@@ -31,6 +36,8 @@ class SchedulingSettings:
         cpu_oversubscription_ratio = self.cpu_oversubscription_ratio
 
         disk_headroom_bytes = self.disk_headroom_bytes
+
+        fork_memory_headroom_ratio = self.fork_memory_headroom_ratio
 
         memory_health_floor_bytes = self.memory_health_floor_bytes
 
@@ -43,6 +50,8 @@ class SchedulingSettings:
             field_dict["cpu_oversubscription_ratio"] = cpu_oversubscription_ratio
         if disk_headroom_bytes is not UNSET:
             field_dict["disk_headroom_bytes"] = disk_headroom_bytes
+        if fork_memory_headroom_ratio is not UNSET:
+            field_dict["fork_memory_headroom_ratio"] = fork_memory_headroom_ratio
         if memory_health_floor_bytes is not UNSET:
             field_dict["memory_health_floor_bytes"] = memory_health_floor_bytes
         if memory_oversubscription_ratio is not UNSET:
@@ -57,6 +66,8 @@ class SchedulingSettings:
 
         disk_headroom_bytes = d.pop("disk_headroom_bytes", UNSET)
 
+        fork_memory_headroom_ratio = d.pop("fork_memory_headroom_ratio", UNSET)
+
         memory_health_floor_bytes = d.pop("memory_health_floor_bytes", UNSET)
 
         memory_oversubscription_ratio = d.pop("memory_oversubscription_ratio", UNSET)
@@ -64,6 +75,7 @@ class SchedulingSettings:
         scheduling_settings = cls(
             cpu_oversubscription_ratio=cpu_oversubscription_ratio,
             disk_headroom_bytes=disk_headroom_bytes,
+            fork_memory_headroom_ratio=fork_memory_headroom_ratio,
             memory_health_floor_bytes=memory_health_floor_bytes,
             memory_oversubscription_ratio=memory_oversubscription_ratio,
         )

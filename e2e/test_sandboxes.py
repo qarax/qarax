@@ -16,6 +16,7 @@ from qarax_api_client.api.boot_sources import (
     delete as delete_boot_source,
 )
 from qarax_api_client.api.hosts import list_ as list_hosts
+from qarax_api_client.api.hosts import resources as host_resources
 from qarax_api_client.api.sandboxes import (
     create as create_sandbox,
 )
@@ -521,6 +522,81 @@ async def test_sandbox_fork_continues_from_its_source(client, hypervisor):
             assert await sh(source.id, "cat /root/state") == "source"
             for fork in forks:
                 assert await sh(fork.id, "cat /root/state") == str(fork.id)
+        finally:
+            for sandbox_id in reversed(sandbox_ids):
+                await delete_sandbox.asyncio_detailed(client=c, sandbox_id=sandbox_id)
+            await cleanup_bootable_sandbox_template(c, resources)
+
+
+@pytest.mark.parametrize("hypervisor", ["firecracker", "cloud_hv"])
+@pytest.mark.asyncio
+async def test_sandbox_fork_is_charged_the_memory_it_holds_of_its_own(client, hypervisor):
+    """A fork shares its source's memory: its host is charged what it holds of
+    its own, as its node measures it, plus headroom, not its memory size."""
+    mib = 1024 * 1024
+    # scheduling.fork_memory_headroom_ratio of the template's 256 MiB.
+    headroom = 64 * mib
+
+    async with client as c:
+        template_id, resources = await create_bootable_sandbox_template(c, hypervisor)
+        sandbox_ids = []
+
+        async def allocated(host_id):
+            capacity = await call_api(host_resources, client=c, host_id=host_id)
+            return capacity.allocated_memory_bytes
+
+        try:
+            source = await call_api(
+                create_sandbox,
+                client=c,
+                body=NewSandbox(
+                    name=f"e2e-sandbox-fork-mem-{uuid.uuid4().hex[:8]}",
+                    vm_template_id=template_id,
+                    idle_timeout_secs=300,
+                ),
+            )
+            sandbox_ids.append(source.id)
+            await wait_for_sandbox_status(c, source.id, SandboxStatus.READY)
+            host_id = (await call_api(get_vm, client=c, vm_id=source.vm_id)).host_id
+
+            before = await allocated(host_id)
+            forks = await call_api(
+                fork_sandbox,
+                client=c,
+                sandbox_id=source.id,
+                body=ForkSandboxRequest(count=2),
+            )
+            sandbox_ids.extend(fork.id for fork in forks)
+            # The forks' headroom, and what their node may have measured of
+            # them since: a few MiB each, not 256.
+            forked = await allocated(host_id)
+            assert 2 * headroom <= forked - before < 2 * (headroom + 32 * mib), forked - before
+
+            # What a fork writes is its own, and charged once its node has
+            # measured it (the resource monitor polls every 30 s).
+            result = await call_api(
+                exec_sandbox,
+                client=c,
+                sandbox_id=forks[0].id,
+                body=ExecSandboxRequest(
+                    command=[
+                        "/bin/busybox",
+                        "dd",
+                        "if=/dev/zero",
+                        "of=/root/fill",
+                        "bs=1M",
+                        "count=96",
+                    ],
+                    timeout_secs=30,
+                ),
+            )
+            assert result.exit_code == 0, result.stderr
+            deadline = time.time() + 75
+            while (grown := await allocated(host_id) - forked) < 90 * mib:
+                assert time.time() < deadline, (
+                    f"the fork's charge grew by {grown // mib} MiB, not by what it wrote"
+                )
+                await asyncio.sleep(2)
         finally:
             for sandbox_id in reversed(sandbox_ids):
                 await delete_sandbox.asyncio_detailed(client=c, sandbox_id=sandbox_id)

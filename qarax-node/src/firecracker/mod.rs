@@ -1040,6 +1040,10 @@ impl VmmManager for FirecrackerManager {
         &self.runtime_dir
     }
 
+    fn api_socket(&self, vm_id: &str) -> PathBuf {
+        self.socket_path(vm_id)
+    }
+
     async fn is_vm_process_alive(&self, vm_id: &str) -> bool {
         let mut vms = self.vms.lock().await;
         let Some(instance) = vms.get_mut(vm_id) else {

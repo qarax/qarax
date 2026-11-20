@@ -23,8 +23,9 @@ qarax sandbox fork my-sandbox --count 3
   write to the same place. The image disk, the data disks, the NICs and the
   seed fork with the sandbox, and read-only disks are shared, see below.
 - Up to 16 forks per request. The source's host must have room for them: the
-  scheduler counts each fork at the source's full memory size and vCPUs, as it
-  does any VM, though a fork uses much less at first (see below).
+  scheduler counts each fork at the source's vCPUs, and at the memory it holds
+  of its own plus headroom rather than the source's memory size (see "What a
+  fork counts against its host").
 - A fork gets the source's template, idle timeout and VM configuration, and
   the name `<source>-fork-<8 hex digits>`.
 
@@ -158,3 +159,34 @@ fork's disk device costs overlaybd-tcmu about 7 MiB of memory.
 A fork's memory grows by what it writes. Data it reads from a disk or
 re-reads after its page cache drops also becomes its own; the page cache it
 inherits stays shared.
+
+## What a fork counts against its host
+
+The scheduler charges each VM its memory size against its host's memory
+(times `scheduling.memory_oversubscription_ratio`). A fork whose memory is its
+source's, copy-on-write, is charged instead the memory it holds of its own, as
+its node last measured it, plus `scheduling.fork_memory_headroom_ratio` (0.25
+by default) of its memory size for what it writes before the next
+measurement, and never more than its memory size. With the default, a host
+with room for 10 more 1 GiB VMs takes 40 forks of one before any is measured,
+and more once the measurements show how little each holds.
+`GET /v1/hosts/{id}/resources` (`qarax host resources`) shows the total.
+
+The node measures a VM's hypervisor process, found through its API socket:
+its anonymous, shared memory and huge pages (`RssAnon`, `RssShmem` and
+`HugetlbPages` in `/proc/<pid>/status`). The pages a fork hasn't written
+are file pages of its source's memory image, which the kernel can drop and
+read back from the node's runtime directory, and aren't counted. The control
+plane's resource monitor records the measurements every 30 seconds.
+
+This is overcommit: a fork that writes all of its memory holds all of it, and
+nothing stops it from growing between measurements. What guards the host is
+`scheduling.memory_health_floor_bytes`: no VM, fork or not, is placed on a
+host whose available memory is below it. A `fork_memory_headroom_ratio` of 1
+charges forks in full, as other VMs.
+
+A fork stops sharing its source's memory when it moves on to a hypervisor
+process of its own, started again after a stop, restored, migrated or failed
+over, and is charged its memory size from then on. A fork of a Cloud
+Hypervisor VM with shared memory or huge pages has a copy of its source's
+memory, and is charged in full from the start.

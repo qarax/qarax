@@ -69,6 +69,15 @@ async fn assert_refused(app: &TestApp, client: &reqwest::Client, sandbox_id: Uui
     assert!(body.contains(because), "expected {because:?} in {body}");
 }
 
+async fn set_total_memory(app: &TestApp, host_id: Uuid, bytes: i64) {
+    sqlx::query("UPDATE hosts SET total_memory_bytes = $1 WHERE id = $2")
+        .bind(bytes)
+        .bind(host_id)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+}
+
 async fn count(app: &TestApp, table: &str) -> i64 {
     sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
         .fetch_one(&app.pool)
@@ -299,13 +308,10 @@ async fn a_fork_needs_room_on_its_source_host_and_a_failed_one_leaves_no_rows() 
     let app = spawn_app().await;
     let client = reqwest::Client::new();
     let host_id = add_up_host(&client, &app.address, "fork-host").await;
-    // Room for the source and one more VM like it.
-    sqlx::query("UPDATE hosts SET total_memory_bytes = $1 WHERE id = $2")
-        .bind(512 * MIB)
-        .bind(host_id)
-        .execute(&app.pool)
-        .await
-        .unwrap();
+    // Room for the source and one fork, which shares the source's memory and
+    // is charged a quarter of it until its node measures what it holds of its
+    // own (scheduling.fork_memory_headroom_ratio).
+    set_total_memory(&app, host_id, (256 + 100) * MIB).await;
     // Booted from an OCI image, with a data disk, a NIC on a network and a
     // security group: they all fork with it.
     let (sandbox_id, vm_id) =
@@ -348,4 +354,25 @@ async fn a_fork_needs_room_on_its_source_host_and_a_failed_one_leaves_no_rows() 
     assert_eq!(count(&app, "network_interfaces").await, 1);
     assert_eq!(count(&app, "ip_allocations").await, 1);
     assert_eq!(count(&app, "vm_security_groups").await, 1);
+}
+
+#[tokio::test]
+async fn a_fork_with_a_copy_of_its_source_s_memory_needs_room_for_all_of_it() {
+    let app = spawn_app().await;
+    let client = reqwest::Client::new();
+    let host_id = add_up_host(&client, &app.address, "fork-host").await;
+    set_total_memory(&app, host_id, (256 + 100) * MIB).await;
+    // Cloud Hypervisor restores a VM with shared memory with a copy of it.
+    let (sandbox_id, _) = running_sandbox(
+        &app,
+        &client,
+        "fork-shared",
+        "cloud_hv",
+        json!({ "memory_shared": true }),
+    )
+    .await;
+
+    let (status, body) = fork(&app, &client, sandbox_id, json!({})).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert!(body.contains("no room for 1 more VMs"), "{body}");
 }

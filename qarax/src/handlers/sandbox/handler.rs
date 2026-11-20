@@ -23,7 +23,7 @@ use crate::{
         storage_objects::{self, StorageObject, StorageObjectType},
         storage_pools::{self, StoragePoolType},
         vm_disks,
-        vms::{self, Vm, VmStatus},
+        vms::{self, Hypervisor, Vm, VmStatus},
     },
     network_policy,
     pagination::{PageQuery, PageRequest, time_key},
@@ -259,11 +259,17 @@ pub async fn fork(
     // The forks' rows, made with the capacity check that keeps their host
     // from taking more than it holds. The VMs stay PENDING, out of the VM
     // monitor's way, until the node has started them.
+    let memory_copy_on_write = forks_share_memory(&vm);
+    let fork_memory = if memory_copy_on_write {
+        unmeasured_fork_memory(vm.memory_size, env.scheduling().fork_memory_headroom_ratio)
+    } else {
+        vm.memory_size
+    };
     let mut tx = env.pool().begin().await?;
     let host = hosts::pick_host_tx(
         &mut tx,
         &SchedulingRequest {
-            memory_bytes: vm.memory_size * i64::from(count),
+            memory_bytes: fork_memory * i64::from(count),
             vcpus: vm.boot_vcpus * count as i32,
             disk_bytes: 0,
             architecture: None,
@@ -288,7 +294,7 @@ pub async fn fork(
     for _ in 0..count {
         let fork_sandbox_id = Uuid::new_v4();
         let name = fork_name(&source.name, fork_sandbox_id);
-        let fork_vm_id = vms::create_fork_tx(&mut tx, vm.id, &name).await?;
+        let fork_vm_id = vms::create_fork_tx(&mut tx, vm.id, &name, memory_copy_on_write).await?;
         let mut disk_copies = Vec::new();
         for disk in &disks {
             let object_id = match disk {
@@ -426,6 +432,23 @@ async fn start_forks(
                 Error::InternalServerError
             }
         })
+}
+
+/// Whether `vm`'s forks map its memory copy-on-write, sharing its pages until
+/// they write them. Cloud Hypervisor restores a VM with shared memory or huge
+/// pages with a copy of its memory; Firecracker has neither.
+fn forks_share_memory(vm: &Vm) -> bool {
+    match vm.hypervisor {
+        Hypervisor::Firecracker => true,
+        Hypervisor::CloudHv => !(vm.memory_shared || vm.memory_hugepages),
+    }
+}
+
+/// What a fork whose memory is copy-on-write is charged before its node has
+/// measured it: its headroom alone (`vm_memory_charge` in SQL, which rounds
+/// the same way).
+fn unmeasured_fork_memory(memory_size: i64, headroom_ratio: f64) -> i64 {
+    memory_size.min((memory_size as f64 * headroom_ratio).round_ties_even() as i64)
 }
 
 /// Only a running VM with the guest agent forks. Its disks are
