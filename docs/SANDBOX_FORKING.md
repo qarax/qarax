@@ -15,12 +15,12 @@ qarax sandbox fork my-sandbox --count 3
 
 ## What forks
 
-- Firecracker sandboxes with the guest agent, no cloud-init, no network
-  interface but ones on a managed bridge or isolated network, and no disk but
-  the OCI image they booted, if they booted one. Any other NIC would leave the
-  forks with the source's addresses; any other disk (a cloud-init seed, a
+- Firecracker sandboxes with the guest agent, no network interface but ones
+  on a managed bridge or isolated network, and no disk but the OCI image they
+  booted, if they booted one, and their cloud-init seed. Any other NIC would
+  leave the forks with the source's addresses; any other disk (a data disk, a
   persistent OverlayBD layer) would have them write to the same files. The
-  image disk and the NICs fork with the sandbox, see below.
+  image disk, the NICs and the seed fork with the sandbox, see below.
 - Up to 16 forks per request. The source's host must have room for them: the
   scheduler counts each fork at the source's full memory size and vCPUs, as it
   does any VM, though a fork uses much less at first (see below).
@@ -87,7 +87,12 @@ The guest's connections from before the fork carry the source's address in
 the fork, so a fork's TCP connections to other machines break: it reconnects
 from its own address. Only guests whose addresses come from the kernel
 command line (`ip=`), as qarax sets them up, are re-addressed; a DHCP client or
-network manager in the guest keeps its own idea of the source's lease.
+network manager in the guest keeps its own idea of the source's lease, and a
+sandbox whose network config comes from cloud-init doesn't fork with its NICs.
+
+A source with cloud-init forks its seed image: each fork gets its own, with the
+same content, so it boots again after its source and its source's seed are
+gone. The guest doesn't run cloud-init again: it already ran in the source.
 
 Either every fork of a request starts or none does. The forks' rows point at
 the source's image storage object, so the database shows what they boot.

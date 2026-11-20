@@ -23,9 +23,13 @@
 //! addresses, which the fork's firewall keeps off the network, until the node
 //! hands its guest agent the fork's after the fork notice.
 //!
+//! A source with cloud-init forks its seed image: each fork gets one of its
+//! own with the same content, which outlives its source's.
+//!
 //! The forks load paused and are resumed in a second step, so that their
 //! firewall is in place before they run. Only VMs with no disk but their OCI
-//! image's fork: a fork would write to its source's other disk files.
+//! image's and their cloud-init seed fork: a fork would write to its source's
+//! other disk files.
 
 use std::io::Read;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -160,16 +164,23 @@ fn overlaybd_err(e: crate::overlaybd::OverlayBdError) -> VmmError {
 }
 
 impl FirecrackerManager {
-    /// The disk `source_id`'s forks get, if it has one: its OCI image's, the
-    /// only disk OverlayBD maps for a VM. Any other disk is refused.
+    /// The disk `source_id`'s forks get a copy of, if it has one: its OCI
+    /// image's, the only disk OverlayBD maps for a VM. Its cloud-init seed is
+    /// each fork's own ([`Self::give_fork_its_seed`]); any other disk is refused.
     async fn source_disk(
         &self,
         source_id: &str,
         config: &ProtoVmConfig,
     ) -> Result<Option<SourceDisk>, VmmError> {
-        let disk = match config.disks.as_slice() {
+        let seed = cloud_init_seed(config).is_some();
+        let disks: Vec<_> = config
+            .disks
+            .iter()
+            .filter(|disk| !(seed && disk.id == CLOUD_INIT_DRIVE))
+            .collect();
+        let disk = match disks.as_slice() {
             [] => return Ok(None),
-            [disk] => disk,
+            [disk] => *disk,
             _ => None.ok_or_else(|| {
                 VmmError::InvalidConfig(
                     "can't fork a VM with disks besides its OCI image's: its forks would write \
@@ -461,12 +472,24 @@ impl FirecrackerManager {
         if let Some(vsock) = config.vsock.as_mut() {
             vsock.socket = Some(vsock_path.display().to_string());
         }
+        // The drives to point at the fork's own files once it has loaded: the
+        // snapshot names its source's.
+        let mut drives = Vec::new();
         if let Some((disk, device)) = disk {
             for drive in config.disks.iter_mut().filter(|d| d.id == disk.drive_id) {
                 drive.path = Some(device.to_string());
             }
+            drives.push((disk.drive_id.clone(), device.to_string()));
         }
         let tap_devices = Self::create_taps(&fork_id, &mut config.networks).await?;
+        match self.give_fork_its_seed(&mut config).await {
+            Ok(Some(seed)) => drives.push((CLOUD_INIT_DRIVE.to_string(), seed)),
+            Ok(None) => {}
+            Err(e) => {
+                self.discard_fork(&fork_id, None, &tap_devices).await;
+                return Err(e);
+            }
+        }
         let network_overrides = config
             .networks
             .iter()
@@ -494,20 +517,20 @@ impl FirecrackerManager {
                     vsock_override: Some(Box::new(VsockOverride::new(
                         vsock_path.display().to_string(),
                     ))),
-                    // Paused: the snapshot names the source's disk, and the
+                    // Paused: the snapshot names the source's drives, and the
                     // fork's firewall comes before it runs.
                     resume_vm: Some(false),
                     ..Default::default()
                 })
                 .await
                 .map_err(sdk_err)?;
-            if let Some((disk, device)) = disk {
-                let mut drive = PartialDrive::new(disk.drive_id.clone());
-                drive.path_on_host = Some(device.to_string());
+            for (drive_id, path) in &drives {
+                let mut drive = PartialDrive::new(drive_id.clone());
+                drive.path_on_host = Some(path.clone());
                 Self::api_request(
                     &socket_path,
                     "PATCH",
-                    &format!("/drives/{}", disk.drive_id),
+                    &format!("/drives/{drive_id}"),
                     &drive,
                 )
                 .await?;
@@ -533,6 +556,27 @@ impl FirecrackerManager {
                 Err(e)
             }
         }
+    }
+
+    /// Give a fork, `config`, a cloud-init seed image of its own if its source
+    /// has one: the same content at the fork's path, pointed to by its drive.
+    /// Returns its path.
+    async fn give_fork_its_seed(
+        &self,
+        config: &mut ProtoVmConfig,
+    ) -> Result<Option<String>, VmmError> {
+        let Some(ci) = cloud_init_seed(config).cloned() else {
+            return Ok(None);
+        };
+        let seed = self
+            .write_cloud_init_seed(&config.vm_id, &ci)
+            .await?
+            .display()
+            .to_string();
+        for drive in config.disks.iter_mut().filter(|d| d.id == CLOUD_INIT_DRIVE) {
+            drive.path = Some(seed.clone());
+        }
+        Ok(Some(seed))
     }
 
     /// Give a fork's guest its NICs' addresses ([`readdress_request`]).
@@ -594,8 +638,8 @@ impl FirecrackerManager {
         }
     }
 
-    /// Stop a fork that won't be kept and remove its sockets, TAPs and disk.
-    /// Its log stays, as a deleted VM's does.
+    /// Stop a fork that won't be kept and remove its sockets, TAPs, disk and
+    /// seed. Its log stays, as a deleted VM's does.
     async fn discard_fork(&self, fork_id: &str, process: Option<Child>, taps: &[String]) {
         if let Some(mut process) = process
             && let Err(e) = process.kill().await
@@ -606,7 +650,11 @@ impl FirecrackerManager {
             Self::delete_tap_device(tap).await;
         }
         self.unmap_oci_disk(fork_id).await;
-        for path in [self.socket_path(fork_id), self.vsock_socket_path(fork_id)] {
+        for path in [
+            self.socket_path(fork_id),
+            self.vsock_socket_path(fork_id),
+            self.cloud_init_seed_path(fork_id),
+        ] {
             if let Err(e) = tokio::fs::remove_file(&path).await
                 && e.kind() != std::io::ErrorKind::NotFound
             {
@@ -619,7 +667,7 @@ impl FirecrackerManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rpc::node::{DiskConfig, NetConfig, VsockConfig};
+    use crate::rpc::node::{CloudInitConfig, DiskConfig, NetConfig, VsockConfig};
 
     fn with_guest_agent() -> ProtoVmConfig {
         ProtoVmConfig {
@@ -752,6 +800,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_fork_gets_a_cloud_init_seed_of_its_own() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let manager =
+            FirecrackerManager::new(dir.path(), "/bin/true", Duration::from_secs(1), None);
+        let ci = CloudInitConfig {
+            user_data: "#cloud-config\n".into(),
+            meta_data: "instance-id: source\n".into(),
+            ..Default::default()
+        };
+        let source_seed = manager.cloud_init_seed_path("source");
+        let mut config = ProtoVmConfig {
+            vm_id: "fork".into(),
+            cloud_init: Some(ci.clone()),
+            disks: vec![DiskConfig {
+                id: CLOUD_INIT_DRIVE.into(),
+                path: Some(source_seed.display().to_string()),
+                readonly: Some(true),
+                ..Default::default()
+            }],
+            ..with_guest_agent()
+        };
+
+        let seed = manager
+            .give_fork_its_seed(&mut config)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            seed,
+            manager.cloud_init_seed_path("fork").display().to_string()
+        );
+        assert_eq!(config.disks[0].path.as_deref(), Some(seed.as_str()));
+        assert_eq!(
+            std::fs::read(&seed).unwrap(),
+            crate::cloud_init::build_seed_image(&ci.user_data, &ci.meta_data, None).unwrap()
+        );
+
+        // Without cloud-init, nothing.
+        let mut without = with_guest_agent();
+        assert!(
+            manager
+                .give_fork_its_seed(&mut without)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
     async fn a_fork_gets_its_sources_oci_disk_and_no_other() {
         let dir = tempfile::TempDir::new().unwrap();
         let manager = manager_with_overlaybd(&dir, "source").await;
@@ -773,10 +870,26 @@ mod tests {
             ("rootfs", "/dev/rootfs")
         );
 
+        // Its cloud-init seed is each fork's own.
+        let with_seed = ProtoVmConfig {
+            cloud_init: Some(CloudInitConfig {
+                user_data: "#cloud-config\n".into(),
+                ..Default::default()
+            }),
+            ..with_disks(vec![disk("rootfs"), disk(CLOUD_INIT_DRIVE)])
+        };
+        let oci = manager
+            .source_disk("source", &with_seed)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(oci.drive_id, "rootfs");
+
         // A disk OverlayBD didn't map for the VM, or a second disk.
         for (vm, disks) in [
             ("unmapped", vec![disk("data")]),
-            ("source", vec![disk("rootfs"), disk("cidata")]),
+            ("source", vec![disk("rootfs"), disk("data")]),
+            ("source", vec![disk("rootfs"), disk(CLOUD_INIT_DRIVE)]),
         ] {
             assert!(matches!(
                 manager.source_disk(vm, &with_disks(disks)).await,

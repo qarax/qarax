@@ -100,10 +100,10 @@ async fn a_fork_count_outside_1_to_16_is_refused() {
 }
 
 #[tokio::test]
-async fn only_a_running_firecracker_sandbox_with_only_memory_to_share_forks() {
+async fn a_sandbox_that_cant_fork_is_refused_before_the_node() {
     let app = spawn_app().await;
     let client = reqwest::Client::new();
-    add_up_host(&client, &app.address, "fork-host").await;
+    let host_id = add_up_host(&client, &app.address, "fork-host").await;
 
     let (provisioning, _) =
         running_sandbox(&app, &client, "fork-provisioning", "firecracker", json!({})).await;
@@ -151,15 +151,25 @@ async fn only_a_running_firecracker_sandbox_with_only_memory_to_share_forks() {
     )
     .await;
 
-    let (with_cloud_init, _) = running_sandbox(
+    let (cloud_init_network, cloud_init_vm) = running_sandbox(
         &app,
         &client,
-        "fork-cloud-init",
+        "fork-cloud-init-network",
         "firecracker",
-        json!({ "cloud_init_user_data": "#cloud-config\n" }),
+        json!({
+            "cloud_init_user_data": "#cloud-config\n",
+            "cloud_init_network_config": "version: 2\n",
+        }),
     )
     .await;
-    assert_refused(&app, &client, with_cloud_init, "cloud-init").await;
+    add_nic(&app, host_id, cloud_init_vm).await;
+    assert_refused(
+        &app,
+        &client,
+        cloud_init_network,
+        "network config comes from cloud-init",
+    )
+    .await;
 
     let pool = storage_pool(&app, "OVERLAYBD").await;
     let (with_data_disk, data_vm) =
