@@ -259,6 +259,7 @@ impl Drop for VmManager {
 mod api;
 mod config;
 mod exec;
+mod fork;
 mod helpers;
 mod hotplug;
 mod lifecycle;

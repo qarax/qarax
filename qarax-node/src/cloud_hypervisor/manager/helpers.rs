@@ -125,6 +125,23 @@ impl VmManager {
     }
 
     /// Create a TAP device and bring it up.
+    /// Wait for a Cloud Hypervisor process just spawned to listen on its API
+    /// socket.
+    pub(super) async fn wait_for_api_socket(socket_path: &Path) -> Result<(), VmManagerError> {
+        const RETRIES: u32 = 50;
+        let mut retries = 0;
+        loop {
+            match UnixStream::connect(socket_path).await {
+                Ok(_) => return Ok(()),
+                Err(_) if retries < RETRIES => {
+                    retries += 1;
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+                Err(e) => return Err(VmManagerError::SpawnError(e)),
+            }
+        }
+    }
+
     pub(super) async fn create_tap_device(name: &str) -> Result<(), VmManagerError> {
         let add = Command::new("ip")
             .args(["tuntap", "add", name, "mode", "tap"])

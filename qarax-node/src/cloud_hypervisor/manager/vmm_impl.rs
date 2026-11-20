@@ -187,6 +187,22 @@ impl crate::vmm::VmmManager for VmManager {
             .map_err(Into::into)
     }
 
+    async fn fork_vm(
+        &self,
+        source_id: &str,
+        forks: &[crate::rpc::node::Fork],
+    ) -> Result<(), crate::vmm::VmmError> {
+        self.fork(source_id, forks).await
+    }
+
+    async fn resume_forks(
+        &self,
+        source_id: &str,
+        fork_ids: &[String],
+    ) -> Result<(), crate::vmm::VmmError> {
+        VmManager::resume_forks(self, source_id, fork_ids).await
+    }
+
     async fn guest_agent_socket(&self, vm_id: &str) -> Result<PathBuf, crate::vmm::VmmError> {
         VmManager::guest_agent_socket(self, vm_id)
             .await

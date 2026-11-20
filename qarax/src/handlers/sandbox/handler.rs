@@ -23,7 +23,7 @@ use crate::{
         storage_objects::{self, StorageObject, StorageObjectType},
         storage_pools::{self, StoragePoolType},
         vm_disks,
-        vms::{self, Hypervisor, Vm, VmStatus},
+        vms::{self, Vm, VmStatus},
     },
     network_policy,
     pagination::{PageQuery, PageRequest, time_key},
@@ -208,13 +208,12 @@ const MAX_VM_NAME_CHARS: usize = 50;
 /// generator is reseeded and its clock set. A fork of a sandbox booted from an
 /// OCI image gets the image and the sandbox's changes to it as they were, and a
 /// copy of each of its writable disks on local and NFS pools, of its own;
-/// read-only disks are shared. Each
-/// of a fork's network interfaces is on its source's network with an address of
-/// its own, and the fork has its source's security groups; a sandbox's
-/// cloud-init seed disk is each fork's own. Only Firecracker sandboxes with no
-/// network interface outside a managed bridge or isolated network (nor one
-/// whose network config comes from cloud-init) and no writable disk on another
-/// kind of pool fork.
+/// read-only disks are shared. Each of a fork's network interfaces is on its
+/// source's network with an address of its own, and the fork has its source's
+/// security groups; a sandbox's cloud-init seed disk is each fork's own. Only
+/// sandboxes with the guest agent, no network interface outside a managed
+/// bridge or isolated network (nor one whose network config comes from
+/// cloud-init) and no writable disk on another kind of pool fork.
 #[utoipa::path(
     post,
     path = "/v1/sandboxes/{sandbox_id}/fork",
@@ -429,13 +428,11 @@ async fn start_forks(
         })
 }
 
-/// Only a running Firecracker VM with the guest agent forks. Its disks are
+/// Only a running VM with the guest agent forks. Its disks are
 /// [`forkable_disks`]'s, its NICs [`forkable_nics`]'.
 fn ensure_forkable(vm: &Vm) -> Result<()> {
     let refusal = if vm.status != VmStatus::Running {
         format!("sandbox VM {} is not running", vm.id)
-    } else if vm.hypervisor != Hypervisor::Firecracker {
-        "only Firecracker sandboxes can be forked".to_string()
     } else if !vm.guest_agent {
         "a sandbox without the guest agent can't be forked: the agent reseeds each fork's \
          random generator"

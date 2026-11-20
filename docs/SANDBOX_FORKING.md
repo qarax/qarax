@@ -15,7 +15,7 @@ qarax sandbox fork my-sandbox --count 3
 
 ## What forks
 
-- Firecracker sandboxes with the guest agent, no network interface but ones
+- Firecracker and Cloud Hypervisor sandboxes with the guest agent, no network interface but ones
   on a managed bridge or isolated network, and no writable disk but the OCI
   image they booted, their cloud-init seed and disks on local or NFS pools.
   Any other NIC would leave the forks with the source's addresses; any other
@@ -52,7 +52,19 @@ qarax sandbox fork my-sandbox --count 3
    file mapped. A source with the guest agent keeps its memory image as its
    fork base, below.
 
-A sandbox forked again writes only the memory it dirtied since its last fork.
+A Cloud Hypervisor fork restores the snapshot copy-on-write
+(`memory_restore_mode=copyonwrite`): its memory maps the snapshot's memory file
+privately, as a Firecracker fork's does, so the forks share the source's pages
+until they write them. The file has to stay as it is for as long as a fork
+runs, so each fork restores from a directory of its own in the node's runtime
+directory, with hard links to the snapshot's memory and device state and the
+snapshot's config rewritten for the fork (its vsock socket, TAPs and disk
+files); the directory goes with the fork. Copy-on-write needs plain private
+guest memory: a VM with shared memory or huge pages (for vhost-user devices,
+say) restores with a copy of its memory instead.
+
+A Firecracker sandbox forked again writes only the memory it dirtied since its
+last fork; a Cloud Hypervisor sandbox writes all of it each time.
 Firecracker tracks the pages a VM with the guest agent dirties, from boot (or,
 for a fork, from its load). The node keeps the memory image of a source's last
 fork round, its fork base, in the node's runtime directory; the next round
@@ -126,7 +138,7 @@ of the source's image storage object, which goes with it when it's deleted.
 
 ## What it costs
 
-Measured on a laptop with a 256 MiB guest, the node in a container capped at
+Measured with Firecracker on a laptop with a 256 MiB guest, the node in a container capped at
 2 CPUs ("bare") and in the bootc node microVM under Cloud Hypervisor with
 2 vCPUs ("nested", as on a KubeVirt node):
 
@@ -146,7 +158,3 @@ fork's disk device costs overlaybd-tcmu about 7 MiB of memory.
 A fork's memory grows by what it writes. Data it reads from a disk or
 re-reads after its page cache drops also becomes its own; the page cache it
 inherits stays shared.
-
-## Not yet
-
-- **Cloud Hypervisor** sandboxes.
