@@ -29,8 +29,9 @@ use crate::vmm::fork::{
 /// fork's own vsock socket, TAPs (with their host-side addresses) and disk
 /// files, from `fork`, its config. Its NICs' MACs and kernel command line are
 /// the fork's too, for when its guest boots again; until then the restored
-/// devices keep what the guest had. A serial port or console writing to a file
-/// writes to the fork's, the source's ID in its name replaced by the fork's.
+/// devices keep what the guest had. A serial port or console on a PTY gets a
+/// PTY of its own, and one on a file or socket the fork's, the source's ID in
+/// its name replaced by the fork's.
 fn fork_snapshot_config(
     mut snapshot: serde_json::Value,
     source_id: &str,
@@ -83,13 +84,27 @@ fn fork_snapshot_config(
         vsock["socket"] = vsock_socket.display().to_string().into();
     }
     for device in ["serial", "console"] {
-        if let Some(file) = snapshot[device]["file"].as_str() {
-            if !file.contains(source_id) {
-                return Err(invalid(format!(
-                    "its {device} writes to {file}, which isn't named for its source"
-                )));
+        let entry = &mut snapshot[device];
+        match entry["mode"].as_str() {
+            // A PTY of its own: Cloud Hypervisor records the one it opened.
+            Some("Pty") => {
+                if let Some(entry) = entry.as_object_mut() {
+                    entry.remove("file");
+                }
             }
-            snapshot[device]["file"] = file.replace(source_id, &fork.vm_id).into();
+            Some("File" | "Socket") => {
+                for key in ["file", "socket"] {
+                    if let Some(path) = entry[key].as_str() {
+                        if !path.contains(source_id) {
+                            return Err(invalid(format!(
+                                "its {device} writes to {path}, which isn't named for its source"
+                            )));
+                        }
+                        entry[key] = path.replace(source_id, &fork.vm_id).into();
+                    }
+                }
+            }
+            _ => {}
         }
     }
     Ok(snapshot)
@@ -514,8 +529,8 @@ mod tests {
             "net": [{"id": "net0", "tap": "qtsource0", "ip": "10.0.0.2", "mask": "255.255.255.0",
                      "mac": "02:00:00:00:00:01", "host_mac": "02:00:00:00:01:01"}],
             "vsock": {"cid": 3, "socket": "/run/source.vsock"},
-            "serial": {"mode": "File", "file": "/run/source.serial.log"},
-            "console": {"mode": "Off"},
+            "serial": {"mode": "Pty", "file": "/dev/pts/0"},
+            "console": {"mode": "File", "file": "/run/source.console.log"},
         });
         let disk = |id: &str, path: &str| DiskConfig {
             id: id.into(),
@@ -560,7 +575,8 @@ mod tests {
         );
         assert_eq!(config["payload"]["kernel"], "/vmlinux");
         assert_eq!(config["vsock"]["socket"], "/run/fork.vsock");
-        assert_eq!(config["serial"]["file"], "/run/fork.serial.log");
+        assert!(config["serial"].get("file").is_none());
+        assert_eq!(config["console"]["file"], "/run/fork.console.log");
         assert_eq!(config["cpus"], snapshot["cpus"]);
 
         // A disk the fork has no file for, or a log not named for the source.
@@ -569,7 +585,7 @@ mod tests {
             ..fork.clone()
         };
         let mut shared_log = snapshot.clone();
-        shared_log["serial"]["file"] = "/run/console.log".into();
+        shared_log["console"]["file"] = "/run/console.log".into();
         for (snapshot, fork) in [(snapshot, &missing), (shared_log, &fork)] {
             assert!(matches!(
                 fork_snapshot_config(snapshot, "source", fork, Path::new("/run/fork.vsock")),
