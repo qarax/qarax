@@ -72,6 +72,10 @@ impl crate::vmm::VmmManager for VmManager {
         VmManager::runtime_dir(self)
     }
 
+    fn api_socket(&self, vm_id: &str) -> PathBuf {
+        self.socket_path(vm_id)
+    }
+
     async fn add_network_device(
         &self,
         vm_id: &str,

@@ -1214,10 +1214,13 @@ VALUES (
 
 /// A row for a VM forked from `source_id`: the source's host and
 /// configuration under a new name, `PENDING` until its node has started it.
+/// `memory_copy_on_write`: the fork's memory maps its source's memory image
+/// (see [`transition_tx`]).
 pub async fn create_fork_tx(
     tx: &mut Transaction<'_, Postgres>,
     source_id: Uuid,
     name: &str,
+    memory_copy_on_write: bool,
 ) -> Result<Uuid, sqlx::Error> {
     let id = Uuid::new_v4();
     let inserted = sqlx::query!(
@@ -1227,6 +1230,7 @@ INSERT INTO vms (
     boot_vcpus, max_vcpus, cpu_topology, kvm_hyperv,
     memory_size, memory_hotplug_size, memory_mergeable, memory_shared,
     memory_hugepages, memory_hugepage_size, memory_prefault, memory_thp,
+    memory_copy_on_write,
     boot_source_id, boot_mode, description, image_ref,
     cloud_init_user_data, cloud_init_meta_data, cloud_init_network_config,
     config
@@ -1236,6 +1240,7 @@ SELECT
     boot_vcpus, max_vcpus, cpu_topology, kvm_hyperv,
     memory_size, memory_hotplug_size, memory_mergeable, memory_shared,
     memory_hugepages, memory_hugepage_size, memory_prefault, memory_thp,
+    $4,
     boot_source_id, boot_mode, description, image_ref,
     cloud_init_user_data, cloud_init_meta_data, cloud_init_network_config,
     config
@@ -1244,7 +1249,8 @@ WHERE id = $3
         "#,
         id,
         name,
-        source_id
+        source_id,
+        memory_copy_on_write
     )
     .execute(tx.as_mut())
     .await?
@@ -1336,6 +1342,11 @@ pub async fn transition(
 
 /// [`transition`] inside the caller's transaction. It doesn't announce the
 /// change: call [`announce_transition`] after the transaction commits.
+///
+/// A VM whose memory is copy-on-write (a fork's) stops being so when it moves
+/// on to a hypervisor process of its own: when it is started or restored
+/// (`PENDING`), migrated (`MIGRATING`) or failed over (`CREATED`). A fork
+/// is created `PENDING`, without a transition.
 pub async fn transition_tx(
     tx: &mut Transaction<'_, Postgres>,
     vm_id: Uuid,
@@ -1347,7 +1358,10 @@ pub async fn transition_tx(
 WITH previous AS (
     SELECT id, status FROM vms WHERE id = $1 AND status = ANY($2) FOR UPDATE
 )
-UPDATE vms SET status = $3
+UPDATE vms
+SET status = $3,
+    memory_copy_on_write = memory_copy_on_write
+        AND $3::vm_status NOT IN ('PENDING', 'MIGRATING', 'CREATED')
 FROM previous
 WHERE vms.id = previous.id
 RETURNING previous.status AS "status: VmStatus"
@@ -1358,6 +1372,30 @@ RETURNING previous.status AS "status: VmStatus"
     )
     .fetch_optional(tx.as_mut())
     .await
+}
+
+/// Record the memory the VMs on `host_id` hold of their own, as its node
+/// measured it (`(vm id, bytes)`). A VM that has left the host since keeps
+/// what it had.
+pub async fn record_private_memory(
+    pool: &PgPool,
+    host_id: Uuid,
+    usage: &[(Uuid, i64)],
+) -> Result<(), sqlx::Error> {
+    let (ids, bytes): (Vec<Uuid>, Vec<i64>) = usage.iter().copied().unzip();
+    sqlx::query!(
+        r#"
+UPDATE vms SET memory_private_bytes = usage.bytes
+FROM UNNEST($2::uuid[], $3::bigint[]) AS usage(id, bytes)
+WHERE vms.id = usage.id AND vms.host_id = $1
+        "#,
+        host_id,
+        &ids,
+        &bytes
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 /// Emit the SSE event and enqueue lifecycle hooks for a committed status

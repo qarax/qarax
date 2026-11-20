@@ -607,7 +607,9 @@ async fn ensure_resize_capacity(
     desired_vcpus: Option<i32>,
     desired_ram: Option<i64>,
 ) -> Result<()> {
-    let Some(capacity) = hosts::get_resource_capacity(env.pool(), host.id).await? else {
+    let Some(capacity) =
+        hosts::get_resource_capacity(env.pool(), host.id, env.scheduling()).await?
+    else {
         return Err(crate::errors::Error::NotFound);
     };
 

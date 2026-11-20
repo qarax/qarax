@@ -28,7 +28,7 @@ use crate::rpc::node::{
     ReceiveMigrationRequest, ReceiveMigrationResponse, RemoveDeviceRequest, ResizeDiskRequest,
     ResizeVmRequest, RestoreVmRequest, SendMigrationRequest, SnapshotVmRequest, StoragePoolKind,
     SyncNetworkIsolationRequest, SyncVmFirewallRequest, SyncVpcOverlaysRequest, VmConfig,
-    VmCounters, VmFirewallInterface, VmId, VmList, VmState, WaitForGuestAgentRequest,
+    VmCounters, VmFirewallInterface, VmId, VmList, VmMemory, VmState, WaitForGuestAgentRequest,
     vm_service_server::VmService,
 };
 use crate::vmm::{VmmError, VmmManager, guest_agent};
@@ -57,6 +57,27 @@ impl NodeVms {
             vms.extend(fc.list_vms().await);
         }
         vms
+    }
+
+    /// The memory each VM holds of its own. A VM no hypervisor process
+    /// serves (one that never started, say) isn't in it.
+    async fn memory(&self) -> Vec<VmMemory> {
+        let ch: &dyn VmmManager = self.ch.as_ref();
+        let fc = self.fc.as_deref().map(|fc| fc as &dyn VmmManager);
+        let mut memory = Vec::new();
+        for manager in std::iter::once(ch).chain(fc) {
+            for vm in manager.list_vms().await {
+                let Some(config) = vm.config else { continue };
+                match crate::vmm::memory::private_memory(&manager.api_socket(&config.vm_id)).await {
+                    Ok(bytes) => memory.push(VmMemory {
+                        vm_id: config.vm_id,
+                        private_bytes: bytes as i64,
+                    }),
+                    Err(e) => debug!(vm_id = %config.vm_id, "no memory measured: {e}"),
+                }
+            }
+        }
+        memory
     }
 
     /// Bring the per-NIC firewall in line with the node's VMs: chains for
@@ -1023,6 +1044,7 @@ impl VmService for VmServiceImpl {
             architecture,
             firecracker_version,
             migration_tls: self.ch_manager.has_migration_tls(),
+            vm_memory: self.node_vms().memory().await,
         }))
     }
 

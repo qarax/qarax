@@ -17,6 +17,7 @@ use crate::rpc::node::{
 
 pub mod fork;
 pub mod guest_agent;
+pub mod memory;
 
 #[derive(Debug, thiserror::Error)]
 pub enum VmmError {
@@ -127,6 +128,9 @@ pub trait VmmManager: Send + Sync + 'static {
     // ── Runtime info ────────────────────────────────────────────────────────
 
     fn runtime_dir(&self) -> &Path;
+
+    /// The socket the VM's hypervisor serves its API on.
+    fn api_socket(&self, vm_id: &str) -> PathBuf;
 
     // ── Operations with default Unsupported responses ───────────────────────
     // Cloud Hypervisor supports all of these; Firecracker returns Unsupported.

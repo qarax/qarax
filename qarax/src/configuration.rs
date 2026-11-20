@@ -21,6 +21,12 @@ pub struct SchedulingSettings {
     pub disk_headroom_bytes: i64,
     #[serde(default = "default_memory_health_floor_bytes")]
     pub memory_health_floor_bytes: i64,
+    /// A fork's memory is its source's, copy-on-write: it is charged the
+    /// memory it was last measured to hold of its own plus this fraction of
+    /// its memory size, room for what it writes before the next measurement,
+    /// and never more than its size. 1 charges forks in full, as other VMs.
+    #[serde(default = "default_fork_memory_headroom_ratio")]
+    pub fork_memory_headroom_ratio: f64,
 }
 
 impl Default for SchedulingSettings {
@@ -30,6 +36,7 @@ impl Default for SchedulingSettings {
             cpu_oversubscription_ratio: default_cpu_oversubscription_ratio(),
             disk_headroom_bytes: default_disk_headroom_bytes(),
             memory_health_floor_bytes: default_memory_health_floor_bytes(),
+            fork_memory_headroom_ratio: default_fork_memory_headroom_ratio(),
         }
     }
 }
@@ -48,6 +55,10 @@ fn default_disk_headroom_bytes() -> i64 {
 
 fn default_memory_health_floor_bytes() -> i64 {
     1024 * 1024 * 1024
+}
+
+fn default_fork_memory_headroom_ratio() -> f64 {
+    0.25
 }
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize, utoipa::ToSchema)]
@@ -377,7 +388,14 @@ pub fn get_configuration() -> Result<Settings, config::ConfigError> {
             std::env::var("NODE_TLS_DIR").ok().filter(|s| !s.is_empty()),
         )?
         .build()?;
-    settings.try_deserialize::<Settings>()
+    let settings = settings.try_deserialize::<Settings>()?;
+    let ratio = settings.scheduling.fork_memory_headroom_ratio;
+    if !(0.0..=1.0).contains(&ratio) {
+        return Err(config::ConfigError::Message(format!(
+            "scheduling.fork_memory_headroom_ratio must be between 0 and 1, not {ratio}"
+        )));
+    }
+    Ok(settings)
 }
 
 pub fn default_control_plane_architecture() -> String {

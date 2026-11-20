@@ -368,6 +368,17 @@ message NodeInfo {
   // Whether the node has certificates for migration TLS
   // (qarax-node --migration-tls-dir), used for every migration in or out.
   bool migration_tls = 15;
+  // The memory each of the node's VMs holds of its own.
+  repeated VmMemory vm_memory = 16;
+}
+
+// The memory a VM's hypervisor process holds of its own: its anonymous,
+// shared memory and huge pages. A fork's pages it hasn't written are file
+// pages of its source's memory image, shared with its siblings, and aren't
+// counted.
+message VmMemory {
+  string vm_id = 1;
+  int64 private_bytes = 2;
 }
 
 // ============================================================================

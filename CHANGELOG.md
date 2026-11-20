@@ -34,7 +34,8 @@ The first release.
   a running Firecracker or Cloud Hypervisor sandbox, its OCI image disk, data
   disks, network interfaces and cloud-init included, that continue from its
   state; forking a Firecracker sandbox again writes only the memory it changed
-  since ([docs/SANDBOX_FORKING.md](docs/SANDBOX_FORKING.md)).
+  since, and a fork counts against its host's memory for what it holds of its
+  own, not its memory size ([docs/SANDBOX_FORKING.md](docs/SANDBOX_FORKING.md)).
 - Lifecycle hooks (webhooks), a Server-Sent Events stream of VM changes, an
   audit log of API mutations, OpenTelemetry traces and metrics.
 - A CLI (`qarax`) and a generated Python SDK.

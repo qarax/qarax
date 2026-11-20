@@ -1091,7 +1091,7 @@ pub async fn resources(
     Path(host_id): Path<Uuid>,
 ) -> Result<ApiResponse<crate::model::hosts::HostResourceCapacity>> {
     hosts::require_by_id(env.pool(), host_id).await?;
-    let resources = hosts::get_resource_capacity(env.pool(), host_id)
+    let resources = hosts::get_resource_capacity(env.pool(), host_id, env.scheduling())
         .await?
         .ok_or(crate::errors::Error::NotFound)?;
     Ok(ApiResponse {

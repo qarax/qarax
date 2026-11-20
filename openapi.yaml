@@ -4097,6 +4097,10 @@ components:
         allocated_memory_bytes:
           type: integer
           format: int64
+          description: |-
+            The memory of the host's VMs that aren't shut down: each one's memory
+            size, a fork's the memory it holds of its own plus headroom (see
+            `scheduling.fork_memory_headroom_ratio`).
         allocated_vcpus:
           type: integer
           format: int64
@@ -5571,6 +5575,14 @@ components:
         disk_headroom_bytes:
           type: integer
           format: int64
+        fork_memory_headroom_ratio:
+          type: number
+          format: double
+          description: |-
+            A fork's memory is its source's, copy-on-write: it is charged the
+            memory it was last measured to hold of its own plus this fraction of
+            its memory size, room for what it writes before the next measurement,
+            and never more than its size. 1 charges forks in full, as other VMs.
         memory_health_floor_bytes:
           type: integer
           format: int64
