@@ -301,35 +301,43 @@ pub async fn create(pool: &PgPool, disk: &NewVmDisk) -> Result<Uuid, sqlx::Error
     Ok(id)
 }
 
-/// Give `fork_vm_id` the disks of `source_vm_id`, the VM it was forked from:
-/// the same storage objects, which for a fork are its source's OCI image.
+/// Give `fork_vm_id` a copy of disk `source_disk_id` of the VM it was forked
+/// from, on `storage_object_id`, the fork's own copy of the disk's object.
 pub async fn copy_for_fork_tx(
     tx: &mut PgTransaction<'_>,
-    source_vm_id: Uuid,
+    source_disk_id: Uuid,
     fork_vm_id: Uuid,
-) -> Result<(), sqlx::Error> {
-    sqlx::query!(
+    storage_object_id: Uuid,
+) -> Result<Uuid, sqlx::Error> {
+    let id = Uuid::new_v4();
+    let inserted = sqlx::query!(
         r#"
 INSERT INTO vm_disks (
-    vm_id, storage_object_id, logical_name, device_path, boot_order,
+    id, vm_id, storage_object_id, logical_name, device_path, boot_order,
     read_only, direct, vhost_user, vhost_socket,
     num_queues, queue_size, rate_limiter, rate_limit_group,
     pci_segment, serial_number, config, upper_storage_object_id
 )
 SELECT
-    $2, storage_object_id, logical_name, device_path, boot_order,
+    $1, $2, $3, logical_name, device_path, boot_order,
     read_only, direct, vhost_user, vhost_socket,
     num_queues, queue_size, rate_limiter, rate_limit_group,
     pci_segment, serial_number, config, upper_storage_object_id
 FROM vm_disks
-WHERE vm_id = $1
+WHERE id = $4
         "#,
-        source_vm_id,
-        fork_vm_id
+        id,
+        fork_vm_id,
+        storage_object_id,
+        source_disk_id
     )
     .execute(tx.as_mut())
-    .await?;
-    Ok(())
+    .await?
+    .rows_affected();
+    if inserted == 0 {
+        return Err(sqlx::Error::RowNotFound);
+    }
+    Ok(id)
 }
 
 pub async fn create_tx(tx: &mut PgTransaction<'_>, disk: &NewVmDisk) -> Result<Uuid, sqlx::Error> {
@@ -567,7 +575,12 @@ mod tests {
         .await
         .unwrap();
 
-        copy_for_fork_tx(&mut tx, source, fork).await.unwrap();
+        let forks_image = storage_objects::copy_oci_image_for_fork_tx(&mut tx, image, fork)
+            .await
+            .unwrap();
+        copy_for_fork_tx(&mut tx, source_disk, fork, forks_image)
+            .await
+            .unwrap();
         tx.commit().await.unwrap();
 
         let disks = list_by_vm(&db.pool, fork).await.unwrap();
@@ -575,7 +588,20 @@ mod tests {
         let disk = &disks[0];
         assert_ne!(disk.id, source_disk);
         assert_eq!(disk.vm_id, fork);
-        assert_eq!(disk.storage_object_id, Some(image));
+        assert_eq!(disk.storage_object_id, Some(forks_image));
+        // The fork's own copy of the image, which goes with it.
+        let copy = storage_objects::get(&db.pool, forks_image).await.unwrap();
+        let original = storage_objects::get(&db.pool, image).await.unwrap();
+        assert_eq!(copy.name, format!("overlaybd-{fork}"));
+        assert_eq!(copy.owner_vm_id, Some(fork));
+        assert_eq!(
+            (copy.storage_pool_id, copy.object_type, copy.config),
+            (
+                original.storage_pool_id,
+                original.object_type,
+                original.config
+            )
+        );
         assert_eq!(
             (disk.logical_name.as_str(), disk.device_path.as_str()),
             ("rootfs", "/dev/vda")

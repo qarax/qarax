@@ -61,7 +61,10 @@ No block device is created yet — the import just prepares the registry.
 
 When you create a VM and attach an OCI image as a disk, another async job runs:
 
-1. Creates a `VmDisk` record linking the `OciImage` storage object to the VM.
+1. Creates a `VmDisk` record linking the `OciImage` storage object to the VM. The
+   object (`overlaybd-<vm id>`) is the VM's own (`owner_vm_id`): deleting the VM
+   deletes it, unless something else, such as a template made from the VM,
+   still uses it.
 2. If `persistent_upper_pool_id` is specified, creates a `StorageObject` of type
    `OverlaybdUpper` in that pool. This object records the paths to the writable upper
    layer files for this VM:

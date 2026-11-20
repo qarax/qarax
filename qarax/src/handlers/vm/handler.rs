@@ -1220,7 +1220,8 @@ async fn run_overlaybd_create(
         "registry_url": registry_url,
         "digest": if import_result.digest.is_empty() { None } else { Some(&import_result.digest) },
     });
-    let so_id = match storage_objects::create(
+    // The VM's own: it goes with the VM.
+    let so_id = match storage_objects::create_owned_by_vm(
         db_pool,
         storage_objects::NewStorageObject {
             name: format!("overlaybd-{}", vm_id),
@@ -1230,6 +1231,7 @@ async fn run_overlaybd_create(
             config: so_config,
             parent_id: None,
         },
+        vm_id,
     )
     .await
     {
@@ -2175,7 +2177,7 @@ pub async fn metrics(
         ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier")
     ),
     responses(
-        (status = 204, description = "VM deleted, with its snapshots and VM backups"),
+        (status = 204, description = "VM deleted, with its snapshots, its VM backups and the storage objects it made for itself that nothing else uses"),
         (status = 404, description = "VM not found"),
         (status = 500, description = "Internal server error")
     ),
@@ -4894,6 +4896,7 @@ mod tests {
             size_bytes: 1024,
             config,
             parent_id: None,
+            owner_vm_id: None,
         }
     }
 

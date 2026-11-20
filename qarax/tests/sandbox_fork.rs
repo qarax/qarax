@@ -332,6 +332,8 @@ async fn a_fork_needs_room_on_its_source_host_and_a_failed_one_leaves_no_rows() 
     assert_eq!(count(&app, "vms").await, 1);
     assert_eq!(count(&app, "sandboxes").await, 1);
     assert_eq!(count(&app, "vm_disks").await, 1);
+    // The fork's own copy of the image object went with its row.
+    assert_eq!(count(&app, "storage_objects").await, 1);
     assert_eq!(count(&app, "network_interfaces").await, 1);
     assert_eq!(count(&app, "ip_allocations").await, 1);
     assert_eq!(count(&app, "vm_security_groups").await, 1);

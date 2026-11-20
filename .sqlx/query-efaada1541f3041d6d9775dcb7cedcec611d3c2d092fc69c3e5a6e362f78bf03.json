@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\nSELECT id,\n        name,\n        storage_pool_id,\n        object_type as \"object_type: _\",\n        size_bytes,\n        config as \"config: _\",\n        parent_id as \"parent_id?\"\nFROM storage_objects\nWHERE id = $1\n        ",
+  "query": "\nSELECT id,\n       name,\n       storage_pool_id,\n       object_type AS \"object_type: _\",\n       size_bytes,\n       config,\n       parent_id,\n       owner_vm_id\nFROM storage_objects\nWHERE id = $1\nFOR UPDATE\n        ",
   "describe": {
     "columns": [
       {
@@ -46,12 +46,17 @@
       },
       {
         "ordinal": 5,
-        "name": "config: _",
+        "name": "config",
         "type_info": "Jsonb"
       },
       {
         "ordinal": 6,
-        "name": "parent_id?",
+        "name": "parent_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 7,
+        "name": "owner_vm_id",
         "type_info": "Uuid"
       }
     ],
@@ -67,8 +72,9 @@
       false,
       false,
       false,
+      true,
       true
     ]
   },
-  "hash": "23af6291d684ee3e62f725d4cb7a45bf5c6c56887c65a289781902ddb66916f4"
+  "hash": "efaada1541f3041d6d9775dcb7cedcec611d3c2d092fc69c3e5a6e362f78bf03"
 }

@@ -1522,17 +1522,104 @@ pub async fn update_resize(
     Ok(())
 }
 
+/// Delete a VM, with the storage objects it owns that nothing else uses (the
+/// files of those qarax manages go through the cleanup queue). An owned object
+/// something still refers to outlives the VM, unowned.
 pub async fn delete(pool: &PgPool, vm_id: Uuid) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let owned = sqlx::query_scalar!(
+        "SELECT id FROM storage_objects WHERE owner_vm_id = $1",
+        vm_id
+    )
+    .fetch_all(tx.as_mut())
+    .await?;
     sqlx::query!("DELETE FROM vms WHERE id = $1", vm_id)
-        .execute(pool)
+        .execute(tx.as_mut())
         .await?;
+    sqlx::query!(
+        "DELETE FROM storage_objects WHERE id = ANY($1) AND NOT storage_object_in_use(id)",
+        &owned
+    )
+    .execute(tx.as_mut())
+    .await?;
+    tx.commit().await?;
 
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ha_enabled, set_ha_enabled_config};
+    use serde_json::json;
+
+    use super::{create_tx, delete, ha_enabled, set_ha_enabled_config};
+    use crate::model::{
+        storage_objects::{self, NewStorageObject, StorageObjectType},
+        storage_pools::{self, NewStoragePool, StoragePoolType},
+    };
+    use crate::test_support::{TestDatabase, resolved_vm};
+
+    #[tokio::test]
+    async fn a_vm_takes_the_storage_objects_it_owns_and_nothing_uses_with_it() {
+        let db = TestDatabase::new().await;
+        let pool_id = storage_pools::create(
+            &db.pool,
+            NewStoragePool {
+                name: "images".into(),
+                pool_type: StoragePoolType::OverlayBd,
+                config: json!({"url": "http://registry:5000"}),
+                capacity_bytes: None,
+            },
+        )
+        .await
+        .unwrap();
+        let mut tx = db.pool.begin().await.unwrap();
+        let vm = create_tx(&mut tx, &resolved_vm("vm"), None).await.unwrap();
+        tx.commit().await.unwrap();
+        let image = |name: &str| NewStorageObject {
+            name: name.into(),
+            storage_pool_id: Some(pool_id),
+            object_type: StorageObjectType::OciImage,
+            size_bytes: 1,
+            config: json!({}),
+            parent_id: None,
+        };
+        let owned = storage_objects::create_owned_by_vm(&db.pool, image("owned"), vm)
+            .await
+            .unwrap();
+        let in_use = storage_objects::create_owned_by_vm(&db.pool, image("in-use"), vm)
+            .await
+            .unwrap();
+        let unowned = storage_objects::create(&db.pool, image("unowned"))
+            .await
+            .unwrap();
+        // A template made from the VM boots its image.
+        sqlx::query("INSERT INTO vm_templates (name, root_disk_object_id) VALUES ('t', $1)")
+            .bind(in_use)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+
+        delete(&db.pool, vm).await.unwrap();
+
+        assert!(matches!(
+            storage_objects::get(&db.pool, owned).await,
+            Err(sqlx::Error::RowNotFound)
+        ));
+        assert_eq!(
+            storage_objects::get(&db.pool, in_use)
+                .await
+                .unwrap()
+                .owner_vm_id,
+            None
+        );
+        assert_eq!(
+            storage_objects::get(&db.pool, unowned)
+                .await
+                .unwrap()
+                .owner_vm_id,
+            None
+        );
+    }
 
     #[test]
     fn ha_enabled_defaults_to_false() {

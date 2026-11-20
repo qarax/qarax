@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\nINSERT INTO storage_objects (id, name, storage_pool_id, object_type, size_bytes, config, parent_id, managed_host_ids)\nVALUES ($1, $2, $3, $4, $5, $6, $7, $8)\n        ",
+  "query": "\nINSERT INTO storage_objects (id, name, storage_pool_id, object_type, size_bytes, config, parent_id, managed_host_ids, owner_vm_id)\nVALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)\n        ",
   "describe": {
     "columns": [],
     "parameters": {
@@ -28,10 +28,11 @@
         "Int8",
         "Jsonb",
         "Uuid",
-        "UuidArray"
+        "UuidArray",
+        "Uuid"
       ]
     },
     "nullable": []
   },
-  "hash": "e03c0b9dc09db4d13d86a4ce10709272c87e6863fc2a45394858a3f2638a3f0f"
+  "hash": "b14338c1367eafc0448ad853cc7fe5b8639a186e5bdcc2da6a2384052ae5bfb7"
 }

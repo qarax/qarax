@@ -2455,7 +2455,7 @@ paths:
           format: uuid
       responses:
         '204':
-          description: VM deleted, with its snapshots and VM backups
+          description: VM deleted, with its snapshots, its VM backups and the storage objects it made for itself that nothing else uses
         '404':
           description: VM not found
         '500':
@@ -5705,6 +5705,14 @@ components:
           type: string
         object_type:
           $ref: '#/components/schemas/StorageObjectType'
+        owner_vm_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+          description: |-
+            The VM that made this object for itself, which it goes with: when the
+            VM is deleted, so is the object, unless something still refers to it.
         parent_id:
           type:
           - string
