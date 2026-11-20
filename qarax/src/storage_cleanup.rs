@@ -87,6 +87,16 @@ pub async fn process(pool: &PgPool, object_id: Uuid) -> Result<bool, sqlx::Error
     Ok(completed)
 }
 
+/// Remove the files of deleted storage objects now, rather than at the
+/// worker's next round, which retries whatever doesn't go now.
+pub async fn process_now(pool: &PgPool, object_ids: &[Uuid]) {
+    for id in object_ids {
+        if let Err(err) = process(pool, *id).await {
+            tracing::warn!(object_id = %id, error = %err, "Storage cleanup failed");
+        }
+    }
+}
+
 pub async fn start(app: App) {
     let mut interval = tokio::time::interval(Duration::from_secs(30));
     loop {

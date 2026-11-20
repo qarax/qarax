@@ -579,7 +579,7 @@ impl OverlayBdManager {
     pub async fn write_back_upper(&self, vm_id: &str) -> Result<(), OverlayBdError> {
         let (_, data, index) = self.upper_of(vm_id).await?;
         for path in [data, index] {
-            tokio::task::spawn_blocking(move || write_back(&path))
+            tokio::task::spawn_blocking(move || crate::storage::files::write_back(&path))
                 .await
                 .map_err(|e| OverlayBdError::MountFailed(format!("write-back task: {e}")))??;
         }
@@ -1407,28 +1407,6 @@ impl OverlayBdManager {
     }
 }
 
-/// Build the target image reference in the local registry.
-/// e.g. image_ref = "public.ecr.aws/docker/library/ubuntu:22.04",
-///      registry_url = "http://registry:5000"
-/// ->   "registry:5000/docker/library/ubuntu:22.04"
-/// Write back `path`'s dirty pages and wait for them, without asking the
-/// device to flush its cache: a reflink copy needs the data written, not
-/// durable, and a flush can take seconds where a disk is slow.
-fn write_back(path: &Path) -> Result<(), OverlayBdError> {
-    use nix::libc;
-    use std::os::fd::AsRawFd;
-
-    let file = std::fs::File::open(path)?;
-    let flags = libc::SYNC_FILE_RANGE_WAIT_BEFORE
-        | libc::SYNC_FILE_RANGE_WRITE
-        | libc::SYNC_FILE_RANGE_WAIT_AFTER;
-    // SAFETY: the descriptor is open for the whole call.
-    if unsafe { libc::sync_file_range(file.as_raw_fd(), 0, 0, flags) } != 0 {
-        return Err(std::io::Error::last_os_error().into());
-    }
-    Ok(())
-}
-
 /// An OverlayBD conversion of an image in the local registry: it reads the
 /// image's tag and writes `<tag>_overlaybd` (the convertor's own convention)
 /// in the same repository, never the tag it reads.
@@ -1457,6 +1435,10 @@ impl Conversion {
     }
 }
 
+/// Build the target image reference in the local registry.
+/// e.g. image_ref = "public.ecr.aws/docker/library/ubuntu:22.04",
+///      registry_url = "http://registry:5000"
+/// ->   "registry:5000/docker/library/ubuntu:22.04"
 fn build_target_ref(image_ref: &str, registry_url: &str) -> Result<String, OverlayBdError> {
     let host_owned = registry_host(registry_url);
     let host = host_owned.as_str();

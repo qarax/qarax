@@ -6,7 +6,10 @@ use uuid::Uuid;
 use crate::{
     App,
     errors::Error,
-    grpc_client::{NodeClient, node::Fork},
+    grpc_client::{
+        NodeClient,
+        node::{DiskCopy, Fork},
+    },
     handlers::{ApiResponse, Result},
     model::{
         hosts::{self, Host, SchedulingRequest},
@@ -17,7 +20,8 @@ use crate::{
             ForkSandboxRequest, NewSandbox, Sandbox, SandboxStatus,
         },
         security_groups,
-        storage_objects::{self, StorageObjectType},
+        storage_objects::{self, StorageObject, StorageObjectType},
+        storage_pools::{self, StoragePoolType},
         vm_disks,
         vms::{self, Hypervisor, Vm, VmStatus},
     },
@@ -202,13 +206,15 @@ const MAX_VM_NAME_CHARS: usize = 50;
 /// its memory, its running processes and its files. They run on the same host
 /// and are ready when this returns; this one keeps running. Each fork's random
 /// generator is reseeded and its clock set. A fork of a sandbox booted from an
-/// OCI image gets the image and the sandbox's changes to it as they were. Each
+/// OCI image gets the image and the sandbox's changes to it as they were, and a
+/// copy of each of its writable disks on local and NFS pools, of its own;
+/// read-only disks are shared. Each
 /// of a fork's network interfaces is on its source's network with an address of
 /// its own, and the fork has its source's security groups; a sandbox's
 /// cloud-init seed disk is each fork's own. Only Firecracker sandboxes with no
 /// network interface outside a managed bridge or isolated network (nor one
-/// whose network config comes from cloud-init) and no disk besides their
-/// image's fork.
+/// whose network config comes from cloud-init) and no writable disk on another
+/// kind of pool fork.
 #[utoipa::path(
     post,
     path = "/v1/sandboxes/{sandbox_id}/fork",
@@ -279,16 +285,47 @@ pub async fn fork(
         ))
     })?;
     let mut forks = Vec::with_capacity(count as usize);
+    let mut copies = Vec::with_capacity(count as usize);
     for _ in 0..count {
         let fork_sandbox_id = Uuid::new_v4();
         let name = fork_name(&source.name, fork_sandbox_id);
         let fork_vm_id = vms::create_fork_tx(&mut tx, vm.id, &name).await?;
+        let mut disk_copies = Vec::new();
         for disk in &disks {
-            let image =
-                storage_objects::copy_oci_image_for_fork_tx(&mut tx, disk.image_id, fork_vm_id)
+            let object_id = match disk {
+                ForkDisk::Image { image_id, .. } => {
+                    storage_objects::copy_oci_image_for_fork_tx(&mut tx, *image_id, fork_vm_id)
+                        .await?
+                }
+                ForkDisk::Shared { object_id, .. } => *object_id,
+                ForkDisk::Copied {
+                    drive_id, object, ..
+                } => {
+                    let copy = storage_objects::create_disk_copy_for_fork_tx(
+                        &mut tx,
+                        env.pool(),
+                        object,
+                        format!("fork-{fork_vm_id}-{drive_id}"),
+                        fork_vm_id,
+                        host.id,
+                    )
                     .await?;
-            vm_disks::copy_for_fork_tx(&mut tx, disk.id, fork_vm_id, image).await?;
+                    let path =
+                        storage_objects::get_path_from_config(&copy.config).ok_or_else(|| {
+                            Error::UnprocessableEntity(format!(
+                                "the storage pool of disk {drive_id} has no path for a copy"
+                            ))
+                        })?;
+                    disk_copies.push(DiskCopy {
+                        drive_id: drive_id.clone(),
+                        path,
+                    });
+                    copy.id
+                }
+            };
+            vm_disks::copy_for_fork_tx(&mut tx, disk.id(), fork_vm_id, object_id).await?;
         }
+        copies.push(disk_copies);
         for nic in &nics {
             let address = networks::allocate_ip_tx(&mut tx, nic.network_id, None, fork_vm_id)
                 .await?
@@ -318,12 +355,16 @@ pub async fn fork(
     sandboxes::touch_activity(env.pool(), sandbox_id).await?;
 
     let fork_vm_ids: Vec<Uuid> = forks.iter().map(|(_, vm_id)| *vm_id).collect();
-    if let Err(e) = start_forks(&env, &host, vm.id, &fork_vm_ids).await {
+    if let Err(e) = start_forks(&env, &host, vm.id, &fork_vm_ids, copies).await {
         // The node starts all of the forks or none: no VM is left to stop.
-        // Their NICs, addresses and security groups go with their rows.
+        // Their NICs, addresses, security groups and own disks go with their
+        // rows; the files of their disk copies through the cleanup queue.
         for vm_id in &fork_vm_ids {
-            if let Err(e) = vms::delete(env.pool(), *vm_id).await {
-                tracing::error!(vm_id = %vm_id, error = %e, "Failed to delete the row of a failed fork");
+            match vms::delete(env.pool(), *vm_id).await {
+                Ok(deleted) => crate::storage_cleanup::process_now(env.pool(), &deleted).await,
+                Err(e) => {
+                    tracing::error!(vm_id = %vm_id, error = %e, "Failed to delete the row of a failed fork")
+                }
             }
         }
         return Err(e);
@@ -353,10 +394,17 @@ pub async fn fork(
 }
 
 /// Have `host`'s node start `fork_vm_ids`, whose rows are made, from
-/// `source_id`: each with its NICs and security groups.
-async fn start_forks(env: &App, host: &Host, source_id: Uuid, fork_vm_ids: &[Uuid]) -> Result<()> {
+/// `source_id`: each with its NICs, security groups and `copies` of the
+/// source's data disks.
+async fn start_forks(
+    env: &App,
+    host: &Host,
+    source_id: Uuid,
+    fork_vm_ids: &[Uuid],
+    copies: Vec<Vec<DiskCopy>>,
+) -> Result<()> {
     let mut forks = Vec::with_capacity(fork_vm_ids.len());
-    for vm_id in fork_vm_ids {
+    for (vm_id, disks) in fork_vm_ids.iter().zip(copies) {
         let nics = network_interfaces::list_by_vm(env.pool(), *vm_id).await?;
         let (networks, _) = net_configs_on_host(env, &nics, Some(host.id)).await?;
         let firewall =
@@ -365,6 +413,7 @@ async fn start_forks(env: &App, host: &Host, source_id: Uuid, fork_vm_ids: &[Uui
             vm_id: vm_id.to_string(),
             networks,
             firewall,
+            disks,
         });
     }
     let client = NodeClient::new(&host.address, host.port as u16);
@@ -444,18 +493,36 @@ async fn forkable_nics(env: &App, vm: &Vm) -> Result<Vec<ForkNic>> {
     Ok(forkable)
 }
 
-/// A disk whose copy a fork gets: one on an OCI image, `image_id`, of which
-/// the fork gets its own image object.
-struct ForkDisk {
-    id: Uuid,
-    image_id: Uuid,
+/// A disk of a sandbox VM, as its forks get it.
+enum ForkDisk {
+    /// Its OCI image's: each fork gets the image and the VM's writable layer
+    /// as it was, and an image object and a writable layer of its own.
+    Image { id: Uuid, image_id: Uuid },
+    /// A read-only disk, which the forks share.
+    Shared { id: Uuid, object_id: Uuid },
+    /// A writable disk on a local or NFS pool: each fork gets a copy of it as
+    /// it was, its own.
+    Copied {
+        id: Uuid,
+        drive_id: String,
+        object: StorageObject,
+    },
 }
 
-/// The disks of `vm` its forks get copies of: its OCI image's, of which each
-/// fork gets the image and the VM's writable layer as it was, and a writable
-/// layer of its own. A persistent writable layer belongs to its storage
-/// object, and other disks would have the forks write to the same file: those
-/// are refused.
+impl ForkDisk {
+    fn id(&self) -> Uuid {
+        match self {
+            ForkDisk::Image { id, .. }
+            | ForkDisk::Shared { id, .. }
+            | ForkDisk::Copied { id, .. } => *id,
+        }
+    }
+}
+
+/// The disks of `vm`, as its forks get them. A persistent OverlayBD writable
+/// layer belongs to its storage object, a disk outside a storage pool or on
+/// another kind of pool can't be copied: the forks would write to the same
+/// file. Those are refused.
 async fn forkable_disks(env: &App, vm: &Vm) -> Result<Vec<ForkDisk>> {
     let mut forkable = Vec::new();
     for disk in vm_disks::list_by_vm(env.pool(), vm.id).await? {
@@ -466,25 +533,47 @@ async fn forkable_disks(env: &App, vm: &Vm) -> Result<Vec<ForkDisk>> {
                     .into(),
             ));
         }
-        let image = match disk.storage_object_id {
-            Some(id) => Some(storage_objects::get(env.pool(), id).await?),
-            None => None,
-        };
-        match image {
-            Some(image) if image.object_type == StorageObjectType::OciImage => {
-                forkable.push(ForkDisk {
-                    id: disk.id,
-                    image_id: image.id,
-                })
-            }
-            _ => {
+        let object = match disk.storage_object_id {
+            Some(id) => storage_objects::get(env.pool(), id).await?,
+            None => {
                 return Err(Error::UnprocessableEntity(format!(
-                    "a sandbox with disks besides its OCI image's can't be forked yet: its \
-                     forks would write to the same files (disk {})",
+                    "a sandbox with a disk outside a storage pool can't be forked: its forks \
+                     would write to the same file (disk {})",
                     disk.logical_name
                 )));
             }
-        }
+        };
+        let fork_disk = if object.object_type == StorageObjectType::OciImage {
+            ForkDisk::Image {
+                id: disk.id,
+                image_id: object.id,
+            }
+        } else if disk.read_only {
+            ForkDisk::Shared {
+                id: disk.id,
+                object_id: object.id,
+            }
+        } else {
+            let pool = storage_pools::get(env.pool(), object.storage_pool_id).await?;
+            if object.object_type != StorageObjectType::Disk
+                || !matches!(
+                    pool.pool_type,
+                    StoragePoolType::Local | StoragePoolType::Nfs
+                )
+            {
+                return Err(Error::UnprocessableEntity(format!(
+                    "a sandbox with a writable disk that isn't a disk on a local or NFS pool \
+                     can't be forked: its forks would write to the same file (disk {})",
+                    disk.logical_name
+                )));
+            }
+            ForkDisk::Copied {
+                id: disk.id,
+                drive_id: disk.logical_name,
+                object,
+            }
+        };
+        forkable.push(fork_disk);
     }
     Ok(forkable)
 }

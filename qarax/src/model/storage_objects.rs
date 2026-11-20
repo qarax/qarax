@@ -368,8 +368,53 @@ async fn insert_object(
     managed_host_ids: Option<Vec<Uuid>>,
     owner_vm_id: Option<Uuid>,
 ) -> Result<StorageObject, sqlx::Error> {
-    let (id, pool_id, config) = resolve_new_object(pool, &new_object).await?;
+    let resolved = resolve_new_object(pool, &new_object).await?;
+    insert_resolved(pool, resolved, new_object, managed_host_ids, owner_vm_id).await
+}
 
+/// Make `fork_vm_id`'s copy of disk object `object`: a new disk named `name`
+/// in the same pool, of the same size and format, owned by the fork. Its file
+/// is qarax's to remove: qarax-node makes it on `host_id`, copying the
+/// source's.
+pub async fn create_disk_copy_for_fork_tx(
+    tx: &mut PgTransaction<'_>,
+    pool: &PgPool,
+    object: &StorageObject,
+    name: String,
+    fork_vm_id: Uuid,
+    host_id: Uuid,
+) -> Result<StorageObject, sqlx::Error> {
+    // The copy's path is its own, derived from its pool and ID.
+    let mut config = object.config.clone();
+    if let Some(config) = config.as_object_mut() {
+        config.remove("path");
+    }
+    let new_object = NewStorageObject {
+        name,
+        storage_pool_id: Some(object.storage_pool_id),
+        object_type: StorageObjectType::Disk,
+        size_bytes: object.size_bytes,
+        config,
+        parent_id: None,
+    };
+    let resolved = resolve_new_object(pool, &new_object).await?;
+    insert_resolved(
+        tx.as_mut(),
+        resolved,
+        new_object,
+        Some(vec![host_id]),
+        Some(fork_vm_id),
+    )
+    .await
+}
+
+async fn insert_resolved<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
+    (id, pool_id, config): (Uuid, Uuid, serde_json::Value),
+    new_object: NewStorageObject,
+    managed_host_ids: Option<Vec<Uuid>>,
+    owner_vm_id: Option<Uuid>,
+) -> Result<StorageObject, sqlx::Error> {
     sqlx::query!(
         r#"
 INSERT INTO storage_objects (id, name, storage_pool_id, object_type, size_bytes, config, parent_id, managed_host_ids, owner_vm_id)
@@ -385,7 +430,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         managed_host_ids.as_deref(),
         owner_vm_id,
     )
-    .execute(pool)
+    .execute(executor)
     .await?;
 
     Ok(StorageObject {

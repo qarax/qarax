@@ -177,17 +177,18 @@ async fn a_sandbox_that_cant_fork_is_refused_before_the_node() {
     add_disk(
         &app,
         data_vm,
+        "vdb",
         storage_object(&app, pool, "DISK").await,
         None,
     )
     .await;
-    assert_refused(&app, &client, with_data_disk, "besides its OCI image's").await;
+    assert_refused(&app, &client, with_data_disk, "on a local or NFS pool").await;
 
     let (with_persistent_layer, persistent_vm) =
         running_sandbox(&app, &client, "fork-persistent", "firecracker", json!({})).await;
     let image = storage_object(&app, pool, "OCI_IMAGE").await;
     let upper = storage_object(&app, pool, "OVERLAYBD_UPPER").await;
-    add_disk(&app, persistent_vm, image, Some(upper)).await;
+    add_disk(&app, persistent_vm, "rootfs", image, Some(upper)).await;
     assert_refused(
         &app,
         &client,
@@ -254,12 +255,13 @@ async fn add_security_group(app: &TestApp, vm_id: Uuid) {
 async fn storage_pool(app: &TestApp, pool_type: &str) -> Uuid {
     let id = Uuid::new_v4();
     sqlx::query(
-        "INSERT INTO storage_pools (id, name, pool_type, status) \
-         VALUES ($1, $2, $3::storage_pool_type, 'ACTIVE')",
+        "INSERT INTO storage_pools (id, name, pool_type, status, config) \
+         VALUES ($1, $2, $3::storage_pool_type, 'ACTIVE', $4)",
     )
     .bind(id)
     .bind(format!("pool-{id}"))
     .bind(pool_type)
+    .bind(json!({ "path": format!("/var/lib/qarax/pool-{id}") }))
     .execute(&app.pool)
     .await
     .unwrap();
@@ -282,13 +284,14 @@ async fn storage_object(app: &TestApp, pool: Uuid, object_type: &str) -> Uuid {
     id
 }
 
-async fn add_disk(app: &TestApp, vm_id: Uuid, object: Uuid, upper: Option<Uuid>) {
+async fn add_disk(app: &TestApp, vm_id: Uuid, name: &str, object: Uuid, upper: Option<Uuid>) {
     sqlx::query(
         "INSERT INTO vm_disks (vm_id, storage_object_id, logical_name, device_path, \
-         upper_storage_object_id) VALUES ($1, $2, 'rootfs', '/dev/vda', $3)",
+         upper_storage_object_id) VALUES ($1, $2, $3, '/dev/' || $3, $4)",
     )
     .bind(vm_id)
     .bind(object)
+    .bind(name)
     .bind(upper)
     .execute(&app.pool)
     .await
@@ -307,8 +310,8 @@ async fn a_fork_needs_room_on_its_source_host_and_a_failed_one_leaves_no_rows() 
         .execute(&app.pool)
         .await
         .unwrap();
-    // Booted from an OCI image, with a NIC on a network and a security group:
-    // its image disk, NIC and security group fork with it.
+    // Booted from an OCI image, with a data disk, a NIC on a network and a
+    // security group: they all fork with it.
     let (sandbox_id, vm_id) =
         running_sandbox(&app, &client, "fork-room", "firecracker", json!({})).await;
     add_nic(&app, host_id, vm_id).await;
@@ -317,7 +320,17 @@ async fn a_fork_needs_room_on_its_source_host_and_a_failed_one_leaves_no_rows() 
     add_disk(
         &app,
         vm_id,
+        "rootfs",
         storage_object(&app, pool, "OCI_IMAGE").await,
+        None,
+    )
+    .await;
+    let local = storage_pool(&app, "LOCAL").await;
+    add_disk(
+        &app,
+        vm_id,
+        "vdb",
+        storage_object(&app, local, "DISK").await,
         None,
     )
     .await;
@@ -331,9 +344,11 @@ async fn a_fork_needs_room_on_its_source_host_and_a_failed_one_leaves_no_rows() 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
     assert_eq!(count(&app, "vms").await, 1);
     assert_eq!(count(&app, "sandboxes").await, 1);
-    assert_eq!(count(&app, "vm_disks").await, 1);
-    // The fork's own copy of the image object went with its row.
-    assert_eq!(count(&app, "storage_objects").await, 1);
+    assert_eq!(count(&app, "vm_disks").await, 2);
+    // The fork's own image object and disk copy went with its row, the copy's
+    // file to the cleanup queue.
+    assert_eq!(count(&app, "storage_objects").await, 2);
+    assert_eq!(count(&app, "storage_cleanup").await, 1);
     assert_eq!(count(&app, "network_interfaces").await, 1);
     assert_eq!(count(&app, "ip_allocations").await, 1);
     assert_eq!(count(&app, "vm_security_groups").await, 1);

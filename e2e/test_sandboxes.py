@@ -28,6 +28,7 @@ from qarax_api_client.api.sandboxes import (
 from qarax_api_client.api.sandboxes import fork as fork_sandbox
 from qarax_api_client.api.sandboxes import get as get_sandbox
 from qarax_api_client.api.sandboxes import list_ as list_sandboxes
+from qarax_api_client.api.storage_objects import create as create_storage_object
 from qarax_api_client.api.storage_objects import delete as delete_storage_object
 from qarax_api_client.api.storage_objects import list_ as list_storage_objects
 from qarax_api_client.api.storage_pools import (
@@ -56,6 +57,7 @@ from qarax_api_client.models import (
     ForkSandboxRequest,
     Hypervisor,
     NewBootSource,
+    NewStorageObject,
     NewStoragePool,
     NewTransfer,
     NewVmTemplate,
@@ -74,10 +76,12 @@ from helpers import (
     attach_overlaybd_pool,
     call_api,
     call_api_detailed,
+    create_sparse_file_on_nodes,
     exec_when_ready,
     isolated_network,
     node_storage_diagnostics,
     overlaybd_disk_wwids,
+    remove_file_from_nodes,
     up_hosts,
     vm_diagnostics,
     wait_for_start,
@@ -103,8 +107,12 @@ async def create_bootable_sandbox_template(
     *,
     shared_pool: bool = False,
     cloud_init_user_data: str | None = None,
+    root_disk_bytes: int | None = None,
 ):
-    """Create a bootable sandbox template and return (template_id, cleanup_resources)."""
+    """Create a bootable sandbox template and return (template_id, cleanup_resources).
+
+    With `root_disk_bytes`, its VMs get a blank raw disk of that size, /dev/vda,
+    in the template's local pool: they still boot the test initramfs."""
     test_id = uuid.uuid4().hex[:8]
     hosts = up_hosts((await call_api(list_hosts, client=client)).items)
     assert hosts, "Expected at least one UP host"
@@ -198,6 +206,24 @@ async def create_bootable_sandbox_template(
 
     assert initrd_transfer.storage_object_id is not None
 
+    root_disk = None
+    if root_disk_bytes is not None:
+        assert not shared_pool, "the root disk is a file in a local pool"
+        root_disk_path = f"{pool_config['path']}/e2e-root-{test_id}.raw"
+        create_sparse_file_on_nodes(root_disk_path, root_disk_bytes)
+        root_disk_id_raw = await call_api(
+            create_storage_object,
+            client=client,
+            body=NewStorageObject(
+                name=f"e2e-sandbox-root-{test_id}",
+                storage_pool_id=pool_id,
+                object_type=StorageObjectType.DISK,
+                size_bytes=root_disk_bytes,
+                config={"path": root_disk_path},
+            ),
+        )
+        root_disk = (uuid.UUID(str(root_disk_id_raw).strip('"')), root_disk_path)
+
     boot_source_name = f"e2e-sandbox-boot-{uuid.uuid4().hex[:8]}"
     boot_source_id_raw = await create_boot_source.asyncio(
         client=client,
@@ -220,6 +246,7 @@ async def create_bootable_sandbox_template(
         boot_source_id=boot_source_id,
         boot_mode="kernel",
         cloud_init_user_data=cloud_init_user_data,
+        root_disk_object_id=root_disk[0] if root_disk else None,
     )
     template_id_str = await create_template.asyncio(client=client, body=new_template)
     assert template_id_str is not None
@@ -231,6 +258,7 @@ async def create_bootable_sandbox_template(
         "kernel_object_id": transfer.storage_object_id,
         "initrd_object_id": initrd_transfer.storage_object_id,
         "pool_id": pool_id,
+        "root_disk": root_disk,
     }
 
 
@@ -247,6 +275,12 @@ async def cleanup_bootable_sandbox_template(client, resources):
     await _delete_tolerating_404(
         delete_template, client=client, vm_template_id=resources["template_id"]
     )
+    if resources["root_disk"] is not None:
+        root_disk_id, root_disk_path = resources["root_disk"]
+        await _delete_tolerating_404(
+            delete_storage_object, client=client, object_id=str(root_disk_id)
+        )
+        remove_file_from_nodes(root_disk_path)
     await _delete_tolerating_404(
         delete_boot_source, client=client, boot_source_id=resources["boot_source_id"]
     )
@@ -761,6 +795,84 @@ async def test_sandbox_fork_with_cloud_init_has_a_seed_of_its_own(client):
             await wait_for_start(c, fork.vm_id, started.job_id)
             result = await exec_when_ready(c, fork.vm_id, "cat /sys/block/vda/size")
             assert result.exit_code == 0 and int(result.stdout) > 0, result
+        finally:
+            for sandbox_id in sandbox_ids:
+                await delete_sandbox.asyncio_detailed(client=c, sandbox_id=sandbox_id)
+            await cleanup_bootable_sandbox_template(c, resources)
+
+
+@pytest.mark.asyncio
+async def test_sandbox_fork_copies_its_data_disk(client):
+    """Each fork of a sandbox with a writable disk gets a copy of it as it was,
+    its own: what the source writes after the fork, or a fork writes, the
+    others don't see. The copies go with the forks."""
+    read = "echo 3 > /proc/sys/vm/drop_caches; /bin/busybox dd if=/dev/vda bs=8 count=1 2>/dev/null"
+
+    def write(text):
+        return f"printf {text} | /bin/busybox dd of=/dev/vda bs=8 count=1 conv=fsync 2>/dev/null"
+
+    async with client as c:
+        template_id, resources = await create_bootable_sandbox_template(
+            c, "firecracker", root_disk_bytes=64 * 1024 * 1024
+        )
+        sandbox_ids = []
+
+        async def sh(sandbox_id, script):
+            result = await call_api(
+                exec_sandbox,
+                client=c,
+                sandbox_id=sandbox_id,
+                body=ExecSandboxRequest(command=["/bin/sh", "-c", script], timeout_secs=15),
+            )
+            assert result.exit_code == 0, f"{script}: {result.stdout} {result.stderr}"
+            return result.stdout.strip()
+
+        async def disks_owned_by(vm_ids):
+            objects = await call_api(
+                list_storage_objects, client=c, pool_id=resources["pool_id"]
+            )
+            return sorted(
+                str(obj.owner_vm_id) for obj in objects.items if obj.owner_vm_id in vm_ids
+            )
+
+        try:
+            source = await call_api(
+                create_sandbox,
+                client=c,
+                body=NewSandbox(
+                    name=f"e2e-fork-disk-{uuid.uuid4().hex[:8]}",
+                    vm_template_id=template_id,
+                    idle_timeout_secs=300,
+                ),
+            )
+            sandbox_ids.append(source.id)
+            await wait_for_sandbox_status(c, source.id, SandboxStatus.READY)
+            await sh(source.id, write("source--"))
+
+            response = await call_api_detailed(
+                fork_sandbox,
+                client=c,
+                sandbox_id=source.id,
+                body=ForkSandboxRequest(count=2),
+            )
+            assert response.status_code == 201, response.content.decode()
+            forks = response.parsed
+            sandbox_ids.extend(fork.id for fork in forks)
+
+            await sh(source.id, write("after---"))
+            for i, fork in enumerate(forks):
+                assert await sh(fork.id, read) == "source--"
+                await sh(fork.id, write(f"fork-{i}--"))
+            assert await sh(source.id, read) == "after---"
+            for i, fork in enumerate(forks):
+                assert await sh(fork.id, read) == f"fork-{i}--"
+
+            fork_vm_ids = [fork.vm_id for fork in forks]
+            assert await disks_owned_by(fork_vm_ids) == sorted(map(str, fork_vm_ids))
+            for fork in forks:
+                await call_api(delete_sandbox, client=c, sandbox_id=fork.id)
+                sandbox_ids.remove(fork.id)
+            assert await disks_owned_by(fork_vm_ids) == []
         finally:
             for sandbox_id in sandbox_ids:
                 await delete_sandbox.asyncio_detailed(client=c, sandbox_id=sandbox_id)

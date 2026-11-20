@@ -443,12 +443,20 @@ message ForkVmRequest {
 }
 
 // One fork of a ForkVmRequest: its ID, a NIC for each of the source's (by id)
-// with the fork's own addresses, which its guest takes, and its security
-// groups, which hold before it runs.
+// with the fork's own addresses, which its guest takes, its security groups,
+// which hold before it runs, and a copy of each of the source's data disks.
 message Fork {
   string vm_id                          = 1;
   repeated NetConfig networks           = 2;
   repeated VmFirewallInterface firewall = 3;
+  repeated DiskCopy disks               = 4;
+}
+
+// A fork's copy of the source's data disk drive_id: a new file at path, which
+// the node copies from the source's as it was at the fork.
+message DiskCopy {
+  string drive_id = 1;
+  string path     = 2;
 }
 
 // ReceiveMigrationRequest is sent to the *destination* node to prepare it for

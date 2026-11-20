@@ -257,7 +257,9 @@ pub(crate) async fn destroy_vm(pool: &PgPool, vm_id: Uuid) {
         Ok(v) => v,
         Err(e) => {
             tracing::warn!(vm_id = %vm_id, error = %e, "Failed to get sandbox VM for deletion");
-            let _ = vms::delete(pool, vm_id).await;
+            if let Ok(deleted) = vms::delete(pool, vm_id).await {
+                crate::storage_cleanup::process_now(pool, &deleted).await;
+            }
             return;
         }
     };
@@ -277,7 +279,10 @@ pub(crate) async fn destroy_vm(pool: &PgPool, vm_id: Uuid) {
         }
     }
 
-    if let Err(e) = vms::delete(pool, vm_id).await {
-        tracing::error!(vm_id = %vm_id, error = %e, "Failed to delete sandbox VM from DB");
+    match vms::delete(pool, vm_id).await {
+        Ok(deleted) => crate::storage_cleanup::process_now(pool, &deleted).await,
+        Err(e) => {
+            tracing::error!(vm_id = %vm_id, error = %e, "Failed to delete sandbox VM from DB")
+        }
     }
 }

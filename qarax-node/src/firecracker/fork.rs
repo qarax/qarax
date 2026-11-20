@@ -26,10 +26,13 @@
 //! A source with cloud-init forks its seed image: each fork gets one of its
 //! own with the same content, which outlives its source's.
 //!
+//! Each of a source's data disks is copied for its forks: during the pause
+//! into the first fork's file (a reflink where the filesystem has them, its
+//! data extents only elsewhere), and from that into the others' once the
+//! source runs again. Read-only disks are shared.
+//!
 //! The forks load paused and are resumed in a second step, so that their
-//! firewall is in place before they run. Only VMs with no disk but their OCI
-//! image's and their cloud-init seed fork: a fork would write to its source's
-//! other disk files.
+//! firewall is in place before they run.
 
 use std::io::Read;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -58,8 +61,51 @@ fn check_forkable(config: &ProtoVmConfig) -> Result<(), VmmError> {
     Ok(())
 }
 
+/// A source's data disk, of which each fork gets a copy.
+struct DataDisk {
+    drive_id: String,
+    path: PathBuf,
+}
+
+/// The source's data disks: the drives the forks copy, each fork the same.
+fn data_disks(source: &ProtoVmConfig, forks: &[Fork]) -> Result<Vec<DataDisk>, VmmError> {
+    fn copied(fork: &Fork) -> Vec<&str> {
+        let mut ids: Vec<&str> = fork
+            .disks
+            .iter()
+            .map(|copy| copy.drive_id.as_str())
+            .collect();
+        ids.sort();
+        ids
+    }
+    let ids = forks.first().map(copied).unwrap_or_default();
+    if let Some(fork) = forks.iter().find(|fork| copied(fork) != ids) {
+        return Err(VmmError::InvalidConfig(format!(
+            "fork {} copies other disks than its siblings, {ids:?}",
+            fork.vm_id
+        )));
+    }
+    ids.into_iter()
+        .map(|id| {
+            let path = source
+                .disks
+                .iter()
+                .find(|disk| disk.id == id)
+                .and_then(|disk| disk.path.clone())
+                .ok_or_else(|| {
+                    VmmError::InvalidConfig(format!("the source has no disk file {id} to copy"))
+                })?;
+            Ok(DataDisk {
+                drive_id: id.to_string(),
+                path: path.into(),
+            })
+        })
+        .collect()
+}
+
 /// `fork`'s config: its source's under its ID, with its own NICs, one for each
-/// of the source's (by id), each with the addresses its guest is to take.
+/// of the source's (by id), each with the addresses its guest is to take, and
+/// its copies of the source's data disks.
 fn fork_config(source: &ProtoVmConfig, fork: &Fork) -> Result<ProtoVmConfig, VmmError> {
     let ids = |networks: &[ProtoNetConfig]| {
         let mut ids: Vec<String> = networks.iter().map(|net| net.id.clone()).collect();
@@ -83,11 +129,25 @@ fn fork_config(source: &ProtoVmConfig, fork: &Fork) -> Result<ProtoVmConfig, Vmm
             net.id, fork.vm_id
         )));
     }
-    Ok(ProtoVmConfig {
+    let mut config = ProtoVmConfig {
         vm_id: fork.vm_id.clone(),
         networks: fork.networks.clone(),
         ..source.clone()
-    })
+    };
+    for copy in &fork.disks {
+        let drive = config
+            .disks
+            .iter_mut()
+            .find(|disk| disk.id == copy.drive_id)
+            .ok_or_else(|| {
+                VmmError::InvalidConfig(format!(
+                    "fork {} copies disk {}, which its source doesn't have",
+                    fork.vm_id, copy.drive_id
+                ))
+            })?;
+        drive.path = Some(copy.path.clone());
+    }
+    Ok(config)
 }
 
 /// What gives a fork's guest its NICs' addresses, on one line:
@@ -129,6 +189,16 @@ fn readdress_request(
     Ok(Some(request))
 }
 
+/// Run `copy`, a blocking file operation, off the async runtime.
+async fn blocking(
+    copy: impl FnOnce() -> std::io::Result<()> + Send + 'static,
+) -> Result<(), VmmError> {
+    tokio::task::spawn_blocking(copy)
+        .await
+        .map_err(|e| VmmError::StorageError(format!("disk copy task: {e}")))?
+        .map_err(|e| VmmError::StorageError(format!("copying a data disk: {e}")))
+}
+
 /// The fork notice qarax-init reads, on one line:
 /// `{"forked": {"entropy": HEX, "unix_time_ns": N}}`.
 fn fork_notice() -> Result<Vec<u8>, VmmError> {
@@ -164,19 +234,23 @@ fn overlaybd_err(e: crate::overlaybd::OverlayBdError) -> VmmError {
 }
 
 impl FirecrackerManager {
-    /// The disk `source_id`'s forks get a copy of, if it has one: its OCI
-    /// image's, the only disk OverlayBD maps for a VM. Its cloud-init seed is
-    /// each fork's own ([`Self::give_fork_its_seed`]); any other disk is refused.
+    /// The OCI image disk `source_id`'s forks get, if it has one: the only
+    /// disk OverlayBD maps for a VM. Its cloud-init seed is each fork's own
+    /// ([`Self::give_fork_its_seed`]), its `data` disks are copied, and its
+    /// read-only disks shared; any other disk is refused.
     async fn source_disk(
         &self,
         source_id: &str,
         config: &ProtoVmConfig,
+        data: &[DataDisk],
     ) -> Result<Option<SourceDisk>, VmmError> {
         let seed = cloud_init_seed(config).is_some();
         let disks: Vec<_> = config
             .disks
             .iter()
             .filter(|disk| !(seed && disk.id == CLOUD_INIT_DRIVE))
+            .filter(|disk| !disk.readonly.unwrap_or(false))
+            .filter(|disk| !data.iter().any(|data| data.drive_id == disk.id))
             .collect();
         let disk = match disks.as_slice() {
             [] => return Ok(None),
@@ -230,13 +304,14 @@ impl FirecrackerManager {
             .iter()
             .map(|fork| fork_config(&source_config, fork))
             .collect::<Result<Vec<_>, _>>()?;
-        let disk = self.source_disk(source_id, &source_config).await?;
+        let data = data_disks(&source_config, forks)?;
+        let disk = self.source_disk(source_id, &source_config, &data).await?;
 
         let snapshot_dir = self
             .runtime_dir
             .join(format!("{source_id}.fork-{}", uuid::Uuid::new_v4()));
         let forked = self
-            .fork_from_snapshot(source_id, disk.as_ref(), configs, &snapshot_dir)
+            .fork_from_snapshot(source_id, disk.as_ref(), &data, configs, &snapshot_dir)
             .await;
         // The forks keep the memory file mapped, so it can go now.
         if let Err(e) = tokio::fs::remove_dir_all(&snapshot_dir).await
@@ -316,24 +391,63 @@ impl FirecrackerManager {
         .collect()
     }
 
-    /// Snapshot `source_id` (and `disk`) into `dir` and load every fork,
-    /// `configs`, from it, paused. Either all of them load, or none is left.
+    /// Snapshot `source_id` (and `disk` and `data`) into `dir` and load
+    /// every fork, `configs`, from it, paused. Either all of them load, or
+    /// none is left.
     async fn fork_from_snapshot(
         &self,
         source_id: &str,
         disk: Option<&SourceDisk>,
+        data: &[DataDisk],
         configs: Vec<ProtoVmConfig>,
         dir: &Path,
     ) -> Result<Vec<(String, FcVmInstance)>, VmmError> {
         let fork_ids: Vec<String> = configs.iter().map(|config| config.vm_id.clone()).collect();
+        // While the source still runs, so the pause only writes back the rest.
         if let Some(disk) = disk {
-            // While the source still runs, so the pause only writes back the rest.
             disk.overlaybd
                 .write_back_upper(source_id)
                 .await
                 .map_err(overlaybd_err)?;
         }
-        let frozen = self.snapshot_for_fork(source_id, disk, dir).await?;
+        for disk in data {
+            let path = disk.path.clone();
+            blocking(move || crate::storage::files::write_back(&path)).await?;
+        }
+        // Each data disk's copies: the first, made in the pause, then the rest.
+        let copies: Vec<Vec<PathBuf>> = data
+            .iter()
+            .map(|disk| {
+                configs
+                    .iter()
+                    .filter_map(|config| {
+                        config
+                            .disks
+                            .iter()
+                            .find(|drive| drive.id == disk.drive_id)?
+                            .path
+                            .as_ref()
+                            .map(PathBuf::from)
+                    })
+                    .collect()
+            })
+            .collect();
+        let in_pause: Vec<(PathBuf, PathBuf)> = data
+            .iter()
+            .zip(&copies)
+            .filter_map(|(disk, copies)| Some((disk.path.clone(), copies.first()?.clone())))
+            .collect();
+        let frozen = self
+            .snapshot_for_fork(source_id, disk, &in_pause, dir)
+            .await?;
+        for copies in &copies {
+            if let [first, rest @ ..] = copies.as_slice() {
+                for copy in rest {
+                    let (first, copy) = (first.clone(), copy.clone());
+                    blocking(move || crate::storage::files::copy_sparse(&first, &copy)).await?;
+                }
+            }
+        }
         let devices = match (disk, frozen) {
             (Some(disk), Some(frozen)) => {
                 let devices = Self::mount_fork_disks(&disk.overlaybd, &frozen, &fork_ids).await;
@@ -346,7 +460,7 @@ impl FirecrackerManager {
 
         let loaded = join_all(configs.into_iter().zip(&devices).map(|(config, device)| {
             let disk = disk.zip(device.as_deref());
-            self.load_fork(config, disk, dir)
+            self.load_fork(config, disk, data, dir)
         }))
         .await;
         let mut forks = Vec::with_capacity(loaded.len());
@@ -395,11 +509,13 @@ impl FirecrackerManager {
     }
 
     /// Pause `source_id` if it runs, write a full snapshot of it to `dir`,
-    /// freeze `disk`'s writable layer, and resume it.
+    /// freeze `disk`'s writable layer, make the `copies` (source file, copy)
+    /// of its data disks, and resume it.
     async fn snapshot_for_fork(
         &self,
         source_id: &str,
         disk: Option<&SourceDisk>,
+        copies: &[(PathBuf, PathBuf)],
         dir: &Path,
     ) -> Result<Option<FrozenUpper>, VmmError> {
         tokio::fs::create_dir_all(dir).await.map_err(|e| {
@@ -437,6 +553,10 @@ impl FirecrackerManager {
                 ))
                 .await
                 .map_err(sdk_err)?;
+            for (file, copy) in copies {
+                let (file, copy) = (file.clone(), copy.clone());
+                blocking(move || crate::storage::files::copy_sparse(&file, &copy)).await?;
+            }
             match disk {
                 Some(disk) => disk
                     .overlaybd
@@ -465,6 +585,7 @@ impl FirecrackerManager {
         &self,
         mut config: ProtoVmConfig,
         disk: Option<(&SourceDisk, &str)>,
+        data: &[DataDisk],
         dir: &Path,
     ) -> Result<FcVmInstance, VmmError> {
         let fork_id = config.vm_id.clone();
@@ -480,6 +601,15 @@ impl FirecrackerManager {
                 drive.path = Some(device.to_string());
             }
             drives.push((disk.drive_id.clone(), device.to_string()));
+        }
+        for drive in config
+            .disks
+            .iter()
+            .filter(|drive| data.iter().any(|data| data.drive_id == drive.id))
+        {
+            if let Some(path) = &drive.path {
+                drives.push((drive.id.clone(), path.clone()));
+            }
         }
         let tap_devices = Self::create_taps(&fork_id, &mut config.networks).await?;
         match self.give_fork_its_seed(&mut config).await {
@@ -667,7 +797,7 @@ impl FirecrackerManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rpc::node::{CloudInitConfig, DiskConfig, NetConfig, VsockConfig};
+    use crate::rpc::node::{CloudInitConfig, DiskConfig, DiskCopy, NetConfig, VsockConfig};
 
     fn with_guest_agent() -> ProtoVmConfig {
         ProtoVmConfig {
@@ -717,6 +847,7 @@ mod tests {
             vm_id: "fork".into(),
             networks,
             firewall: vec![],
+            disks: vec![],
         };
         let own = vec![
             nic("net1", "02:00:00:00:01:02", "10.0.1.3"),
@@ -800,6 +931,74 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_forks_data_disks_are_copies_and_read_only_ones_are_shared() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let manager = manager_with_overlaybd(&dir, "source").await;
+        let source = ProtoVmConfig {
+            disks: vec![
+                disk("rootfs"),
+                disk("data"),
+                DiskConfig {
+                    readonly: Some(true),
+                    ..disk("iso")
+                },
+            ],
+            ..with_guest_agent()
+        };
+        let fork = |vm_id: &str, copies: &[&str]| Fork {
+            vm_id: vm_id.into(),
+            disks: copies
+                .iter()
+                .map(|id| DiskCopy {
+                    drive_id: id.to_string(),
+                    path: format!("/pool/{vm_id}-{id}"),
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let forks = [fork("fork-1", &["data"]), fork("fork-2", &["data"])];
+
+        let data = data_disks(&source, &forks).unwrap();
+        let copied: Vec<_> = data
+            .iter()
+            .map(|disk| (disk.drive_id.as_str(), disk.path.as_path()))
+            .collect();
+        assert_eq!(copied, [("data", Path::new("/dev/data"))]);
+        // What is left is the OCI image's disk.
+        let oci = manager
+            .source_disk("source", &source, &data)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(oci.drive_id, "rootfs");
+        let config = fork_config(&source, &forks[0]).unwrap();
+        let paths: Vec<_> = config.disks.iter().map(|d| d.path.as_deref()).collect();
+        assert_eq!(
+            paths,
+            [
+                Some("/dev/rootfs"),
+                Some("/pool/fork-1-data"),
+                Some("/dev/iso")
+            ]
+        );
+
+        // A writable disk that isn't copied, siblings that copy different
+        // disks, and a copy of a disk the source doesn't have.
+        assert!(matches!(
+            manager.source_disk("source", &source, &[]).await,
+            Err(VmmError::InvalidConfig(_))
+        ));
+        assert!(matches!(
+            data_disks(&source, &[fork("a", &["data"]), fork("b", &[])]),
+            Err(VmmError::InvalidConfig(_))
+        ));
+        assert!(matches!(
+            fork_config(&source, &fork("c", &["none"])),
+            Err(VmmError::InvalidConfig(_))
+        ));
+    }
+
+    #[tokio::test]
     async fn a_fork_gets_a_cloud_init_seed_of_its_own() {
         let dir = tempfile::TempDir::new().unwrap();
         let manager =
@@ -857,11 +1056,13 @@ mod tests {
             ..with_guest_agent()
         };
 
-        let none = manager.source_disk("source", &with_disks(vec![])).await;
+        let none = manager
+            .source_disk("source", &with_disks(vec![]), &[])
+            .await;
         assert!(matches!(none, Ok(None)));
 
         let oci = manager
-            .source_disk("source", &with_disks(vec![disk("rootfs")]))
+            .source_disk("source", &with_disks(vec![disk("rootfs")]), &[])
             .await
             .unwrap()
             .unwrap();
@@ -879,7 +1080,7 @@ mod tests {
             ..with_disks(vec![disk("rootfs"), disk(CLOUD_INIT_DRIVE)])
         };
         let oci = manager
-            .source_disk("source", &with_seed)
+            .source_disk("source", &with_seed, &[])
             .await
             .unwrap()
             .unwrap();
@@ -892,7 +1093,7 @@ mod tests {
             ("source", vec![disk("rootfs"), disk(CLOUD_INIT_DRIVE)]),
         ] {
             assert!(matches!(
-                manager.source_disk(vm, &with_disks(disks)).await,
+                manager.source_disk(vm, &with_disks(disks), &[]).await,
                 Err(VmmError::InvalidConfig(_))
             ));
         }
@@ -901,7 +1102,7 @@ mod tests {
             FirecrackerManager::new(dir.path(), "/bin/true", Duration::from_secs(1), None);
         assert!(matches!(
             without_overlaybd
-                .source_disk("source", &with_disks(vec![disk("rootfs")]))
+                .source_disk("source", &with_disks(vec![disk("rootfs")]), &[])
                 .await,
             Err(VmmError::InvalidConfig(_))
         ));

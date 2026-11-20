@@ -16,11 +16,12 @@ qarax sandbox fork my-sandbox --count 3
 ## What forks
 
 - Firecracker sandboxes with the guest agent, no network interface but ones
-  on a managed bridge or isolated network, and no disk but the OCI image they
-  booted, if they booted one, and their cloud-init seed. Any other NIC would
-  leave the forks with the source's addresses; any other disk (a data disk, a
-  persistent OverlayBD layer) would have them write to the same files. The
-  image disk, the NICs and the seed fork with the sandbox, see below.
+  on a managed bridge or isolated network, and no writable disk but the OCI
+  image they booted, their cloud-init seed and disks on local or NFS pools.
+  Any other NIC would leave the forks with the source's addresses; any other
+  writable disk (a persistent OverlayBD layer, an iSCSI LUN) would have them
+  write to the same place. The image disk, the data disks, the NICs and the
+  seed fork with the sandbox, and read-only disks are shared, see below.
 - Up to 16 forks per request. The source's host must have room for them: the
   scheduler counts each fork at the source's full memory size and vCPUs, as it
   does any VM, though a fork uses much less at first (see below).
@@ -94,6 +95,15 @@ A source with cloud-init forks its seed image: each fork gets its own, with the
 same content, so it boots again after its source and its source's seed are
 gone. The guest doesn't run cloud-init again: it already ran in the source.
 
+A source's writable disks on local and NFS pools are copied: each fork gets a
+disk storage object of its own in the same pool, which goes with it when it's
+deleted, its file with it. The node writes back the source's dirty pages
+while it runs, copies each disk during the pause into the first fork's file,
+and from that file into the other forks' once the source runs again. A copy is
+a reflink where the filesystem has them (XFS, btrfs), and takes milliseconds;
+elsewhere it copies the disk's data, its holes left out, and the pause lasts as
+long as copying one disk's data does. Read-only disks, an ISO say, are shared.
+
 Either every fork of a request starts or none does. Each fork has its own copy
 of the source's image storage object, which goes with it when it's deleted.
 
@@ -110,6 +120,7 @@ Measured on a laptop with a 256 MiB guest, the node in a container capped at
 | One fork, until its guest agent answers | 13–18 ms | 66–72 ms |
 | A fork's own memory after it starts | ~7 MiB | ~7 MiB |
 | Extra pause for an OCI disk (flush, write-back, reflink) | | 8–31 ms |
+| Extra pause for a data disk without reflinks | | the time to copy its data |
 
 The disk figure is from the prototype, on XFS; on a filesystem without
 reflinks the copy takes as long as copying the source's writable layer. Each
