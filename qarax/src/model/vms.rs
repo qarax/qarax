@@ -1522,10 +1522,11 @@ pub async fn update_resize(
     Ok(())
 }
 
-/// Delete a VM, with the storage objects it owns that nothing else uses (the
-/// files of those qarax manages go through the cleanup queue). An owned object
-/// something still refers to outlives the VM, unowned.
-pub async fn delete(pool: &PgPool, vm_id: Uuid) -> Result<(), sqlx::Error> {
+/// Delete a VM, with the storage objects it owns that nothing else uses, and
+/// return those: the files of the ones qarax manages are in the cleanup queue
+/// (see [`crate::storage_cleanup::process_now`]). An owned object something
+/// still refers to outlives the VM, unowned.
+pub async fn delete(pool: &PgPool, vm_id: Uuid) -> Result<Vec<Uuid>, sqlx::Error> {
     let mut tx = pool.begin().await?;
     let owned = sqlx::query_scalar!(
         "SELECT id FROM storage_objects WHERE owner_vm_id = $1",
@@ -1536,15 +1537,16 @@ pub async fn delete(pool: &PgPool, vm_id: Uuid) -> Result<(), sqlx::Error> {
     sqlx::query!("DELETE FROM vms WHERE id = $1", vm_id)
         .execute(tx.as_mut())
         .await?;
-    sqlx::query!(
-        "DELETE FROM storage_objects WHERE id = ANY($1) AND NOT storage_object_in_use(id)",
+    let deleted = sqlx::query_scalar!(
+        "DELETE FROM storage_objects WHERE id = ANY($1) AND NOT storage_object_in_use(id) \
+         RETURNING id",
         &owned
     )
-    .execute(tx.as_mut())
+    .fetch_all(tx.as_mut())
     .await?;
     tx.commit().await?;
 
-    Ok(())
+    Ok(deleted)
 }
 
 #[cfg(test)]
@@ -1599,7 +1601,7 @@ mod tests {
             .await
             .unwrap();
 
-        delete(&db.pool, vm).await.unwrap();
+        assert_eq!(delete(&db.pool, vm).await.unwrap(), [owned]);
 
         assert!(matches!(
             storage_objects::get(&db.pool, owned).await,

@@ -2234,7 +2234,8 @@ pub async fn delete(
     }
 
     let vm_name = vm.name.clone();
-    vms::delete(env.pool(), vm_id).await?;
+    let deleted = vms::delete(env.pool(), vm_id).await?;
+    crate::storage_cleanup::process_now(env.pool(), &deleted).await;
 
     Ok(ApiResponse {
         data: (),

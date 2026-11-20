@@ -360,8 +360,11 @@ pub async fn fork(
         // Their NICs, addresses, security groups and own disks go with their
         // rows; the files of their disk copies through the cleanup queue.
         for vm_id in &fork_vm_ids {
-            if let Err(e) = vms::delete(env.pool(), *vm_id).await {
-                tracing::error!(vm_id = %vm_id, error = %e, "Failed to delete the row of a failed fork");
+            match vms::delete(env.pool(), *vm_id).await {
+                Ok(deleted) => crate::storage_cleanup::process_now(env.pool(), &deleted).await,
+                Err(e) => {
+                    tracing::error!(vm_id = %vm_id, error = %e, "Failed to delete the row of a failed fork")
+                }
             }
         }
         return Err(e);
