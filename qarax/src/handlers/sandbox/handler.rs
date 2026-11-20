@@ -6,27 +6,29 @@ use uuid::Uuid;
 use crate::{
     App,
     errors::Error,
-    grpc_client::NodeClient,
+    grpc_client::{NodeClient, node::Fork},
     handlers::{ApiResponse, Result},
     model::{
-        hosts::{self, SchedulingRequest},
+        hosts::{self, Host, SchedulingRequest},
         jobs::{self, JobType, NewJob},
-        network_interfaces, sandbox_pool_members,
+        network_interfaces, networks, sandbox_pool_members,
         sandboxes::{
             self, CreateSandboxResponse, ExecSandboxRequest, ExecSandboxResponse,
             ForkSandboxRequest, NewSandbox, Sandbox, SandboxStatus,
         },
+        security_groups,
         storage_objects::{self, StorageObjectType},
         vm_disks,
         vms::{self, Hypervisor, Vm, VmStatus},
     },
+    network_policy,
     pagination::{PageQuery, PageRequest, time_key},
     sandbox_pool_manager,
     sandbox_runtime::{self, ReadyOutcome, ReadyWait, destroy_vm, resolve_sandbox_vm},
 };
 
 use super::super::vm::handler::{
-    create_vm_internal, create_vm_with_image_internal, start_vm_internal,
+    create_vm_internal, create_vm_with_image_internal, net_configs_on_host, start_vm_internal,
 };
 
 #[utoipa::path(
@@ -200,9 +202,11 @@ const MAX_VM_NAME_CHARS: usize = 50;
 /// its memory, its running processes and its files. They run on the same host
 /// and are ready when this returns; this one keeps running. Each fork's random
 /// generator is reseeded and its clock set. A fork of a sandbox booted from an
-/// OCI image gets the image and the sandbox's changes to it as they were.
-/// Only Firecracker sandboxes without network interfaces, cloud-init or disks
-/// besides their image's fork.
+/// OCI image gets the image and the sandbox's changes to it as they were. Each
+/// of a fork's network interfaces is on its source's network with an address of
+/// its own, and the fork has its source's security groups. Only Firecracker
+/// sandboxes with no network interface outside a managed bridge or isolated
+/// network, no cloud-init and no disk besides their image's fork.
 #[utoipa::path(
     post,
     path = "/v1/sandboxes/{sandbox_id}/fork",
@@ -239,6 +243,7 @@ pub async fn fork(
     }
     let vm = vms::get(env.pool(), source.vm_id).await?;
     ensure_forkable(&env, &vm).await?;
+    let nics = forkable_nics(&env, vm.id).await?;
     let host_id = vm
         .host_id
         .ok_or_else(|| Error::UnprocessableEntity("sandbox VM has no assigned host".into()))?;
@@ -276,6 +281,19 @@ pub async fn fork(
         let name = fork_name(&source.name, fork_sandbox_id);
         let fork_vm_id = vms::create_fork_tx(&mut tx, vm.id, &name).await?;
         vm_disks::copy_for_fork_tx(&mut tx, vm.id, fork_vm_id).await?;
+        for nic in &nics {
+            let address = networks::allocate_ip_tx(&mut tx, nic.network_id, None, fork_vm_id)
+                .await?
+                .ok_or_else(|| {
+                    Error::UnprocessableEntity(format!(
+                        "network {} has no address left for a fork",
+                        nic.network_id
+                    ))
+                })?;
+            network_interfaces::copy_for_fork_tx(&mut tx, nic.id, fork_vm_id, &address.ip_address)
+                .await?;
+        }
+        security_groups::copy_for_fork_tx(&mut tx, vm.id, fork_vm_id).await?;
         sandboxes::create_tx_with_status(
             &mut tx,
             fork_sandbox_id,
@@ -292,21 +310,15 @@ pub async fn fork(
     sandboxes::touch_activity(env.pool(), sandbox_id).await?;
 
     let fork_vm_ids: Vec<Uuid> = forks.iter().map(|(_, vm_id)| *vm_id).collect();
-    let client = NodeClient::new(&host.address, host.port as u16);
-    if let Err(e) = client.fork_vm(vm.id, &fork_vm_ids).await {
+    if let Err(e) = start_forks(&env, &host, vm.id, &fork_vm_ids).await {
         // The node starts all of the forks or none: no VM is left to stop.
+        // Their NICs, addresses and security groups go with their rows.
         for vm_id in &fork_vm_ids {
             if let Err(e) = vms::delete(env.pool(), *vm_id).await {
                 tracing::error!(vm_id = %vm_id, error = %e, "Failed to delete the row of a failed fork");
             }
         }
-        return Err(match e.downcast::<Error>() {
-            Ok(err) => err,
-            Err(err) => {
-                tracing::error!(sandbox_id = %sandbox_id, error = %err, "sandbox fork failed");
-                Error::InternalServerError
-            }
-        });
+        return Err(e);
     }
 
     let mut forked = Vec::with_capacity(forks.len());
@@ -332,9 +344,37 @@ pub async fn fork(
     })
 }
 
-/// A fork shares everything but its memory with its source, so only a VM
-/// with nothing else to share forks: no NICs (the forks would have their MAC
-/// and IP addresses) and no disks (they would write to the same files).
+/// Have `host`'s node start `fork_vm_ids`, whose rows are made, from
+/// `source_id`: each with its NICs and security groups.
+async fn start_forks(env: &App, host: &Host, source_id: Uuid, fork_vm_ids: &[Uuid]) -> Result<()> {
+    let mut forks = Vec::with_capacity(fork_vm_ids.len());
+    for vm_id in fork_vm_ids {
+        let nics = network_interfaces::list_by_vm(env.pool(), *vm_id).await?;
+        let (networks, _) = net_configs_on_host(env, &nics, Some(host.id)).await?;
+        let firewall =
+            network_policy::firewall_interfaces_for_vm(env.pool(), *vm_id, host.id).await?;
+        forks.push(Fork {
+            vm_id: vm_id.to_string(),
+            networks,
+            firewall,
+        });
+    }
+    let client = NodeClient::new(&host.address, host.port as u16);
+    client
+        .fork_vm(source_id, forks)
+        .await
+        .map_err(|e| match e.downcast::<Error>() {
+            Ok(err) => err,
+            Err(err) => {
+                tracing::error!(source_vm_id = %source_id, error = %err, "sandbox fork failed");
+                Error::InternalServerError
+            }
+        })
+}
+
+/// A fork shares everything but its memory, NICs and image disk with its
+/// source, so a VM with something else to share doesn't fork: a disk the forks
+/// would write to (see [`disk_refusal`]), or cloud-init's seed disk.
 async fn ensure_forkable(env: &App, vm: &Vm) -> Result<()> {
     let refusal = if vm.status != VmStatus::Running {
         format!("sandbox VM {} is not running", vm.id)
@@ -343,13 +383,6 @@ async fn ensure_forkable(env: &App, vm: &Vm) -> Result<()> {
     } else if !vm.guest_agent {
         "a sandbox without the guest agent can't be forked: the agent reseeds each fork's \
          random generator"
-            .to_string()
-    } else if !network_interfaces::list_by_vm(env.pool(), vm.id)
-        .await?
-        .is_empty()
-    {
-        "a sandbox with network interfaces can't be forked yet: its forks would have their MAC \
-         and IP addresses"
             .to_string()
     } else if vm.cloud_init_user_data.is_some() {
         "a sandbox with cloud-init can't be forked yet: its forks would share its seed disk"
@@ -360,6 +393,44 @@ async fn ensure_forkable(env: &App, vm: &Vm) -> Result<()> {
         return Ok(());
     };
     Err(Error::UnprocessableEntity(refusal))
+}
+
+/// A NIC whose copy a fork gets, on `network_id` with an address of its own.
+struct ForkNic {
+    id: Uuid,
+    network_id: Uuid,
+}
+
+/// The NICs of `vm_id` its forks get copies of: each on a managed bridge or
+/// isolated network, where the fork gets an address of its own and its guest
+/// agent switches the guest to it. Any other NIC is refused: the forks would
+/// keep their source's addresses.
+async fn forkable_nics(env: &App, vm_id: Uuid) -> Result<Vec<ForkNic>> {
+    let mut forkable = Vec::new();
+    for nic in network_interfaces::list_by_vm(env.pool(), vm_id).await? {
+        let managed = match nic.network_id {
+            Some(network_id) => {
+                let network = networks::get(env.pool(), network_id).await?;
+                matches!(network.network_type.as_deref(), Some("bridge" | "isolated"))
+                    .then_some(network_id)
+            }
+            None => None,
+        };
+        match managed {
+            Some(network_id) if nic.ip_address.is_some() => forkable.push(ForkNic {
+                id: nic.id,
+                network_id,
+            }),
+            _ => {
+                return Err(Error::UnprocessableEntity(format!(
+                    "a sandbox with a network interface outside a managed bridge or isolated \
+                     network can't be forked: its forks would keep its addresses (interface {})",
+                    nic.device_id
+                )));
+            }
+        }
+    }
+    Ok(forkable)
 }
 
 /// Why `vm`'s disks keep it from forking, if they do. Its OCI image disk

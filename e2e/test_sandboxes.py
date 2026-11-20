@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import re
 import time
 import uuid
 
@@ -47,6 +48,7 @@ from qarax_api_client.api.vm_templates import (
     delete as delete_template,
 )
 from qarax_api_client.api.vms import get as get_vm
+from qarax_api_client.api.vms import list_nics
 from qarax_api_client.models import (
     ExecSandboxRequest,
     ForkSandboxRequest,
@@ -70,6 +72,7 @@ from helpers import (
     attach_overlaybd_pool,
     call_api,
     call_api_detailed,
+    isolated_network,
     node_storage_diagnostics,
     overlaybd_disk_wwids,
     up_hosts,
@@ -604,6 +607,99 @@ async def test_sandbox_fork_of_an_oci_sandbox_forks_its_disk(client, bootable_oc
                 for obj in objects.items if objects else []:
                     await delete_storage_object.asyncio_detailed(client=c, object_id=obj.id)
             await delete_storage_pool.asyncio_detailed(client=c, pool_id=pool_id)
+
+
+@pytest.mark.asyncio
+async def test_sandbox_fork_on_a_network_gets_addresses_of_its_own(client):
+    """Each fork of a sandbox on a network has a NIC of its own there: its
+    guest takes the fork's MAC and address in place of its source's, keeps its
+    default route, and the source reaches it."""
+    test_id = uuid.uuid4().hex[:8]
+    gateway = "10.95.0.1"
+
+    async with client as c:
+        hosts = up_hosts((await call_api(list_hosts, client=c)).items)
+
+        async def sh(sandbox_id, script):
+            result = await call_api(
+                exec_sandbox,
+                client=c,
+                sandbox_id=sandbox_id,
+                body=ExecSandboxRequest(command=["/bin/sh", "-c", script], timeout_secs=15),
+            )
+            assert result.exit_code == 0, f"{script}: {result.stdout} {result.stderr}"
+            return result.stdout
+
+        async def guest_nic(sandbox_id):
+            """eth0's MAC, IPv4 address and default gateway, in the guest."""
+            out = await sh(
+                sandbox_id,
+                "cat /sys/class/net/eth0/address; ip addr show dev eth0; ip route",
+            )
+            address = re.search(r"inet (\d+\.\d+\.\d+\.\d+)/", out)
+            default = re.search(r"default via (\S+)", out)
+            return (
+                out.splitlines()[0].strip(),
+                address and address.group(1),
+                default and default.group(1),
+            )
+
+        async def api_address(vm_id):
+            nics = await call_api(list_nics, client=c, vm_id=vm_id)
+            assert len(nics) == 1, nics
+            return nics[0].ip_address.split("/")[0]
+
+        async with isolated_network(c, test_id, hosts, 95) as network_id:
+            template_id, resources = await create_bootable_sandbox_template(c, "firecracker")
+            sandbox_ids = []
+            try:
+                source = await call_api(
+                    create_sandbox,
+                    client=c,
+                    body=NewSandbox(
+                        name=f"e2e-fork-nic-{test_id}",
+                        vm_template_id=template_id,
+                        idle_timeout_secs=300,
+                        network_id=network_id,
+                    ),
+                )
+                sandbox_ids.append(source.id)
+                await wait_for_sandbox_status(c, source.id, SandboxStatus.READY)
+                source_mac, source_address, source_gateway = await guest_nic(source.id)
+                assert (source_address, source_gateway) == (
+                    await api_address(source.vm_id),
+                    gateway,
+                )
+
+                response = await call_api_detailed(
+                    fork_sandbox,
+                    client=c,
+                    sandbox_id=source.id,
+                    body=ForkSandboxRequest(count=2),
+                )
+                assert response.status_code == 201, response.content.decode()
+                forks = response.parsed
+                sandbox_ids.extend(fork.id for fork in forks)
+
+                macs, addresses = [source_mac], [source_address]
+                for fork in forks:
+                    mac, address, default = await guest_nic(fork.id)
+                    assert address == await api_address(fork.vm_id), (fork.id, address)
+                    assert default == gateway, (fork.id, default)
+                    macs.append(mac)
+                    addresses.append(address)
+                assert len(set(macs)) == 3 and len(set(addresses)) == 3, (macs, addresses)
+
+                # On the network as themselves: the source reaches each fork,
+                # each fork its gateway.
+                for fork, address in zip(forks, addresses[1:]):
+                    await sh(source.id, f"ping -c 1 -W 3 {address}")
+                    await sh(fork.id, f"ping -c 1 -W 3 {gateway}")
+            finally:
+                # Synchronous: the network can go once the sandboxes are gone.
+                for sandbox_id in sandbox_ids:
+                    await delete_sandbox.asyncio_detailed(client=c, sandbox_id=sandbox_id)
+                await cleanup_bootable_sandbox_template(c, resources)
 
 
 @pytest.mark.asyncio

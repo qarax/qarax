@@ -1,17 +1,24 @@
 """Shared helpers for qarax e2e tests."""
 
 import asyncio
+import contextlib
 import os
 import shlex
 import subprocess
 import time
+from uuid import UUID
 
 from qarax_api_client.api.hosts import list_ as list_hosts
+from qarax_api_client.api.networks import attach_host as attach_network_host
+from qarax_api_client.api.networks import create as create_network
+from qarax_api_client.api.networks import delete as delete_network
+from qarax_api_client.api.networks import detach_host as detach_network_host
 from qarax_api_client.api.storage_pools import attach_host as attach_pool_host
 from qarax_api_client.api.jobs import get as get_job
 from qarax_api_client.api.vms import exec_ as exec_vm
 from qarax_api_client.api.vms import get as get_vm
-from qarax_api_client.models import ExecVmRequest, HostStatus, VmStatus
+from qarax_api_client.models import ExecVmRequest, HostStatus, NewNetwork, VmStatus
+from qarax_api_client.models.attach_host_request import AttachHostRequest
 from qarax_api_client.models.attach_pool_host_request import AttachPoolHostRequest
 
 QARAX_URL = os.getenv("QARAX_URL", "http://localhost:8000")
@@ -88,6 +95,44 @@ async def attach_overlaybd_pool(c, hosts, pool_id):
                 f"attaching OverlayBD pool to {host.name}: {resp.status_code} {resp.content}"
             )
     assert accepted, "no host accepted the OverlayBD pool"
+
+
+@contextlib.asynccontextmanager
+async def isolated_network(c, test_id, hosts, octet):
+    """An isolated 10.<octet>.0.0/24 network, gateway .1, on every one of
+    `hosts`, since a VM may land on any of them. Yields its UUID; deleted on
+    exit, once the test has deleted the VMs on it."""
+    net_id_raw = await call_api(
+        create_network,
+        client=c,
+        body=NewNetwork(
+            name=f"e2e-net-{octet}-{test_id}",
+            subnet=f"10.{octet}.0.0/24",
+            gateway=f"10.{octet}.0.1",
+            type_="isolated",
+        ),
+    )
+    net_id = UUID(str(net_id_raw).strip('"'))
+    attached_host_ids = []
+    try:
+        for host in hosts:
+            await call_api(
+                attach_network_host,
+                client=c,
+                network_id=net_id,
+                body=AttachHostRequest(
+                    host_id=host.id,
+                    bridge_name=f"br-10-{octet}-{test_id[:4]}",
+                ),
+            )
+            attached_host_ids.append(host.id)
+        yield net_id
+    finally:
+        for host_id in attached_host_ids:
+            await call_api(
+                detach_network_host, client=c, network_id=net_id, host_id=host_id
+            )
+        await call_api(delete_network, client=c, network_id=net_id)
 
 
 def up_hosts(hosts):

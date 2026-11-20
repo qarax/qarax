@@ -143,7 +143,13 @@ async fn only_a_running_firecracker_sandbox_with_only_memory_to_share_forks() {
     .execute(&app.pool)
     .await
     .unwrap();
-    assert_refused(&app, &client, with_nic, "network interfaces").await;
+    assert_refused(
+        &app,
+        &client,
+        with_nic,
+        "outside a managed bridge or isolated network",
+    )
+    .await;
 
     let (with_cloud_init, _) = running_sandbox(
         &app,
@@ -183,6 +189,56 @@ async fn only_a_running_firecracker_sandbox_with_only_memory_to_share_forks() {
     // Nothing refused made a row.
     assert_eq!(count(&app, "vms").await, 8);
     assert_eq!(count(&app, "sandboxes").await, 8);
+}
+
+/// An isolated network attached to `host_id`, and a NIC of `vm_id` on it with
+/// one of its addresses, as the API makes them.
+async fn add_nic(app: &TestApp, host_id: Uuid, vm_id: Uuid) {
+    let network_id = Uuid::new_v4();
+    for (sql, bind_vm) in [
+        (
+            "INSERT INTO networks (id, name, subnet, gateway, type) \
+             VALUES ($1, 'fork-net', '10.9.0.0/24', '10.9.0.1', 'isolated')",
+            false,
+        ),
+        (
+            "INSERT INTO ip_allocations (network_id, ip_address, vm_id) \
+             VALUES ($1, '10.9.0.2', $2)",
+            true,
+        ),
+        (
+            "INSERT INTO network_interfaces (network_id, vm_id, interface_type, device_id, \
+             ip_address) VALUES ($1, $2, 'tap', 'net0', '10.9.0.2')",
+            true,
+        ),
+    ] {
+        let query = sqlx::query(sql).bind(network_id);
+        let query = if bind_vm { query.bind(vm_id) } else { query };
+        query.execute(&app.pool).await.unwrap();
+    }
+    sqlx::query(
+        "INSERT INTO host_networks (host_id, network_id, bridge_name) VALUES ($1, $2, 'brfork')",
+    )
+    .bind(host_id)
+    .bind(network_id)
+    .execute(&app.pool)
+    .await
+    .unwrap();
+}
+
+async fn add_security_group(app: &TestApp, vm_id: Uuid) {
+    let group = Uuid::new_v4();
+    sqlx::query("INSERT INTO security_groups (id, name) VALUES ($1, 'fork-sg')")
+        .bind(group)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO vm_security_groups (vm_id, security_group_id) VALUES ($1, $2)")
+        .bind(vm_id)
+        .bind(group)
+        .execute(&app.pool)
+        .await
+        .unwrap();
 }
 
 async fn storage_pool(app: &TestApp, pool_type: &str) -> Uuid {
@@ -241,9 +297,12 @@ async fn a_fork_needs_room_on_its_source_host_and_a_failed_one_leaves_no_rows() 
         .execute(&app.pool)
         .await
         .unwrap();
-    // Booted from an OCI image: its image disk forks with it.
+    // Booted from an OCI image, with a NIC on a network and a security group:
+    // its image disk, NIC and security group fork with it.
     let (sandbox_id, vm_id) =
         running_sandbox(&app, &client, "fork-room", "firecracker", json!({})).await;
+    add_nic(&app, host_id, vm_id).await;
+    add_security_group(&app, vm_id).await;
     let pool = storage_pool(&app, "OVERLAYBD").await;
     add_disk(
         &app,
@@ -263,4 +322,7 @@ async fn a_fork_needs_room_on_its_source_host_and_a_failed_one_leaves_no_rows() 
     assert_eq!(count(&app, "vms").await, 1);
     assert_eq!(count(&app, "sandboxes").await, 1);
     assert_eq!(count(&app, "vm_disks").await, 1);
+    assert_eq!(count(&app, "network_interfaces").await, 1);
+    assert_eq!(count(&app, "ip_allocations").await, 1);
+    assert_eq!(count(&app, "vm_security_groups").await, 1);
 }

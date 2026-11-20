@@ -17,14 +17,20 @@
 //! Each fork's disk stacks a writable layer of its own on the source's layers
 //! and that one, and the fork's drive is pointed at it before it resumes.
 //!
-//! Only VMs without NICs, and with no disk but their OCI image's, fork: a fork
-//! would write to its source's other disk files, and its NICs would have the
-//! source's MAC and IP addresses.
+//! A fork's NICs are its own: the control plane gives each an address on its
+//! source NIC's network, and the fork loads the snapshot onto TAPs of its own
+//! (`network_overrides`). Its guest resumes with the source's MAC and IP
+//! addresses, which the fork's firewall keeps off the network, until the node
+//! hands its guest agent the fork's after the fork notice.
+//!
+//! The forks load paused and are resumed in a second step, so that their
+//! firewall is in place before they run. Only VMs with no disk but their OCI
+//! image's fork: a fork would write to its source's other disk files.
 
 use std::io::Read;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use firecracker_rust_sdk::models::{PartialDrive, VsockOverride};
+use firecracker_rust_sdk::models::{NetworkOverride, PartialDrive, VsockOverride};
 use futures::future::join_all;
 
 use super::*;
@@ -36,16 +42,9 @@ const FORK_NOTICE_TIMEOUT: Duration = Duration::from_secs(10);
 /// Bytes of entropy each fork gets.
 const FORK_ENTROPY_BYTES: usize = 64;
 
-/// Refuse a VM a fork would share its NICs with, or that has no guest agent
-/// to tell its forks they are forks. Its disks are [`FirecrackerManager::source_disk`]'s.
+/// Refuse a VM that has no guest agent to tell its forks they are forks. Its
+/// NICs are [`fork_config`]'s, its disks [`FirecrackerManager::source_disk`]'s.
 fn check_forkable(config: &ProtoVmConfig) -> Result<(), VmmError> {
-    if !config.networks.is_empty() {
-        return Err(VmmError::InvalidConfig(
-            "can't fork a VM with network interfaces: its forks would have their MAC and IP \
-             addresses"
-                .into(),
-        ));
-    }
     if config.vsock.is_none() {
         return Err(VmmError::InvalidConfig(
             "can't fork a VM without the guest agent, which reseeds each fork's random generator"
@@ -53,6 +52,77 @@ fn check_forkable(config: &ProtoVmConfig) -> Result<(), VmmError> {
         ));
     }
     Ok(())
+}
+
+/// `fork`'s config: its source's under its ID, with its own NICs, one for each
+/// of the source's (by id), each with the addresses its guest is to take.
+fn fork_config(source: &ProtoVmConfig, fork: &Fork) -> Result<ProtoVmConfig, VmmError> {
+    let ids = |networks: &[ProtoNetConfig]| {
+        let mut ids: Vec<String> = networks.iter().map(|net| net.id.clone()).collect();
+        ids.sort();
+        ids
+    };
+    if ids(&fork.networks) != ids(&source.networks) {
+        return Err(VmmError::InvalidConfig(format!(
+            "fork {} needs a NIC for each of its source's, {:?}",
+            fork.vm_id,
+            ids(&source.networks)
+        )));
+    }
+    if let Some(net) = fork
+        .networks
+        .iter()
+        .find(|net| net.mac.is_none() || net.ip.is_none() || net.mask.is_none())
+    {
+        return Err(VmmError::InvalidConfig(format!(
+            "NIC {} of fork {} has no MAC or IP address for its guest",
+            net.id, fork.vm_id
+        )));
+    }
+    Ok(ProtoVmConfig {
+        vm_id: fork.vm_id.clone(),
+        networks: fork.networks.clone(),
+        ..source.clone()
+    })
+}
+
+/// What gives a fork's guest its NICs' addresses, on one line:
+/// `{"readdress": [{"from": MAC, "mac": MAC, "ip": IP, "mask": MASK}]}`, each
+/// NIC by the source's MAC, which the guest still has. None for a fork without
+/// NICs, whose guest may run a qarax-init older than the request.
+fn readdress_request(
+    source: &ProtoVmConfig,
+    fork: &ProtoVmConfig,
+) -> Result<Option<Vec<u8>>, VmmError> {
+    if fork.networks.is_empty() {
+        return Ok(None);
+    }
+    let nics = fork
+        .networks
+        .iter()
+        .map(|net| {
+            let from = source
+                .networks
+                .iter()
+                .find(|source_net| source_net.id == net.id)
+                .and_then(|source_net| source_net.mac.clone())
+                .ok_or_else(|| {
+                    VmmError::InvalidConfig(format!(
+                        "the source of fork {} has no MAC for NIC {}",
+                        fork.vm_id, net.id
+                    ))
+                })?;
+            Ok(serde_json::json!({
+                "from": from, "mac": net.mac, "ip": net.ip, "mask": net.mask
+            }))
+        })
+        .collect::<Result<Vec<_>, VmmError>>()?;
+    let mut request =
+        serde_json::to_vec(&serde_json::json!({ "readdress": nics })).map_err(|e| {
+            VmmError::ProcessError(format!("failed to encode the fork's addresses: {e}"))
+        })?;
+    request.push(b'\n');
+    Ok(Some(request))
 }
 
 /// The fork notice qarax-init reads, on one line:
@@ -128,7 +198,8 @@ impl FirecrackerManager {
         }))
     }
 
-    pub(super) async fn fork(&self, source_id: &str, fork_ids: &[String]) -> Result<(), VmmError> {
+    pub(super) async fn fork(&self, source_id: &str, forks: &[Fork]) -> Result<(), VmmError> {
+        let fork_ids: Vec<String> = forks.iter().map(|fork| fork.vm_id.clone()).collect();
         info!("FC: Forking VM {} into {:?}", source_id, fork_ids);
         if fork_ids.is_empty() {
             return Err(VmmError::InvalidConfig("no VMs to fork into".into()));
@@ -144,19 +215,17 @@ impl FirecrackerManager {
                 .clone()
         };
         check_forkable(&source_config)?;
+        let configs = forks
+            .iter()
+            .map(|fork| fork_config(&source_config, fork))
+            .collect::<Result<Vec<_>, _>>()?;
         let disk = self.source_disk(source_id, &source_config).await?;
 
         let snapshot_dir = self
             .runtime_dir
             .join(format!("{source_id}.fork-{}", uuid::Uuid::new_v4()));
         let forked = self
-            .fork_from_snapshot(
-                source_id,
-                &source_config,
-                disk.as_ref(),
-                fork_ids,
-                &snapshot_dir,
-            )
+            .fork_from_snapshot(source_id, disk.as_ref(), configs, &snapshot_dir)
             .await;
         // The forks keep the memory file mapped, so it can go now.
         if let Err(e) = tokio::fs::remove_dir_all(&snapshot_dir).await
@@ -183,20 +252,69 @@ impl FirecrackerManager {
             }
             vms.insert(fork_id, instance);
         }
-        info!("FC: VM {} forked into {} VMs", source_id, fork_ids.len());
+        info!(
+            "FC: VM {} forked into {} VMs, paused",
+            source_id,
+            fork_ids.len()
+        );
         Ok(())
     }
 
-    /// Snapshot `source_id` (and `disk`) into `dir` and start every fork
-    /// from it. Either all of them start, or none is left running.
+    /// Resume forks [`Self::fork`] loaded, and tell each one's guest that it
+    /// is a fork and, if it has NICs, their addresses.
+    pub(super) async fn resume_forks(
+        &self,
+        source_id: &str,
+        fork_ids: &[String],
+    ) -> Result<(), VmmError> {
+        let forks = {
+            let vms = self.vms.lock().await;
+            let source = &vms
+                .get(source_id)
+                .ok_or_else(|| VmmError::VmNotFound(source_id.to_string()))?
+                .proto_config;
+            fork_ids
+                .iter()
+                .map(|fork_id| {
+                    let fork = &vms
+                        .get(fork_id)
+                        .ok_or_else(|| VmmError::VmNotFound(fork_id.clone()))?
+                        .proto_config;
+                    Ok((
+                        fork_id.as_str(),
+                        self.vsock_socket_path(fork_id),
+                        readdress_request(source, fork)?,
+                    ))
+                })
+                .collect::<Result<Vec<_>, VmmError>>()?
+        };
+        join_all(
+            forks
+                .into_iter()
+                .map(|(fork_id, vsock_path, readdress)| async move {
+                    self.resume_vm(fork_id).await?;
+                    Self::send_fork_notice(&vsock_path).await?;
+                    if let Some(readdress) = readdress {
+                        Self::readdress_guest(&vsock_path, &readdress).await?;
+                    }
+                    Ok::<(), VmmError>(())
+                }),
+        )
+        .await
+        .into_iter()
+        .collect()
+    }
+
+    /// Snapshot `source_id` (and `disk`) into `dir` and load every fork,
+    /// `configs`, from it, paused. Either all of them load, or none is left.
     async fn fork_from_snapshot(
         &self,
         source_id: &str,
-        source_config: &ProtoVmConfig,
         disk: Option<&SourceDisk>,
-        fork_ids: &[String],
+        configs: Vec<ProtoVmConfig>,
         dir: &Path,
     ) -> Result<Vec<(String, FcVmInstance)>, VmmError> {
+        let fork_ids: Vec<String> = configs.iter().map(|config| config.vm_id.clone()).collect();
         if let Some(disk) = disk {
             // While the source still runs, so the pause only writes back the rest.
             disk.overlaybd
@@ -207,7 +325,7 @@ impl FirecrackerManager {
         let frozen = self.snapshot_for_fork(source_id, disk, dir).await?;
         let devices = match (disk, frozen) {
             (Some(disk), Some(frozen)) => {
-                let devices = Self::mount_fork_disks(&disk.overlaybd, &frozen, fork_ids).await;
+                let devices = Self::mount_fork_disks(&disk.overlaybd, &frozen, &fork_ids).await;
                 // The forks that got a disk have their own link to the layer.
                 disk.overlaybd.release(frozen).await;
                 devices?.into_iter().map(Some).collect()
@@ -215,14 +333,14 @@ impl FirecrackerManager {
             _ => vec![None; fork_ids.len()],
         };
 
-        let started = join_all(fork_ids.iter().zip(&devices).map(|(fork_id, device)| {
+        let loaded = join_all(configs.into_iter().zip(&devices).map(|(config, device)| {
             let disk = disk.zip(device.as_deref());
-            self.start_fork(fork_id, source_config, disk, dir)
+            self.load_fork(config, disk, dir)
         }))
         .await;
-        let mut forks = Vec::with_capacity(started.len());
+        let mut forks = Vec::with_capacity(loaded.len());
         let mut first_error = None;
-        for (fork_id, result) in fork_ids.iter().zip(started) {
+        for (fork_id, result) in fork_ids.iter().zip(loaded) {
             match result {
                 Ok(instance) => forks.push((fork_id.clone(), instance)),
                 Err(e) => {
@@ -233,7 +351,8 @@ impl FirecrackerManager {
         }
         if let Some(e) = first_error {
             for (fork_id, instance) in forks {
-                self.discard_fork(&fork_id, instance.process).await;
+                self.discard_fork(&fork_id, instance.process, &instance.tap_devices)
+                    .await;
             }
             return Err(e);
         }
@@ -329,18 +448,16 @@ impl FirecrackerManager {
         snapshot
     }
 
-    /// Start one fork from the snapshot in `dir`, with `disk`'s drive on
-    /// the fork's own device, and give its guest the fork notice.
-    async fn start_fork(
+    /// Load one fork, `config`, paused from the snapshot in `dir`, onto TAPs
+    /// of its own and with `disk`'s drive on the fork's own device.
+    async fn load_fork(
         &self,
-        fork_id: &str,
-        source_config: &ProtoVmConfig,
+        mut config: ProtoVmConfig,
         disk: Option<(&SourceDisk, &str)>,
         dir: &Path,
     ) -> Result<FcVmInstance, VmmError> {
-        let mut config = source_config.clone();
-        config.vm_id = fork_id.to_string();
-        let vsock_path = self.vsock_socket_path(fork_id);
+        let fork_id = config.vm_id.clone();
+        let vsock_path = self.vsock_socket_path(&fork_id);
         if let Some(vsock) = config.vsock.as_mut() {
             vsock.socket = Some(vsock_path.display().to_string());
         }
@@ -349,22 +466,36 @@ impl FirecrackerManager {
                 drive.path = Some(device.to_string());
             }
         }
+        let tap_devices = Self::create_taps(&fork_id, &mut config.networks).await?;
+        let network_overrides = config
+            .networks
+            .iter()
+            .filter_map(|net| Some(NetworkOverride::new(net.id.clone(), net.tap.clone()?)))
+            .collect();
 
-        let process = self.spawn_process(fork_id).await?;
-        let socket_path = self.socket_path(fork_id);
-        let started = async {
+        let process = match self.spawn_process(&fork_id).await {
+            Ok(process) => process,
+            Err(e) => {
+                self.discard_fork(&fork_id, None, &tap_devices).await;
+                return Err(e);
+            }
+        };
+        let socket_path = self.socket_path(&fork_id);
+        let loaded = async {
             let machine = Machine::attach(&socket_path).await.map_err(sdk_err)?;
-            let mut micro_vm = machine
+            let micro_vm = machine
                 .load_and_resume(&SnapshotLoadParams {
                     snapshot_path: dir.join("vm.snap").display().to_string(),
                     mem_backend: Some(Box::new(MemoryBackend::new(
                         BackendType::File,
                         dir.join("mem.snap").display().to_string(),
                     ))),
+                    network_overrides: Some(network_overrides),
                     vsock_override: Some(Box::new(VsockOverride::new(
                         vsock_path.display().to_string(),
                     ))),
-                    // Paused: the snapshot names the source's disk.
+                    // Paused: the snapshot names the source's disk, and the
+                    // fork's firewall comes before it runs.
                     resume_vm: Some(false),
                     ..Default::default()
                 })
@@ -381,31 +512,48 @@ impl FirecrackerManager {
                 )
                 .await?;
             }
-            micro_vm
-                .patch_vm(&Vm::new(FcVmState::Resumed))
-                .await
-                .map_err(sdk_err)?;
-            Self::send_fork_notice(&vsock_path).await?;
             Ok(micro_vm)
         }
         .await;
 
-        match started {
+        match loaded {
             Ok(micro_vm) => Ok(FcVmInstance {
                 proto_config: config,
                 process: Some(process),
                 socket_path,
-                tap_devices: vec![],
+                tap_devices,
                 phase: FcPhase::Live {
                     micro_vm,
-                    state: LiveState::Running,
+                    state: LiveState::Paused,
                 },
             }),
             Err(e) => {
-                self.discard_fork(fork_id, Some(process)).await;
+                self.discard_fork(&fork_id, Some(process), &tap_devices)
+                    .await;
                 Err(e)
             }
         }
+    }
+
+    /// Give a fork's guest its NICs' addresses ([`readdress_request`]).
+    async fn readdress_guest(vsock_path: &Path, request: &[u8]) -> Result<(), VmmError> {
+        const TIMEOUT: Duration = Duration::from_secs(10);
+
+        let response = guest_agent::request(vsock_path, request, TIMEOUT).await?;
+        let ack: guest_agent::Ack = serde_json::from_slice(&response).map_err(|e| {
+            VmmError::ExecError(format!(
+                "invalid answer to the fork's addresses from the guest agent: {e}"
+            ))
+        })?;
+        if ack.exit_code != 0 {
+            // An older qarax-init answers it as an invalid exec request.
+            return Err(VmmError::ExecError(format!(
+                "the guest agent did not take the fork's addresses (exit {}): {}",
+                ack.exit_code,
+                ack.stderr.trim_end()
+            )));
+        }
+        Ok(())
     }
 
     /// Tell a fork's guest that it was forked. Its agent was listening when
@@ -446,13 +594,16 @@ impl FirecrackerManager {
         }
     }
 
-    /// Stop a fork that won't be kept and remove its sockets and disk. Its
-    /// log stays, as a deleted VM's does.
-    async fn discard_fork(&self, fork_id: &str, process: Option<Child>) {
+    /// Stop a fork that won't be kept and remove its sockets, TAPs and disk.
+    /// Its log stays, as a deleted VM's does.
+    async fn discard_fork(&self, fork_id: &str, process: Option<Child>, taps: &[String]) {
         if let Some(mut process) = process
             && let Err(e) = process.kill().await
         {
             warn!("FC: Failed to kill fork {}: {}", fork_id, e);
+        }
+        for tap in taps {
+            Self::delete_tap_device(tap).await;
         }
         self.unmap_oci_disk(fork_id).await;
         for path in [self.socket_path(fork_id), self.vsock_socket_path(fork_id)] {
@@ -484,23 +635,96 @@ mod tests {
     }
 
     #[test]
-    fn a_vm_with_a_nic_or_no_guest_agent_does_not_fork() {
-        let refused = [
-            ProtoVmConfig {
-                networks: vec![NetConfig::default()],
-                ..with_guest_agent()
-            },
-            ProtoVmConfig {
-                vsock: None,
-                ..with_guest_agent()
+    fn a_vm_without_the_guest_agent_does_not_fork() {
+        let config = ProtoVmConfig {
+            vsock: None,
+            ..with_guest_agent()
+        };
+        assert!(matches!(
+            check_forkable(&config),
+            Err(VmmError::InvalidConfig(_))
+        ));
+    }
+
+    fn nic(id: &str, mac: &str, ip: &str) -> NetConfig {
+        NetConfig {
+            id: id.into(),
+            mac: Some(mac.into()),
+            ip: Some(ip.into()),
+            mask: Some("255.255.255.0".into()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_fork_has_a_nic_of_its_own_for_each_of_its_sources() {
+        let source = ProtoVmConfig {
+            networks: vec![
+                nic("net0", "02:00:00:00:00:01", "10.0.0.2"),
+                nic("net1", "02:00:00:00:01:01", "10.0.1.2"),
+            ],
+            ..with_guest_agent()
+        };
+        let fork = |networks| Fork {
+            vm_id: "fork".into(),
+            networks,
+            firewall: vec![],
+        };
+        let own = vec![
+            nic("net1", "02:00:00:00:01:02", "10.0.1.3"),
+            nic("net0", "02:00:00:00:00:02", "10.0.0.3"),
+        ];
+
+        let config = fork_config(&source, &fork(own.clone())).unwrap();
+        assert_eq!(config.vm_id, "fork");
+        assert_eq!(config.networks, own);
+
+        let missing = vec![own[0].clone()];
+        let no_address = vec![
+            own[0].clone(),
+            NetConfig {
+                ip: None,
+                ..own[1].clone()
             },
         ];
-        for config in refused {
+        for networks in [missing, no_address] {
             assert!(matches!(
-                check_forkable(&config),
+                fork_config(&source, &fork(networks)),
                 Err(VmmError::InvalidConfig(_))
             ));
         }
+    }
+
+    #[test]
+    fn a_forks_guest_finds_its_nics_by_its_sources_macs() {
+        let source = ProtoVmConfig {
+            networks: vec![nic("net0", "02:00:00:00:00:01", "10.0.0.2")],
+            ..with_guest_agent()
+        };
+        let fork = ProtoVmConfig {
+            networks: vec![nic("net0", "02:00:00:00:00:02", "10.0.0.3")],
+            ..with_guest_agent()
+        };
+
+        let request = readdress_request(&source, &fork).unwrap().unwrap();
+        assert_eq!(request.last(), Some(&b'\n'));
+        let request: serde_json::Value = serde_json::from_slice(&request).unwrap();
+        assert_eq!(
+            request,
+            serde_json::json!({"readdress": [{
+                "from": "02:00:00:00:00:01",
+                "mac": "02:00:00:00:00:02",
+                "ip": "10.0.0.3",
+                "mask": "255.255.255.0",
+            }]})
+        );
+
+        // Nothing to tell a fork without NICs.
+        assert!(
+            readdress_request(&with_guest_agent(), &with_guest_agent())
+                .unwrap()
+                .is_none()
+        );
     }
 
     fn disk(id: &str) -> DiskConfig {

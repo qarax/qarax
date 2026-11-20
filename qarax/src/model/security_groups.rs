@@ -304,6 +304,25 @@ ORDER BY sgr.direction, sgr.protocol, sgr.cidr NULLS FIRST, sgr.port_start NULLS
     Ok(rows.into_iter().map(Into::into).collect())
 }
 
+/// Give `fork_vm_id` the security groups of `source_vm_id`.
+pub async fn copy_for_fork_tx(
+    tx: &mut PgTransaction<'_>,
+    source_vm_id: Uuid,
+    fork_vm_id: Uuid,
+) -> Result<(), sqlx::Error> {
+    sqlx::query!(
+        r#"
+INSERT INTO vm_security_groups (vm_id, security_group_id)
+SELECT $2, security_group_id FROM vm_security_groups WHERE vm_id = $1
+        "#,
+        source_vm_id,
+        fork_vm_id
+    )
+    .execute(tx.as_mut())
+    .await?;
+    Ok(())
+}
+
 pub async fn add_to_vm(
     tx: &mut PgTransaction<'_>,
     vm_id: Uuid,

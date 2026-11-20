@@ -2481,6 +2481,81 @@ fn subnet_mask_from_cidr(subnet: &str) -> Option<String> {
     networks::Ipv4Subnet::parse(subnet).map(|subnet| subnet.netmask().to_string())
 }
 
+/// The node's config for a VM's NICs, `db_networks`, on `host_id` (bridges,
+/// masks, passt), and the kernel `ip=` parameters that set them up in a guest
+/// booted from a kernel.
+pub(crate) async fn net_configs_on_host(
+    env: &App,
+    db_networks: &[NetworkInterface],
+    host_id: Option<Uuid>,
+) -> Result<(Vec<NetConfig>, String)> {
+    let mut networks = net_configs_from_db(db_networks);
+
+    let mut ip_params = String::new();
+
+    // Managed networking stores IPs in DB as inet (often /32); provide mask from network CIDR.
+    // For passt networks, switch to vhost-user passt backend and let guest networking be dynamic.
+    for (i, db_net) in db_networks.iter().enumerate() {
+        if let Some(net_id) = db_net.network_id
+            && let Some(net_config) = networks.get_mut(i)
+            && let Ok(network) = networks::get(env.pool(), net_id).await
+        {
+            if network.network_type.as_deref() == Some("passt") {
+                net_config.vhost_user = Some(true);
+                net_config.vhost_socket = Some("passt".to_string());
+                net_config.vhost_mode = Some(VhostMode::Client as i32);
+                net_config.tap = None;
+                net_config.bridge = None;
+                net_config.ip = None;
+                net_config.mask = None;
+            } else if net_config.ip.is_some() {
+                if net_config.mask.is_none() {
+                    net_config.mask = subnet_mask_from_cidr(&network.subnet);
+                }
+
+                let ty = network.network_type.as_deref();
+                if ty == Some("bridge") || ty == Some("isolated") {
+                    let ip = net_config.ip.as_ref().unwrap();
+                    let mask = net_config.mask.as_deref().unwrap_or("");
+                    let gw = network.gateway.as_deref().unwrap_or("");
+                    // The gateway, like DHCP's default: on an isolated
+                    // network the node forwards DNS there.
+                    let dns = network.dns.as_deref().unwrap_or(gw);
+                    ip_params.push_str(&format!(
+                        " ip={}::{}:{}::eth{}:off:{}",
+                        ip, gw, mask, i, dns
+                    ));
+                }
+            }
+        }
+    }
+
+    // Populate bridge field from host_networks if the VM has a host and network interfaces.
+    // Return an error if a managed network is not attached to the scheduled host.
+    if let Some(host_id) = host_id {
+        for (i, db_net) in db_networks.iter().enumerate() {
+            if let Some(net_id) = db_net.network_id {
+                match networks::get_host_bridge(env.pool(), host_id, net_id).await {
+                    Ok(Some(bridge_name)) => {
+                        if let Some(net_config) = networks.get_mut(i) {
+                            net_config.bridge = Some(bridge_name);
+                        }
+                    }
+                    Ok(None) => {
+                        return Err(crate::errors::Error::UnprocessableEntity(format!(
+                            "Network {} is not attached to host {}. Run 'network attach-host' first.",
+                            net_id, host_id
+                        )));
+                    }
+                    Err(e) => return Err(crate::errors::Error::Sqlx(e)),
+                }
+            }
+        }
+    }
+
+    Ok((networks, ip_params))
+}
+
 /// Build a `CreateVmRequest` from DB state — called at `vm start` for lazily-provisioned VMs.
 async fn build_create_vm_request(env: &App, vm: &Vm) -> Result<CreateVmRequest> {
     let vm_id = vm.id;
@@ -2530,69 +2605,7 @@ async fn build_create_vm_request(env: &App, vm: &Vm) -> Result<CreateVmRequest> 
     let db_disks = vm_disks::list_by_vm(env.pool(), vm_id).await?;
     let db_networks = network_interfaces::list_by_vm(env.pool(), vm_id).await?;
 
-    let mut networks = net_configs_from_db(&db_networks);
-
-    let mut ip_params = String::new();
-
-    // Managed networking stores IPs in DB as inet (often /32); provide mask from network CIDR.
-    // For passt networks, switch to vhost-user passt backend and let guest networking be dynamic.
-    for (i, db_net) in db_networks.iter().enumerate() {
-        if let Some(net_id) = db_net.network_id
-            && let Some(net_config) = networks.get_mut(i)
-            && let Ok(network) = networks::get(env.pool(), net_id).await
-        {
-            if network.network_type.as_deref() == Some("passt") {
-                net_config.vhost_user = Some(true);
-                net_config.vhost_socket = Some("passt".to_string());
-                net_config.vhost_mode = Some(VhostMode::Client as i32);
-                net_config.tap = None;
-                net_config.bridge = None;
-                net_config.ip = None;
-                net_config.mask = None;
-            } else if net_config.ip.is_some() {
-                if net_config.mask.is_none() {
-                    net_config.mask = subnet_mask_from_cidr(&network.subnet);
-                }
-
-                let ty = network.network_type.as_deref();
-                if ty == Some("bridge") || ty == Some("isolated") {
-                    let ip = net_config.ip.as_ref().unwrap();
-                    let mask = net_config.mask.as_deref().unwrap_or("");
-                    let gw = network.gateway.as_deref().unwrap_or("");
-                    // The gateway, like DHCP's default: on an isolated
-                    // network the node forwards DNS there.
-                    let dns = network.dns.as_deref().unwrap_or(gw);
-                    ip_params.push_str(&format!(
-                        " ip={}::{}:{}::eth{}:off:{}",
-                        ip, gw, mask, i, dns
-                    ));
-                }
-            }
-        }
-    }
-
-    // Populate bridge field from host_networks if the VM has a host and network interfaces.
-    // Return an error if a managed network is not attached to the scheduled host.
-    if let Some(host_id) = vm.host_id {
-        for (i, db_net) in db_networks.iter().enumerate() {
-            if let Some(net_id) = db_net.network_id {
-                match networks::get_host_bridge(env.pool(), host_id, net_id).await {
-                    Ok(Some(bridge_name)) => {
-                        if let Some(net_config) = networks.get_mut(i) {
-                            net_config.bridge = Some(bridge_name);
-                        }
-                    }
-                    Ok(None) => {
-                        return Err(crate::errors::Error::UnprocessableEntity(format!(
-                            "Network {} is not attached to host {}. Run 'network attach-host' first.",
-                            net_id, host_id
-                        )));
-                    }
-                    Err(e) => return Err(crate::errors::Error::Sqlx(e)),
-                }
-            }
-        }
-    }
+    let (networks, mut ip_params) = net_configs_on_host(env, &db_networks, vm.host_id).await?;
 
     // Batch-fetch storage objects and pools to avoid N+1 queries.
     // Include both primary (storage_object_id) and upper layer (upper_storage_object_id) SOs.

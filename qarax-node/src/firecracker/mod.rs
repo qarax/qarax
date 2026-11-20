@@ -36,8 +36,8 @@ use tracing::{debug, info, warn};
 
 use crate::rpc::node::ExecVmResponse;
 use crate::rpc::node::{
-    RateLimiterConfig as ProtoRateLimiterConfig, TokenBucket as ProtoTokenBucket,
-    VmConfig as ProtoVmConfig, VmState, VmStatus,
+    Fork, NetConfig as ProtoNetConfig, RateLimiterConfig as ProtoRateLimiterConfig,
+    TokenBucket as ProtoTokenBucket, VmConfig as ProtoVmConfig, VmState, VmStatus,
 };
 use crate::storage::StorageBackend;
 use crate::storage::overlaybd::{OverlayBdBackend, map_oci_disks};
@@ -350,8 +350,8 @@ impl FirecrackerManager {
                 .map_err(|e| VmmError::ExecError(format!("invalid guest-agent response: {e}")))
         });
         match accepted {
-            Ok(guest_agent::Ack { exit_code: 0 }) => {}
-            Ok(guest_agent::Ack { exit_code }) => {
+            Ok(guest_agent::Ack { exit_code: 0, .. }) => {}
+            Ok(guest_agent::Ack { exit_code, .. }) => {
                 warn!("FC: VM {vm_id}'s guest agent refused to shut down (exit code {exit_code})");
                 return false;
             }
@@ -412,6 +412,49 @@ fn sdk_err(e: firecracker_rust_sdk::error::Error) -> VmmError {
     VmmError::ProcessError(e.to_string())
 }
 
+impl FirecrackerManager {
+    /// Create a TAP for each of `networks` that has none, named for `vm_id`,
+    /// and attach the TAPs to their bridges. Returns the TAPs it created, of
+    /// which none is left if it fails.
+    async fn create_taps(
+        vm_id: &str,
+        networks: &mut [ProtoNetConfig],
+    ) -> Result<Vec<String>, VmmError> {
+        let mut tap_devices: Vec<String> = Vec::new();
+        let created = async {
+            for (i, net) in networks.iter_mut().enumerate() {
+                if net.tap.is_none() && !net.vhost_user.unwrap_or(false) {
+                    let tap_name = Self::tap_name_for_net(vm_id, i);
+                    Self::create_tap_device(&tap_name).await?;
+                    net.tap = Some(tap_name.clone());
+                    tap_devices.push(tap_name);
+                }
+            }
+            for net in networks.iter() {
+                if let (Some(tap_name), Some(bridge_name)) = (&net.tap, &net.bridge) {
+                    crate::networking::bridge::attach_to_bridge(tap_name, bridge_name)
+                        .await
+                        .map_err(|e| {
+                            VmmError::TapError(format!(
+                                "Failed to attach TAP {} to bridge {}: {}",
+                                tap_name, bridge_name, e
+                            ))
+                        })?;
+                }
+            }
+            Ok(())
+        }
+        .await;
+        if let Err(e) = created {
+            for tap in &tap_devices {
+                Self::delete_tap_device(tap).await;
+            }
+            return Err(e);
+        }
+        Ok(tap_devices)
+    }
+}
+
 #[async_trait::async_trait]
 impl VmmManager for FirecrackerManager {
     async fn create_vm(&self, config: ProtoVmConfig) -> Result<VmState, VmmError> {
@@ -431,37 +474,7 @@ impl VmmManager for FirecrackerManager {
 
         let mut config = config;
 
-        // Create TAP devices for network interfaces that don't have one yet.
-        let mut tap_devices: Vec<String> = Vec::new();
-        for (i, net) in config.networks.iter_mut().enumerate() {
-            if net.tap.is_none() && !net.vhost_user.unwrap_or(false) {
-                let tap_name = Self::tap_name_for_net(&vm_id, i);
-                if let Err(e) = Self::create_tap_device(&tap_name).await {
-                    for tap in &tap_devices {
-                        Self::delete_tap_device(tap).await;
-                    }
-                    return Err(e);
-                }
-                net.tap = Some(tap_name.clone());
-                tap_devices.push(tap_name);
-            }
-        }
-
-        // Attach TAPs to bridges if specified.
-        for net in &config.networks {
-            if let (Some(tap_name), Some(bridge_name)) = (&net.tap, &net.bridge)
-                && let Err(e) =
-                    crate::networking::bridge::attach_to_bridge(tap_name, bridge_name).await
-            {
-                for tap in &tap_devices {
-                    Self::delete_tap_device(tap).await;
-                }
-                return Err(VmmError::TapError(format!(
-                    "Failed to attach TAP {} to bridge {}: {}",
-                    tap_name, bridge_name, e
-                )));
-            }
-        }
+        let tap_devices = Self::create_taps(&vm_id, &mut config.networks).await?;
 
         if let Some(vsock) = config.vsock.as_mut() {
             self.resolve_vsock_config(&vm_id, vsock);
@@ -903,8 +916,12 @@ impl VmmManager for FirecrackerManager {
         FirecrackerManager::guest_agent_socket(self, vm_id).await
     }
 
-    async fn fork_vm(&self, source_id: &str, fork_ids: &[String]) -> Result<(), VmmError> {
-        self.fork(source_id, fork_ids).await
+    async fn fork_vm(&self, source_id: &str, forks: &[Fork]) -> Result<(), VmmError> {
+        self.fork(source_id, forks).await
+    }
+
+    async fn resume_forks(&self, source_id: &str, fork_ids: &[String]) -> Result<(), VmmError> {
+        FirecrackerManager::resume_forks(self, source_id, fork_ids).await
     }
 
     async fn recover_vms(&self) {

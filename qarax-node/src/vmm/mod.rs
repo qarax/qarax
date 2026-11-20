@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use async_trait::async_trait;
 
 use crate::rpc::node::{
-    DiskConfig as ProtoDiskConfig, ExecVmResponse, ImageFormat, NetConfig as ProtoNetConfig,
+    DiskConfig as ProtoDiskConfig, ExecVmResponse, Fork, ImageFormat, NetConfig as ProtoNetConfig,
     SendMigrationRequest, VfioDeviceConfig as ProtoVfioDeviceConfig, VmConfig as ProtoVmConfig,
     VmState,
 };
@@ -201,10 +201,18 @@ pub trait VmmManager: Send + Sync + 'static {
     /// The host end of a running VM's guest-agent vsock.
     async fn guest_agent_socket(&self, vm_id: &str) -> Result<PathBuf, VmmError>;
 
-    /// Start `fork_ids`, new VMs that continue from `source_id`'s current
-    /// state. The source keeps running.
-    async fn fork_vm(&self, _source_id: &str, _fork_ids: &[String]) -> Result<(), VmmError> {
+    /// Load `forks`, new VMs that continue from `source_id`'s current state,
+    /// each with its own NICs, and leave them paused, for their firewall to
+    /// come first. The source keeps running. Either all of them load or none
+    /// is left.
+    async fn fork_vm(&self, _source_id: &str, _forks: &[Fork]) -> Result<(), VmmError> {
         Err(VmmError::Unsupported("fork_vm"))
+    }
+
+    /// Resume forks of `source_id` that [`VmmManager::fork_vm`] loaded, and
+    /// tell each one's guest that it is a fork, and its NICs' addresses.
+    async fn resume_forks(&self, _source_id: &str, _fork_ids: &[String]) -> Result<(), VmmError> {
+        Err(VmmError::Unsupported("resume_forks"))
     }
 
     async fn get_vm_counters(
