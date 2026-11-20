@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\nSELECT id,\n        name,\n        storage_pool_id,\n        object_type AS \"object_type: _\",\n        size_bytes,\n        config,\n        parent_id\nFROM storage_objects\nWHERE id = ANY($1)\n        ",
+  "query": "\nSELECT id,\n        name,\n        storage_pool_id,\n        object_type AS \"object_type: _\",\n        size_bytes,\n        config,\n        parent_id,\n        owner_vm_id\nFROM storage_objects\nWHERE id = ANY($1)\n        ",
   "describe": {
     "columns": [
       {
@@ -53,6 +53,11 @@
         "ordinal": 6,
         "name": "parent_id",
         "type_info": "Uuid"
+      },
+      {
+        "ordinal": 7,
+        "name": "owner_vm_id",
+        "type_info": "Uuid"
       }
     ],
     "parameters": {
@@ -67,8 +72,9 @@
       false,
       false,
       false,
+      true,
       true
     ]
   },
-  "hash": "9d3394198e732b57a3f24a5c4bf7ae7f41f624974894603609c5fe55b17eebea"
+  "hash": "e4e1482caddc1f50241bf368640f7eeb1836d8eb348e7affd2e3c35f05156268"
 }

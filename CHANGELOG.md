@@ -19,7 +19,9 @@ The first release.
   Firecracker), cloud and disk images, kernel boot sources, instance types and
   VM templates.
 - Storage pools: local, NFS, OverlayBD and iSCSI block, with capacity
-  accounting and durable cleanup of the files qarax provisions.
+  accounting and durable cleanup of the files qarax provisions. A storage
+  object a VM makes for itself, such as the image object of a VM booted from
+  an OCI image, is deleted with the VM unless something still uses it.
 - Networking: bridged and isolated networks with IPAM, DHCP and DNS,
   VPC-style isolation with VXLAN overlays across hosts, per-NIC security
   groups, and disk and NIC rate limits.

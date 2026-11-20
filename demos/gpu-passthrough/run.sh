@@ -129,16 +129,11 @@ while [[ $# -gt 0 ]]; do
 	esac
 done
 
-# delete_image_vm VM: delete an --image-ref VM and the OverlayBD image object
-# qarax created for it (overlaybd-<vm id>), which VM deletion leaves behind.
-# Deleting the VM releases its GPUs.
+# delete_image_vm VM: delete an --image-ref VM. The OverlayBD image object
+# qarax created for it (overlaybd-<vm id>) goes with it, and its GPUs are
+# released.
 delete_image_vm() {
-	local id
-	id="$(qarax vm get "$1" -o json | jq -r '.id')"
-	qarax vm delete "$id" >/dev/null
-	if exists storage-object "overlaybd-${id}"; then
-		qarax storage-object delete "overlaybd-${id}" >/dev/null
-	fi
+	qarax vm delete "$1" >/dev/null
 }
 
 cleanup() {

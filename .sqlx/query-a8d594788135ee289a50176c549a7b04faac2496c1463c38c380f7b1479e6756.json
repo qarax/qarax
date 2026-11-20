@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\nSELECT id,\n       name,\n       storage_pool_id,\n       object_type AS \"object_type: _\",\n       size_bytes,\n       config,\n       parent_id\nFROM storage_objects\nWHERE id = $1\nFOR UPDATE\n        ",
+  "query": "\nSELECT id,\n        name,\n        storage_pool_id,\n        object_type as \"object_type: _\",\n        size_bytes,\n        config as \"config: _\",\n        parent_id as \"parent_id?\",\n        owner_vm_id as \"owner_vm_id?\"\nFROM storage_objects\nWHERE ($1::text IS NULL OR name = $1)\n  AND ($2::uuid IS NULL OR storage_pool_id = $2)\n  AND ($3::storage_object_type IS NULL OR object_type = $3)\n  AND ($4::text IS NULL OR (name, id) > ($4, $5::uuid))\nORDER BY name, id\nLIMIT $6\n        ",
   "describe": {
     "columns": [
       {
@@ -46,18 +46,44 @@
       },
       {
         "ordinal": 5,
-        "name": "config",
+        "name": "config: _",
         "type_info": "Jsonb"
       },
       {
         "ordinal": 6,
-        "name": "parent_id",
+        "name": "parent_id?",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 7,
+        "name": "owner_vm_id?",
         "type_info": "Uuid"
       }
     ],
     "parameters": {
       "Left": [
-        "Uuid"
+        "Text",
+        "Uuid",
+        {
+          "Custom": {
+            "name": "storage_object_type",
+            "kind": {
+              "Enum": [
+                "DISK",
+                "KERNEL",
+                "INITRD",
+                "ISO",
+                "SNAPSHOT",
+                "OCI_IMAGE",
+                "OVERLAYBD_UPPER",
+                "DATABASE_BACKUP"
+              ]
+            }
+          }
+        },
+        "Text",
+        "Uuid",
+        "Int8"
       ]
     },
     "nullable": [
@@ -67,8 +93,9 @@
       false,
       false,
       false,
+      true,
       true
     ]
   },
-  "hash": "980388b1656e6f6f19bb703e2d7f0763dfd302698169925a2968c54a328ebfe9"
+  "hash": "a8d594788135ee289a50176c549a7b04faac2496c1463c38c380f7b1479e6756"
 }

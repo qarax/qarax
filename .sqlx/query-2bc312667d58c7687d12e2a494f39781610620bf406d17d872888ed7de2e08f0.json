@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\nSELECT id,\n        name,\n        storage_pool_id,\n        object_type as \"object_type: _\",\n        size_bytes,\n        config as \"config: _\",\n        parent_id as \"parent_id?\"\nFROM storage_objects\nWHERE ($1::text IS NULL OR name = $1)\n  AND ($2::uuid IS NULL OR storage_pool_id = $2)\n  AND ($3::storage_object_type IS NULL OR object_type = $3)\n  AND ($4::text IS NULL OR (name, id) > ($4, $5::uuid))\nORDER BY name, id\nLIMIT $6\n        ",
+  "query": "\nSELECT id,\n        name,\n        storage_pool_id,\n        object_type as \"object_type: _\",\n        size_bytes,\n        config as \"config: _\",\n        parent_id as \"parent_id?\",\n        owner_vm_id as \"owner_vm_id?\"\nFROM storage_objects\nWHERE id = $1\n        ",
   "describe": {
     "columns": [
       {
@@ -53,32 +53,16 @@
         "ordinal": 6,
         "name": "parent_id?",
         "type_info": "Uuid"
+      },
+      {
+        "ordinal": 7,
+        "name": "owner_vm_id?",
+        "type_info": "Uuid"
       }
     ],
     "parameters": {
       "Left": [
-        "Text",
-        "Uuid",
-        {
-          "Custom": {
-            "name": "storage_object_type",
-            "kind": {
-              "Enum": [
-                "DISK",
-                "KERNEL",
-                "INITRD",
-                "ISO",
-                "SNAPSHOT",
-                "OCI_IMAGE",
-                "OVERLAYBD_UPPER",
-                "DATABASE_BACKUP"
-              ]
-            }
-          }
-        },
-        "Text",
-        "Uuid",
-        "Int8"
+        "Uuid"
       ]
     },
     "nullable": [
@@ -88,8 +72,9 @@
       false,
       false,
       false,
+      true,
       true
     ]
   },
-  "hash": "02de99a56f3ecae525a41715a7b0f7507c0c5dc1c5f8d86f125b53d3b0983dce"
+  "hash": "2bc312667d58c7687d12e2a494f39781610620bf406d17d872888ed7de2e08f0"
 }

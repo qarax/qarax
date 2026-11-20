@@ -244,7 +244,8 @@ pub async fn fork(
         )));
     }
     let vm = vms::get(env.pool(), source.vm_id).await?;
-    ensure_forkable(&env, &vm).await?;
+    ensure_forkable(&vm)?;
+    let disks = forkable_disks(&env, &vm).await?;
     let nics = forkable_nics(&env, &vm).await?;
     let host_id = vm
         .host_id
@@ -282,7 +283,12 @@ pub async fn fork(
         let fork_sandbox_id = Uuid::new_v4();
         let name = fork_name(&source.name, fork_sandbox_id);
         let fork_vm_id = vms::create_fork_tx(&mut tx, vm.id, &name).await?;
-        vm_disks::copy_for_fork_tx(&mut tx, vm.id, fork_vm_id).await?;
+        for disk in &disks {
+            let image =
+                storage_objects::copy_oci_image_for_fork_tx(&mut tx, disk.image_id, fork_vm_id)
+                    .await?;
+            vm_disks::copy_for_fork_tx(&mut tx, disk.id, fork_vm_id, image).await?;
+        }
         for nic in &nics {
             let address = networks::allocate_ip_tx(&mut tx, nic.network_id, None, fork_vm_id)
                 .await?
@@ -374,10 +380,9 @@ async fn start_forks(env: &App, host: &Host, source_id: Uuid, fork_vm_ids: &[Uui
         })
 }
 
-/// A fork shares everything but its memory, NICs and disks with its source,
-/// so a VM with a disk the forks would write to doesn't fork (see
-/// [`disk_refusal`]).
-async fn ensure_forkable(env: &App, vm: &Vm) -> Result<()> {
+/// Only a running Firecracker VM with the guest agent forks. Its disks are
+/// [`forkable_disks`]'s, its NICs [`forkable_nics`]'.
+fn ensure_forkable(vm: &Vm) -> Result<()> {
     let refusal = if vm.status != VmStatus::Running {
         format!("sandbox VM {} is not running", vm.id)
     } else if vm.hypervisor != Hypervisor::Firecracker {
@@ -386,8 +391,6 @@ async fn ensure_forkable(env: &App, vm: &Vm) -> Result<()> {
         "a sandbox without the guest agent can't be forked: the agent reseeds each fork's \
          random generator"
             .to_string()
-    } else if let Some(refusal) = disk_refusal(env, vm).await? {
-        refusal
     } else {
         return Ok(());
     };
@@ -441,14 +444,23 @@ async fn forkable_nics(env: &App, vm: &Vm) -> Result<Vec<ForkNic>> {
     Ok(forkable)
 }
 
-/// Why `vm`'s disks keep it from forking, if they do. Its OCI image disk
-/// forks: each fork gets the image and the VM's writable layer as it was, and a
-/// writable layer of its own. A persistent writable layer belongs to its
-/// storage object, and other disks would have the forks write to the same file.
-async fn disk_refusal(env: &App, vm: &Vm) -> Result<Option<String>> {
+/// A disk whose copy a fork gets: one on an OCI image, `image_id`, of which
+/// the fork gets its own image object.
+struct ForkDisk {
+    id: Uuid,
+    image_id: Uuid,
+}
+
+/// The disks of `vm` its forks get copies of: its OCI image's, of which each
+/// fork gets the image and the VM's writable layer as it was, and a writable
+/// layer of its own. A persistent writable layer belongs to its storage
+/// object, and other disks would have the forks write to the same file: those
+/// are refused.
+async fn forkable_disks(env: &App, vm: &Vm) -> Result<Vec<ForkDisk>> {
+    let mut forkable = Vec::new();
     for disk in vm_disks::list_by_vm(env.pool(), vm.id).await? {
         if disk.upper_storage_object_id.is_some() {
-            return Ok(Some(
+            return Err(Error::UnprocessableEntity(
                 "a sandbox with a persistent disk layer can't be forked: its forks would \
                  write to the same layer"
                     .into(),
@@ -458,15 +470,23 @@ async fn disk_refusal(env: &App, vm: &Vm) -> Result<Option<String>> {
             Some(id) => Some(storage_objects::get(env.pool(), id).await?),
             None => None,
         };
-        if !image.is_some_and(|object| object.object_type == StorageObjectType::OciImage) {
-            return Ok(Some(format!(
-                "a sandbox with disks besides its OCI image's can't be forked yet: its forks \
-                 would write to the same files (disk {})",
-                disk.logical_name
-            )));
+        match image {
+            Some(image) if image.object_type == StorageObjectType::OciImage => {
+                forkable.push(ForkDisk {
+                    id: disk.id,
+                    image_id: image.id,
+                })
+            }
+            _ => {
+                return Err(Error::UnprocessableEntity(format!(
+                    "a sandbox with disks besides its OCI image's can't be forked yet: its \
+                     forks would write to the same files (disk {})",
+                    disk.logical_name
+                )));
+            }
         }
     }
-    Ok(None)
+    Ok(forkable)
 }
 
 /// `<source>-fork-<8 hex>`, with the source's name cut to fit a VM name.

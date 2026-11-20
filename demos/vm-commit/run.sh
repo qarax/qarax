@@ -62,16 +62,10 @@ delete_pool_objects() {
 	done
 }
 
-# delete_image_vm VM: delete an --image-ref VM and the OverlayBD image object
-# qarax created for it (overlaybd-<vm id>), which VM deletion leaves behind.
-# A committed VM no longer has that object.
+# delete_image_vm VM: delete an --image-ref VM. The OverlayBD image object
+# qarax created for it (overlaybd-<vm id>) goes with it.
 delete_image_vm() {
-	local id
-	id="$(qarax vm get "$1" -o json | jq -r '.id')"
-	qarax vm delete "$id" >/dev/null
-	if exists storage-object "overlaybd-${id}"; then
-		qarax storage-object delete "overlaybd-${id}" >/dev/null
-	fi
+	qarax vm delete "$1" >/dev/null
 }
 
 # Delete what a previous run left, except the local pool.

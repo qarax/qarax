@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nINSERT INTO storage_objects (\n    id, name, storage_pool_id, object_type, size_bytes, config, parent_id, owner_vm_id\n)\nSELECT $1, 'overlaybd-' || $2::uuid::text, storage_pool_id, object_type, size_bytes, config,\n       parent_id, $2\nFROM storage_objects\nWHERE id = $3 AND object_type = 'OCI_IMAGE' AND managed_host_ids IS NULL\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "165eb7618ebebc1cc87e059ac25a34b3ec76142851668c78697c2e6baed51144"
+}

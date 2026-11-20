@@ -603,18 +603,27 @@ async def test_sandbox_fork_of_an_oci_sandbox_forks_its_disk(client, bootable_oc
             for fork in forks:
                 await sh(fork.id, "echo 3 > /proc/sys/vm/drop_caches")
                 assert await sh(fork.id, "cat /root/state") == str(fork.id)
+
+            # Each sandbox has an image object of its own, which goes with it.
+            vm_ids = [source_vm_id] + [fork.vm_id for fork in forks]
+            for vm_id in vm_ids:
+                objects = await call_api(
+                    list_storage_objects, client=c, name=f"overlaybd-{vm_id}"
+                )
+                assert [obj.owner_vm_id for obj in objects.items] == [vm_id], objects.items
+            for sandbox_id in reversed(sandbox_ids):
+                await call_api(delete_sandbox, client=c, sandbox_id=sandbox_id)
+            sandbox_ids.clear()
+            for vm_id in vm_ids:
+                objects = await call_api(
+                    list_storage_objects, client=c, name=f"overlaybd-{vm_id}"
+                )
+                assert not objects.items, f"VM {vm_id}'s image object outlived it"
         finally:
             for sandbox_id in reversed(sandbox_ids):
                 await delete_sandbox.asyncio_detailed(client=c, sandbox_id=sandbox_id)
             if template_id is not None:
                 await delete_template.asyncio_detailed(client=c, vm_template_id=template_id)
-            if source_vm_id is not None:
-                # The image object the source and its forks shared.
-                objects = await list_storage_objects.asyncio(
-                    client=c, name=f"overlaybd-{source_vm_id}"
-                )
-                for obj in objects.items if objects else []:
-                    await delete_storage_object.asyncio_detailed(client=c, object_id=obj.id)
             await delete_storage_pool.asyncio_detailed(client=c, pool_id=pool_id)
 
 

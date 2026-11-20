@@ -23,6 +23,8 @@ class StorageObject:
         object_type (StorageObjectType):
         size_bytes (int):
         storage_pool_id (UUID):
+        owner_vm_id (None | Unset | UUID): The VM that made this object for itself, which it goes with: when the
+            VM is deleted, so is the object, unless something still refers to it.
         parent_id (None | Unset | UUID):
     """
 
@@ -32,6 +34,7 @@ class StorageObject:
     object_type: StorageObjectType
     size_bytes: int
     storage_pool_id: UUID
+    owner_vm_id: None | Unset | UUID = UNSET
     parent_id: None | Unset | UUID = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -47,6 +50,14 @@ class StorageObject:
         size_bytes = self.size_bytes
 
         storage_pool_id = str(self.storage_pool_id)
+
+        owner_vm_id: None | str | Unset
+        if isinstance(self.owner_vm_id, Unset):
+            owner_vm_id = UNSET
+        elif isinstance(self.owner_vm_id, UUID):
+            owner_vm_id = str(self.owner_vm_id)
+        else:
+            owner_vm_id = self.owner_vm_id
 
         parent_id: None | str | Unset
         if isinstance(self.parent_id, Unset):
@@ -68,6 +79,8 @@ class StorageObject:
                 "storage_pool_id": storage_pool_id,
             }
         )
+        if owner_vm_id is not UNSET:
+            field_dict["owner_vm_id"] = owner_vm_id
         if parent_id is not UNSET:
             field_dict["parent_id"] = parent_id
 
@@ -87,6 +100,23 @@ class StorageObject:
         size_bytes = d.pop("size_bytes")
 
         storage_pool_id = UUID(d.pop("storage_pool_id"))
+
+        def _parse_owner_vm_id(data: object) -> None | Unset | UUID:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                owner_vm_id_type_0 = UUID(data)
+
+                return owner_vm_id_type_0
+            except (TypeError, ValueError, AttributeError, KeyError):
+                pass
+            return cast(None | Unset | UUID, data)
+
+        owner_vm_id = _parse_owner_vm_id(d.pop("owner_vm_id", UNSET))
 
         def _parse_parent_id(data: object) -> None | Unset | UUID:
             if data is None:
@@ -112,6 +142,7 @@ class StorageObject:
             object_type=object_type,
             size_bytes=size_bytes,
             storage_pool_id=storage_pool_id,
+            owner_vm_id=owner_vm_id,
             parent_id=parent_id,
         )
 

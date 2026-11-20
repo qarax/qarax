@@ -17,6 +17,9 @@ pub struct StorageObject {
     pub size_bytes: i64,
     pub config: serde_json::Value,
     pub parent_id: Option<Uuid>,
+    /// The VM that made this object for itself, which it goes with: when the
+    /// VM is deleted, so is the object, unless something still refers to it.
+    pub owner_vm_id: Option<Uuid>,
 }
 
 pub struct StorageObjectRow {
@@ -27,6 +30,7 @@ pub struct StorageObjectRow {
     pub size_bytes: i64,
     pub config: Json<serde_json::Value>,
     pub parent_id: Option<Uuid>,
+    pub owner_vm_id: Option<Uuid>,
 }
 
 impl From<StorageObjectRow> for StorageObject {
@@ -39,6 +43,7 @@ impl From<StorageObjectRow> for StorageObject {
             size_bytes: row.size_bytes,
             config: row.config.0,
             parent_id: row.parent_id,
+            owner_vm_id: row.owner_vm_id,
         }
     }
 }
@@ -95,7 +100,8 @@ SELECT id,
         object_type as "object_type: _",
         size_bytes,
         config as "config: _",
-        parent_id as "parent_id?"
+        parent_id as "parent_id?",
+        owner_vm_id as "owner_vm_id?"
 FROM storage_objects
 WHERE ($1::text IS NULL OR name = $1)
   AND ($2::uuid IS NULL OR storage_pool_id = $2)
@@ -131,7 +137,8 @@ SELECT id,
         object_type AS "object_type: _",
         size_bytes,
         config,
-        parent_id
+        parent_id,
+        owner_vm_id
 FROM storage_objects
 WHERE id = ANY($1)
         "#,
@@ -153,7 +160,8 @@ SELECT id,
         object_type as "object_type: _",
         size_bytes,
         config as "config: _",
-        parent_id as "parent_id?"
+        parent_id as "parent_id?",
+        owner_vm_id as "owner_vm_id?"
 FROM storage_objects
 WHERE id = $1
         "#,
@@ -178,7 +186,8 @@ SELECT id,
        object_type AS "object_type: _",
        size_bytes,
        config,
-       parent_id
+       parent_id,
+       owner_vm_id
 FROM storage_objects
 WHERE id = $1
 FOR UPDATE
@@ -321,7 +330,17 @@ pub async fn create_returning(
     pool: &PgPool,
     new_object: NewStorageObject,
 ) -> Result<StorageObject, sqlx::Error> {
-    insert_object(pool, new_object, None).await
+    insert_object(pool, new_object, None, None).await
+}
+
+/// Register an object `vm_id` makes for itself, without files of its own
+/// for qarax to remove: it goes with the VM.
+pub async fn create_owned_by_vm(
+    pool: &PgPool,
+    new_object: NewStorageObject,
+    vm_id: Uuid,
+) -> Result<Uuid, sqlx::Error> {
+    Ok(insert_object(pool, new_object, None, Some(vm_id)).await?.id)
 }
 
 /// Record ownership and the node on which Qarax provisions the files.
@@ -340,20 +359,21 @@ pub async fn create_managed_returning(
     new_object: NewStorageObject,
     host_id: Uuid,
 ) -> Result<StorageObject, sqlx::Error> {
-    insert_object(pool, new_object, Some(vec![host_id])).await
+    insert_object(pool, new_object, Some(vec![host_id]), None).await
 }
 
 async fn insert_object(
     pool: &PgPool,
     new_object: NewStorageObject,
     managed_host_ids: Option<Vec<Uuid>>,
+    owner_vm_id: Option<Uuid>,
 ) -> Result<StorageObject, sqlx::Error> {
     let (id, pool_id, config) = resolve_new_object(pool, &new_object).await?;
 
     sqlx::query!(
         r#"
-INSERT INTO storage_objects (id, name, storage_pool_id, object_type, size_bytes, config, parent_id, managed_host_ids)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+INSERT INTO storage_objects (id, name, storage_pool_id, object_type, size_bytes, config, parent_id, managed_host_ids, owner_vm_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         "#,
         id,
         &new_object.name,
@@ -363,6 +383,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         &config,
         new_object.parent_id,
         managed_host_ids.as_deref(),
+        owner_vm_id,
     )
     .execute(pool)
     .await?;
@@ -375,7 +396,40 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         size_bytes: new_object.size_bytes,
         config,
         parent_id: new_object.parent_id,
+        owner_vm_id,
     })
+}
+
+/// Give `fork_vm_id` its own copy of OCI image object `image_id`, which its
+/// source booted: the same image, owned by the fork. A copy of the row only:
+/// an image object has no files of its own.
+pub async fn copy_oci_image_for_fork_tx(
+    tx: &mut PgTransaction<'_>,
+    image_id: Uuid,
+    fork_vm_id: Uuid,
+) -> Result<Uuid, sqlx::Error> {
+    let id = Uuid::new_v4();
+    let inserted = sqlx::query!(
+        r#"
+INSERT INTO storage_objects (
+    id, name, storage_pool_id, object_type, size_bytes, config, parent_id, owner_vm_id
+)
+SELECT $1, 'overlaybd-' || $2::uuid::text, storage_pool_id, object_type, size_bytes, config,
+       parent_id, $2
+FROM storage_objects
+WHERE id = $3 AND object_type = 'OCI_IMAGE' AND managed_host_ids IS NULL
+        "#,
+        id,
+        fork_vm_id,
+        image_id
+    )
+    .execute(tx.as_mut())
+    .await?
+    .rows_affected();
+    if inserted == 0 {
+        return Err(sqlx::Error::RowNotFound);
+    }
+    Ok(id)
 }
 
 pub async fn delete(pool: &PgPool, object_id: Uuid) -> Result<(), sqlx::Error> {

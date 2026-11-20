@@ -94,8 +94,8 @@ A source with cloud-init forks its seed image: each fork gets its own, with the
 same content, so it boots again after its source and its source's seed are
 gone. The guest doesn't run cloud-init again: it already ran in the source.
 
-Either every fork of a request starts or none does. The forks' rows point at
-the source's image storage object, so the database shows what they boot.
+Either every fork of a request starts or none does. Each fork has its own copy
+of the source's image storage object, which goes with it when it's deleted.
 
 ## What it costs
 

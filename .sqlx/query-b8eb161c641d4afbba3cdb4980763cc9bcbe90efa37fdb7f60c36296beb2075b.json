@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM storage_objects WHERE id = ANY($1) AND NOT storage_object_in_use(id)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "UuidArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b8eb161c641d4afbba3cdb4980763cc9bcbe90efa37fdb7f60c36296beb2075b"
+}
