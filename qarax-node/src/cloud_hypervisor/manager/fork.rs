@@ -353,7 +353,7 @@ impl VmManager {
             // Copy-on-write: the forks share the snapshot's memory pages.
             let body = serde_json::json!({
                 "source_url": format!("file://{}", fork_dir.display()),
-                "memory_restore_mode": "copyonwrite",
+                "memory_restore_mode": "CopyOnWrite",
                 "resume": false,
             })
             .to_string();
