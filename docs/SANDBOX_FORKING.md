@@ -30,9 +30,11 @@ qarax sandbox fork my-sandbox --count 3
 
 ## How it works
 
-1. The node pauses the source, writes a full Firecracker snapshot of it
-   (memory and device state) and resumes it. The pause lasts as long as
-   writing the memory does, about 0.1 s for 256 MiB on fast storage.
+1. The node pauses the source, writes a Firecracker snapshot of it (memory
+   and device state) and resumes it. The first time, it writes all of the
+   memory: the pause lasts as long as that does, about 0.1 s for 256 MiB on
+   fast storage. The snapshot isn't synced to disk: the forks read it from the
+   page cache on the same host.
 2. Each fork is a new Firecracker process that loads the snapshot with the
    `File` memory backend, which maps the memory file `MAP_PRIVATE`: the forks
    share the source's pages until they write them. Each fork's vsock gets its
@@ -47,7 +49,22 @@ qarax sandbox fork my-sandbox --count 3
    (OpenSSL, numpy, ...) keep the state they had in the source: reseed them if
    the forks need their own.
 4. The snapshot is deleted once the forks have loaded it: they keep the memory
-   file mapped.
+   file mapped. A source with the guest agent keeps its memory image as its
+   fork base, below.
+
+A sandbox forked again writes only the memory it dirtied since its last fork.
+Firecracker tracks the pages a VM with the guest agent dirties, from boot (or,
+for a fork, from its load). The node keeps the memory image of a source's last
+fork round, its fork base, in the node's runtime directory; the next round
+takes a diff snapshot, the pages dirtied since, so the pause lasts as long as
+writing those does. Once the source runs again, the node lays them over a copy
+of the base (a reflink where the filesystem has them, a copy of the memory
+otherwise) and the forks load that, the new base. A base is never written to:
+the forks that loaded it map it, and keep it when it's replaced. One fork round
+of a source runs at a time, and a snapshot of the source through the API or a
+restart forgets the base, so its next fork takes a full snapshot again; so
+does the first fork of a VM a restarted node recovered. A source forked once
+keeps a file the size of its memory in the runtime directory until it stops.
 
 A source booted from an OCI image forks its disk too. The image is OverlayBD
 read-only layers with a writable layer of the VM's own on top:
@@ -116,7 +133,7 @@ Measured on a laptop with a 256 MiB guest, the node in a container capped at
 | | bare | nested |
 |---|---:|---:|
 | Cold boot of the source, until the guest agent answers | 0.37 s | 1.5 s |
-| Source paused for the snapshot | 116 ms | 130 ms |
+| Source paused for the snapshot (the first fork) | 116 ms | 130 ms |
 | One fork, until its guest agent answers | 13–18 ms | 66–72 ms |
 | A fork's own memory after it starts | ~7 MiB | ~7 MiB |
 | Extra pause for an OCI disk (flush, write-back, reflink) | | 8–31 ms |
@@ -133,5 +150,3 @@ inherits stays shared.
 ## Not yet
 
 - **Cloud Hypervisor** sandboxes.
-- **Diff snapshots**, so that forking a source again writes only the memory it
-  changed since the last time.

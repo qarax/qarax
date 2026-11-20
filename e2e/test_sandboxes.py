@@ -72,11 +72,14 @@ from qarax_api_client.models.sandbox_status import SandboxStatus
 
 from helpers import (
     AUTH_HEADERS,
+    NODE_CONTAINER_PREFIX,
     REGISTRY_INTERNAL_URL,
     attach_overlaybd_pool,
     call_api,
     call_api_detailed,
+    containers,
     create_sparse_file_on_nodes,
+    docker,
     exec_when_ready,
     isolated_network,
     node_storage_diagnostics,
@@ -875,6 +878,69 @@ async def test_sandbox_fork_copies_its_data_disk(client):
             assert await disks_owned_by(fork_vm_ids) == []
         finally:
             for sandbox_id in sandbox_ids:
+                await delete_sandbox.asyncio_detailed(client=c, sandbox_id=sandbox_id)
+            await cleanup_bootable_sandbox_template(c, resources)
+
+
+@pytest.mark.asyncio
+async def test_a_sandbox_forked_again_forks_from_a_diff(client):
+    """Forking a sandbox again writes only the memory it dirtied since its last
+    fork: the second round's fork has what the source did in between, the
+    first round's doesn't."""
+    async with client as c:
+        template_id, resources = await create_bootable_sandbox_template(c, "firecracker")
+        sandbox_ids = []
+
+        async def sh(sandbox_id, script):
+            result = await call_api(
+                exec_sandbox,
+                client=c,
+                sandbox_id=sandbox_id,
+                body=ExecSandboxRequest(command=["/bin/sh", "-c", script], timeout_secs=15),
+            )
+            assert result.exit_code == 0, f"{script}: {result.stdout} {result.stderr}"
+            return result.stdout.strip()
+
+        async def fork_once(sandbox_id):
+            response = await call_api_detailed(
+                fork_sandbox,
+                client=c,
+                sandbox_id=sandbox_id,
+                body=ForkSandboxRequest(count=1),
+            )
+            assert response.status_code == 201, response.content.decode()
+            [fork] = response.parsed
+            sandbox_ids.append(fork.id)
+            return fork
+
+        try:
+            source = await call_api(
+                create_sandbox,
+                client=c,
+                body=NewSandbox(
+                    name=f"e2e-fork-diff-{uuid.uuid4().hex[:8]}",
+                    vm_template_id=template_id,
+                    idle_timeout_secs=300,
+                ),
+            )
+            sandbox_ids.append(source.id)
+            await wait_for_sandbox_status(c, source.id, SandboxStatus.READY)
+
+            await sh(source.id, "echo one > /root/state")
+            first = await fork_once(source.id)
+            await sh(source.id, "echo two > /root/state")
+            second = await fork_once(source.id)
+
+            assert await sh(first.id, "cat /root/state") == "one"
+            assert await sh(second.id, "cat /root/state") == "two"
+            assert await sh(source.id, "cat /root/state") == "two"
+            logs = "".join(
+                docker("logs", container, check=False).stdout
+                for container in containers(NODE_CONTAINER_PREFIX)
+            )
+            assert f"Forking VM {source.vm_id} from a diff snapshot" in logs
+        finally:
+            for sandbox_id in reversed(sandbox_ids):
                 await delete_sandbox.asyncio_detailed(client=c, sandbox_id=sandbox_id)
             await cleanup_bootable_sandbox_template(c, resources)
 

@@ -31,12 +31,25 @@
 //! data extents only elsewhere), and from that into the others' once the
 //! source runs again. Read-only disks are shared.
 //!
+//! A VM with the guest agent runs with Firecracker tracking the pages it
+//! dirties. Its first fork takes a full snapshot, whose memory image the node
+//! keeps as the VM's fork base; each fork after that writes only the pages
+//! dirtied since (a diff snapshot), so the pause lasts as long as writing those
+//! does, and once the VM runs again lays them over a copy of the base (a
+//! reflink where the filesystem has them), which becomes the next base. A base
+//! is never written to: the forks that loaded it map it. One fork round of a VM
+//! runs at a time, and anything else that resets the dirty-page log (a
+//! snapshot, a restart) forgets the base.
+//!
 //! The forks load paused and are resumed in a second step, so that their
 //! firewall is in place before they run.
 
 use std::io::Read;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+use std::os::unix::fs::MetadataExt;
+
+use firecracker_rust_sdk::models::snapshot_create_params::SnapshotType;
 use firecracker_rust_sdk::models::{NetworkOverride, PartialDrive, VsockOverride};
 use futures::future::join_all;
 
@@ -59,6 +72,76 @@ fn check_forkable(config: &ProtoVmConfig) -> Result<(), VmmError> {
         ));
     }
     Ok(())
+}
+
+/// Whether Firecracker tracks the pages a VM dirties: for a VM with the guest
+/// agent, which can be forked, so that its forks after the first take a diff
+/// snapshot.
+pub(super) fn tracks_dirty_pages(config: &ProtoVmConfig) -> bool {
+    config.vsock.is_some()
+}
+
+/// A running VM's [`ForkMemory`], which a fork round holds from its snapshot
+/// to its new base.
+pub(super) type ForkMemoryLock = Arc<tokio::sync::Mutex<ForkMemory>>;
+
+/// What the next fork of a running VM snapshots of its memory.
+pub(super) enum ForkMemory {
+    /// Firecracker doesn't track the pages the VM dirties, or qarax-node
+    /// doesn't know that it does (a VM recovered at startup): each fork takes
+    /// a full snapshot.
+    Untracked,
+    /// Firecracker tracks the pages the VM dirties. `base` is its memory as
+    /// the last fork round's snapshot left it, the dirty-page log reset since:
+    /// the next round writes only the pages dirtied since.
+    Tracked { base: Option<ForkBase> },
+}
+
+impl ForkMemory {
+    /// For a VM Firecracker runs with dirty-page tracking or without.
+    pub(super) fn new(tracked: bool) -> ForkMemoryLock {
+        Arc::new(tokio::sync::Mutex::new(if tracked {
+            ForkMemory::Tracked { base: None }
+        } else {
+            ForkMemory::Untracked
+        }))
+    }
+
+    /// Forget the base, whose diffs no longer hold: something reset the
+    /// dirty-page log.
+    pub(super) fn forget_base(&mut self) {
+        if let ForkMemory::Tracked { base } = self {
+            *base = None;
+        }
+    }
+}
+
+/// The memory image a VM's last fork round left, which that round's forks
+/// map. Its file is unlinked when it's replaced or forgotten, which the forks
+/// mapping it don't notice.
+pub(super) struct ForkBase(PathBuf);
+
+impl Drop for ForkBase {
+    fn drop(&mut self) {
+        if let Err(e) = std::fs::remove_file(&self.0)
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            warn!("FC: Failed to remove fork base {}: {}", self.0.display(), e);
+        }
+    }
+}
+
+/// What a fork round's snapshot wrote of its source's memory.
+enum MemorySnapshot {
+    /// All of it, in this file.
+    Full(PathBuf),
+    /// The pages dirtied since `base`, in `diff`: laid over a copy of `base`,
+    /// they make `image`.
+    Diff {
+        base: PathBuf,
+        diff: PathBuf,
+        image: PathBuf,
+    },
 }
 
 /// A source's data disk, of which each fork gets a copy.
@@ -189,14 +272,15 @@ fn readdress_request(
     Ok(Some(request))
 }
 
-/// Run `copy`, a blocking file operation, off the async runtime.
+/// Run `op`, a blocking file operation (`what`), off the async runtime.
 async fn blocking(
-    copy: impl FnOnce() -> std::io::Result<()> + Send + 'static,
+    what: &str,
+    op: impl FnOnce() -> std::io::Result<()> + Send + 'static,
 ) -> Result<(), VmmError> {
-    tokio::task::spawn_blocking(copy)
+    tokio::task::spawn_blocking(op)
         .await
-        .map_err(|e| VmmError::StorageError(format!("disk copy task: {e}")))?
-        .map_err(|e| VmmError::StorageError(format!("copying a data disk: {e}")))
+        .map_err(|e| VmmError::StorageError(format!("{what}: {e}")))?
+        .map_err(|e| VmmError::StorageError(format!("{what}: {e}")))
 }
 
 /// The fork notice qarax-init reads, on one line:
@@ -289,16 +373,22 @@ impl FirecrackerManager {
         if fork_ids.is_empty() {
             return Err(VmmError::InvalidConfig("no VMs to fork into".into()));
         }
-        let source_config = {
+        let (source_config, memory) = {
             let vms = self.vms.lock().await;
             if let Some(id) = fork_ids.iter().find(|id| vms.contains_key(*id)) {
                 return Err(VmmError::VmAlreadyExists(id.clone()));
             }
-            vms.get(source_id)
-                .ok_or_else(|| VmmError::VmNotFound(source_id.to_string()))?
-                .proto_config
-                .clone()
+            let instance = vms
+                .get(source_id)
+                .ok_or_else(|| VmmError::VmNotFound(source_id.to_string()))?;
+            let FcPhase::Live { forking, .. } = &instance.phase else {
+                return Err(VmmError::ProcessError("VM is not running".into()));
+            };
+            (instance.proto_config.clone(), forking.clone())
         };
+        // One fork round of a VM at a time: each diffs against the last one's
+        // memory image.
+        let mut memory = memory.lock().await;
         check_forkable(&source_config)?;
         let configs = forks
             .iter()
@@ -311,9 +401,16 @@ impl FirecrackerManager {
             .runtime_dir
             .join(format!("{source_id}.fork-{}", uuid::Uuid::new_v4()));
         let forked = self
-            .fork_from_snapshot(source_id, disk.as_ref(), &data, configs, &snapshot_dir)
+            .fork_from_snapshot(
+                source_id,
+                disk.as_ref(),
+                &data,
+                configs,
+                &snapshot_dir,
+                &mut memory,
+            )
             .await;
-        // The forks keep the memory file mapped, so it can go now.
+        // The forks keep the snapshot's files mapped, so they can go now.
         if let Err(e) = tokio::fs::remove_dir_all(&snapshot_dir).await
             && e.kind() != std::io::ErrorKind::NotFound
         {
@@ -401,6 +498,7 @@ impl FirecrackerManager {
         data: &[DataDisk],
         configs: Vec<ProtoVmConfig>,
         dir: &Path,
+        memory: &mut ForkMemory,
     ) -> Result<Vec<(String, FcVmInstance)>, VmmError> {
         let fork_ids: Vec<String> = configs.iter().map(|config| config.vm_id.clone()).collect();
         // While the source still runs, so the pause only writes back the rest.
@@ -412,7 +510,10 @@ impl FirecrackerManager {
         }
         for disk in data {
             let path = disk.path.clone();
-            blocking(move || crate::storage::files::write_back(&path)).await?;
+            blocking("writing back a data disk", move || {
+                crate::storage::files::write_back(&path)
+            })
+            .await?;
         }
         // Each data disk's copies: the first, made in the pause, then the rest.
         let copies: Vec<Vec<PathBuf>> = data
@@ -437,14 +538,26 @@ impl FirecrackerManager {
             .zip(&copies)
             .filter_map(|(disk, copies)| Some((disk.path.clone(), copies.first()?.clone())))
             .collect();
-        let frozen = self
-            .snapshot_for_fork(source_id, disk, &in_pause, dir)
-            .await?;
+        let (frozen, snapshot) = match self
+            .snapshot_for_fork(source_id, disk, &in_pause, dir, memory)
+            .await
+        {
+            Ok(taken) => taken,
+            Err(e) => {
+                // The snapshot may have reset the dirty-page log.
+                memory.forget_base();
+                return Err(e);
+            }
+        };
+        let image = self.memory_image(source_id, snapshot, memory).await?;
         for copies in &copies {
             if let [first, rest @ ..] = copies.as_slice() {
                 for copy in rest {
                     let (first, copy) = (first.clone(), copy.clone());
-                    blocking(move || crate::storage::files::copy_sparse(&first, &copy)).await?;
+                    blocking("copying a data disk", move || {
+                        crate::storage::files::copy_sparse(&first, &copy)
+                    })
+                    .await?;
                 }
             }
         }
@@ -460,7 +573,7 @@ impl FirecrackerManager {
 
         let loaded = join_all(configs.into_iter().zip(&devices).map(|(config, device)| {
             let disk = disk.zip(device.as_deref());
-            self.load_fork(config, disk, data, dir)
+            self.load_fork(config, disk, data, dir, &image)
         }))
         .await;
         let mut forks = Vec::with_capacity(loaded.len());
@@ -517,7 +630,8 @@ impl FirecrackerManager {
         disk: Option<&SourceDisk>,
         copies: &[(PathBuf, PathBuf)],
         dir: &Path,
-    ) -> Result<Option<FrozenUpper>, VmmError> {
+        memory: &ForkMemory,
+    ) -> Result<(Option<FrozenUpper>, MemorySnapshot), VmmError> {
         tokio::fs::create_dir_all(dir).await.map_err(|e| {
             VmmError::ProcessError(format!(
                 "Failed to create snapshot directory {}: {}",
@@ -545,17 +659,40 @@ impl FirecrackerManager {
                 .map_err(sdk_err)?;
             *state = LiveState::Paused;
         }
+        let image = dir.join("mem.snap");
+        let (mem_file, snapshot_type, taken) = match memory {
+            ForkMemory::Tracked { base: Some(base) } => {
+                let diff = dir.join("mem.diff");
+                let taken = MemorySnapshot::Diff {
+                    base: base.0.clone(),
+                    diff: diff.clone(),
+                    image,
+                };
+                (diff, SnapshotType::Diff, taken)
+            }
+            _ => (
+                image.clone(),
+                SnapshotType::Full,
+                MemorySnapshot::Full(image),
+            ),
+        };
         let snapshot = async {
             micro_vm
-                .create_snapshot(&SnapshotCreateParams::new(
-                    dir.join("mem.snap").display().to_string(),
-                    dir.join("vm.snap").display().to_string(),
-                ))
+                .create_snapshot(&SnapshotCreateParams {
+                    mem_file_path: mem_file.display().to_string(),
+                    snapshot_path: dir.join("vm.snap").display().to_string(),
+                    snapshot_type: Some(snapshot_type),
+                    // The forks read them on this host, from the page cache.
+                    sync_snapshot_files: Some(false),
+                })
                 .await
                 .map_err(sdk_err)?;
             for (file, copy) in copies {
                 let (file, copy) = (file.clone(), copy.clone());
-                blocking(move || crate::storage::files::copy_sparse(&file, &copy)).await?;
+                blocking("copying a data disk", move || {
+                    crate::storage::files::copy_sparse(&file, &copy)
+                })
+                .await?;
             }
             match disk {
                 Some(disk) => disk
@@ -576,7 +713,67 @@ impl FirecrackerManager {
                 .map_err(sdk_err)?;
             *state = LiveState::Running;
         }
-        snapshot
+        snapshot.map(|frozen| (frozen, taken))
+    }
+
+    /// The full memory image of a fork round's `snapshot`, which its forks
+    /// load. For a source whose dirty pages are tracked, it is the base of the
+    /// next round too: the snapshot reset the dirty-page log.
+    async fn memory_image(
+        &self,
+        source_id: &str,
+        snapshot: MemorySnapshot,
+        memory: &mut ForkMemory,
+    ) -> Result<PathBuf, VmmError> {
+        let image = match snapshot {
+            MemorySnapshot::Full(image) => Ok(image),
+            MemorySnapshot::Diff { base, diff, image } => {
+                let dirty = tokio::fs::metadata(&diff)
+                    .await
+                    .map(|metadata| metadata.blocks() * 512 / (1024 * 1024))
+                    .unwrap_or_default();
+                info!("FC: Forking VM {source_id} from a diff snapshot, {dirty} MiB dirty");
+                let merged = async {
+                    let (from, to) = (base, image.clone());
+                    blocking("copying the fork base", move || {
+                        crate::storage::files::copy_sparse(&from, &to)
+                    })
+                    .await?;
+                    let (from, to) = (diff.clone(), image.clone());
+                    blocking("applying the diff snapshot", move || {
+                        crate::storage::files::overlay_extents(&from, &to)
+                    })
+                    .await?;
+                    Ok(image)
+                }
+                .await;
+                if let Err(e) = tokio::fs::remove_file(&diff).await {
+                    warn!(
+                        "FC: Failed to remove diff snapshot {}: {}",
+                        diff.display(),
+                        e
+                    );
+                }
+                merged
+            }
+        };
+        let ForkMemory::Tracked { base } = memory else {
+            return image;
+        };
+        // Whatever comes next, the old base no longer holds.
+        *base = None;
+        let image = image?;
+        let kept = self
+            .runtime_dir
+            .join(format!("{source_id}.fork-base-{}", uuid::Uuid::new_v4()));
+        tokio::fs::rename(&image, &kept).await.map_err(|e| {
+            VmmError::ProcessError(format!(
+                "Failed to keep {} as the fork base: {e}",
+                image.display()
+            ))
+        })?;
+        *base = Some(ForkBase(kept.clone()));
+        Ok(kept)
     }
 
     /// Load one fork, `config`, paused from the snapshot in `dir`, onto TAPs
@@ -587,8 +784,10 @@ impl FirecrackerManager {
         disk: Option<(&SourceDisk, &str)>,
         data: &[DataDisk],
         dir: &Path,
+        image: &Path,
     ) -> Result<FcVmInstance, VmmError> {
         let fork_id = config.vm_id.clone();
+        let tracked = tracks_dirty_pages(&config);
         let vsock_path = self.vsock_socket_path(&fork_id);
         if let Some(vsock) = config.vsock.as_mut() {
             vsock.socket = Some(vsock_path.display().to_string());
@@ -641,8 +840,9 @@ impl FirecrackerManager {
                     snapshot_path: dir.join("vm.snap").display().to_string(),
                     mem_backend: Some(Box::new(MemoryBackend::new(
                         BackendType::File,
-                        dir.join("mem.snap").display().to_string(),
+                        image.display().to_string(),
                     ))),
+                    track_dirty_pages: Some(tracked),
                     network_overrides: Some(network_overrides),
                     vsock_override: Some(Box::new(VsockOverride::new(
                         vsock_path.display().to_string(),
@@ -678,6 +878,7 @@ impl FirecrackerManager {
                 phase: FcPhase::Live {
                     micro_vm,
                     state: LiveState::Paused,
+                    forking: ForkMemory::new(tracked),
                 },
             }),
             Err(e) => {
