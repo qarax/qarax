@@ -1,4 +1,5 @@
 pub mod block;
+pub mod files;
 pub mod local;
 pub mod nfs;
 pub mod overlaybd;
