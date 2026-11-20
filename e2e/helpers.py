@@ -208,6 +208,30 @@ def vm_diagnostics(vm_id, max_bytes=6000):
     return f"(no console log for VM {vm_id} on any node)"
 
 
+def node_storage_diagnostics(max_lines=80):
+    """The state of OverlayBD on every node, for a failure message: whether
+    overlaybd-tcmu runs, the end of its log, the kernel's, and the SCSI disks."""
+    script = (
+        "pgrep -a overlaybd-tcmu || echo 'overlaybd-tcmu is not running'; "
+        f"echo '--- overlaybd.log'; tail -n {max_lines} /var/log/overlaybd.log 2>&1; "
+        f"echo '--- dmesg'; dmesg 2>&1 | tail -n {max_lines}; "
+        "echo '--- disks'; ls -l /sys/block | grep ' sd' || true"
+    )
+    return "\n".join(
+        f"=== {container} ===\n" + docker("exec", container, "sh", "-c", script, check=False).stdout
+        for container in containers(NODE_CONTAINER_PREFIX)
+    )
+
+
+def overlaybd_tcmu_running():
+    """Whether overlaybd-tcmu runs on the node that has it (the compose stack
+    runs it on qarax-node only)."""
+    return any(
+        docker("exec", container, "pgrep", "-x", "overlaybd-tcmu", check=False).returncode == 0
+        for container in containers(NODE_CONTAINER_PREFIX)
+    )
+
+
 def path_exists_in_any(prefix, path):
     """True if `path` exists in any running container whose name starts with prefix."""
     return any(

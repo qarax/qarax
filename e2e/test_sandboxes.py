@@ -71,6 +71,8 @@ from helpers import (
     call_api,
     call_api_detailed,
     exec_when_ready,
+    node_storage_diagnostics,
+    overlaybd_tcmu_running,
     up_hosts,
     vm_diagnostics,
 )
@@ -597,6 +599,9 @@ async def test_sandbox_fork_of_an_oci_sandbox_forks_its_disk(client, bootable_oc
                 for obj in objects.items if objects else []:
                     await delete_storage_object.asyncio_detailed(client=c, object_id=obj.id)
             await delete_storage_pool.asyncio_detailed(client=c, pool_id=pool_id)
+
+    # The forks and their cleanup leave the node's OverlayBD daemon serving.
+    assert overlaybd_tcmu_running(), node_storage_diagnostics()
 
 
 @pytest.mark.asyncio

@@ -87,6 +87,7 @@ from helpers import (
     call_api,
     docker,
     exec_when_ready,
+    node_storage_diagnostics,
     vm_diagnostics,
     wait_for_start,
 )
@@ -230,7 +231,10 @@ async def test_vm_boots_an_oci_image(client, bootable_oci_image_ref, hypervisor)
             await wait_for_job(c, result.job_id)
 
             started = await call_api(start_vm, client=c, vm_id=vm_id)
-            await wait_for_start(c, vm_id, started.job_id)
+            try:
+                await wait_for_start(c, vm_id, started.job_id)
+            except TimeoutError as e:
+                raise TimeoutError(f"{e}\n{node_storage_diagnostics()}") from e
 
             try:
                 os_release = await exec_when_ready(c, vm_id, "cat /etc/os-release")
