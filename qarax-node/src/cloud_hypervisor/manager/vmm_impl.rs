@@ -187,6 +187,12 @@ impl crate::vmm::VmmManager for VmManager {
             .map_err(Into::into)
     }
 
+    async fn guest_agent_socket(&self, vm_id: &str) -> Result<PathBuf, crate::vmm::VmmError> {
+        VmManager::guest_agent_socket(self, vm_id)
+            .await
+            .map_err(Into::into)
+    }
+
     async fn get_vm_counters(
         &self,
         vm_id: &str,

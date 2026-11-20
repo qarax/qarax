@@ -5548,6 +5548,10 @@ components:
           - 'null'
     SandboxStatus:
       type: string
+      description: |-
+        `provisioning` until its VM runs and its guest agent answers, then
+        `ready`, when `exec` works; `error` (see `error_message`) if it
+        doesn't get there, and `destroying` while it is deleted.
       enum:
       - provisioning
       - ready

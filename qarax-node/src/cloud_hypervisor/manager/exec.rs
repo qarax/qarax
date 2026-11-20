@@ -44,6 +44,24 @@ impl VmManager {
         Ok(request_json)
     }
 
+    /// The host end of `vm_id`'s guest-agent vsock, while the VM runs.
+    pub(super) async fn guest_agent_socket(&self, vm_id: &str) -> Result<PathBuf, VmManagerError> {
+        let vms = self.vms.lock().await;
+        let instance = vms
+            .get(vm_id)
+            .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
+        if instance.status != VmStatus::Running {
+            return Err(VmManagerError::ExecUnavailable(format!(
+                "VM {} is not running",
+                vm_id
+            )));
+        }
+        instance
+            .vsock_socket_path
+            .clone()
+            .ok_or_else(|| VmManagerError::ExecUnavailable(vm_id.to_string()))
+    }
+
     /// Execute a command inside the guest through the sandbox exec guest agent.
     pub async fn exec_vm(
         &self,
@@ -57,24 +75,7 @@ impl VmManager {
             ));
         }
 
-        let (status, vsock_socket_path) = {
-            let vms = self.vms.lock().await;
-            let instance = vms
-                .get(vm_id)
-                .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
-
-            (instance.status, instance.vsock_socket_path.clone())
-        };
-
-        if status != VmStatus::Running {
-            return Err(VmManagerError::ExecUnavailable(format!(
-                "VM {} is not running",
-                vm_id
-            )));
-        }
-
-        let vsock_socket_path =
-            vsock_socket_path.ok_or_else(|| VmManagerError::ExecUnavailable(vm_id.to_string()))?;
+        let vsock_socket_path = self.guest_agent_socket(vm_id).await?;
 
         let request_json = Self::build_guest_exec_request(command, timeout_secs)?;
 

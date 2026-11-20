@@ -96,7 +96,8 @@ impl ReadyWait {
     }
 }
 
-/// Event-driven wait until the sandbox VM either reaches Running or fails.
+/// Event-driven wait until the sandbox VM runs and its guest agent answers,
+/// so `exec` works, or it fails.
 ///
 /// Listens on the broadcast event bus emitted by `vms::transition`, with a
 /// low-cadence job-status poll as a backstop for failures that don't transition
@@ -121,7 +122,9 @@ pub(crate) async fn watch_for_ready(env: &App, vm_id: Uuid, mut wait: ReadyWait)
     // the time we subscribe, and gets OCI sandboxes off the launchpad).
     match vms::get(env.pool(), vm_id).await {
         Ok(vm) => {
-            if let Some(outcome) = handle_vm_status(env, vm.status, &mut wait, vm_id).await {
+            if let Some(outcome) =
+                handle_vm_status(env, vm.status, &mut wait, vm_id, deadline).await
+            {
                 return outcome;
             }
         }
@@ -142,7 +145,7 @@ pub(crate) async fn watch_for_ready(env: &App, vm_id: Uuid, mut wait: ReadyWait)
                     Ok(evt) if evt.vm_id == vm_id => {
                         let parsed: Option<VmStatus> = evt.new_status.parse().ok();
                         if let Some(status) = parsed
-                            && let Some(outcome) = handle_vm_status(env, status, &mut wait, vm_id).await
+                            && let Some(outcome) = handle_vm_status(env, status, &mut wait, vm_id, deadline).await
                         {
                             return outcome;
                         }
@@ -152,7 +155,7 @@ pub(crate) async fn watch_for_ready(env: &App, vm_id: Uuid, mut wait: ReadyWait)
                         // We may have missed events; re-sync from the DB.
                         match vms::get(env.pool(), vm_id).await {
                             Ok(vm) => {
-                                if let Some(outcome) = handle_vm_status(env, vm.status, &mut wait, vm_id)
+                                if let Some(outcome) = handle_vm_status(env, vm.status, &mut wait, vm_id, deadline)
                                 .await
                                 {
                                     return outcome;
@@ -189,9 +192,10 @@ async fn handle_vm_status(
     status: VmStatus,
     wait: &mut ReadyWait,
     vm_id: Uuid,
+    deadline: Instant,
 ) -> Option<ReadyOutcome> {
     match status {
-        VmStatus::Running => Some(ReadyOutcome::Ready),
+        VmStatus::Running => Some(wait_for_guest_agent(env, vm_id, deadline).await),
         VmStatus::Shutdown | VmStatus::Unknown => {
             Some(ReadyOutcome::Failed("VM failed to start".to_string()))
         }
@@ -211,6 +215,34 @@ async fn handle_vm_status(
             ReadyWait::Starting { .. } => None,
         },
         VmStatus::Pending | VmStatus::Paused | VmStatus::Migrating | VmStatus::Committing => None,
+    }
+}
+
+/// Wait, until `deadline`, for the guest agent of a running sandbox VM to
+/// answer: for an image, a while after the VM runs.
+async fn wait_for_guest_agent(env: &App, vm_id: Uuid, deadline: Instant) -> ReadyOutcome {
+    let vm = match vms::get(env.pool(), vm_id).await {
+        Ok(vm) => vm,
+        Err(sqlx::Error::RowNotFound) => return ReadyOutcome::Gone,
+        Err(e) => return ReadyOutcome::Failed(e.to_string()),
+    };
+    let host = match vm.host_id {
+        Some(host_id) => hosts::get_by_id(env.pool(), host_id).await,
+        None => Ok(None),
+    };
+    let host = match host {
+        Ok(Some(host)) => host,
+        Ok(None) => return ReadyOutcome::Failed(format!("VM {vm_id} has no host")),
+        Err(e) => return ReadyOutcome::Failed(e.to_string()),
+    };
+
+    let client = NodeClient::new(&host.address, host.port as u16);
+    match client
+        .wait_for_guest_agent(vm_id, deadline.saturating_duration_since(Instant::now()))
+        .await
+    {
+        Ok(()) => ReadyOutcome::Ready,
+        Err(e) => ReadyOutcome::Failed(format!("the guest agent did not answer: {e:#}")),
     }
 }
 
