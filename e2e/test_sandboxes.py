@@ -49,12 +49,14 @@ from qarax_api_client.api.vm_templates import (
 from qarax_api_client.api.vm_templates import (
     delete as delete_template,
 )
+from qarax_api_client.api.vms import exec_ as exec_vm
 from qarax_api_client.api.vms import get as get_vm
 from qarax_api_client.api.vms import list_nics
 from qarax_api_client.api.vms import start as start_vm
 from qarax_api_client.api.vms import stop as stop_vm
 from qarax_api_client.models import (
     ExecSandboxRequest,
+    ExecVmRequest,
     ForkSandboxRequest,
     Hypervisor,
     NewBootSource,
@@ -1108,6 +1110,84 @@ async def test_sandbox_pool_claim_returns_completed_claim_job(client, sandbox_te
                     f"{QARAX_URL}/v1/vm-templates/{sandbox_template}/sandbox-pool"
                 )
                 assert response.status_code == 204, response.text
+
+
+@pytest.mark.asyncio
+async def test_a_forking_sandbox_pool_fills_with_forks_of_its_seed(client):
+    """A pool that forks keeps one booted VM of its template, its seed, and
+    makes its members by forking it: a member continues from the seed's state
+    as it was when the member was made, and the seed is never handed out."""
+    async with client as c:
+        httpx_client = c.get_async_httpx_client()
+        template_id, resources = await create_bootable_sandbox_template(c, "firecracker")
+        pool_url = f"{QARAX_URL}/v1/vm-templates/{template_id}/sandbox-pool"
+        sandbox_ids = []
+
+        async def claim():
+            created = await call_api(
+                create_sandbox,
+                client=c,
+                body=NewSandbox(
+                    name=f"e2e-fork-pool-{uuid.uuid4().hex[:8]}",
+                    vm_template_id=template_id,
+                    idle_timeout_secs=300,
+                ),
+            )
+            sandbox_ids.append(created.id)
+            sandbox = await call_api(get_sandbox, client=c, sandbox_id=created.id)
+            assert sandbox.status == SandboxStatus.READY, sandbox.status
+            return created
+
+        async def marker(sandbox_id):
+            result = await call_api(
+                exec_sandbox,
+                client=c,
+                sandbox_id=sandbox_id,
+                body=ExecSandboxRequest(
+                    command=["/bin/sh", "-c", "cat /root/marker 2>/dev/null || echo none"],
+                    timeout_secs=15,
+                ),
+            )
+            assert result.exit_code == 0, result.stderr
+            return result.stdout.strip()
+
+        try:
+            response = await httpx_client.put(pool_url, json={"min_ready": 1, "fork": True})
+            assert response.status_code == 200, response.text
+            assert response.json()["fork"] is True
+            pool = await wait_for_sandbox_pool_ready(c, template_id, min_ready=1)
+            assert pool["seed_status"] == "ready", pool
+            seed_vm_id = uuid.UUID(pool["seed_vm_id"])
+
+            # The member the pool has made doesn't have this; the next does.
+            result = await call_api(
+                exec_vm,
+                client=c,
+                vm_id=seed_vm_id,
+                body=ExecVmRequest(
+                    command=["/bin/sh", "-c", "echo seeded > /root/marker"], timeout_secs=15
+                ),
+            )
+            assert result.exit_code == 0, result.stderr
+
+            first = await claim()
+            assert first.vm_id != seed_vm_id
+            assert await marker(first.id) == "none"
+
+            await wait_for_sandbox_pool_ready(c, template_id, min_ready=1)
+            second = await claim()
+            assert second.vm_id != seed_vm_id
+            assert await marker(second.id) == "seeded"
+
+            seed = await call_api(get_vm, client=c, vm_id=seed_vm_id)
+            assert seed.status == VmStatus.RUNNING, seed.status
+        finally:
+            for sandbox_id in sandbox_ids:
+                await delete_sandbox.asyncio_detailed(client=c, sandbox_id=sandbox_id)
+            # Deleting the pool destroys its seed and members.
+            response = await httpx_client.delete(pool_url)
+            assert response.status_code in (204, 404), response.text
+            await cleanup_bootable_sandbox_template(c, resources)
 
 
 @pytest.mark.asyncio

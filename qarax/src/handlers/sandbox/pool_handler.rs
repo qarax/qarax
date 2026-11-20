@@ -102,7 +102,7 @@ pub async fn put(
         ));
     }
 
-    let pool = sandbox_pools::upsert(env.pool(), vm_template_id, body.min_ready)
+    let pool = sandbox_pools::upsert(env.pool(), vm_template_id, &body)
         .await
         .map_err(crate::errors::Error::Sqlx)?;
     Ok(ApiResponse {

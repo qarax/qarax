@@ -104,6 +104,10 @@ enum SandboxPoolCommand {
         /// Keep at least this many prewarmed sandboxes ready
         #[arg(long)]
         min_ready: i32,
+        /// Make them by forking one booted VM of the template, the pool's
+        /// seed, rather than booting each one
+        #[arg(long)]
+        fork: bool,
     },
     /// Delete the sandbox pool for a VM template
     Delete {
@@ -135,6 +139,8 @@ struct SandboxPoolRow {
     template: String,
     #[tabled(rename = "Min Ready")]
     min_ready: i32,
+    #[tabled(rename = "Fork")]
+    fork: bool,
     #[tabled(rename = "Ready")]
     ready: i64,
     #[tabled(rename = "Provisioning")]
@@ -164,6 +170,7 @@ pub async fn run(args: SandboxArgs, client: &Client, output: OutputFormat) -> an
                         .map(|pool| SandboxPoolRow {
                             template: pool.vm_template_name.clone(),
                             min_ready: pool.min_ready,
+                            fork: pool.fork,
                             ready: pool.current_ready,
                             provisioning: pool.current_provisioning,
                             error: pool.current_error,
@@ -181,6 +188,10 @@ pub async fn run(args: SandboxArgs, client: &Client, output: OutputFormat) -> an
                     println!("Template:      {}", pool.vm_template_name);
                     println!("Template ID:   {}", pool.vm_template_id);
                     println!("Min Ready:     {}", pool.min_ready);
+                    println!("Fork:          {}", pool.fork);
+                    if let (Some(vm_id), Some(status)) = (pool.seed_vm_id, &pool.seed_status) {
+                        println!("Seed:          {vm_id} ({status})");
+                    }
                     println!("Ready:         {}", pool.current_ready);
                     println!("Provisioning:  {}", pool.current_provisioning);
                     println!("Error:         {}", pool.current_error);
@@ -191,20 +202,21 @@ pub async fn run(args: SandboxArgs, client: &Client, output: OutputFormat) -> an
             SandboxPoolCommand::Set {
                 template,
                 min_ready,
+                fork,
             } => {
                 let vm_template_id = resolve_vm_template_id(client, &template).await?;
                 let pool = api::sandbox_pools::put(
                     client,
                     vm_template_id,
-                    &ConfigureSandboxPoolRequest { min_ready },
+                    &ConfigureSandboxPoolRequest { min_ready, fork },
                 )
                 .await?;
                 if !matches!(output, OutputFormat::Table) {
                     print_output(&pool, output)?;
                 } else {
                     println!(
-                        "Configured sandbox pool for {}: min_ready={}",
-                        pool.vm_template_name, pool.min_ready
+                        "Configured sandbox pool for {}: min_ready={} fork={}",
+                        pool.vm_template_name, pool.min_ready, pool.fork
                     );
                 }
             }

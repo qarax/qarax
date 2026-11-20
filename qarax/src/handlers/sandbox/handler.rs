@@ -1,5 +1,6 @@
 use axum::{Extension, Json, extract::Path, response::IntoResponse};
 use http::StatusCode;
+use sqlx::{Postgres, Transaction};
 use tracing::instrument;
 use uuid::Uuid;
 
@@ -195,7 +196,7 @@ pub async fn exec(
 }
 
 /// The most forks one request makes.
-const MAX_FORKS: u32 = 16;
+pub(crate) const MAX_FORKS: u32 = 16;
 
 /// `vms.name` is VARCHAR(50).
 const MAX_VM_NAME_CHARS: usize = 50;
@@ -249,27 +250,87 @@ pub async fn fork(
         )));
     }
     let vm = vms::get(env.pool(), source.vm_id).await?;
-    ensure_forkable(&vm)?;
-    let disks = forkable_disks(&env, &vm).await?;
-    let nics = forkable_nics(&env, &vm).await?;
+
+    let fork_sandbox_ids: Vec<Uuid> = (0..count).map(|_| Uuid::new_v4()).collect();
+    let names: Vec<String> = fork_sandbox_ids
+        .iter()
+        .map(|id| fork_name(&source.name, *id))
+        .collect();
+    let mut tx = env.pool().begin().await?;
+    let forks = create_forks_tx(&env, &mut tx, &vm, &names).await?;
+    for ((fork_sandbox_id, fork_vm_id), name) in
+        fork_sandbox_ids.iter().zip(&forks.vm_ids).zip(&names)
+    {
+        sandboxes::create_tx_with_status(
+            &mut tx,
+            *fork_sandbox_id,
+            *fork_vm_id,
+            source.vm_template_id,
+            name,
+            source.idle_timeout_secs,
+            SandboxStatus::Provisioning,
+        )
+        .await?;
+    }
+    tx.commit().await?;
+    sandboxes::touch_activity(env.pool(), sandbox_id).await?;
+    start_forks(&env, forks).await?;
+
+    let mut forked = Vec::with_capacity(fork_sandbox_ids.len());
+    for fork_sandbox_id in fork_sandbox_ids {
+        sandboxes::mark_ready(env.pool(), fork_sandbox_id).await?;
+        forked.push(
+            sandboxes::get_with_details(env.pool(), fork_sandbox_id)
+                .await?
+                .into(),
+        );
+    }
+
+    Ok(ApiResponse {
+        data: forked,
+        code: StatusCode::CREATED,
+    })
+}
+
+/// Forks whose rows [`create_forks_tx`] made, for [`start_forks`] to start.
+pub(crate) struct PendingForks {
+    host: Host,
+    source_vm_id: Uuid,
+    /// The forks' VMs, in the order of the names they were made with.
+    pub(crate) vm_ids: Vec<Uuid>,
+    copies: Vec<Vec<DiskCopy>>,
+}
+
+/// The rows of forks of `vm`, one with each of `names`, made in `tx` with the
+/// capacity check that keeps their host from taking more than it holds. Each
+/// has a copy of its source's image object and writable data disks, NICs with
+/// addresses of their own and its source's security groups. The VMs stay
+/// PENDING, out of the VM monitor's way, until [`start_forks`] has started
+/// them.
+pub(crate) async fn create_forks_tx(
+    env: &App,
+    tx: &mut Transaction<'_, Postgres>,
+    vm: &Vm,
+    names: &[String],
+) -> Result<PendingForks> {
+    ensure_forkable(vm)?;
+    let disks = forkable_disks(env, vm).await?;
+    let nics = forkable_nics(env, vm).await?;
     let host_id = vm
         .host_id
         .ok_or_else(|| Error::UnprocessableEntity("sandbox VM has no assigned host".into()))?;
 
-    // The forks' rows, made with the capacity check that keeps their host
-    // from taking more than it holds. The VMs stay PENDING, out of the VM
-    // monitor's way, until the node has started them.
-    let memory_copy_on_write = forks_share_memory(&vm);
+    let count = names.len();
+    let memory_copy_on_write = forks_share_memory(vm);
     let fork_memory = if memory_copy_on_write {
         unmeasured_fork_memory(vm.memory_size, env.scheduling().fork_memory_headroom_ratio)
     } else {
         vm.memory_size
     };
-    let mut tx = env.pool().begin().await?;
     let host = hosts::pick_host_tx(
-        &mut tx,
+        tx,
         &SchedulingRequest {
-            memory_bytes: fork_memory * i64::from(count),
+            memory_bytes: fork_memory * count as i64,
             vcpus: vm.boot_vcpus * count as i32,
             disk_bytes: 0,
             architecture: None,
@@ -289,25 +350,22 @@ pub async fn fork(
             "the sandbox's host is not up or has no room for {count} more VMs like it"
         ))
     })?;
-    let mut forks = Vec::with_capacity(count as usize);
-    let mut copies = Vec::with_capacity(count as usize);
-    for _ in 0..count {
-        let fork_sandbox_id = Uuid::new_v4();
-        let name = fork_name(&source.name, fork_sandbox_id);
-        let fork_vm_id = vms::create_fork_tx(&mut tx, vm.id, &name, memory_copy_on_write).await?;
+    let mut vm_ids = Vec::with_capacity(count);
+    let mut copies = Vec::with_capacity(count);
+    for name in names {
+        let fork_vm_id = vms::create_fork_tx(tx, vm.id, name, memory_copy_on_write).await?;
         let mut disk_copies = Vec::new();
         for disk in &disks {
             let object_id = match disk {
                 ForkDisk::Image { image_id, .. } => {
-                    storage_objects::copy_oci_image_for_fork_tx(&mut tx, *image_id, fork_vm_id)
-                        .await?
+                    storage_objects::copy_oci_image_for_fork_tx(tx, *image_id, fork_vm_id).await?
                 }
                 ForkDisk::Shared { object_id, .. } => *object_id,
                 ForkDisk::Copied {
                     drive_id, object, ..
                 } => {
                     let copy = storage_objects::create_disk_copy_for_fork_tx(
-                        &mut tx,
+                        tx,
                         env.pool(),
                         object,
                         format!("fork-{fork_vm_id}-{drive_id}"),
@@ -328,11 +386,11 @@ pub async fn fork(
                     copy.id
                 }
             };
-            vm_disks::copy_for_fork_tx(&mut tx, disk.id(), fork_vm_id, object_id).await?;
+            vm_disks::copy_for_fork_tx(tx, disk.id(), fork_vm_id, object_id).await?;
         }
         copies.push(disk_copies);
         for nic in &nics {
-            let address = networks::allocate_ip_tx(&mut tx, nic.network_id, None, fork_vm_id)
+            let address = networks::allocate_ip_tx(tx, nic.network_id, None, fork_vm_id)
                 .await?
                 .ok_or_else(|| {
                     Error::UnprocessableEntity(format!(
@@ -340,31 +398,27 @@ pub async fn fork(
                         nic.network_id
                     ))
                 })?;
-            network_interfaces::copy_for_fork_tx(&mut tx, nic.id, fork_vm_id, &address.ip_address)
+            network_interfaces::copy_for_fork_tx(tx, nic.id, fork_vm_id, &address.ip_address)
                 .await?;
         }
-        security_groups::copy_for_fork_tx(&mut tx, vm.id, fork_vm_id).await?;
-        sandboxes::create_tx_with_status(
-            &mut tx,
-            fork_sandbox_id,
-            fork_vm_id,
-            source.vm_template_id,
-            &name,
-            source.idle_timeout_secs,
-            SandboxStatus::Provisioning,
-        )
-        .await?;
-        forks.push((fork_sandbox_id, fork_vm_id));
+        security_groups::copy_for_fork_tx(tx, vm.id, fork_vm_id).await?;
+        vm_ids.push(fork_vm_id);
     }
-    tx.commit().await?;
-    sandboxes::touch_activity(env.pool(), sandbox_id).await?;
+    Ok(PendingForks {
+        host,
+        source_vm_id: vm.id,
+        vm_ids,
+        copies,
+    })
+}
 
-    let fork_vm_ids: Vec<Uuid> = forks.iter().map(|(_, vm_id)| *vm_id).collect();
-    if let Err(e) = start_forks(&env, &host, vm.id, &fork_vm_ids, copies).await {
-        // The node starts all of the forks or none: no VM is left to stop.
-        // Their NICs, addresses, security groups and own disks go with their
-        // rows; the files of their disk copies through the cleanup queue.
-        for vm_id in &fork_vm_ids {
+/// Have the forks' node start them, and move their VMs to RUNNING. The node
+/// starts all of them or none: when it fails, their rows go, and with them
+/// their NICs, addresses, security groups and own disks; the files of their
+/// disk copies go through the cleanup queue.
+pub(crate) async fn start_forks(env: &App, forks: PendingForks) -> Result<()> {
+    if let Err(e) = start_forks_on_node(env, &forks).await {
+        for vm_id in &forks.vm_ids {
             match vms::delete(env.pool(), *vm_id).await {
                 Ok(deleted) => crate::storage_cleanup::process_now(env.pool(), &deleted).await,
                 Err(e) => {
@@ -374,56 +428,33 @@ pub async fn fork(
         }
         return Err(e);
     }
-
-    let mut forked = Vec::with_capacity(forks.len());
-    for (fork_sandbox_id, fork_vm_id) in forks {
-        vms::transition(
-            env.pool(),
-            fork_vm_id,
-            &[VmStatus::Pending],
-            VmStatus::Running,
-        )
-        .await?;
-        sandboxes::mark_ready(env.pool(), fork_sandbox_id).await?;
-        forked.push(
-            sandboxes::get_with_details(env.pool(), fork_sandbox_id)
-                .await?
-                .into(),
-        );
+    for vm_id in &forks.vm_ids {
+        vms::transition(env.pool(), *vm_id, &[VmStatus::Pending], VmStatus::Running).await?;
     }
-
-    Ok(ApiResponse {
-        data: forked,
-        code: StatusCode::CREATED,
-    })
+    Ok(())
 }
 
-/// Have `host`'s node start `fork_vm_ids`, whose rows are made, from
-/// `source_id`: each with its NICs, security groups and `copies` of the
-/// source's data disks.
-async fn start_forks(
-    env: &App,
-    host: &Host,
-    source_id: Uuid,
-    fork_vm_ids: &[Uuid],
-    copies: Vec<Vec<DiskCopy>>,
-) -> Result<()> {
-    let mut forks = Vec::with_capacity(fork_vm_ids.len());
-    for (vm_id, disks) in fork_vm_ids.iter().zip(copies) {
+/// Have the forks' node start them from their source: each with its NICs,
+/// security groups and copies of the source's data disks.
+async fn start_forks_on_node(env: &App, forks: &PendingForks) -> Result<()> {
+    let host = &forks.host;
+    let mut node_forks = Vec::with_capacity(forks.vm_ids.len());
+    for (vm_id, disks) in forks.vm_ids.iter().zip(&forks.copies) {
         let nics = network_interfaces::list_by_vm(env.pool(), *vm_id).await?;
         let (networks, _) = net_configs_on_host(env, &nics, Some(host.id)).await?;
         let firewall =
             network_policy::firewall_interfaces_for_vm(env.pool(), *vm_id, host.id).await?;
-        forks.push(Fork {
+        node_forks.push(Fork {
             vm_id: vm_id.to_string(),
             networks,
             firewall,
-            disks,
+            disks: disks.clone(),
         });
     }
+    let source_id = forks.source_vm_id;
     let client = NodeClient::new(&host.address, host.port as u16);
     client
-        .fork_vm(source_id, forks)
+        .fork_vm(source_id, node_forks)
         .await
         .map_err(|e| match e.downcast::<Error>() {
             Ok(err) => err,

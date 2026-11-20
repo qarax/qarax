@@ -30,7 +30,8 @@ The first release.
   and NUMA placement.
 - Live migration (TLS, postcopy), HA failover of VMs from dead hosts.
 - Snapshots and backups of VMs, and backups of the control-plane database.
-- Sandboxes: short-lived VMs with idle reaping and prewarmed pools, and forks of
+- Sandboxes: short-lived VMs with idle reaping and prewarmed pools, which can
+  make their sandboxes by forking one booted VM of the template, and forks of
   a running Firecracker or Cloud Hypervisor sandbox, its OCI image disk, data
   disks, network interfaces and cloud-init included, that continue from its
   state; forking a Firecracker sandbox again writes only the memory it changed

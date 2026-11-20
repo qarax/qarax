@@ -886,6 +886,9 @@ pub struct SandboxPool {
     pub vm_template_id: Uuid,
     pub vm_template_name: String,
     pub min_ready: i32,
+    pub fork: bool,
+    pub seed_vm_id: Option<Uuid>,
+    pub seed_status: Option<String>,
     pub current_ready: i64,
     pub current_provisioning: i64,
     pub current_error: i64,
@@ -896,6 +899,7 @@ pub struct SandboxPool {
 #[derive(Debug, Serialize)]
 pub struct ConfigureSandboxPoolRequest {
     pub min_ready: i32,
+    pub fork: bool,
 }
 
 // Lifecycle Hooks

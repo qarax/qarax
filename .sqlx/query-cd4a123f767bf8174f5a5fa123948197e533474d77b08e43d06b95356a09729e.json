@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\nSELECT spm.id,\n       spm.sandbox_pool_id,\n       spm.vm_id,\n       spm.status AS \"status: _\",\n       spm.error_message,\n       spm.created_at,\n       spm.updated_at\nFROM sandbox_pool_members spm\nJOIN sandbox_pools sp\n  ON sp.id = spm.sandbox_pool_id\nWHERE sp.vm_template_id = $1\n  AND spm.status = 'READY'\nORDER BY spm.created_at\nFOR UPDATE OF spm SKIP LOCKED\nLIMIT 1\n        ",
+  "query": "\nSELECT id, sandbox_pool_id, vm_id, status AS \"status: _\", error_message, created_at, updated_at\nFROM sandbox_pool_members\nWHERE sandbox_pool_id = $1 AND seed\n        ",
   "describe": {
     "columns": [
       {
@@ -66,5 +66,5 @@
       false
     ]
   },
-  "hash": "2a508b1787dca739a3a091f3e30b6733756077a96e96b27ee8bfc2d91c7c122c"
+  "hash": "cd4a123f767bf8174f5a5fa123948197e533474d77b08e43d06b95356a09729e"
 }
