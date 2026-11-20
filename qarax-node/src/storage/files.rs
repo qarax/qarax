@@ -29,17 +29,44 @@ pub fn write_back(path: &Path) -> io::Result<()> {
 /// copying the data.
 pub fn copy_sparse(src: &Path, dst: &Path) -> io::Result<()> {
     let src = File::open(src)?;
-    let metadata = src.metadata()?;
+    let len = regular_file_len(&src)?;
+    let dst = OpenOptions::new().write(true).create_new(true).open(dst)?;
+    dst.set_len(len)?;
+    copy_extents(&src, &dst, len)
+}
+
+/// Write the data extents of the regular file `src` over `dst`, a file of
+/// the same size, at the same offsets: `dst` keeps what is in `src`'s holes.
+/// Lays the pages of a Firecracker diff snapshot over a copy of the memory
+/// image it is a diff of.
+pub fn overlay_extents(src: &Path, dst: &Path) -> io::Result<()> {
+    let src = File::open(src)?;
+    let len = regular_file_len(&src)?;
+    let dst = OpenOptions::new().write(true).open(dst)?;
+    if dst.metadata()?.len() != len {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "the files' sizes differ",
+        ));
+    }
+    copy_extents(&src, &dst, len)
+}
+
+fn regular_file_len(file: &File) -> io::Result<u64> {
+    let metadata = file.metadata()?;
     if !metadata.is_file() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "not a regular file",
         ));
     }
-    let len = i64::try_from(metadata.len()).map_err(io::Error::other)?;
-    let dst = OpenOptions::new().write(true).create_new(true).open(dst)?;
-    dst.set_len(metadata.len())?;
+    Ok(metadata.len())
+}
 
+/// Copy `src`'s data extents, within its first `len` bytes, to the same
+/// offsets of `dst`.
+fn copy_extents(src: &File, dst: &File, len: u64) -> io::Result<()> {
+    let len = i64::try_from(len).map_err(io::Error::other)?;
     let mut offset = 0;
     while offset < len {
         // SAFETY: the descriptor is open for the whole call.
@@ -108,6 +135,33 @@ mod tests {
         assert_eq!(std::fs::read(&dst).unwrap(), std::fs::read(&src).unwrap());
         // Far from the 64 MiB a full copy would take up.
         assert!(std::fs::metadata(&dst).unwrap().blocks() * 512 < 8 * MIB);
+    }
+
+    #[test]
+    fn an_overlay_writes_the_extents_over_and_keeps_the_rest() {
+        let dir = tempfile::tempdir().unwrap();
+        let (base, diff) = (dir.path().join("base"), dir.path().join("diff"));
+        std::fs::write(&base, vec![1u8; 2 * MIB as usize]).unwrap();
+        let mut file = File::create(&diff).unwrap();
+        file.set_len(2 * MIB).unwrap();
+        file.seek(SeekFrom::Start(MIB)).unwrap();
+        file.write_all(&[2u8; 4096]).unwrap();
+        file.sync_all().unwrap();
+
+        overlay_extents(&diff, &base).unwrap();
+
+        let merged = std::fs::read(&base).unwrap();
+        let page = MIB as usize..MIB as usize + 4096;
+        assert!(merged[page.clone()].iter().all(|b| *b == 2));
+        assert!(merged[..page.start].iter().all(|b| *b == 1));
+        assert!(merged[page.end..].iter().all(|b| *b == 1));
+
+        let short = dir.path().join("short");
+        std::fs::write(&short, b"x").unwrap();
+        assert_eq!(
+            overlay_extents(&diff, &short).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
     }
 
     #[test]

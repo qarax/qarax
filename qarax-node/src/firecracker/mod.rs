@@ -46,6 +46,7 @@ use crate::vmm::{VmmError, VmmManager, guest_agent};
 
 mod exec;
 mod fork;
+use fork::{ForkMemory, ForkMemoryLock, tracks_dirty_pages};
 mod helpers;
 
 /// Where a Firecracker VM is in its lifecycle, with the SDK handle that
@@ -53,10 +54,12 @@ mod helpers;
 enum FcPhase {
     /// The FC process is configured but `InstanceStart` has not been sent.
     PreBoot(Machine<'static>),
-    /// Started (or recovered) and attached; `state` is what FC last reported.
+    /// Started (or recovered) and attached; `state` is what FC last reported,
+    /// `forking` what its next fork snapshots of its memory.
     Live {
         micro_vm: MicroVm<'static>,
         state: LiveState,
+        forking: ForkMemoryLock,
     },
     /// Stopped through qarax. Its FC process is gone or on its way out, and
     /// a start launches a new one.
@@ -129,7 +132,9 @@ impl FcVmInstance {
         not_live: &str,
     ) -> Result<(&mut MicroVm<'static>, &mut LiveState), VmmError> {
         match &mut self.phase {
-            FcPhase::Live { micro_vm, state } => Ok((micro_vm, state)),
+            FcPhase::Live {
+                micro_vm, state, ..
+            } => Ok((micro_vm, state)),
             FcPhase::PreBoot(_) | FcPhase::Stopped | FcPhase::Detached => {
                 Err(VmmError::ProcessError(not_live.to_string()))
             }
@@ -256,8 +261,10 @@ impl FirecrackerManager {
             .unwrap_or(128 * 1024 * 1024)
             / (1024 * 1024)) as i32;
 
+        let mut machine_config = MachineConfiguration::new(mem_mib, cpus);
+        machine_config.track_dirty_pages = Some(tracks_dirty_pages(config));
         machine
-            .put_machine_config(&MachineConfiguration::new(mem_mib, cpus))
+            .put_machine_config(&machine_config)
             .await
             .map_err(sdk_err)?;
 
@@ -612,6 +619,7 @@ impl VmmManager for FirecrackerManager {
         instance.phase = FcPhase::Live {
             micro_vm,
             state: LiveState::Running,
+            forking: ForkMemory::new(tracks_dirty_pages(&instance.proto_config)),
         };
         info!("FC: VM {} started successfully", vm_id);
         Ok(())
@@ -780,7 +788,9 @@ impl VmmManager for FirecrackerManager {
 
         // Only a live VM is asked: a stopped one recovered after a node
         // restart may still answer on its socket.
-        if let FcPhase::Live { micro_vm, state } = &mut instance.phase
+        if let FcPhase::Live {
+            micro_vm, state, ..
+        } = &mut instance.phase
             && let Ok(info) = micro_vm.describe_instance().await
         {
             *state = info.state.into();
@@ -796,6 +806,23 @@ impl VmmManager for FirecrackerManager {
 
     async fn snapshot_vm(&self, vm_id: &str, destination_url: &str) -> Result<(), VmmError> {
         info!("FC: Snapshotting VM {} to {}", vm_id, destination_url);
+
+        // A snapshot resets the dirty-page log a fork diffs against: wait for
+        // a fork round of the VM to end, and forget its base.
+        let forking = match &self
+            .vms
+            .lock()
+            .await
+            .get(vm_id)
+            .ok_or_else(|| VmmError::VmNotFound(vm_id.to_string()))?
+            .phase
+        {
+            FcPhase::Live { forking, .. } => Some(forking.clone()),
+            _ => None,
+        };
+        if let Some(forking) = forking {
+            forking.lock().await.forget_base();
+        }
 
         let mut vms = self.vms.lock().await;
         let instance = vms
@@ -909,9 +936,11 @@ impl VmmManager for FirecrackerManager {
             process: Some(process),
             socket_path,
             tap_devices: vec![],
+            // Loaded without dirty-page tracking.
             phase: FcPhase::Live {
                 micro_vm,
                 state: LiveState::Running,
+                forking: ForkMemory::new(false),
             },
         };
 
@@ -961,6 +990,18 @@ impl VmmManager for FirecrackerManager {
                 Some(n) => n.to_string(),
                 None => continue,
             };
+            // A fork base of the node's last run: a recovered VM's next fork
+            // takes a full snapshot.
+            if name.contains(".fork-base-") {
+                if let Err(e) = tokio::fs::remove_file(&path).await {
+                    warn!(
+                        "FC: Failed to remove stale fork base {}: {}",
+                        path.display(),
+                        e
+                    );
+                }
+                continue;
+            }
             if !name.ends_with(".fc.sock") {
                 continue;
             }
@@ -990,7 +1031,12 @@ impl VmmManager for FirecrackerManager {
                         Ok(info) => info.state.into(),
                         Err(_) => LiveState::Unknown,
                     };
-                    FcPhase::Live { micro_vm, state }
+                    // Whether it tracks dirty pages isn't known.
+                    FcPhase::Live {
+                        micro_vm,
+                        state,
+                        forking: ForkMemory::new(false),
+                    }
                 }
                 Err(e) => {
                     warn!("FC: Failed to attach to recovered VM {}: {}", vm_id, e);
