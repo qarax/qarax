@@ -131,6 +131,24 @@ pub(crate) fn fork_config(source: &ProtoVmConfig, fork: &Fork) -> Result<ProtoVm
         networks: fork.networks.clone(),
         ..source.clone()
     };
+    // The control plane puts each NIC's address on the kernel command line
+    // (`ip=<address>::...`): a fork's are its own, for when it boots again.
+    if let Some(cmdline) = config
+        .payload
+        .as_mut()
+        .and_then(|payload| payload.cmdline.as_mut())
+    {
+        for net in &fork.networks {
+            let from = source
+                .networks
+                .iter()
+                .find(|source_net| source_net.id == net.id)
+                .and_then(|source_net| source_net.ip.as_deref());
+            if let (Some(from), Some(to)) = (from, net.ip.as_deref()) {
+                *cmdline = cmdline.replace(&format!("ip={from}:"), &format!("ip={to}:"));
+            }
+        }
+    }
     for copy in &fork.disks {
         let drive = config
             .disks
@@ -504,7 +522,9 @@ async fn send_fork_notice(vsock_path: &Path) -> Result<(), VmmError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rpc::node::{CloudInitConfig, DiskConfig, DiskCopy, NetConfig, VsockConfig};
+    use crate::rpc::node::{
+        CloudInitConfig, DiskConfig, DiskCopy, NetConfig, PayloadConfig, VsockConfig,
+    };
 
     const SEED: &str = cloud_init::SEED_DRIVE;
 
@@ -550,6 +570,14 @@ mod tests {
                 nic("net0", "02:00:00:00:00:01", "10.0.0.2"),
                 nic("net1", "02:00:00:00:01:01", "10.0.1.2"),
             ],
+            payload: Some(PayloadConfig {
+                cmdline: Some(
+                    "console=ttyS0 ip=10.0.0.2::10.0.0.1:255.255.255.0::eth0:off:10.0.0.1 \
+                     ip=10.0.1.2::10.0.1.1:255.255.255.0::eth1:off:10.0.1.1"
+                        .into(),
+                ),
+                ..Default::default()
+            }),
             ..with_guest_agent()
         };
         let fork = |networks| Fork {
@@ -566,6 +594,12 @@ mod tests {
         let config = fork_config(&source, &fork(own.clone())).unwrap();
         assert_eq!(config.vm_id, "fork");
         assert_eq!(config.networks, own);
+        // Booted again, it comes up on its own addresses.
+        assert_eq!(
+            config.payload.unwrap().cmdline.unwrap(),
+            "console=ttyS0 ip=10.0.0.3::10.0.0.1:255.255.255.0::eth0:off:10.0.0.1 \
+             ip=10.0.1.3::10.0.1.1:255.255.255.0::eth1:off:10.0.1.1"
+        );
 
         let missing = vec![own[0].clone()];
         let no_address = vec![
@@ -697,6 +731,22 @@ mod tests {
         ));
     }
 
+    /// The content of file `name` in a seed image.
+    fn seed_file(image: &[u8], name: &str) -> String {
+        let fs = fatfs::FileSystem::new(
+            std::io::Cursor::new(image.to_vec()),
+            fatfs::FsOptions::new(),
+        )
+        .unwrap();
+        let mut content = String::new();
+        fs.root_dir()
+            .open_file(name)
+            .unwrap()
+            .read_to_string(&mut content)
+            .unwrap();
+        content
+    }
+
     #[tokio::test]
     async fn a_fork_gets_a_cloud_init_seed_of_its_own() {
         let dir = tempfile::TempDir::new().unwrap();
@@ -725,10 +775,10 @@ mod tests {
             .unwrap();
         assert_eq!(seed, fork_seed.display().to_string());
         assert_eq!(config.disks[0].path.as_deref(), Some(seed.as_str()));
-        assert_eq!(
-            std::fs::read(&seed).unwrap(),
-            crate::cloud_init::build_seed_image(&ci.user_data, &ci.meta_data, None).unwrap()
-        );
+        // Its files: the image's bytes hold their times, so they differ.
+        let image = std::fs::read(&seed).unwrap();
+        assert_eq!(seed_file(&image, "user-data"), ci.user_data);
+        assert_eq!(seed_file(&image, "meta-data"), ci.meta_data);
 
         // Without cloud-init, nothing.
         let mut without = with_guest_agent();

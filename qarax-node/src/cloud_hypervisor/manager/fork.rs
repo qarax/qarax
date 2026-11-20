@@ -27,7 +27,9 @@ use crate::vmm::fork::{
 
 /// The snapshot config a fork restores from: its source's, `snapshot`, on the
 /// fork's own vsock socket, TAPs (with their host-side addresses) and disk
-/// files, from `fork`, its config. A serial port or console writing to a file
+/// files, from `fork`, its config. Its NICs' MACs and kernel command line are
+/// the fork's too, for when its guest boots again; until then the restored
+/// devices keep what the guest had. A serial port or console writing to a file
 /// writes to the fork's, the source's ID in its name replaced by the fork's.
 fn fork_snapshot_config(
     mut snapshot: serde_json::Value,
@@ -58,6 +60,7 @@ fn fork_snapshot_config(
             .ok_or_else(|| invalid(format!("NIC {id:?}")))?;
         for (key, value) in [
             ("tap", &nic.tap),
+            ("mac", &nic.mac),
             ("ip", &nic.ip),
             ("mask", &nic.mask),
             ("host_mac", &nic.host_mac),
@@ -67,6 +70,14 @@ fn fork_snapshot_config(
                 None => entry.remove(key),
             };
         }
+    }
+    if let Some(cmdline) = fork
+        .payload
+        .as_ref()
+        .and_then(|payload| payload.cmdline.as_ref())
+        && snapshot["payload"].is_object()
+    {
+        snapshot["payload"]["cmdline"] = cmdline.clone().into();
     }
     if let Some(vsock) = snapshot.get_mut("vsock").filter(|vsock| !vsock.is_null()) {
         vsock["socket"] = vsock_socket.display().to_string().into();
@@ -498,6 +509,7 @@ mod tests {
     fn a_fork_restores_on_its_own_socket_taps_and_disks() {
         let snapshot = serde_json::json!({
             "cpus": {"boot_vcpus": 1},
+            "payload": {"kernel": "/vmlinux", "cmdline": "ip=10.0.0.2::10.0.0.1:255.255.255.0::eth0:off:"},
             "disks": [{"id": "rootfs", "path": "/dev/sda"}, {"id": "data", "path": "/pool/a"}],
             "net": [{"id": "net0", "tap": "qtsource0", "ip": "10.0.0.2", "mask": "255.255.255.0",
                      "mac": "02:00:00:00:00:01", "host_mac": "02:00:00:00:01:01"}],
@@ -518,8 +530,13 @@ mod tests {
                 tap: Some("qtfork0".into()),
                 ip: Some("10.0.0.3".into()),
                 mask: Some("255.255.255.0".into()),
+                mac: Some("02:00:00:00:00:02".into()),
                 ..Default::default()
             }],
+            payload: Some(crate::rpc::node::PayloadConfig {
+                cmdline: Some("ip=10.0.0.3::10.0.0.1:255.255.255.0::eth0:off:".into()),
+                ..Default::default()
+            }),
             ..Default::default()
         };
 
@@ -534,9 +551,14 @@ mod tests {
         assert_eq!(config["disks"][1]["path"], "/pool/b");
         assert_eq!(config["net"][0]["tap"], "qtfork0");
         assert_eq!(config["net"][0]["ip"], "10.0.0.3");
-        // The guest keeps its MAC until its agent changes it; the TAP has its own.
-        assert_eq!(config["net"][0]["mac"], "02:00:00:00:00:01");
+        // For when it boots again; the TAP has a MAC of its own.
+        assert_eq!(config["net"][0]["mac"], "02:00:00:00:00:02");
         assert!(config["net"][0].get("host_mac").is_none());
+        assert_eq!(
+            config["payload"]["cmdline"],
+            "ip=10.0.0.3::10.0.0.1:255.255.255.0::eth0:off:"
+        );
+        assert_eq!(config["payload"]["kernel"], "/vmlinux");
         assert_eq!(config["vsock"]["socket"], "/run/fork.vsock");
         assert_eq!(config["serial"]["file"], "/run/fork.serial.log");
         assert_eq!(config["cpus"], snapshot["cpus"]);
