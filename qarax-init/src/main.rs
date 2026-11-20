@@ -1,6 +1,8 @@
 use std::collections::HashMap;
+use std::ffi::CString;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::net::Ipv4Addr;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::sync::{
@@ -65,6 +67,19 @@ enum ControlRequest {
     /// qarax-node asks whether the agent is up, before it reports a sandbox
     /// ready.
     Ping {},
+    /// This guest is a fork with NICs of its own, which still have their
+    /// source's addresses: give each the fork's.
+    Readdress(Vec<NicAddress>),
+}
+
+/// A NIC of a fork's guest, found by its source's MAC (`from`), and the
+/// fork's MAC and IPv4 address for it.
+#[derive(Deserialize)]
+struct NicAddress {
+    from: String,
+    mac: String,
+    ip: Ipv4Addr,
+    mask: Ipv4Addr,
 }
 
 #[derive(Deserialize, Default)]
@@ -392,6 +407,27 @@ fn serve_exec_connection(stream_fd: OwnedFd, exit_registry: ExitRegistry) {
                     let _ = stream.write_all(&body);
                     return;
                 }
+                Ok(ControlRequest::Readdress(nics)) => {
+                    let (exit_code, stderr) = match readdress(&nics) {
+                        Ok(()) => {
+                            log("forked: took the fork's network addresses");
+                            (0, String::new())
+                        }
+                        Err(e) => {
+                            log(format!("taking the fork's network addresses failed: {e}"));
+                            (1, e)
+                        }
+                    };
+                    let body = serde_json::to_vec(&ExecResponse {
+                        exit_code,
+                        stdout: String::new(),
+                        stderr,
+                        timed_out: false,
+                    })
+                    .unwrap_or_default();
+                    let _ = stream.write_all(&body);
+                    return;
+                }
                 Ok(ControlRequest::Forked {
                     entropy,
                     unix_time_ns,
@@ -578,6 +614,177 @@ fn set_realtime_clock(unix_time_ns: u64) -> std::io::Result<()> {
     time.tv_nsec = (unix_time_ns % 1_000_000_000) as _;
     // SAFETY: `time` is a valid timespec.
     if unsafe { libc::clock_settime(libc::CLOCK_REALTIME, &time) } < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Give each of `nics` its fork's MAC and address in place of its source's.
+fn readdress(nics: &[NicAddress]) -> Result<(), String> {
+    // Before any interface goes down, which drops the routes through it.
+    let routes = std::fs::read_to_string("/proc/net/route")
+        .map_err(|e| format!("reading the routes: {e}"))?;
+    let socket = socket(
+        AddressFamily::Inet,
+        SockType::Datagram,
+        SockFlag::SOCK_CLOEXEC,
+        None,
+    )
+    .map_err(|e| format!("socket: {e}"))?;
+    for nic in nics {
+        let name = interface_with_mac(&nic.from)?;
+        let mac = parse_mac(&nic.mac).ok_or_else(|| format!("{:?} is not a MAC", nic.mac))?;
+        let gateways = default_gateways(&routes, &name);
+        readdress_interface(socket.as_raw_fd(), &name, mac, nic, &gateways)
+            .map_err(|e| format!("{name}: {e}"))?;
+    }
+    Ok(())
+}
+
+fn interface_with_mac(mac: &str) -> Result<String, String> {
+    let interfaces = std::fs::read_dir("/sys/class/net")
+        .map_err(|e| format!("listing the network interfaces: {e}"))?;
+    interfaces
+        .flatten()
+        .find(|interface| {
+            std::fs::read_to_string(interface.path().join("address"))
+                .is_ok_and(|address| address.trim().eq_ignore_ascii_case(mac))
+        })
+        .map(|interface| interface.file_name().to_string_lossy().into_owned())
+        .ok_or_else(|| format!("no network interface has MAC {mac}"))
+}
+
+fn parse_mac(mac: &str) -> Option<[u8; 6]> {
+    let bytes: Vec<u8> = mac
+        .split(':')
+        .map(|byte| u8::from_str_radix(byte, 16).ok())
+        .collect::<Option<_>>()?;
+    bytes.try_into().ok()
+}
+
+/// The gateways of `interface`'s default routes in `routes`, the text of
+/// /proc/net/route.
+fn default_gateways(routes: &str, interface: &str) -> Vec<Ipv4Addr> {
+    routes
+        .lines()
+        .skip(1)
+        .filter_map(|line| {
+            // Iface Destination Gateway Flags RefCnt Use Metric Mask ...
+            let fields: Vec<&str> = line.split_whitespace().collect();
+            let [iface, destination, gateway, flags, _, _, _, mask, ..] = fields.as_slice() else {
+                return None;
+            };
+            let flags = u16::from_str_radix(flags, 16).ok()?;
+            let default = *iface == interface
+                && *destination == "00000000"
+                && *mask == "00000000"
+                && flags & libc::RTF_GATEWAY != 0;
+            // The address as the kernel holds it, printed as a native integer.
+            let gateway = u32::from_str_radix(gateway, 16).ok()?;
+            default.then(|| Ipv4Addr::from(gateway.to_ne_bytes()))
+        })
+        .collect()
+}
+
+/// Take `name` down, give it `nic`'s MAC and address, bring it up, and
+/// route the default traffic through `gateways` again.
+fn readdress_interface(
+    fd: RawFd,
+    name: &str,
+    mac: [u8; 6],
+    nic: &NicAddress,
+    gateways: &[Ipv4Addr],
+) -> std::io::Result<()> {
+    /// The kernel's `struct rtentry` (<linux/route.h>), which only some
+    /// targets' libc has.
+    #[repr(C)]
+    struct RtEntry {
+        rt_pad1: libc::c_ulong,
+        rt_dst: libc::sockaddr,
+        rt_gateway: libc::sockaddr,
+        rt_genmask: libc::sockaddr,
+        rt_flags: libc::c_ushort,
+        rt_pad2: libc::c_short,
+        rt_pad3: libc::c_ulong,
+        rt_pad4: *mut libc::c_void,
+        rt_metric: libc::c_short,
+        rt_dev: *mut libc::c_char,
+        rt_mtu: libc::c_ulong,
+        rt_window: libc::c_ulong,
+        rt_irtt: libc::c_ushort,
+    }
+
+    let c_name = CString::new(name).map_err(std::io::Error::other)?;
+    if c_name.as_bytes_with_nul().len() > libc::IFNAMSIZ {
+        return Err(std::io::Error::other("interface name too long"));
+    }
+    // SAFETY: an all-zero ifreq is valid; the name is set below.
+    let mut ifreq: libc::ifreq = unsafe { std::mem::zeroed() };
+    for (dst, src) in ifreq.ifr_name.iter_mut().zip(c_name.as_bytes()) {
+        *dst = *src as libc::c_char;
+    }
+
+    ioctl(fd, libc::SIOCGIFFLAGS as libc::Ioctl, &mut ifreq)?;
+    // SAFETY: SIOCGIFFLAGS filled in the flags.
+    let flags = unsafe { ifreq.ifr_ifru.ifru_flags };
+    // Down first: Firecracker's virtio-net can't change a running NIC's MAC.
+    ifreq.ifr_ifru.ifru_flags = flags & !(libc::IFF_UP as libc::c_short);
+    ioctl(fd, libc::SIOCSIFFLAGS as libc::Ioctl, &mut ifreq)?;
+
+    // SAFETY: an all-zero sockaddr is valid; its family and bytes are set below.
+    let mut hwaddr: libc::sockaddr = unsafe { std::mem::zeroed() };
+    hwaddr.sa_family = libc::ARPHRD_ETHER;
+    for (dst, src) in hwaddr.sa_data.iter_mut().zip(mac) {
+        *dst = src as libc::c_char;
+    }
+    ifreq.ifr_ifru.ifru_hwaddr = hwaddr;
+    ioctl(fd, libc::SIOCSIFHWADDR as libc::Ioctl, &mut ifreq)?;
+    ifreq.ifr_ifru.ifru_addr = sockaddr_of(nic.ip);
+    ioctl(fd, libc::SIOCSIFADDR as libc::Ioctl, &mut ifreq)?;
+    ifreq.ifr_ifru.ifru_netmask = sockaddr_of(nic.mask);
+    ioctl(fd, libc::SIOCSIFNETMASK as libc::Ioctl, &mut ifreq)?;
+
+    ifreq.ifr_ifru.ifru_flags = flags | libc::IFF_UP as libc::c_short;
+    ioctl(fd, libc::SIOCSIFFLAGS as libc::Ioctl, &mut ifreq)?;
+
+    for gateway in gateways {
+        let mut route = RtEntry {
+            rt_pad1: 0,
+            rt_dst: sockaddr_of(Ipv4Addr::UNSPECIFIED),
+            rt_gateway: sockaddr_of(*gateway),
+            rt_genmask: sockaddr_of(Ipv4Addr::UNSPECIFIED),
+            rt_flags: libc::RTF_UP | libc::RTF_GATEWAY,
+            rt_pad2: 0,
+            rt_pad3: 0,
+            rt_pad4: std::ptr::null_mut(),
+            rt_metric: 0,
+            rt_dev: c_name.as_ptr() as *mut libc::c_char,
+            rt_mtu: 0,
+            rt_window: 0,
+            rt_irtt: 0,
+        };
+        ioctl(fd, libc::SIOCADDRT as libc::Ioctl, &mut route)?;
+    }
+    Ok(())
+}
+
+fn sockaddr_of(ip: Ipv4Addr) -> libc::sockaddr {
+    let addr = libc::sockaddr_in {
+        sin_family: libc::AF_INET as libc::sa_family_t,
+        sin_port: 0,
+        sin_addr: libc::in_addr {
+            s_addr: u32::from_ne_bytes(ip.octets()),
+        },
+        sin_zero: [0; 8],
+    };
+    // SAFETY: both are 16 bytes: the socket API passes a sockaddr_in as a sockaddr.
+    unsafe { std::mem::transmute::<libc::sockaddr_in, libc::sockaddr>(addr) }
+}
+
+/// An ioctl whose argument is `arg`.
+fn ioctl<T>(fd: RawFd, request: libc::Ioctl, arg: &mut T) -> std::io::Result<()> {
+    // SAFETY: each caller passes the struct its request reads or writes.
+    if unsafe { libc::ioctl(fd, request, arg as *mut T) } < 0 {
         return Err(std::io::Error::last_os_error());
     }
     Ok(())
@@ -806,6 +1013,57 @@ mod tests {
         };
         assert_eq!(decode_hex(&entropy), Some(vec![0x00, 0xff, 0x10]));
         assert_eq!(unix_time_ns, 1_763_568_000_000_000_000);
+    }
+
+    #[test]
+    fn a_forks_addresses_are_a_control_request() {
+        let line = r#"{"readdress":[{"from":"02:00:00:00:00:01","mac":"02:00:00:00:00:02","ip":"10.97.0.3","mask":"255.255.255.0"}]}"#;
+        let Ok(ControlRequest::Readdress(nics)) = serde_json::from_str(line) else {
+            panic!("not a fork's addresses");
+        };
+        let [nic] = nics.as_slice() else {
+            panic!("{} NICs", nics.len());
+        };
+        assert_eq!(nic.from, "02:00:00:00:00:01");
+        assert_eq!(parse_mac(&nic.mac), Some([2, 0, 0, 0, 0, 2]));
+        assert_eq!(
+            (nic.ip, nic.mask),
+            (Ipv4Addr::new(10, 97, 0, 3), Ipv4Addr::new(255, 255, 255, 0))
+        );
+    }
+
+    #[test]
+    fn an_interfaces_default_routes_are_kept_by_their_gateways() {
+        let hex = |ip: Ipv4Addr| format!("{:08X}", u32::from_ne_bytes(ip.octets()));
+        let gateway = Ipv4Addr::new(10, 97, 0, 1);
+        let subnet = Ipv4Addr::new(10, 97, 0, 0);
+        let mask = Ipv4Addr::new(255, 255, 255, 0);
+        let any = Ipv4Addr::UNSPECIFIED;
+        let routes = [
+            "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT"
+                .to_string(),
+            format!(
+                "eth0\t{}\t{}\t0003\t0\t0\t0\t{}\t0\t0\t0",
+                hex(any),
+                hex(gateway),
+                hex(any)
+            ),
+            format!(
+                "eth0\t{}\t{}\t0001\t0\t0\t0\t{}\t0\t0\t0",
+                hex(subnet),
+                hex(any),
+                hex(mask)
+            ),
+            format!(
+                "eth1\t{}\t{}\t0003\t0\t0\t0\t{}\t0\t0\t0",
+                hex(any),
+                hex(Ipv4Addr::new(10, 98, 0, 1)),
+                hex(any)
+            ),
+        ]
+        .join("\n");
+        assert_eq!(default_gateways(&routes, "eth0"), vec![gateway]);
+        assert_eq!(default_gateways(&routes, "eth2"), Vec::<Ipv4Addr>::new());
     }
 
     #[test]

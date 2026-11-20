@@ -28,7 +28,8 @@ use crate::rpc::node::{
     ReceiveMigrationRequest, ReceiveMigrationResponse, RemoveDeviceRequest, ResizeDiskRequest,
     ResizeVmRequest, RestoreVmRequest, SendMigrationRequest, SnapshotVmRequest, StoragePoolKind,
     SyncNetworkIsolationRequest, SyncVmFirewallRequest, SyncVpcOverlaysRequest, VmConfig,
-    VmCounters, VmId, VmList, VmState, WaitForGuestAgentRequest, vm_service_server::VmService,
+    VmCounters, VmFirewallInterface, VmId, VmList, VmState, WaitForGuestAgentRequest,
+    vm_service_server::VmService,
 };
 use crate::vmm::{VmmError, VmmManager, guest_agent};
 use common::cpu_list::expand_cpu_list;
@@ -75,6 +76,29 @@ impl NodeVms {
             }
         }
         firewall::sync_nics(&nics, &host_addrs).await
+    }
+
+    /// Write `vm_id`'s security groups, `interfaces`, into its NICs' chains.
+    #[allow(clippy::result_large_err)]
+    async fn sync_security_groups(
+        &self,
+        vm_id: &str,
+        interfaces: &[VmFirewallInterface],
+    ) -> Result<(), Status> {
+        // From the node's own state: asking the hypervisor (get_vm_info) blocks
+        // while a VM waits for an incoming migration, which waits on this sync.
+        let config = self
+            .states()
+            .await
+            .into_iter()
+            .filter_map(|vm| vm.config)
+            .find(|config| config.vm_id == vm_id)
+            .ok_or_else(|| Status::not_found(format!("VM {} not found", vm_id)))?;
+        let nics = Nic::from_config(&config.networks)
+            .map_err(|e| Status::internal(format!("Failed to sync VM firewall: {e:#}")))?;
+        firewall::sync_security_groups(&nics, interfaces)
+            .await
+            .map_err(|e| Status::internal(format!("Failed to sync VM firewall: {e:#}")))
     }
 }
 
@@ -364,26 +388,55 @@ impl VmService for VmServiceImpl {
     }
 
     async fn fork_vm(&self, request: Request<ForkVmRequest>) -> Result<Response<()>, Status> {
-        let req = request.into_inner();
-        info!("Forking VM {} into {:?}", req.source_vm_id, req.fork_vm_ids);
+        let mut req = request.into_inner();
+        let fork_ids: Vec<String> = req.forks.iter().map(|fork| fork.vm_id.clone()).collect();
+        info!("Forking VM {} into {:?}", req.source_vm_id, fork_ids);
+        for fork in &mut req.forks {
+            assign_nic_macs(&fork.vm_id, &mut fork.networks);
+        }
         let manager = self
             .find_manager(&req.source_vm_id)
             .await
             .ok_or_else(|| Status::not_found(format!("VM {} not found", req.source_vm_id)))?;
-        match manager.fork_vm(&req.source_vm_id, &req.fork_vm_ids).await {
-            Ok(()) => {
-                info!(
-                    "VM {} forked into {} VMs",
-                    req.source_vm_id,
-                    req.fork_vm_ids.len()
-                );
-                Ok(Response::new(()))
-            }
-            Err(e) => {
+        manager
+            .fork_vm(&req.source_vm_id, &req.forks)
+            .await
+            .map_err(|e| {
                 error!("Failed to fork VM {}: {}", req.source_vm_id, e);
-                Err(map_vmm_error(e))
+                map_vmm_error(e)
+            })?;
+
+        // Loaded and paused: their NICs are filtered before they run.
+        let node_vms = self.node_vms();
+        let started = async {
+            firewall_status(node_vms.sync_nic_firewall().await, true)?;
+            for fork in &req.forks {
+                node_vms
+                    .sync_security_groups(&fork.vm_id, &fork.firewall)
+                    .await?;
             }
+            manager
+                .resume_forks(&req.source_vm_id, &fork_ids)
+                .await
+                .map_err(map_vmm_error)
         }
+        .await;
+        if let Err(status) = started {
+            error!(
+                "Failed to start the forks of VM {}: {}",
+                req.source_vm_id,
+                status.message()
+            );
+            for fork_id in &fork_ids {
+                if let Err(e) = manager.delete_vm(fork_id).await {
+                    error!("Failed to delete fork {fork_id}: {e}");
+                }
+            }
+            firewall_status(node_vms.sync_nic_firewall().await, false)?;
+            return Err(status);
+        }
+        info!("VM {} forked into {} VMs", req.source_vm_id, fork_ids.len());
+        Ok(Response::new(()))
     }
 
     async fn delete_snapshot(
@@ -1373,21 +1426,9 @@ impl VmService for VmServiceImpl {
         request: Request<SyncVmFirewallRequest>,
     ) -> Result<Response<()>, Status> {
         let req = request.into_inner();
-        // From the node's own state: asking the hypervisor (get_vm_info) blocks
-        // while a VM waits for an incoming migration, which waits on this sync.
-        let config = self
-            .node_vms()
-            .states()
-            .await
-            .into_iter()
-            .filter_map(|vm| vm.config)
-            .find(|config| config.vm_id == req.vm_id)
-            .ok_or_else(|| Status::not_found(format!("VM {} not found", req.vm_id)))?;
-        let nics = Nic::from_config(&config.networks)
-            .map_err(|e| Status::internal(format!("Failed to sync VM firewall: {e:#}")))?;
-        firewall::sync_security_groups(&nics, &req.interfaces)
-            .await
-            .map_err(|e| Status::internal(format!("Failed to sync VM firewall: {e:#}")))?;
+        self.node_vms()
+            .sync_security_groups(&req.vm_id, &req.interfaces)
+            .await?;
         Ok(Response::new(()))
     }
 

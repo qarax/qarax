@@ -388,7 +388,7 @@ async fn resolve_underlay_ip(
 
 /// The VM's NICs to filter on `host_id` (where it runs, or is migrating to),
 /// with its security-group rules; none when it has no security groups.
-async fn firewall_interfaces_for_vm(
+pub(crate) async fn firewall_interfaces_for_vm(
     pool: &PgPool,
     vm_id: Uuid,
     host_id: Uuid,

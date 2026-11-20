@@ -433,11 +433,22 @@ message RestoreVmRequest {
 
 // ForkVmRequest starts new VMs that continue from a running VM's current
 // state: its memory, devices and guest processes. The source is paused for a
-// snapshot and resumes. Each fork has the source's config under its own ID.
-// Firecracker VMs with the guest agent and without disks or NICs only.
+// snapshot and resumes. Each fork has the source's config under its own ID,
+// with its own NICs. Firecracker VMs with the guest agent, and no disk but
+// their OCI image's, only.
 message ForkVmRequest {
-  string source_vm_id          = 1;
-  repeated string fork_vm_ids  = 2;
+  reserved 2;
+  string source_vm_id  = 1;
+  repeated Fork forks  = 3;
+}
+
+// One fork of a ForkVmRequest: its ID, a NIC for each of the source's (by id)
+// with the fork's own addresses, which its guest takes, and its security
+// groups, which hold before it runs.
+message Fork {
+  string vm_id                          = 1;
+  repeated NetConfig networks           = 2;
+  repeated VmFirewallInterface firewall = 3;
 }
 
 // ReceiveMigrationRequest is sent to the *destination* node to prepare it for

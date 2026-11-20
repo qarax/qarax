@@ -343,3 +343,120 @@ WHERE vm_id = $1 AND device_id = $2
     .await?;
     Ok(row.map(|r| r.into()))
 }
+
+/// Give `fork_vm_id` a copy of NIC `source_nic_id`, on its network with
+/// `ip_address`, the fork's. It has none of the source's MAC, host MAC or
+/// TAP: the node gives the fork its own.
+pub async fn copy_for_fork_tx(
+    tx: &mut PgTransaction<'_>,
+    source_nic_id: Uuid,
+    fork_vm_id: Uuid,
+    ip_address: &str,
+) -> Result<Uuid, sqlx::Error> {
+    let id = Uuid::new_v4();
+    let inserted = sqlx::query!(
+        r#"
+INSERT INTO network_interfaces (
+    id, vm_id, network_id, device_id, ip_address, mtu,
+    interface_type, vhost_user, vhost_socket, vhost_mode,
+    num_queues, queue_size, rate_limiter,
+    offload_tso, offload_ufo, offload_csum,
+    pci_segment, iommu
+)
+SELECT
+    $1, $2, network_id, device_id, $3::text::inet, mtu,
+    interface_type, vhost_user, vhost_socket, vhost_mode,
+    num_queues, queue_size, rate_limiter,
+    offload_tso, offload_ufo, offload_csum,
+    pci_segment, iommu
+FROM network_interfaces
+WHERE id = $4
+        "#,
+        id,
+        fork_vm_id,
+        ip_address,
+        source_nic_id
+    )
+    .execute(tx.as_mut())
+    .await?
+    .rows_affected();
+    if inserted == 0 {
+        return Err(sqlx::Error::RowNotFound);
+    }
+    Ok(id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{copy_for_fork_tx, create, list_by_vm};
+    use crate::model::{
+        networks::{self, NewNetwork},
+        vms::{self, NewVmNetwork},
+    };
+    use crate::test_support::{TestDatabase, resolved_vm};
+
+    #[tokio::test]
+    async fn a_forks_nic_is_its_sources_with_the_forks_address() {
+        let db = TestDatabase::new().await;
+        let network_id = networks::create(
+            &db.pool,
+            NewNetwork {
+                name: "isolated".into(),
+                subnet: "10.9.0.0/24".into(),
+                gateway: Some("10.9.0.1".into()),
+                dns: None,
+                vpc_name: None,
+                network_type: Some("isolated".into()),
+            },
+        )
+        .await
+        .unwrap();
+        let mut tx = db.pool.begin().await.unwrap();
+        let source = vms::create_tx(&mut tx, &resolved_vm("source"), None)
+            .await
+            .unwrap();
+        let fork = vms::create_tx(&mut tx, &resolved_vm("fork"), None)
+            .await
+            .unwrap();
+        let nic = create(
+            &mut tx,
+            source,
+            &NewVmNetwork {
+                id: "net0".into(),
+                network_id: Some(network_id),
+                mac: Some("02:00:00:00:00:01".into()),
+                tap: Some("qfsource0".into()),
+                ip: Some("10.9.0.2".into()),
+                mtu: Some(1400),
+                host_mac: Some("02:00:00:00:01:01".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        copy_for_fork_tx(&mut tx, nic, fork, "10.9.0.3")
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+
+        let copies = list_by_vm(&db.pool, fork).await.unwrap();
+        let [copy] = copies.as_slice() else {
+            panic!("{} NICs", copies.len());
+        };
+        assert_eq!(
+            (copy.device_id.as_str(), copy.network_id, copy.mtu),
+            ("net0", Some(network_id), 1400)
+        );
+        assert_eq!(
+            copy.ip_address
+                .as_deref()
+                .map(|ip| ip.split('/').next().unwrap()),
+            Some("10.9.0.3")
+        );
+        assert_eq!(
+            (&copy.mac_address, &copy.host_mac, &copy.tap_name),
+            (&None, &None, &None)
+        );
+    }
+}

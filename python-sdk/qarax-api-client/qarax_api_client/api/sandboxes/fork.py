@@ -86,9 +86,11 @@ def sync_detailed(
     its memory, its running processes and its files. They run on the same host
     and are ready when this returns; this one keeps running. Each fork's random
     generator is reseeded and its clock set. A fork of a sandbox booted from an
-    OCI image gets the image and the sandbox's changes to it as they were.
-    Only Firecracker sandboxes without network interfaces, cloud-init or disks
-    besides their image's fork.
+    OCI image gets the image and the sandbox's changes to it as they were. Each
+    of a fork's network interfaces is on its source's network with an address of
+    its own, and the fork has its source's security groups. Only Firecracker
+    sandboxes with no network interface outside a managed bridge or isolated
+    network, no cloud-init and no disk besides their image's fork.
 
     Args:
         sandbox_id (UUID):
@@ -126,9 +128,11 @@ def sync(
     its memory, its running processes and its files. They run on the same host
     and are ready when this returns; this one keeps running. Each fork's random
     generator is reseeded and its clock set. A fork of a sandbox booted from an
-    OCI image gets the image and the sandbox's changes to it as they were.
-    Only Firecracker sandboxes without network interfaces, cloud-init or disks
-    besides their image's fork.
+    OCI image gets the image and the sandbox's changes to it as they were. Each
+    of a fork's network interfaces is on its source's network with an address of
+    its own, and the fork has its source's security groups. Only Firecracker
+    sandboxes with no network interface outside a managed bridge or isolated
+    network, no cloud-init and no disk besides their image's fork.
 
     Args:
         sandbox_id (UUID):
@@ -161,9 +165,11 @@ async def asyncio_detailed(
     its memory, its running processes and its files. They run on the same host
     and are ready when this returns; this one keeps running. Each fork's random
     generator is reseeded and its clock set. A fork of a sandbox booted from an
-    OCI image gets the image and the sandbox's changes to it as they were.
-    Only Firecracker sandboxes without network interfaces, cloud-init or disks
-    besides their image's fork.
+    OCI image gets the image and the sandbox's changes to it as they were. Each
+    of a fork's network interfaces is on its source's network with an address of
+    its own, and the fork has its source's security groups. Only Firecracker
+    sandboxes with no network interface outside a managed bridge or isolated
+    network, no cloud-init and no disk besides their image's fork.
 
     Args:
         sandbox_id (UUID):
@@ -199,9 +205,11 @@ async def asyncio(
     its memory, its running processes and its files. They run on the same host
     and are ready when this returns; this one keeps running. Each fork's random
     generator is reseeded and its clock set. A fork of a sandbox booted from an
-    OCI image gets the image and the sandbox's changes to it as they were.
-    Only Firecracker sandboxes without network interfaces, cloud-init or disks
-    besides their image's fork.
+    OCI image gets the image and the sandbox's changes to it as they were. Each
+    of a fork's network interfaces is on its source's network with an address of
+    its own, and the fork has its source's security groups. Only Firecracker
+    sandboxes with no network interface outside a managed bridge or isolated
+    network, no cloud-init and no disk besides their image's fork.
 
     Args:
         sandbox_id (UUID):

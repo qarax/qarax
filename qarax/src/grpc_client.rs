@@ -130,7 +130,7 @@ use node::{
     AddDiskDeviceRequest, AddNetworkDeviceRequest, AttachNetworkRequest, AttachStoragePoolRequest,
     BlankDiskSource, CloudInitConfig, ConsoleConfig, ConsoleInput, ConsoleLogResponse,
     CopyFileRequest, CpusConfig, CreateDiskRequest, DeleteSnapshotRequest, DetachNetworkRequest,
-    DetachStoragePoolRequest, DiskConfig, DownloadFileRequest, ExecVmRequest, ExecVmResponse,
+    DetachStoragePoolRequest, DiskConfig, DownloadFileRequest, ExecVmRequest, ExecVmResponse, Fork,
     ForkVmRequest, HypervisorType, ImportOverlayBdRequest, ImportOverlayBdResponse, MemoryConfig,
     NetConfig, NodeInfo, NumaPlacement, OverlayBdDiskSource, PayloadConfig, PreflightImageRequest,
     PreflightImageResponse, ReceiveMigrationRequest, RemoveDeviceRequest, ResizeDiskRequest,
@@ -660,15 +660,15 @@ impl NodeClient {
         Ok(())
     }
 
-    /// Start `fork_ids` on the node, new VMs that continue from `source_id`'s
+    /// Start `forks` on the node, new VMs that continue from `source_id`'s
     /// current state. Either all of them start or none does.
-    #[instrument(skip(self))]
-    pub async fn fork_vm(&self, source_id: Uuid, fork_ids: &[Uuid]) -> Result<()> {
+    #[instrument(skip(self, forks))]
+    pub async fn fork_vm(&self, source_id: Uuid, forks: Vec<Fork>) -> Result<()> {
         let mut client = self.connect_vm_service().await?;
         client
             .fork_vm(ForkVmRequest {
                 source_vm_id: source_id.to_string(),
-                fork_vm_ids: fork_ids.iter().map(Uuid::to_string).collect(),
+                forks,
             })
             .await
             .map_err(|status| match status.code() {

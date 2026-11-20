@@ -3,9 +3,9 @@
 `POST /v1/sandboxes/{id}/fork` (`qarax sandbox fork SANDBOX --count N`) makes
 new sandboxes that continue from a running sandbox's current state: its
 memory, its running processes and its files, whether in a RAM-backed root or
-on the disk of the OCI image it booted. They run
-on the same host and are ready when the call returns; the source keeps
-running. An agent can branch mid-task to try several approaches from the same
+on the disk of the OCI image it booted. They run on the same host, each with
+addresses of its own on the source's networks, and are ready when the call
+returns; the source keeps running. An agent can branch mid-task to try several approaches from the same
 point, or fan out from a warmed sandbox (imports done, caches loaded) without
 booting each copy.
 
@@ -15,11 +15,12 @@ qarax sandbox fork my-sandbox --count 3
 
 ## What forks
 
-- Firecracker sandboxes with the guest agent, no network interfaces, no
-  cloud-init and no disk but the OCI image they booted, if they booted one. A
-  NIC would give the forks the source's MAC and IP addresses; any other disk
-  (a cloud-init seed, a persistent OverlayBD layer) would have them write to
-  the same files. The image disk forks with the sandbox, see below.
+- Firecracker sandboxes with the guest agent, no cloud-init, no network
+  interface but ones on a managed bridge or isolated network, and no disk but
+  the OCI image they booted, if they booted one. Any other NIC would leave the
+  forks with the source's addresses; any other disk (a cloud-init seed, a
+  persistent OverlayBD layer) would have them write to the same files. The
+  image disk and the NICs fork with the sandbox, see below.
 - Up to 16 forks per request. The source's host must have room for them: the
   scheduler counts each fork at the source's full memory size and vCPUs, as it
   does any VM, though a fork uses much less at first (see below).
@@ -65,6 +66,29 @@ read-only layers with a writable layer of the VM's own on top:
    and then it resumes. A write that was still in the source's page cache at
    the fork is in each fork's memory and reaches the fork's own disk.
 
+A source's network interfaces fork too, each onto the same network with the
+fork's own addresses:
+
+1. The control plane gives each fork a copy of each of the source's NICs,
+   with a new address from the network's pool, and the source's security
+   groups. The node gives each fork's NIC its own MAC, as it does any VM's.
+2. Each fork loads the snapshot paused onto TAPs of its own
+   (`network_overrides`), attached to the source NICs' bridges. The node writes
+   the forks' firewall (anti-spoofing for their own MAC and address, and their
+   security groups), then resumes them.
+3. A fork's guest still has the source's MAC and address, which the fork's
+   firewall drops. After the fork notice, the node sends the guest agent the
+   fork's addresses: for each NIC, the guest interface that has the source's
+   MAC is taken down, gets the fork's MAC, address and netmask, comes up, and
+   gets its default route back. A qarax-init older than this refuses, and the
+   fork fails.
+
+The guest's connections from before the fork carry the source's address in
+the fork, so a fork's TCP connections to other machines break: it reconnects
+from its own address. Only guests whose addresses come from the kernel
+command line (`ip=`), as qarax sets them up, are re-addressed; a DHCP client or
+network manager in the guest keeps its own idea of the source's lease.
+
 Either every fork of a request starts or none does. The forks' rows point at
 the source's image storage object, so the database shows what they boot.
 
@@ -92,9 +116,6 @@ inherits stays shared.
 
 ## Not yet
 
-- **NICs.** Forks keep their source's MAC and IP addresses, so each would need
-  a network namespace of its own with those addresses inside and its own
-  address outside.
 - **Cloud Hypervisor** sandboxes.
 - **Diff snapshots**, so that forking a source again writes only the memory it
   changed since the last time.

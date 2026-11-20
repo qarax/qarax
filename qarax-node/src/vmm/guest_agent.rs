@@ -22,10 +22,12 @@ const MAX_RESPONSE_BYTES: u64 = 10 * 1024 * 1024;
 const PING: &[u8] = b"{\"ping\":{}}\n";
 
 /// The agent's answer to a request other than exec: an exec response, whose
-/// exit code is 0 when it accepted.
+/// exit code is 0 when it accepted, with why it didn't on stderr.
 #[derive(serde::Deserialize)]
 pub(crate) struct Ack {
     pub(crate) exit_code: i32,
+    #[serde(default)]
+    pub(crate) stderr: String,
 }
 
 /// Send one request line to the guest agent behind `vsock_socket_path`
