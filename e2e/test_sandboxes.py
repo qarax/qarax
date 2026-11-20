@@ -72,7 +72,7 @@ from helpers import (
     call_api_detailed,
     exec_when_ready,
     node_storage_diagnostics,
-    overlaybd_tcmu_running,
+    overlaybd_disk_wwids,
     up_hosts,
     vm_diagnostics,
 )
@@ -566,6 +566,12 @@ async def test_sandbox_fork_of_an_oci_sandbox_forks_its_disk(client, bootable_oc
             )
             forks = response.parsed
             sandbox_ids.extend(fork.id for fork in forks)
+            # Each disk has a SCSI identity of its own, or the host's
+            # multipathd takes them for paths to one LUN and holds them.
+            wwids = overlaybd_disk_wwids()
+            assert len(wwids) >= 3 and len(set(wwids.values())) == len(wwids), (
+                f"{wwids}\n{node_storage_diagnostics()}"
+            )
             # After the fork point: no fork may see it.
             await sh(source.id, "echo after > /root/after && sync")
 
@@ -599,9 +605,6 @@ async def test_sandbox_fork_of_an_oci_sandbox_forks_its_disk(client, bootable_oc
                 for obj in objects.items if objects else []:
                     await delete_storage_object.asyncio_detailed(client=c, object_id=obj.id)
             await delete_storage_pool.asyncio_detailed(client=c, pool_id=pool_id)
-
-    # The forks and their cleanup leave the node's OverlayBD daemon serving.
-    assert overlaybd_tcmu_running(), node_storage_diagnostics()
 
 
 @pytest.mark.asyncio

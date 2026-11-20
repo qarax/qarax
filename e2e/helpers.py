@@ -215,7 +215,8 @@ def node_storage_diagnostics(max_lines=80):
         "pgrep -a overlaybd-tcmu || echo 'overlaybd-tcmu is not running'; "
         f"echo '--- overlaybd.log'; tail -n {max_lines} /var/log/overlaybd.log 2>&1; "
         f"echo '--- dmesg'; dmesg 2>&1 | tail -n {max_lines}; "
-        "echo '--- disks'; ls -l /sys/block | grep ' sd' || true"
+        "echo '--- disks'; for d in /sys/block/sd*; do [ -e \"$d\" ] || continue; "
+        "echo \"$d wwid=$(cat $d/device/wwid 2>/dev/null) holders=$(ls $d/holders)\"; done"
     )
     return "\n".join(
         f"=== {container} ===\n" + docker("exec", container, "sh", "-c", script, check=False).stdout
@@ -223,13 +224,19 @@ def node_storage_diagnostics(max_lines=80):
     )
 
 
-def overlaybd_tcmu_running():
-    """Whether overlaybd-tcmu runs on the node that has it (the compose stack
-    runs it on qarax-node only)."""
-    return any(
-        docker("exec", container, "pgrep", "-x", "overlaybd-tcmu", check=False).returncode == 0
-        for container in containers(NODE_CONTAINER_PREFIX)
+def overlaybd_disk_wwids():
+    """The SCSI identity (wwid) of each OverlayBD (TCMU, vendor LIO-ORG) disk,
+    by disk. The node containers share the host's kernel, so each sees them all."""
+    script = (
+        'for d in /sys/block/sd*; do grep -qs LIO-ORG "$d/device/vendor" '
+        '&& echo "$d $(cat "$d/device/wwid")"; done; true'
     )
+    wwids = {}
+    for container in containers(NODE_CONTAINER_PREFIX):
+        for line in docker("exec", container, "sh", "-c", script).stdout.splitlines():
+            disk, _, wwid = line.partition(" ")
+            wwids[disk] = wwid
+    return wwids
 
 
 def path_exists_in_any(prefix, path):

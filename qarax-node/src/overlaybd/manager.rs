@@ -469,6 +469,20 @@ impl OverlayBdManager {
 
         self.wait_for_tcmu_control_files(&tcmu_dir).await?;
 
+        // A serial of its own, so the disk has a SCSI identity of its own:
+        // without one every OverlayBD disk reports the same, and a node's
+        // multipathd takes two disks that exist at once (a fork's, two image
+        // VMs') for paths to one LUN, holds them in a device-mapper map, and
+        // claims every later one. Before the LUN is exported, which locks it.
+        tokio::fs::write(tcmu_dir.join("wwn").join("vpd_unit_serial"), vm_id)
+            .await
+            .map_err(|e| {
+                OverlayBdError::MountFailed(format!(
+                    "write TCMU unit serial for VM {}: {}",
+                    vm_id, e
+                ))
+            })?;
+
         let dev_config = format!(
             "dev_config=overlaybd/{},dev_size={},dev_max_sectors=128",
             config_file.display(),
