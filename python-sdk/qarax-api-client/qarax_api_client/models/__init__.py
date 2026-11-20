@@ -91,6 +91,7 @@ from .restore_request import RestoreRequest
 from .sandbox import Sandbox
 from .sandbox_page import SandboxPage
 from .sandbox_pool import SandboxPool
+from .sandbox_pool_member_status import SandboxPoolMemberStatus
 from .sandbox_pool_page import SandboxPoolPage
 from .sandbox_status import SandboxStatus
 from .scheduling_settings import SchedulingSettings
@@ -227,6 +228,7 @@ __all__ = (
     "Sandbox",
     "SandboxPage",
     "SandboxPool",
+    "SandboxPoolMemberStatus",
     "SandboxPoolPage",
     "SandboxStatus",
     "SchedulingSettings",

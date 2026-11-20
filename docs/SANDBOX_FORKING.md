@@ -190,3 +190,29 @@ process of its own, started again after a stop, restored, migrated or failed
 over, and is charged its memory size from then on. A fork of a Cloud
 Hypervisor VM with shared memory or huge pages has a copy of its source's
 memory, and is charged in full from the start.
+
+## Pools that fork
+
+A sandbox pool keeps `min_ready` sandboxes of a template ready for
+`POST /v1/sandboxes` to hand out. A pool that forks makes them by forking
+one VM of the template it keeps booted, its seed, instead of booting each:
+
+```bash
+qarax sandbox pool set --template agent-base --min-ready 8 --fork
+```
+
+- The pool boots its seed when it has members to keep (`min_ready` above 0),
+  and forks it, up to 16 at a time, for each member it is short of: a refill
+  after a sandbox is claimed takes milliseconds, not a boot.
+- Each member shares the seed's memory until it writes it, and counts
+  against the host as a fork does (see above); the seed counts in full.
+  Members run on the seed's host.
+- A member continues from the seed's state when it was made. The seed is
+  never handed out; `GET /v1/vm-templates/{id}/sandbox-pool` shows it as
+  `seed_vm_id` and `seed_status`, and its counts are of the members alone.
+- A seed that fails to boot, or whose VM stops running, is replaced. When
+  forking the seed fails (its host has no room, say), the pool logs it and
+  tries again on its next pass. A pool set to stop forking, or to keep no
+  members, destroys its seed; its members stay until they're claimed.
+- The template must be forkable as a sandbox is (see "What forks"). Pools of
+  templates booting an OCI image aren't supported, whether they fork or not.

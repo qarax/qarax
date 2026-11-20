@@ -1,0 +1,102 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nSELECT sp.id,\n       sp.vm_template_id,\n       vt.name AS vm_template_name,\n       sp.min_ready,\n       sp.fork,\n       seed.vm_id AS \"seed_vm_id?\",\n       seed.status AS \"seed_status?: SandboxPoolMemberStatus\",\n       COUNT(spm.id) FILTER (WHERE spm.status = 'READY')::bigint AS \"current_ready!\",\n       COUNT(spm.id) FILTER (WHERE spm.status = 'PROVISIONING')::bigint AS \"current_provisioning!\",\n       COUNT(spm.id) FILTER (WHERE spm.status = 'ERROR')::bigint AS \"current_error!\",\n       sp.created_at,\n       sp.updated_at\nFROM sandbox_pools sp\nJOIN vm_templates vt\n  ON vt.id = sp.vm_template_id\nLEFT JOIN sandbox_pool_members seed\n  ON seed.sandbox_pool_id = sp.id AND seed.seed\nLEFT JOIN sandbox_pool_members spm\n  ON spm.sandbox_pool_id = sp.id AND NOT spm.seed\nWHERE ($1::text IS NULL OR (vt.name, sp.id) > ($1, $2::uuid))\nGROUP BY sp.id, vt.name, seed.vm_id, seed.status\nORDER BY vt.name, sp.id\nLIMIT $3\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "vm_template_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "vm_template_name",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "min_ready",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "fork",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 5,
+        "name": "seed_vm_id?",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 6,
+        "name": "seed_status?: SandboxPoolMemberStatus",
+        "type_info": {
+          "Custom": {
+            "name": "sandbox_pool_member_status",
+            "kind": {
+              "Enum": [
+                "PROVISIONING",
+                "READY",
+                "ERROR",
+                "DESTROYING"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "current_ready!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 8,
+        "name": "current_provisioning!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 9,
+        "name": "current_error!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 10,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 11,
+        "name": "updated_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null,
+      null,
+      null,
+      false,
+      false
+    ]
+  },
+  "hash": "a186f8268aef3190731ba89178804e1a036b5f1dbd6ddbbeaeecc7e46ea4c5df"
+}

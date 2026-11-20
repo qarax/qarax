@@ -30,25 +30,59 @@ pub struct SandboxPoolMember {
     pub updated_at: DateTime<Utc>,
 }
 
+/// A PROVISIONING member of the pool: its seed, which is never claimed, or a
+/// member a sandbox claims.
 pub async fn create(
     pool: &PgPool,
     sandbox_pool_id: Uuid,
     vm_id: Uuid,
+    seed: bool,
 ) -> Result<SandboxPoolMember, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let id = create_tx(&mut tx, sandbox_pool_id, vm_id, seed).await?;
+    tx.commit().await?;
+    get(pool, id).await
+}
+
+/// [`create`] inside the caller's transaction.
+pub async fn create_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    sandbox_pool_id: Uuid,
+    vm_id: Uuid,
+    seed: bool,
+) -> Result<Uuid, sqlx::Error> {
     let id = Uuid::new_v4();
     sqlx::query!(
         r#"
-INSERT INTO sandbox_pool_members (id, sandbox_pool_id, vm_id)
-VALUES ($1, $2, $3)
+INSERT INTO sandbox_pool_members (id, sandbox_pool_id, vm_id, seed)
+VALUES ($1, $2, $3, $4)
         "#,
         id,
         sandbox_pool_id,
-        vm_id
+        vm_id,
+        seed
     )
-    .execute(pool)
+    .execute(tx.as_mut())
     .await?;
+    Ok(id)
+}
 
-    get(pool, id).await
+/// The pool's seed, if it has one.
+pub async fn seed(
+    pool: &PgPool,
+    sandbox_pool_id: Uuid,
+) -> Result<Option<SandboxPoolMember>, sqlx::Error> {
+    sqlx::query_as!(
+        SandboxPoolMember,
+        r#"
+SELECT id, sandbox_pool_id, vm_id, status AS "status: _", error_message, created_at, updated_at
+FROM sandbox_pool_members
+WHERE sandbox_pool_id = $1 AND seed
+        "#,
+        sandbox_pool_id
+    )
+    .fetch_optional(pool)
+    .await
 }
 
 pub async fn get(pool: &PgPool, member_id: Uuid) -> Result<SandboxPoolMember, sqlx::Error> {
@@ -65,6 +99,7 @@ WHERE id = $1
     .await
 }
 
+/// The pool's ready members, oldest first; never its seed.
 pub async fn list_ready_by_pool(
     pool: &PgPool,
     sandbox_pool_id: Uuid,
@@ -76,6 +111,7 @@ SELECT id, sandbox_pool_id, vm_id, status AS "status: _", error_message, created
 FROM sandbox_pool_members
 WHERE sandbox_pool_id = $1
   AND status = 'READY'
+  AND NOT seed
 ORDER BY created_at
         "#,
         sandbox_pool_id
@@ -84,6 +120,7 @@ ORDER BY created_at
     .await
 }
 
+/// The pool's members that failed, its seed among them.
 pub async fn list_error_by_pool(
     pool: &PgPool,
     sandbox_pool_id: Uuid,
@@ -103,6 +140,7 @@ ORDER BY created_at
     .await
 }
 
+/// Every member of the pool, its seed among them.
 pub async fn list_by_pool(
     pool: &PgPool,
     sandbox_pool_id: Uuid,
@@ -121,6 +159,7 @@ ORDER BY created_at
     .await
 }
 
+/// How many of the pool's members, not counting its seed, are in `status`.
 pub async fn count_by_status(
     pool: &PgPool,
     sandbox_pool_id: Uuid,
@@ -132,6 +171,7 @@ SELECT COUNT(*)::bigint AS "count!"
 FROM sandbox_pool_members
 WHERE sandbox_pool_id = $1
   AND status = $2
+  AND NOT seed
         "#,
         sandbox_pool_id,
         status as SandboxPoolMemberStatus
@@ -210,6 +250,8 @@ pub async fn delete_tx(
     Ok(())
 }
 
+/// The oldest ready member of the template's pool, never its seed, locked for
+/// the caller's transaction to hand to a sandbox.
 pub async fn claim_ready_for_template_tx(
     tx: &mut Transaction<'_, Postgres>,
     vm_template_id: Uuid,
@@ -229,6 +271,7 @@ JOIN sandbox_pools sp
   ON sp.id = spm.sandbox_pool_id
 WHERE sp.vm_template_id = $1
   AND spm.status = 'READY'
+  AND NOT spm.seed
 ORDER BY spm.created_at
 FOR UPDATE OF spm SKIP LOCKED
 LIMIT 1

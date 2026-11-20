@@ -3531,6 +3531,12 @@ components:
       required:
       - min_ready
       properties:
+        fork:
+          type: boolean
+          description: |-
+            Make the pool's members by forking one VM of the template it keeps
+            booted, its seed, rather than booting each one: a member is ready in
+            milliseconds and shares the seed's memory until it writes it.
         min_ready:
           type: integer
           format: int32
@@ -5507,6 +5513,7 @@ components:
       - vm_template_id
       - vm_template_name
       - min_ready
+      - fork
       - current_ready
       - current_provisioning
       - current_error
@@ -5525,12 +5532,28 @@ components:
         current_ready:
           type: integer
           format: int64
+          description: Counts of the pool's members, not counting its seed.
+        fork:
+          type: boolean
+          description: |-
+            The pool makes its members by forking its seed, one VM of the template
+            it keeps booted, rather than booting each one.
         id:
           type: string
           format: uuid
         min_ready:
           type: integer
           format: int32
+        seed_status:
+          oneOf:
+          - $ref: '#/components/schemas/SandboxPoolMemberStatus'
+          - type: 'null'
+        seed_vm_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+          description: The seed's VM, while the pool has one.
         updated_at:
           type: string
           format: date-time
@@ -5539,6 +5562,13 @@ components:
           format: uuid
         vm_template_name:
           type: string
+    SandboxPoolMemberStatus:
+      type: string
+      enum:
+      - provisioning
+      - ready
+      - error
+      - destroying
     SandboxPoolPage:
       type: object
       description: |-

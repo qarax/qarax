@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\nSELECT COUNT(*)::bigint AS \"count!\"\nFROM sandbox_pool_members\nWHERE sandbox_pool_id = $1\n  AND status = $2\n        ",
+  "query": "\nSELECT COUNT(*)::bigint AS \"count!\"\nFROM sandbox_pool_members\nWHERE sandbox_pool_id = $1\n  AND status = $2\n  AND NOT seed\n        ",
   "describe": {
     "columns": [
       {
@@ -31,5 +31,5 @@
       null
     ]
   },
-  "hash": "de21674bc280152885365c97aed63cb79da49f17bdea589097e405626552f017"
+  "hash": "7de77ed2a3332a7aa75a4a7a61f63bf10b5e0113f64bbb4d2e2cf577aaff1b05"
 }

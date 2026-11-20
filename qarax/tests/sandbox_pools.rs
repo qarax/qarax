@@ -43,6 +43,18 @@ async fn sandbox_pool_supports_crud() {
     assert_eq!(configured["vm_template_id"], template_id.to_string());
     assert_eq!(configured["min_ready"], 2);
     assert_eq!(configured["current_ready"], 0);
+    assert_eq!(configured["fork"], false);
+    assert_eq!(configured["seed_vm_id"], serde_json::Value::Null);
+
+    let res = client
+        .put(&pool_url)
+        .json(&json!({ "min_ready": 2, "fork": true }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let configured: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(configured["fork"], true);
 
     let res = client.get(&pool_url).send().await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
@@ -177,4 +189,95 @@ VALUES ($1, $2, $3, 'READY')
     .await
     .unwrap();
     assert_eq!(remaining_members, 0);
+}
+
+/// A running VM in the pool as a READY member, or its seed.
+async fn add_ready_member(app: &support::TestApp, pool_id: Uuid, seed: bool) -> Uuid {
+    let vm_id = Uuid::new_v4();
+    sqlx::query(
+        r#"
+INSERT INTO vms (
+    id, name, tags, status, host_id, hypervisor, config,
+    boot_vcpus, max_vcpus, memory_size, boot_mode
+)
+VALUES (
+    $1, $2, ARRAY[]::TEXT[], 'RUNNING', NULL, 'FIRECRACKER', '{}',
+    1, 1, 268435456, 'KERNEL'
+)
+        "#,
+    )
+    .bind(vm_id)
+    .bind(format!("sandbox-pool-{}", &vm_id.to_string()[..8]))
+    .execute(&app.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO sandbox_pool_members (sandbox_pool_id, vm_id, status, seed) \
+         VALUES ($1, $2, 'READY', $3)",
+    )
+    .bind(pool_id)
+    .bind(vm_id)
+    .bind(seed)
+    .execute(&app.pool)
+    .await
+    .unwrap();
+    vm_id
+}
+
+#[tokio::test]
+async fn a_forking_pool_s_seed_is_never_claimed() {
+    let app = spawn_app().await;
+    let client = reqwest::Client::new();
+    let template_id = create_template(&client, &app.address, "fork-pool-template").await;
+    let pool_url = format!("{}/vm-templates/{template_id}/sandbox-pool", app.address);
+    let res = client
+        .put(&pool_url)
+        .json(&json!({ "min_ready": 1, "fork": true }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let configured: serde_json::Value = res.json().await.unwrap();
+    let pool_id = Uuid::parse_str(configured["id"].as_str().unwrap()).unwrap();
+    let seed_vm = add_ready_member(&app, pool_id, true).await;
+    let member_vm = add_ready_member(&app, pool_id, false).await;
+
+    // The pool counts its members, and shows its seed apart.
+    let pool: serde_json::Value = client
+        .get(&pool_url)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(pool["current_ready"], 1);
+    assert_eq!(pool["seed_vm_id"], seed_vm.to_string());
+    assert_eq!(pool["seed_status"], "ready");
+
+    let claim = |name: &'static str| {
+        client
+            .post(format!("{}/sandboxes", app.address))
+            .json(&json!({ "name": name, "vm_template_id": template_id }))
+            .send()
+    };
+    let res = claim("first").await.unwrap();
+    assert_eq!(res.status(), StatusCode::ACCEPTED);
+    let created: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(created["vm_id"], member_vm.to_string());
+
+    // With only the seed left, a sandbox boots a VM of its own, here on no
+    // host at all.
+    let res = claim("second").await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let pool: serde_json::Value = client
+        .get(&pool_url)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(pool["current_ready"], 0);
+    assert_eq!(pool["seed_vm_id"], seed_vm.to_string());
 }

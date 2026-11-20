@@ -37,7 +37,7 @@ mod instance_type;
 mod job;
 mod lifecycle_hook;
 mod network;
-mod sandbox;
+pub(crate) mod sandbox;
 mod scheduling;
 mod security_group;
 mod storage_object;
