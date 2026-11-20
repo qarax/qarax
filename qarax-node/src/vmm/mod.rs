@@ -15,6 +15,7 @@ use crate::rpc::node::{
     VmState,
 };
 
+pub mod fork;
 pub mod guest_agent;
 
 #[derive(Debug, thiserror::Error)]
@@ -60,6 +61,16 @@ pub enum VmmError {
 
     #[error("Operation not supported by this hypervisor: {0}")]
     Unsupported(&'static str),
+}
+
+impl From<crate::cloud_init::CloudInitError> for VmmError {
+    fn from(e: crate::cloud_init::CloudInitError) -> Self {
+        use crate::cloud_init::CloudInitError as E;
+        match e {
+            E::Io(e) => VmmError::SpawnError(e),
+            E::Fat(msg) => VmmError::InvalidConfig(msg),
+        }
+    }
 }
 
 impl From<crate::cloud_hypervisor::VmManagerError> for VmmError {
