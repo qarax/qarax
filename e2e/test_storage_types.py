@@ -55,10 +55,6 @@ from qarax_api_client.models.job_status import JobStatus
 from qarax_api_client.models.storage_object_type import StorageObjectType
 
 QARAX_URL = os.getenv("QARAX_URL", "http://localhost:8000")
-# Registry URL as seen from the test runner (host-side port mapping)
-REGISTRY_PUSH_URL = os.getenv("REGISTRY_PUSH_URL", "localhost:5001")
-# Registry URL as seen from inside the docker network
-REGISTRY_INTERNAL_URL = os.getenv("REGISTRY_INTERNAL_URL", "registry:5000")
 
 JOB_TIMEOUT = 120  # OCI image pull can take a while
 
@@ -86,13 +82,16 @@ async def wait_for_job(c, job_id, timeout=JOB_TIMEOUT):
 
 from helpers import (
     AUTH_HEADERS,
+    REGISTRY_INTERNAL_URL,
+    REGISTRY_PUSH_URL,
     call_api,
-    call_api_detailed,
     docker,
     exec_when_ready,
+    node_storage_diagnostics,
     vm_diagnostics,
     wait_for_start,
 )
+from helpers import attach_overlaybd_pool as _attach_overlaybd_pool
 from helpers import up_hosts as _up_hosts
 
 
@@ -119,30 +118,6 @@ async def _attach_pools_to_hosts(c, hosts, pool_ids):
             )
 
 
-async def _attach_overlaybd_pool(c, hosts, pool_id):
-    """Attach an OverlayBD pool to every UP host whose node accepts it.
-
-    A node refuses OverlayBD without an overlaybd-tcmu daemon, which the
-    compose stack runs on qarax-node only (two daemons can't share a kernel's
-    TCMU handler). The scheduler then places image VMs on a host that has it.
-    """
-    accepted = []
-    for host in _up_hosts(hosts):
-        resp = await call_api_detailed(
-            attach_pool_host,
-            client=c,
-            pool_id=pool_id,
-            body=AttachPoolHostRequest(host_id=host.id),
-        )
-        if resp.status_code == 204:
-            accepted.append(host.name)
-        else:
-            assert resp.status_code == 422 and b"overlaybd-tcmu" in resp.content, (
-                f"attaching OverlayBD pool to {host.name}: {resp.status_code} {resp.content}"
-            )
-    assert accepted, "no host accepted the OverlayBD pool"
-
-
 async def _cleanup(c, vm_id, object_name_prefixes, pool_ids):
     """Delete VM, storage objects by name prefix, and pools."""
     if vm_id is not None:
@@ -163,20 +138,6 @@ def oci_image_ref():
     docker("tag", "busybox:latest", tag)
     docker("push", tag)
     return f"{REGISTRY_INTERNAL_URL}/test/busybox:latest"
-
-
-@pytest.fixture(scope="session")
-def bootable_oci_image_ref():
-    """Push alpine to the local test registry; return its internal ref.
-
-    Unlike busybox (see test_preflight_oci_image), its /bin/sh is a symlink,
-    which the OverlayBD conversion keeps, so a VM can boot it.
-    """
-    tag = f"{REGISTRY_PUSH_URL}/test/alpine:latest"
-    docker("pull", "alpine:latest")
-    docker("tag", "alpine:latest", tag)
-    docker("push", tag)
-    return f"{REGISTRY_INTERNAL_URL}/test/alpine:latest"
 
 
 # OCI image tests
@@ -270,7 +231,10 @@ async def test_vm_boots_an_oci_image(client, bootable_oci_image_ref, hypervisor)
             await wait_for_job(c, result.job_id)
 
             started = await call_api(start_vm, client=c, vm_id=vm_id)
-            await wait_for_start(c, vm_id, started.job_id)
+            try:
+                await wait_for_start(c, vm_id, started.job_id)
+            except TimeoutError as e:
+                raise TimeoutError(f"{e}\n{node_storage_diagnostics()}") from e
 
             try:
                 os_release = await exec_when_ready(c, vm_id, "cat /etc/os-release")

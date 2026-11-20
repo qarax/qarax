@@ -40,7 +40,7 @@ use crate::rpc::node::{
     VmConfig as ProtoVmConfig, VmState, VmStatus,
 };
 use crate::storage::StorageBackend;
-use crate::storage::overlaybd::map_oci_disks;
+use crate::storage::overlaybd::{OverlayBdBackend, map_oci_disks};
 use crate::vmm::{VmmError, VmmManager};
 
 mod exec;
@@ -146,7 +146,7 @@ pub struct FirecrackerManager {
     graceful_stop_timeout: Duration,
     /// Presents OCI image disks as block devices; `None` on a node without
     /// OverlayBD.
-    overlaybd: Option<Arc<dyn StorageBackend>>,
+    overlaybd: Option<Arc<OverlayBdBackend>>,
 }
 
 impl FirecrackerManager {
@@ -154,7 +154,7 @@ impl FirecrackerManager {
         runtime_dir: impl Into<PathBuf>,
         fc_binary: impl Into<PathBuf>,
         graceful_stop_timeout: Duration,
-        overlaybd: Option<Arc<dyn StorageBackend>>,
+        overlaybd: Option<Arc<OverlayBdBackend>>,
     ) -> Self {
         let runtime_dir = runtime_dir.into();
         let fc_binary = fc_binary.into();
@@ -494,16 +494,23 @@ impl VmmManager for FirecrackerManager {
 
         // Present an OCI image disk as an OverlayBD block device. Last before
         // the spawn, so that only a failed spawn leaves a mapping to undo.
-        let oci_mapped =
-            match map_oci_disks(self.overlaybd.as_ref(), &vm_id, &mut config.disks).await {
-                Ok(mapped) => mapped,
-                Err(e) => {
-                    for tap in &tap_devices {
-                        Self::delete_tap_device(tap).await;
-                    }
-                    return Err(VmmError::StorageError(e.to_string()));
+        let oci_mapped = match map_oci_disks(
+            self.overlaybd
+                .as_deref()
+                .map(|backend| backend as &dyn StorageBackend),
+            &vm_id,
+            &mut config.disks,
+        )
+        .await
+        {
+            Ok(mapped) => mapped,
+            Err(e) => {
+                for tap in &tap_devices {
+                    Self::delete_tap_device(tap).await;
                 }
-            };
+                return Err(VmmError::StorageError(e.to_string()));
+            }
+        };
 
         let (process, machine) = match self.spawn_configured(&vm_id, &config).await {
             Ok(spawned) => spawned,

@@ -85,8 +85,10 @@ def sync_detailed(
      Makes `count` new sandboxes that continue from this one's current state:
     its memory, its running processes and its files. They run on the same host
     and are ready when this returns; this one keeps running. Each fork's random
-    generator is reseeded and its clock set. Only Firecracker sandboxes without
-    network interfaces or disks fork.
+    generator is reseeded and its clock set. A fork of a sandbox booted from an
+    OCI image gets the image and the sandbox's changes to it as they were.
+    Only Firecracker sandboxes without network interfaces, cloud-init or disks
+    besides their image's fork.
 
     Args:
         sandbox_id (UUID):
@@ -123,8 +125,10 @@ def sync(
      Makes `count` new sandboxes that continue from this one's current state:
     its memory, its running processes and its files. They run on the same host
     and are ready when this returns; this one keeps running. Each fork's random
-    generator is reseeded and its clock set. Only Firecracker sandboxes without
-    network interfaces or disks fork.
+    generator is reseeded and its clock set. A fork of a sandbox booted from an
+    OCI image gets the image and the sandbox's changes to it as they were.
+    Only Firecracker sandboxes without network interfaces, cloud-init or disks
+    besides their image's fork.
 
     Args:
         sandbox_id (UUID):
@@ -156,8 +160,10 @@ async def asyncio_detailed(
      Makes `count` new sandboxes that continue from this one's current state:
     its memory, its running processes and its files. They run on the same host
     and are ready when this returns; this one keeps running. Each fork's random
-    generator is reseeded and its clock set. Only Firecracker sandboxes without
-    network interfaces or disks fork.
+    generator is reseeded and its clock set. A fork of a sandbox booted from an
+    OCI image gets the image and the sandbox's changes to it as they were.
+    Only Firecracker sandboxes without network interfaces, cloud-init or disks
+    besides their image's fork.
 
     Args:
         sandbox_id (UUID):
@@ -192,8 +198,10 @@ async def asyncio(
      Makes `count` new sandboxes that continue from this one's current state:
     its memory, its running processes and its files. They run on the same host
     and are ready when this returns; this one keeps running. Each fork's random
-    generator is reseeded and its clock set. Only Firecracker sandboxes without
-    network interfaces or disks fork.
+    generator is reseeded and its clock set. A fork of a sandbox booted from an
+    OCI image gets the image and the sandbox's changes to it as they were.
+    Only Firecracker sandboxes without network interfaces, cloud-init or disks
+    besides their image's fork.
 
     Args:
         sandbox_id (UUID):

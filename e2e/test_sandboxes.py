@@ -64,7 +64,18 @@ from qarax_api_client.models.attach_pool_host_request import AttachPoolHostReque
 from qarax_api_client.models.new_sandbox import NewSandbox
 from qarax_api_client.models.sandbox_status import SandboxStatus
 
-from helpers import AUTH_HEADERS, call_api, call_api_detailed, up_hosts
+from helpers import (
+    AUTH_HEADERS,
+    REGISTRY_INTERNAL_URL,
+    attach_overlaybd_pool,
+    call_api,
+    call_api_detailed,
+    exec_when_ready,
+    node_storage_diagnostics,
+    overlaybd_disk_wwids,
+    up_hosts,
+    vm_diagnostics,
+)
 
 QARAX_URL = os.getenv("QARAX_URL", "http://localhost:8000")
 NFS_SERVER_HOST = os.getenv("NFS_SERVER_HOST", "nfs-server")
@@ -465,6 +476,135 @@ async def test_sandbox_fork_continues_from_its_source(client):
             for sandbox_id in reversed(sandbox_ids):
                 await delete_sandbox.asyncio_detailed(client=c, sandbox_id=sandbox_id)
             await cleanup_bootable_sandbox_template(c, resources)
+
+
+@pytest.mark.asyncio
+async def test_sandbox_fork_of_an_oci_sandbox_forks_its_disk(client, bootable_oci_image_ref):
+    """A fork of a sandbox booted from an OCI image gets the image with the
+    sandbox's changes as they were at the fork: synced files, a write still in
+    the page cache, a running process. Afterwards each one's disk is its own."""
+    test_id = uuid.uuid4().hex[:8]
+    counter = (
+        "setsid sh -c 'i=0; while :; do i=$((i+1)); echo $i > /root/counter; sleep 0.1; done' "
+        "</dev/null >/dev/null 2>&1 &"
+    )
+
+    async with client as c:
+        hosts = up_hosts((await call_api(list_hosts, client=c)).items)
+        pool_id = uuid.UUID(
+            str(
+                await call_api(
+                    create_storage_pool,
+                    client=c,
+                    body=NewStoragePool(
+                        name=f"e2e-fork-obd-{test_id}",
+                        pool_type=StoragePoolType.OVERLAY_BD,
+                        config={"url": f"http://{REGISTRY_INTERNAL_URL}"},
+                    ),
+                )
+            ).strip('"')
+        )
+        template_id = None
+        source_vm_id = None
+        sandbox_ids = []
+
+        async def sh(sandbox_id, script):
+            result = await call_api(
+                exec_sandbox,
+                client=c,
+                sandbox_id=sandbox_id,
+                body=ExecSandboxRequest(command=["/bin/sh", "-c", script], timeout_secs=15),
+            )
+            assert result.exit_code == 0, result.stderr
+            return result.stdout.strip()
+
+        try:
+            await attach_overlaybd_pool(c, hosts, pool_id)
+            template_id = uuid.UUID(
+                str(
+                    await call_api(
+                        create_template,
+                        client=c,
+                        body=NewVmTemplate(
+                            name=f"e2e-fork-oci-{test_id}",
+                            hypervisor=Hypervisor.FIRECRACKER,
+                            boot_vcpus=1,
+                            max_vcpus=1,
+                            memory_size=256 * 1024 * 1024,
+                            image_ref=bootable_oci_image_ref,
+                        ),
+                    )
+                ).strip('"')
+            )
+            source = await call_api(
+                create_sandbox,
+                client=c,
+                body=NewSandbox(
+                    name=f"e2e-fork-oci-{test_id}",
+                    vm_template_id=template_id,
+                    idle_timeout_secs=300,
+                ),
+            )
+            sandbox_ids.append(source.id)
+            source_vm_id = source.vm_id
+            await wait_for_sandbox_status(c, source.id, SandboxStatus.READY)
+            # READY means its VM runs; an image's guest agent comes up later.
+            await exec_when_ready(c, source.vm_id, "true")
+            await sh(
+                source.id,
+                f"echo source > /root/state && sync && echo unsynced > /root/unsynced && {counter}",
+            )
+
+            response = await call_api_detailed(
+                fork_sandbox,
+                client=c,
+                sandbox_id=source.id,
+                body=ForkSandboxRequest(count=2),
+            )
+            assert response.status_code == 201, (
+                f"{response.content.decode(errors='replace')}\n{vm_diagnostics(source_vm_id)}"
+            )
+            forks = response.parsed
+            sandbox_ids.extend(fork.id for fork in forks)
+            # Each disk has a SCSI identity of its own, or the host's
+            # multipathd takes them for paths to one LUN and holds them.
+            wwids = overlaybd_disk_wwids()
+            assert len(wwids) >= 3 and len(set(wwids.values())) == len(wwids), (
+                f"{wwids}\n{node_storage_diagnostics()}"
+            )
+            # After the fork point: no fork may see it.
+            await sh(source.id, "echo after > /root/after && sync")
+
+            for fork in forks:
+                # Read from the disk, not the page cache the fork inherited.
+                await sh(fork.id, "echo 3 > /proc/sys/vm/drop_caches")
+                assert await sh(fork.id, "cat /root/state") == "source"
+                assert await sh(fork.id, "cat /root/unsynced") == "unsynced"
+                assert await sh(fork.id, "[ -e /root/after ] && echo yes || echo no") == "no"
+                before = int(await sh(fork.id, "cat /root/counter"))
+                await asyncio.sleep(1)
+                assert int(await sh(fork.id, "cat /root/counter")) > before, (
+                    "the source's counting process didn't continue in the fork"
+                )
+                await sh(fork.id, f"echo {fork.id} > /root/state && sync")
+
+            assert await sh(source.id, "cat /root/state") == "source"
+            for fork in forks:
+                await sh(fork.id, "echo 3 > /proc/sys/vm/drop_caches")
+                assert await sh(fork.id, "cat /root/state") == str(fork.id)
+        finally:
+            for sandbox_id in reversed(sandbox_ids):
+                await delete_sandbox.asyncio_detailed(client=c, sandbox_id=sandbox_id)
+            if template_id is not None:
+                await delete_template.asyncio_detailed(client=c, vm_template_id=template_id)
+            if source_vm_id is not None:
+                # The image object the source and its forks shared.
+                objects = await list_storage_objects.asyncio(
+                    client=c, name=f"overlaybd-{source_vm_id}"
+                )
+                for obj in objects.items if objects else []:
+                    await delete_storage_object.asyncio_detailed(client=c, object_id=obj.id)
+            await delete_storage_pool.asyncio_detailed(client=c, pool_id=pool_id)
 
 
 @pytest.mark.asyncio

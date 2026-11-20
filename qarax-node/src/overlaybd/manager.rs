@@ -28,6 +28,8 @@ use crate::oci_config::{OciImageConfig, OciImageConfigDetails};
 
 /// Path to the overlaybd-create binary installed by the overlaybd RPM.
 const OVERLAYBD_CREATE: &str = "/opt/overlaybd/bin/overlaybd-create";
+/// Path to the overlaybd-commit binary, which seals a writable layer.
+const OVERLAYBD_COMMIT: &str = "/opt/overlaybd/bin/overlaybd-commit";
 
 /// Virtual disk size presented to Cloud Hypervisor (sparse, so barely uses space).
 const DISK_SIZE_GB: u64 = 64;
@@ -76,6 +78,21 @@ pub struct MountedDevice {
     tcmu_name: String,
     /// Loopback target WWN in configfs (derived from vm_id)
     wwn: String,
+}
+
+/// A VM's writable layer as it was when the VM was forked, with the layers
+/// it stacked on: each fork of the VM stacks a writable layer of its own on
+/// both. Sealed (read-only) before a fork mounts it.
+#[derive(Debug)]
+pub struct FrozenUpper {
+    /// In the cache dir, on the forks' filesystem (for reflinks and links);
+    /// removed by [`OverlayBdManager::release`].
+    dir: PathBuf,
+    data: PathBuf,
+    index: PathBuf,
+    /// The source's TCMU config's `repoBlobUrl` and `lowers`.
+    repo_blob_url: serde_json::Value,
+    lowers: Vec<serde_json::Value>,
 }
 
 /// Manages OverlayBD block devices for VMs.
@@ -321,7 +338,6 @@ impl OverlayBdManager {
         let upper_data = upper_data_path
             .map(PathBuf::from)
             .unwrap_or_else(|| config_dir.join("upper.data"));
-        let config_file = config_dir.join("config.json");
 
         // Build the registry blob URL used by overlaybd to fetch image data lazily.
         let (repo_name, _tag) = parse_image_ref(image_ref)?;
@@ -344,42 +360,64 @@ impl OverlayBdManager {
                     ))
                 })?;
             }
-            info!(
-                "Creating OverlayBD upper layer for VM {} ({} GB sparse)",
-                vm_id, DISK_SIZE_GB
-            );
-            let out = tokio::process::Command::new(OVERLAYBD_CREATE)
-                .args([
-                    upper_data.to_str().unwrap_or(""),
-                    upper_index.to_str().unwrap_or(""),
-                    &DISK_SIZE_GB.to_string(),
-                ])
-                .output()
-                .await
-                .map_err(|e| {
-                    OverlayBdError::MountFailed(format!("exec {}: {}", OVERLAYBD_CREATE, e))
-                })?;
-            if !out.status.success() {
-                return Err(OverlayBdError::MountFailed(format!(
-                    "overlaybd-create failed: {}",
-                    String::from_utf8_lossy(&out.stderr).trim()
-                )));
-            }
+            Self::create_upper(vm_id, &upper_data, &upper_index).await?;
         }
 
-        // 2. Write the overlaybd TCMU config.json.
-        //    Fetch the manifest to build the lowers array (OverlayBD layer descriptors).
-        //    overlaybd-tcmu needs these to lazy-fetch image data from the registry.
+        // 2. The TCMU config. Fetch the manifest to build the lowers array
+        //    (OverlayBD layer descriptors): overlaybd-tcmu needs these to
+        //    lazy-fetch image data from the registry.
         let lowers = self.fetch_lowers(image_ref, registry_url).await?;
-        let config_json = serde_json::json!({
-            "repoBlobUrl": repo_blob_url,
-            "lowers": lowers,
-            "upper": {
-                "index": upper_index.to_string_lossy(),
-                "data":  upper_data.to_string_lossy()
-            },
-            "resultFile": config_dir.join("result").to_string_lossy()
-        });
+        self.attach(
+            vm_id,
+            &config_dir,
+            serde_json::json!({
+                "repoBlobUrl": repo_blob_url,
+                "lowers": lowers,
+                "upper": {
+                    "index": upper_index.to_string_lossy(),
+                    "data":  upper_data.to_string_lossy()
+                },
+            }),
+        )
+        .await
+    }
+
+    /// Create an empty writable upper layer at `data` and `index`.
+    async fn create_upper(vm_id: &str, data: &Path, index: &Path) -> Result<(), OverlayBdError> {
+        info!(
+            "Creating OverlayBD upper layer for VM {} ({} GB sparse)",
+            vm_id, DISK_SIZE_GB
+        );
+        let out = tokio::process::Command::new(OVERLAYBD_CREATE)
+            .args([
+                data.to_str().unwrap_or(""),
+                index.to_str().unwrap_or(""),
+                &DISK_SIZE_GB.to_string(),
+            ])
+            .output()
+            .await
+            .map_err(|e| {
+                OverlayBdError::MountFailed(format!("exec {}: {}", OVERLAYBD_CREATE, e))
+            })?;
+        if !out.status.success() {
+            return Err(OverlayBdError::MountFailed(format!(
+                "overlaybd-create failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            )));
+        }
+        Ok(())
+    }
+
+    /// Write `config` as `vm_id`'s TCMU config, in `config_dir`, and present
+    /// it as a block device through a TCMU backstore and a tcm_loop LUN.
+    async fn attach(
+        &self,
+        vm_id: &str,
+        config_dir: &Path,
+        mut config_json: serde_json::Value,
+    ) -> Result<MountedDevice, OverlayBdError> {
+        let config_file = config_dir.join("config.json");
+        config_json["resultFile"] = config_dir.join("result").to_string_lossy().into();
         tokio::fs::write(&config_file, serde_json::to_string_pretty(&config_json)?)
             .await
             .map_err(|e| {
@@ -431,6 +469,20 @@ impl OverlayBdManager {
 
         self.wait_for_tcmu_control_files(&tcmu_dir).await?;
 
+        // A serial of its own, so the disk has a SCSI identity of its own:
+        // without one every OverlayBD disk reports the same, and a node's
+        // multipathd takes two disks that exist at once (a fork's, two image
+        // VMs') for paths to one LUN, holds them in a device-mapper map, and
+        // claims every later one. Before the LUN is exported, which locks it.
+        tokio::fs::write(tcmu_dir.join("wwn").join("vpd_unit_serial"), vm_id)
+            .await
+            .map_err(|e| {
+                OverlayBdError::MountFailed(format!(
+                    "write TCMU unit serial for VM {}: {}",
+                    vm_id, e
+                ))
+            })?;
+
         let dev_config = format!(
             "dev_config=overlaybd/{},dev_size={},dev_max_sectors=128",
             config_file.display(),
@@ -478,7 +530,7 @@ impl OverlayBdManager {
 
         let mounted = MountedDevice {
             device_path,
-            config_dir: config_dir.clone(),
+            config_dir: config_dir.to_path_buf(),
             tcmu_name,
             wwn,
         };
@@ -489,6 +541,144 @@ impl OverlayBdManager {
             .insert(vm_id.to_string(), mounted.clone());
 
         Ok(mounted)
+    }
+
+    /// `vm_id`'s TCMU config and the paths of its writable upper layer. Only
+    /// an upper in the VM's own config dir is the VM's to fork: a persistent
+    /// one belongs to a storage object.
+    async fn upper_of(
+        &self,
+        vm_id: &str,
+    ) -> Result<(serde_json::Value, PathBuf, PathBuf), OverlayBdError> {
+        let config_dir = self.cache_dir.join(vm_id);
+        let config: serde_json::Value =
+            serde_json::from_slice(&tokio::fs::read(config_dir.join("config.json")).await?)?;
+        let path = |key: &str| {
+            config["upper"][key]
+                .as_str()
+                .map(PathBuf::from)
+                .ok_or_else(|| {
+                    OverlayBdError::MountFailed(format!(
+                        "the TCMU config of VM {vm_id} has no upper {key}"
+                    ))
+                })
+        };
+        let (data, index) = (path("data")?, path("index")?);
+        if data.parent() != Some(config_dir.as_path()) {
+            return Err(OverlayBdError::MountFailed(format!(
+                "the disk of VM {vm_id} has a persistent upper layer, which a fork can't share"
+            )));
+        }
+        Ok((config, data, index))
+    }
+
+    /// Write back `vm_id`'s writable layer from the page cache, where
+    /// overlaybd-tcmu leaves its writes: its device is write-through, so it gets
+    /// no cache flushes. Before a VM is paused for a fork, so that the pause
+    /// only writes back what came after.
+    pub async fn write_back_upper(&self, vm_id: &str) -> Result<(), OverlayBdError> {
+        let (_, data, index) = self.upper_of(vm_id).await?;
+        for path in [data, index] {
+            tokio::task::spawn_blocking(move || write_back(&path))
+                .await
+                .map_err(|e| OverlayBdError::MountFailed(format!("write-back task: {e}")))??;
+        }
+        Ok(())
+    }
+
+    /// Copy `vm_id`'s writable layer as it is now. With the VM paused:
+    /// `device`, its disk as the VM sees it, is flushed first, so the layer
+    /// holds what the VM wrote. Where the filesystem has reflinks the copy
+    /// shares the data, so it takes milliseconds whatever the layer's size.
+    pub async fn freeze_upper(
+        &self,
+        vm_id: &str,
+        device: &str,
+    ) -> Result<FrozenUpper, OverlayBdError> {
+        let (config, data, index) = self.upper_of(vm_id).await?;
+        tokio::fs::File::open(device).await?.sync_all().await?;
+        self.write_back_upper(vm_id).await?;
+
+        let dir = self
+            .cache_dir
+            .join(format!("{vm_id}.fork-{}", Uuid::new_v4()));
+        tokio::fs::create_dir(&dir).await?;
+        let frozen = FrozenUpper {
+            data: dir.join("upper.data"),
+            index: dir.join("upper.index"),
+            repo_blob_url: config["repoBlobUrl"].clone(),
+            lowers: config["lowers"].as_array().cloned().unwrap_or_default(),
+            dir,
+        };
+        tokio::fs::copy(&data, &frozen.data).await?;
+        tokio::fs::copy(&index, &frozen.index).await?;
+        Ok(frozen)
+    }
+
+    /// Remove a frozen layer once every fork that needs it has its own link.
+    pub async fn release(&self, frozen: FrozenUpper) {
+        if let Err(e) = tokio::fs::remove_dir_all(&frozen.dir).await {
+            warn!(
+                "Failed to remove frozen upper layer {}: {}",
+                frozen.dir.display(),
+                e
+            );
+        }
+    }
+
+    /// Seal a frozen writable layer into a read-only one, in place.
+    pub async fn seal(&self, frozen: &FrozenUpper) -> Result<(), OverlayBdError> {
+        let out = tokio::process::Command::new(OVERLAYBD_COMMIT)
+            .arg("--seal")
+            .arg(&frozen.data)
+            .arg(&frozen.index)
+            .output()
+            .await
+            .map_err(|e| {
+                OverlayBdError::MountFailed(format!("exec {}: {}", OVERLAYBD_COMMIT, e))
+            })?;
+        if !out.status.success() {
+            return Err(OverlayBdError::MountFailed(format!(
+                "overlaybd-commit --seal failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            )));
+        }
+        Ok(())
+    }
+
+    /// Present the disk of `fork_id`, a fork: its source's layers, the sealed
+    /// `frozen` layer on top, and a writable layer of its own. The fork's
+    /// config dir gets its own link to the frozen layer, so the layer lasts as
+    /// long as any fork of that moment does, and unmounting a fork drops its
+    /// link with the rest of its dir.
+    pub async fn mount_fork(
+        &self,
+        fork_id: &str,
+        frozen: &FrozenUpper,
+    ) -> Result<MountedDevice, OverlayBdError> {
+        let config_dir = self.cache_dir.join(fork_id);
+        tokio::fs::create_dir_all(&config_dir).await?;
+        let base = config_dir.join("fork-base.layer");
+        tokio::fs::hard_link(&frozen.data, &base).await?;
+        let upper_data = config_dir.join("upper.data");
+        let upper_index = config_dir.join("upper.index");
+        Self::create_upper(fork_id, &upper_data, &upper_index).await?;
+
+        let mut lowers = frozen.lowers.clone();
+        lowers.push(serde_json::json!({ "file": base.to_string_lossy() }));
+        self.attach(
+            fork_id,
+            &config_dir,
+            serde_json::json!({
+                "repoBlobUrl": frozen.repo_blob_url,
+                "lowers": lowers,
+                "upper": {
+                    "index": upper_index.to_string_lossy(),
+                    "data":  upper_data.to_string_lossy()
+                },
+            }),
+        )
+        .await
     }
 
     pub async fn preflight_boot(
@@ -1221,6 +1411,24 @@ impl OverlayBdManager {
 /// e.g. image_ref = "public.ecr.aws/docker/library/ubuntu:22.04",
 ///      registry_url = "http://registry:5000"
 /// ->   "registry:5000/docker/library/ubuntu:22.04"
+/// Write back `path`'s dirty pages and wait for them, without asking the
+/// device to flush its cache: a reflink copy needs the data written, not
+/// durable, and a flush can take seconds where a disk is slow.
+fn write_back(path: &Path) -> Result<(), OverlayBdError> {
+    use nix::libc;
+    use std::os::fd::AsRawFd;
+
+    let file = std::fs::File::open(path)?;
+    let flags = libc::SYNC_FILE_RANGE_WAIT_BEFORE
+        | libc::SYNC_FILE_RANGE_WRITE
+        | libc::SYNC_FILE_RANGE_WAIT_AFTER;
+    // SAFETY: the descriptor is open for the whole call.
+    if unsafe { libc::sync_file_range(file.as_raw_fd(), 0, 0, flags) } != 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    Ok(())
+}
+
 /// An OverlayBD conversion of an image in the local registry: it reads the
 /// image's tag and writes `<tag>_overlaybd` (the convertor's own convention)
 /// in the same repository, never the tag it reads.
@@ -1310,7 +1518,83 @@ fn looks_like_device_path(path: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{Conversion, looks_like_device_path};
+    use super::{Conversion, OverlayBdManager, looks_like_device_path};
+
+    /// A cache dir where `vm` has an OverlayBD disk with the upper `upper_dir`
+    /// (its own config dir when `None`).
+    async fn cache_with_disk(
+        dir: &tempfile::TempDir,
+        vm: &str,
+        upper_dir: Option<&std::path::Path>,
+    ) -> (OverlayBdManager, std::path::PathBuf) {
+        let cache = dir.path().join("overlaybd");
+        let config_dir = cache.join(vm);
+        tokio::fs::create_dir_all(&config_dir).await.unwrap();
+        let upper_dir = upper_dir.unwrap_or(&config_dir);
+        tokio::fs::write(upper_dir.join("upper.data"), b"what the guest wrote")
+            .await
+            .unwrap();
+        tokio::fs::write(upper_dir.join("upper.index"), b"its index")
+            .await
+            .unwrap();
+        let config = serde_json::json!({
+            "repoBlobUrl": "http://registry:5000/v2/test/alpine/blobs/",
+            "lowers": [{"digest": "sha256:aa", "size": 1, "dir": ""}],
+            "upper": {
+                "data": upper_dir.join("upper.data"),
+                "index": upper_dir.join("upper.index"),
+            },
+        });
+        tokio::fs::write(config_dir.join("config.json"), config.to_string())
+            .await
+            .unwrap();
+        (OverlayBdManager::new("unused-convertor", &cache), cache)
+    }
+
+    #[tokio::test]
+    async fn freezing_copies_the_writable_layer_and_keeps_the_layers_under_it() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (manager, cache) = cache_with_disk(&dir, "source", None).await;
+        // Stands in for the block device: flushing a file works the same.
+        let device = dir.path().join("device");
+        tokio::fs::write(&device, b"").await.unwrap();
+
+        manager.write_back_upper("source").await.unwrap();
+        let frozen = manager
+            .freeze_upper("source", device.to_str().unwrap())
+            .await
+            .unwrap();
+
+        assert!(frozen.dir.starts_with(&cache));
+        assert_eq!(
+            tokio::fs::read(&frozen.data).await.unwrap(),
+            b"what the guest wrote"
+        );
+        assert_eq!(tokio::fs::read(&frozen.index).await.unwrap(), b"its index");
+        assert_eq!(
+            frozen.repo_blob_url,
+            "http://registry:5000/v2/test/alpine/blobs/"
+        );
+        assert_eq!(
+            frozen.lowers,
+            vec![serde_json::json!({"digest": "sha256:aa", "size": 1, "dir": ""})]
+        );
+
+        let frozen_dir = frozen.dir.clone();
+        manager.release(frozen).await;
+        assert!(!frozen_dir.exists());
+    }
+
+    #[tokio::test]
+    async fn a_persistent_writable_layer_is_not_frozen() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let pool = dir.path().join("pool");
+        tokio::fs::create_dir(&pool).await.unwrap();
+        let (manager, _) = cache_with_disk(&dir, "source", Some(&pool)).await;
+
+        let error = manager.write_back_upper("source").await.unwrap_err();
+        assert!(error.to_string().contains("persistent"), "{error}");
+    }
 
     #[test]
     fn a_conversion_writes_a_tag_of_its_own() {

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nINSERT INTO vm_disks (\n    vm_id, storage_object_id, logical_name, device_path, boot_order,\n    read_only, direct, vhost_user, vhost_socket,\n    num_queues, queue_size, rate_limiter, rate_limit_group,\n    pci_segment, serial_number, config, upper_storage_object_id\n)\nSELECT\n    $2, storage_object_id, logical_name, device_path, boot_order,\n    read_only, direct, vhost_user, vhost_socket,\n    num_queues, queue_size, rate_limiter, rate_limit_group,\n    pci_segment, serial_number, config, upper_storage_object_id\nFROM vm_disks\nWHERE vm_id = $1\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "48ede06ed700680943d89ae7dc40862a7b388168aa874a8658c78a61b3861e26"
+}

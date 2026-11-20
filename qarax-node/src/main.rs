@@ -18,11 +18,11 @@ use qarax_node::rpc::node::file_transfer_service_server::FileTransferServiceServ
 use qarax_node::rpc::node::vm_service_server::VmServiceServer;
 use qarax_node::services::file_transfer::FileTransferServiceImpl;
 use qarax_node::services::vm::VmServiceImpl;
+use qarax_node::storage::StorageBackendRegistry;
 use qarax_node::storage::block::BlockBackend;
 use qarax_node::storage::local::LocalBackend;
 use qarax_node::storage::nfs::NfsBackend;
 use qarax_node::storage::overlaybd::OverlayBdBackend;
-use qarax_node::storage::{StorageBackend, StorageBackendRegistry};
 use qarax_node::vmm::VmmManager;
 
 #[derive(Parser, Debug)]
@@ -189,15 +189,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     storage_backends.register(StoragePoolKind::Nfs, Arc::new(NfsBackend));
     storage_backends.register(StoragePoolKind::Block, Arc::new(BlockBackend));
     // One OverlayBD backend, for both hypervisors' OCI disks.
-    let overlaybd_backend: Option<Arc<dyn StorageBackend>> =
-        overlaybd_manager.as_ref().map(|obd| {
-            Arc::new(OverlayBdBackend::new(
-                Arc::clone(obd),
-                qarax_init_binary.clone(),
-            )) as Arc<dyn StorageBackend>
-        });
+    let overlaybd_backend = overlaybd_manager.as_ref().map(|obd| {
+        Arc::new(OverlayBdBackend::new(
+            Arc::clone(obd),
+            qarax_init_binary.clone(),
+        ))
+    });
     if let Some(backend) = &overlaybd_backend {
-        storage_backends.register(StoragePoolKind::Overlaybd, Arc::clone(backend));
+        storage_backends.register(StoragePoolKind::Overlaybd, backend.clone());
     }
 
     let migration_tls = args

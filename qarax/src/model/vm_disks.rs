@@ -301,6 +301,37 @@ pub async fn create(pool: &PgPool, disk: &NewVmDisk) -> Result<Uuid, sqlx::Error
     Ok(id)
 }
 
+/// Give `fork_vm_id` the disks of `source_vm_id`, the VM it was forked from:
+/// the same storage objects, which for a fork are its source's OCI image.
+pub async fn copy_for_fork_tx(
+    tx: &mut PgTransaction<'_>,
+    source_vm_id: Uuid,
+    fork_vm_id: Uuid,
+) -> Result<(), sqlx::Error> {
+    sqlx::query!(
+        r#"
+INSERT INTO vm_disks (
+    vm_id, storage_object_id, logical_name, device_path, boot_order,
+    read_only, direct, vhost_user, vhost_socket,
+    num_queues, queue_size, rate_limiter, rate_limit_group,
+    pci_segment, serial_number, config, upper_storage_object_id
+)
+SELECT
+    $2, storage_object_id, logical_name, device_path, boot_order,
+    read_only, direct, vhost_user, vhost_socket,
+    num_queues, queue_size, rate_limiter, rate_limit_group,
+    pci_segment, serial_number, config, upper_storage_object_id
+FROM vm_disks
+WHERE vm_id = $1
+        "#,
+        source_vm_id,
+        fork_vm_id
+    )
+    .execute(tx.as_mut())
+    .await?;
+    Ok(())
+}
+
 pub async fn create_tx(tx: &mut PgTransaction<'_>, disk: &NewVmDisk) -> Result<Uuid, sqlx::Error> {
     let id = Uuid::new_v4();
 
@@ -463,4 +494,93 @@ WHERE vm_id = $1 AND logical_name = $2
     .fetch_optional(pool)
     .await?;
     Ok(row.map(|r| r.into()))
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+    use crate::model::{
+        storage_objects::{self, NewStorageObject, StorageObjectType},
+        storage_pools::{self, NewStoragePool, StoragePoolType},
+        vms,
+    };
+    use crate::test_support::{TestDatabase, resolved_vm};
+
+    #[tokio::test]
+    async fn a_fork_gets_its_sources_disks() {
+        let db = TestDatabase::new().await;
+        let pool_id = storage_pools::create(
+            &db.pool,
+            NewStoragePool {
+                name: "overlaybd".into(),
+                pool_type: StoragePoolType::OverlayBd,
+                config: json!({"url": "http://registry:5000"}),
+                capacity_bytes: None,
+            },
+        )
+        .await
+        .unwrap();
+        let image = storage_objects::create(
+            &db.pool,
+            NewStorageObject {
+                name: "image".into(),
+                storage_pool_id: Some(pool_id),
+                object_type: StorageObjectType::OciImage,
+                size_bytes: 1,
+                config: json!({"image_ref": "registry:5000/test/alpine:latest_overlaybd"}),
+                parent_id: None,
+            },
+        )
+        .await
+        .unwrap();
+        let mut tx = db.pool.begin().await.unwrap();
+        let source = vms::create_tx(&mut tx, &resolved_vm("source"), None)
+            .await
+            .unwrap();
+        let fork = vms::create_tx(&mut tx, &resolved_vm("fork"), None)
+            .await
+            .unwrap();
+        let source_disk = create_tx(
+            &mut tx,
+            &NewVmDisk {
+                vm_id: source,
+                storage_object_id: Some(image),
+                logical_name: "rootfs".into(),
+                device_path: "/dev/vda".into(),
+                boot_order: Some(0),
+                read_only: None,
+                direct: None,
+                vhost_user: None,
+                vhost_socket: None,
+                num_queues: None,
+                queue_size: None,
+                rate_limiter: None,
+                rate_limit_group: None,
+                pci_segment: None,
+                serial_number: None,
+                config: json!({}),
+                upper_storage_object_id: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        copy_for_fork_tx(&mut tx, source, fork).await.unwrap();
+        tx.commit().await.unwrap();
+
+        let disks = list_by_vm(&db.pool, fork).await.unwrap();
+        assert_eq!(disks.len(), 1);
+        let disk = &disks[0];
+        assert_ne!(disk.id, source_disk);
+        assert_eq!(disk.vm_id, fork);
+        assert_eq!(disk.storage_object_id, Some(image));
+        assert_eq!(
+            (disk.logical_name.as_str(), disk.device_path.as_str()),
+            ("rootfs", "/dev/vda")
+        );
+        assert_eq!(disk.boot_order, Some(0));
+        assert_eq!(list_by_vm(&db.pool, source).await.unwrap().len(), 1);
+    }
 }
