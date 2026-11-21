@@ -5,6 +5,7 @@ the console connection the UI makes reaches a VM's serial console.
 
 import asyncio
 import re
+import uuid
 
 import httpx2
 import pytest
@@ -46,8 +47,10 @@ def test_ui_is_served():
 async def test_console_with_token_subprotocol():
     """The console as the UI attaches to it: a browser can't set the
     Authorization header on a WebSocket, so the token goes as a subprotocol.
-    What the guest shell (qarax-init's /bin/sh on the serial console) prints
-    for typed input comes back."""
+    What is typed reaches the guest and comes back: the guest's serial tty
+    echoes it (qarax-node keeps its end of the PTY raw, so only the guest
+    echoes). The test guest's console runs a script, not a shell, so echo is
+    what it answers with."""
     async with Client(base_url=QARAX_URL, headers=AUTH_HEADERS) as c:
         new_vm = NewVm(
             name="test-webui-console",
@@ -67,18 +70,17 @@ async def test_console_with_token_subprotocol():
                 url, subprotocols=["qarax.console", f"qarax.bearer.{token}"]
             ) as ws:
                 assert ws.subprotocol == "qarax.console"
-                # The shell's echo of this line has no 42; only running it does.
-                command = b"echo qarax-ui-$((6*7))\r"
+                marker = f"qarax-ui-{uuid.uuid4().hex[:12]}".encode()
                 output = b""
                 deadline = asyncio.get_running_loop().time() + CONSOLE_DEADLINE_SECONDS
-                while b"qarax-ui-42" not in output:
+                while marker not in output:
                     assert asyncio.get_running_loop().time() < deadline, (
-                        f"the guest shell didn't answer; the console said: {output[-800:]!r}"
+                        f"the guest didn't echo what was typed; the console said: {output[-800:]!r}"
                     )
-                    # Again until the shell is up to read it.
-                    await ws.send(command)
+                    # Again until the guest's console is open to take it.
+                    await ws.send(marker + b"\r")
                     try:
-                        while b"qarax-ui-42" not in output:
+                        while marker not in output:
                             frame = await asyncio.wait_for(ws.recv(), timeout=3)
                             # A text frame is the server's: it couldn't attach.
                             assert isinstance(frame, bytes), frame
