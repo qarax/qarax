@@ -80,12 +80,16 @@
 	async function act(name: VmAction) {
 		action = { kind: 'running', action: name };
 		try {
-			await runVmAction(vmId, name);
+			const { finished } = await runVmAction(vmId, name);
+			// Free the buttons once the request is in, not when it's done: a VM
+			// stays pending while its start job runs, and force stop gives up on it.
 			action = { kind: 'idle' };
+			void detail.refresh();
+			await finished;
 		} catch (e) {
 			action = { kind: 'failed', message: message(e) };
+			void detail.refresh();
 		}
-		void detail.refresh();
 	}
 
 	async function remove() {
