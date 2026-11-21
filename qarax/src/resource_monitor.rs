@@ -239,11 +239,18 @@ mod tests {
         let db = TestDatabase::new().await;
         let host = insert_up_host(&db).await;
         let other_host = db.add_host("other-host", HostStatus::Up).await;
+        // A fork on each host, whose memory is its source's copy-on-write.
         let mut tx = db.pool.begin().await.unwrap();
-        let vm = vms::create_tx(&mut tx, &resolved_vm("here"), Some(host.id))
+        let source = vms::create_tx(&mut tx, &resolved_vm("source"), Some(host.id))
             .await
             .unwrap();
-        let elsewhere = vms::create_tx(&mut tx, &resolved_vm("elsewhere"), Some(other_host))
+        let fork = vms::create_fork_tx(&mut tx, source, "fork", true)
+            .await
+            .unwrap();
+        let other_source = vms::create_tx(&mut tx, &resolved_vm("other-source"), Some(other_host))
+            .await
+            .unwrap();
+        let elsewhere = vms::create_fork_tx(&mut tx, other_source, "elsewhere", true)
             .await
             .unwrap();
         tx.commit().await.unwrap();
@@ -267,7 +274,7 @@ mod tests {
                 gpus: vec![],
                 numa_nodes: vec![],
                 architecture: "x86_64".to_string(),
-                vm_memory: [vm, elsewhere]
+                vm_memory: [source, fork, elsewhere]
                     .map(|id| VmMemory {
                         vm_id: id.to_string(),
                         private_bytes: 7 * 1024 * 1024,
@@ -289,14 +296,22 @@ mod tests {
             updated.firecracker_version.as_deref(),
             Some("Firecracker v1.11.0")
         );
-        // A VM's memory comes from its own host's node.
-        let memory: Vec<Option<i64>> = sqlx::query_scalar(
-            "SELECT memory_private_bytes FROM vms WHERE id = ANY($1) ORDER BY name DESC",
+        // Only a fork's memory is recorded, since only a fork is charged by
+        // it, and only what its own host's node measured.
+        let memory: Vec<(String, Option<i64>)> = sqlx::query_as(
+            "SELECT name, memory_private_bytes FROM vms WHERE id = ANY($1) ORDER BY name",
         )
-        .bind([vm, elsewhere])
+        .bind([source, fork, elsewhere])
         .fetch_all(&db.pool)
         .await
         .unwrap();
-        assert_eq!(memory, [Some(7 * 1024 * 1024), None]);
+        assert_eq!(
+            memory,
+            [
+                ("elsewhere".to_string(), None),
+                ("fork".to_string(), Some(7 * 1024 * 1024)),
+                ("source".to_string(), None),
+            ]
+        );
     }
 }

@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nUPDATE vms SET memory_private_bytes = usage.bytes\nFROM UNNEST($2::uuid[], $3::bigint[]) AS usage(id, bytes)\nWHERE vms.id = usage.id AND vms.host_id = $1\n  AND vms.memory_copy_on_write\n  AND vms.memory_private_bytes IS DISTINCT FROM usage.bytes\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "UuidArray",
+        "Int8Array"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "231792c7a9532861e49e4036306f5c81b6d6415e1d70856fdc3d53bd65676481"
+}

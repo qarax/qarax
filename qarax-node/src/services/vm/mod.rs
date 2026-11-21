@@ -490,19 +490,16 @@ impl VmService for VmServiceImpl {
 
     async fn get_vm_info(&self, request: Request<VmId>) -> Result<Response<VmState>, Status> {
         let vm_id = request.into_inner().id;
-        info!("Getting VM info: {}", vm_id);
+        debug!("Getting VM info: {}", vm_id);
 
-        let manager = self
-            .find_manager(&vm_id)
-            .await
-            .ok_or_else(|| Status::not_found(format!("VM {} not found", vm_id)))?;
-        match manager.get_vm_info(&vm_id).await {
-            Ok(state) => Ok(Response::new(state)),
-            Err(e) => {
-                error!("Failed to get VM info {}: {}", vm_id, e);
-                Err(map_vmm_error(e))
-            }
+        // The VM monitor asks this for every VM on every tick, so ask the
+        // hypervisor once: a manager's answer also tells whether the VM is
+        // its own, where find_manager would ask once more to find that out.
+        let mut info = VmmManager::get_vm_info(self.ch_manager.as_ref(), &vm_id).await;
+        if let (Err(VmmError::VmNotFound(_)), Some(fc)) = (&info, &self.fc_manager) {
+            info = fc.get_vm_info(&vm_id).await;
         }
+        info.map(Response::new).map_err(map_vmm_error)
     }
 
     async fn list_vms(&self, _request: Request<()>) -> Result<Response<VmList>, Status> {

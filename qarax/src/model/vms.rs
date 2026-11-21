@@ -1358,6 +1358,10 @@ RETURNING previous.status AS "status: VmStatus"
 /// Record the memory the VMs on `host_id` hold of their own, as its node
 /// measured it (`(vm id, bytes)`). A VM that has left the host since keeps
 /// what it had.
+///
+/// Only for VMs whose memory is copy-on-write, the ones charged by it: the
+/// node reports every VM on every probe, and writing each would rewrite the
+/// row of every VM there is twice a minute.
 pub async fn record_private_memory(
     pool: &PgPool,
     host_id: Uuid,
@@ -1369,6 +1373,8 @@ pub async fn record_private_memory(
 UPDATE vms SET memory_private_bytes = usage.bytes
 FROM UNNEST($2::uuid[], $3::bigint[]) AS usage(id, bytes)
 WHERE vms.id = usage.id AND vms.host_id = $1
+  AND vms.memory_copy_on_write
+  AND vms.memory_private_bytes IS DISTINCT FROM usage.bytes
         "#,
         host_id,
         &ids,
