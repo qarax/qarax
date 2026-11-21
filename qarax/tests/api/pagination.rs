@@ -1,8 +1,6 @@
-mod support;
-
+use crate::support::{add_host, add_up_host, create_vm, spawn_app};
 use reqwest::StatusCode;
 use serde_json::{Value, json};
-use support::{add_host, add_up_host, create_vm, spawn_app};
 
 /// Every page of `url` (which has a query string) with `limit` items each.
 async fn pages(client: &reqwest::Client, url: &str, limit: u32) -> Vec<Vec<Value>> {

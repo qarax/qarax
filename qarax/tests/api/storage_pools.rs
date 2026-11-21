@@ -1,5 +1,4 @@
-mod support;
-
+use crate::support::spawn_app;
 use qarax::model::{
     hosts::{self, HostStatus, NewHost},
     storage_objects,
@@ -9,7 +8,6 @@ use reqwest::StatusCode;
 use serde_json::json;
 use sqlx::PgPool;
 use std::assert_matches;
-use support::spawn_app;
 use uuid::Uuid;
 
 async fn create_test_pool(pool: &PgPool, pool_type: StoragePoolType) -> Uuid {
@@ -388,12 +386,12 @@ async fn test_list_pool_hosts() {
     assert_eq!(res.status(), reqwest::StatusCode::CREATED);
     let pool_id: uuid::Uuid = res.text().await.unwrap().parse().unwrap();
     for name in ["pool-host-b", "pool-host-a"] {
-        let host_id = support::add_host(&client, &app.address, name).await;
+        let host_id = crate::support::add_host(&client, &app.address, name).await;
         qarax::model::storage_pools::attach_host(&app.pool, pool_id, host_id)
             .await
             .unwrap();
     }
-    support::add_host(&client, &app.address, "pool-host-unattached").await;
+    crate::support::add_host(&client, &app.address, "pool-host-unattached").await;
 
     let res = client
         .get(format!("{}/storage-pools/{pool_id}/hosts", app.address))

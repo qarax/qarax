@@ -1,5 +1,4 @@
-mod support;
-
+use crate::support::{add_host, add_up_host, create_vm, set_vm_status, spawn_app};
 use qarax::model::{
     networks as network_model, storage_pools, vm_disks,
     vms::{self, VmStatus},
@@ -7,7 +6,6 @@ use qarax::model::{
 use reqwest::StatusCode;
 use serde_json::{Value, json};
 use sqlx::PgPool;
-use support::{add_host, add_up_host, create_vm, set_vm_status, spawn_app};
 use uuid::Uuid;
 
 const MIB: i64 = 1024 * 1024;

@@ -1,7 +1,5 @@
-mod support;
-
+use crate::support::{UI_INDEX, spawn_app};
 use reqwest::{StatusCode, header::CACHE_CONTROL};
-use support::{UI_INDEX, spawn_app};
 
 /// Every page of the web UI is its index.html, which browsers must revalidate
 /// on each load: it names the build's hashed files, and a stale copy would load

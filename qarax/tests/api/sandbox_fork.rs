@@ -2,11 +2,9 @@
 //! call, and that a fork whose node call fails leaves no rows behind. The fork
 //! itself needs a real node; it is in e2e/test_sandboxes.py.
 
-mod support;
-
+use crate::support::{TestApp, add_up_host, create_vm, set_vm_status, spawn_app};
 use reqwest::StatusCode;
 use serde_json::{Value, json};
-use support::{TestApp, add_up_host, create_vm, set_vm_status, spawn_app};
 use uuid::Uuid;
 
 const MIB: i64 = 1024 * 1024;

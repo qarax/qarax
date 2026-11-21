@@ -1,5 +1,4 @@
-mod support;
-
+use crate::support::{node_server_tls, spawn_app};
 use qarax::model::{
     storage_objects::{self, NewStorageObject, StorageObjectType},
     storage_pools::{self, NewStoragePool, StoragePoolType},
@@ -9,7 +8,6 @@ use reqwest::StatusCode;
 use serde_json::json;
 use sqlx::PgPool;
 use std::assert_matches;
-use support::{node_server_tls, spawn_app};
 use tokio::net::TcpListener;
 use uuid::Uuid;
 
@@ -380,7 +378,7 @@ async fn a_local_pool_on_an_unreachable_host_can_be_detached_and_deleted() {
     let app = spawn_app().await;
     let client = reqwest::Client::new();
     // Registered DOWN, and no node listens on its port.
-    let host_id = support::add_host(&client, &app.address, "gone-node").await;
+    let host_id = crate::support::add_host(&client, &app.address, "gone-node").await;
     let pool_id = create_test_pool(&app.pool).await;
     storage_pools::attach_host(&app.pool, pool_id, host_id)
         .await

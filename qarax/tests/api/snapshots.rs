@@ -1,8 +1,6 @@
-mod support;
-
+use crate::support::{TestApp, add_up_host, create_vm, spawn_app};
 use reqwest::StatusCode;
 use serde_json::json;
-use support::{TestApp, add_up_host, create_vm, spawn_app};
 use uuid::Uuid;
 
 /// Create a local storage pool for snapshots.

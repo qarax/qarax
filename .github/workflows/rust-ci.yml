@@ -39,6 +39,9 @@ jobs:
     env:
       # The workspace's sqlx (Cargo.lock).
       SQLX_CLI_VERSION: 0.8.6
+      # Enough for a backtrace's file and line; full debug info is most of
+      # what the linker has to write for each test binary.
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
     services:
       postgres:
         image: postgres:16

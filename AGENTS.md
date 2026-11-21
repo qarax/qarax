@@ -241,7 +241,7 @@ Cloud Hypervisor and Firecracker versions are pinned in `versions/` (the `Makefi
 
 E2E runs only on master and labelled PRs, so a contract that needs no real VM or node belongs in a Rust test that runs on every PR.
 
-- **REST contracts** (status codes, error messages, validation guards, persistence through the API): `qarax/tests/*.rs`, using `qarax/tests/support` (`spawn_app`, `add_up_host`, `create_vm`, `set_vm_status` for states only a node could reach).
+- **REST contracts** (status codes, error messages, validation guards, persistence through the API): `qarax/tests/api/*.rs` (one test binary, `--test api`), using `qarax/tests/api/support` (`spawn_app`, `add_up_host`, `create_vm`, `set_vm_status` for states only a node could reach).
 - **SQL and scheduling logic**: `#[cfg(test)]` modules using `crate::test_support::TestDatabase`.
 - **E2E**: behaviour that needs KVM, a hypervisor, guest networking or control plane to node gRPC.
 - Test a shared helper once, in the crate that owns it (e.g. `common::cpu_list`). See `.claude/skills/test-audit/SKILL.md` before adding or changing tests.

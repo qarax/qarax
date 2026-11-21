@@ -6,7 +6,7 @@ the generated Python SDK (`qarax-api-client`) against a Docker Compose stack.
 They own what the Rust suites cannot prove: real Cloud Hypervisor and
 Firecracker VMs under KVM, guest networking, storage on real nodes, and the
 control plane to node gRPC path. REST status codes, validation errors and
-persistence round trips belong in `qarax/tests/*.rs`, which run on every PR.
+persistence round trips belong in `qarax/tests/api/*.rs`, which run on every PR.
 
 ## Stack
 

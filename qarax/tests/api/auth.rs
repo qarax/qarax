@@ -1,5 +1,4 @@
-mod support;
-
+use crate::support::{add_up_host, create_vm, spawn_app_with_auth};
 use qarax::configuration::AuthSettings;
 use reqwest::{
     StatusCode,
@@ -9,7 +8,6 @@ use reqwest::{
     },
 };
 use serde_json::json;
-use support::{add_up_host, create_vm, spawn_app_with_auth};
 
 #[tokio::test]
 async fn test_auth_disabled_allows_unauthenticated_requests() {

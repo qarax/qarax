@@ -1,9 +1,7 @@
-mod support;
-
+use crate::support::{add_up_host, spawn_app};
 use qarax::model::vm_disks;
 use reqwest::StatusCode;
 use serde_json::json;
-use support::{add_up_host, spawn_app};
 use uuid::Uuid;
 
 async fn create_local_pool_and_disk(client: &reqwest::Client, address: &str) -> String {

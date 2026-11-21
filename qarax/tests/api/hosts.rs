@@ -1,11 +1,9 @@
-mod support;
-
 use std::io::Write as _;
 
+use crate::support::{add_host, spawn_app};
 use qarax::model::host_gpus::{self, GpuDiscovery};
 use reqwest::StatusCode;
 use serde_json::json;
-use support::{add_host, spawn_app};
 use uuid::Uuid;
 
 #[tokio::test]
@@ -264,8 +262,8 @@ async fn test_list_host_gpus_returns_discovered_gpus() {
 async fn test_delete_host_refuses_while_vms_are_placed_on_it() {
     let app = spawn_app().await;
     let client = reqwest::Client::new();
-    let host_id = support::add_up_host(&client, &app.address, "busy-host").await;
-    let vm_id = support::create_vm(
+    let host_id = crate::support::add_up_host(&client, &app.address, "busy-host").await;
+    let vm_id = crate::support::create_vm(
         &client,
         &app.address,
         json!({

@@ -17,7 +17,7 @@ Reject new matches unless the [retention bar](../SKILL.md#retention-bar) names a
 
 - A shared helper tested again in each crate that calls it (e.g. `common::cpu_list` replayed in `qarax` and `qarax-node`). The owner crate keeps the table; callers keep one test only if they add behaviour.
 - Private helper or call-shape tests duplicating an HTTP integration or e2e test of the same contract.
-- The same contract in `qarax/tests/*.rs` and in `e2e/` with no distinct transport or lifecycle risk. The Rust test usually owns REST semantics; e2e owns the real VM, gRPC and SDK path.
+- The same contract in `qarax/tests/api/*.rs` and in `e2e/` with no distinct transport or lifecycle risk. The Rust test usually owns REST semantics; e2e owns the real VM, gRPC and SDK path.
 - Copied setup: `spawn_app`, `configure_database`, `TestDatabase` and `Drop` cleanup duplicated per file. Consolidate into one shared module.
 
 **Couples to implementation**
@@ -89,7 +89,7 @@ Run every build and test through `capped`, one at a time, on the changed package
 
 ```bash
 pg_isready -h 127.0.0.1 -p 5432          # qarax tests need Postgres; otherwise ask before `make test-deps`
-capped cargo nextest run -p qarax --test vms -E 'test(name)'
+capped cargo nextest run -p qarax --test api -E 'test(name)'
 capped cargo nextest run -p qarax --lib -E 'test(name)'
 capped cargo nextest run -p qarax-node --lib
 capped make lint                          # clippy -D warnings, whole workspace

@@ -1,8 +1,6 @@
-mod support;
-
+use crate::support::spawn_app;
 use reqwest::StatusCode;
 use serde_json::json;
-use support::spawn_app;
 use uuid::Uuid;
 
 async fn create_template(client: &reqwest::Client, address: &str, name: &str) -> Uuid {
@@ -192,7 +190,7 @@ VALUES ($1, $2, $3, 'READY')
 }
 
 /// A running VM in the pool as a READY member, or its seed.
-async fn add_ready_member(app: &support::TestApp, pool_id: Uuid, seed: bool) -> Uuid {
+async fn add_ready_member(app: &crate::support::TestApp, pool_id: Uuid, seed: bool) -> Uuid {
     let vm_id = Uuid::new_v4();
     sqlx::query(
         r#"
