@@ -144,7 +144,9 @@ async def test_vms_start_again_after_their_node_restarts(
             for host_id in vm_hosts:
                 await reinit_host(c, host_id)
 
-            for vm_id in vm_ids:
+            # The VM monitor finds the running VMs gone from their node. It
+            # doesn't ask about stopped ones, so that one stays shutdown.
+            for vm_id in (firecracker_id, image.vm_id):
                 await wait_for_status(
                     c, vm_id, VmStatus.UNKNOWN, timeout=VM_MONITOR_TIMEOUT
                 )
