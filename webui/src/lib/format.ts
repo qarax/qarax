@@ -1,4 +1,4 @@
-import type { Hypervisor } from './api/client';
+import type { Hypervisor, StorageObjectType, StoragePool, StoragePoolType } from './api/client';
 
 const UNITS = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB'];
 
@@ -36,3 +36,48 @@ export const HYPERVISOR: Record<Hypervisor, string> = {
 	cloud_hv: 'Cloud Hypervisor',
 	firecracker: 'Firecracker'
 };
+
+export const POOL_TYPE: Record<StoragePoolType, string> = {
+	local: 'Local',
+	nfs: 'NFS',
+	overlay_bd: 'OverlayBD',
+	block: 'iSCSI block'
+};
+
+export const OBJECT_TYPE: Record<StorageObjectType, string> = {
+	disk: 'Disk',
+	kernel: 'Kernel',
+	initrd: 'Initramfs',
+	iso: 'ISO image',
+	snapshot: 'Snapshot',
+	database_backup: 'Database backup',
+	oci_image: 'OCI image',
+	overlaybd_upper: 'Writable image layer'
+};
+
+/**
+ * Where a pool keeps its data, from its config (qarax/src/model/storage_pools.rs):
+ * a directory, an NFS export or registry URL, or an iSCSI target. Null when the
+ * config doesn't say, as a pool created through the API without one can.
+ */
+export function poolLocation(pool: StoragePool): string | null {
+	const config = (
+		typeof pool.config === 'object' && pool.config !== null ? pool.config : {}
+	) as Record<string, unknown>;
+	const text = (key: string) => {
+		const value = config[key];
+		return typeof value === 'string' ? value : null;
+	};
+	switch (pool.pool_type) {
+		case 'local':
+			return text('path');
+		case 'nfs':
+		case 'overlay_bd':
+			return text('url');
+		case 'block': {
+			const iqn = text('iqn');
+			const portal = text('portal');
+			return iqn && portal ? `${iqn} at ${portal}` : null;
+		}
+	}
+}

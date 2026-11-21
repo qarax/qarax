@@ -352,7 +352,9 @@
 															>
 															<td class="pf-v6-c-table__td" data-label="Network">
 																{#if nic.network_id}
-																	{networkNames.get(nic.network_id) ?? nic.network_id}
+																	<a href={resolve('/networks/[id]', { id: nic.network_id })}
+																		>{networkNames.get(nic.network_id) ?? nic.network_id}</a
+																	>
 																{:else}
 																	<span class="qx-subtle">None</span>
 																{/if}

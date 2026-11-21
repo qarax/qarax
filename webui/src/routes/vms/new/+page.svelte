@@ -29,7 +29,7 @@
 			await Promise.all([
 				allInstanceTypes(),
 				allBootSources(),
-				allStorageObjects('disk'),
+				allStorageObjects({ objectType: 'disk' }),
 				allNetworks(),
 				allSecurityGroups(),
 				allStoragePools(),

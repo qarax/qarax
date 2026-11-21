@@ -1,4 +1,10 @@
-import type { HostStatus, VmStatus } from './api/client.ts';
+import type {
+	HostStatus,
+	NetworkStatus,
+	StoragePoolStatus,
+	TransferStatus,
+	VmStatus
+} from './api/client.ts';
 
 /**
  * How a status is drawn, with PatternFly's status icons (StatusIcon): `run`
@@ -52,4 +58,22 @@ export const HOST_STATUS: Record<HostStatus, StatusLook> = {
 	maintenance: { tone: 'hold', text: 'Maintenance' },
 	initializing: { tone: 'busy', text: 'Initializing' },
 	unknown: { tone: 'unknown', text: 'Unknown' }
+};
+
+export const POOL_STATUS: Record<StoragePoolStatus, StatusLook> = {
+	active: { tone: 'run', text: 'Active' },
+	inactive: { tone: 'idle', text: 'Inactive' },
+	error: { tone: 'fault', text: 'Error' }
+};
+
+export const NETWORK_STATUS: Record<NetworkStatus, StatusLook> = {
+	active: { tone: 'run', text: 'Active' },
+	inactive: { tone: 'idle', text: 'Inactive' }
+};
+
+export const TRANSFER_STATUS: Record<TransferStatus, StatusLook> = {
+	pending: { tone: 'busy', text: 'Pending' },
+	running: { tone: 'busy', text: 'Copying' },
+	completed: { tone: 'run', text: 'Done' },
+	failed: { tone: 'fault', text: 'Failed' }
 };
