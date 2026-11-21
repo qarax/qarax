@@ -1,7 +1,7 @@
 application:
   host: 0.0.0.0
 database:
-  max_connections: 200
+  max_connections: 50
 # Override vm_defaults for production with actual bootable images
 # Replace these paths with your production kernel/initramfs
 vm_defaults:
