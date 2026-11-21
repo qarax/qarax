@@ -1,0 +1,48 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nSELECT id, status AS \"status: _\", host_id AS \"host_id!\"\nFROM vms\nWHERE status NOT IN ('SHUTDOWN', 'UNKNOWN', 'PENDING', 'MIGRATING', 'COMMITTING')\n  AND host_id IS NOT NULL\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "status: _",
+        "type_info": {
+          "Custom": {
+            "name": "vm_status",
+            "kind": {
+              "Enum": [
+                "UNKNOWN",
+                "CREATED",
+                "RUNNING",
+                "PAUSED",
+                "SHUTDOWN",
+                "PENDING",
+                "MIGRATING",
+                "COMMITTING"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "host_id!",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "d5fcb7bbf1ff4f5280bbc7ef148709c7f23d866b4bf8e0ad39a8be0eb61605b0"
+}

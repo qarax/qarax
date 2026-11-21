@@ -1,5 +1,9 @@
 use super::*;
 
+/// How often to look for the socket of a process just spawned. Every VM start
+/// waits for one, so a long interval is time added to each start.
+const SOCKET_POLL_INTERVAL: Duration = Duration::from_millis(5);
+
 impl VmManager {
     pub(super) fn socket_path(&self, vm_id: &str) -> PathBuf {
         self.runtime_dir.join(format!("{}.sock", vm_id))
@@ -100,12 +104,14 @@ impl VmManager {
             .spawn()
             .map_err(|e| VmManagerError::ProcessError(format!("failed to spawn passt: {e}")))?;
 
-        for _ in 0..30 {
+        const TIMEOUT: Duration = Duration::from_secs(3);
+        let deadline = tokio::time::Instant::now() + TIMEOUT;
+        while tokio::time::Instant::now() < deadline {
             if socket_path.exists() {
                 info!("passt backend ready at {}", socket_path.display());
                 return Ok(child);
             }
-            sleep(Duration::from_millis(100)).await;
+            sleep(SOCKET_POLL_INTERVAL).await;
         }
 
         let _ = child.kill().await;
@@ -128,14 +134,13 @@ impl VmManager {
     /// Wait for a Cloud Hypervisor process just spawned to listen on its API
     /// socket.
     pub(super) async fn wait_for_api_socket(socket_path: &Path) -> Result<(), VmManagerError> {
-        const RETRIES: u32 = 50;
-        let mut retries = 0;
+        const TIMEOUT: Duration = Duration::from_secs(5);
+        let deadline = tokio::time::Instant::now() + TIMEOUT;
         loop {
             match UnixStream::connect(socket_path).await {
                 Ok(_) => return Ok(()),
-                Err(_) if retries < RETRIES => {
-                    retries += 1;
-                    tokio::time::sleep(Duration::from_millis(100)).await;
+                Err(_) if tokio::time::Instant::now() < deadline => {
+                    sleep(SOCKET_POLL_INTERVAL).await;
                 }
                 Err(e) => return Err(VmManagerError::SpawnError(e)),
             }

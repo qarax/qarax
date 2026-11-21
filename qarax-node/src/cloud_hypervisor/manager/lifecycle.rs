@@ -320,24 +320,12 @@ impl VmManager {
             process.id()
         );
 
-        // Wait for socket to be available
-        let max_retries = 50;
-        let mut retries = 0;
-        loop {
-            match UnixStream::connect(&socket_path).await {
-                Ok(_) => break,
-                Err(_) if retries < max_retries => {
-                    retries += 1;
-                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                }
-                Err(e) => {
-                    for tap in &tap_devices {
-                        Self::delete_tap_device(tap).await;
-                    }
-                    Self::cleanup_passt_processes(&mut passt_processes).await;
-                    return Err(VmManagerError::SpawnError(e));
-                }
+        if let Err(e) = Self::wait_for_api_socket(&socket_path).await {
+            for tap in &tap_devices {
+                Self::delete_tap_device(tap).await;
             }
+            Self::cleanup_passt_processes(&mut passt_processes).await;
+            return Err(e);
         }
 
         // Validate kernel path before sending to CH

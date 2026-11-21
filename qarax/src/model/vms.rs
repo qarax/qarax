@@ -1261,47 +1261,28 @@ WHERE id = $3
     Ok(id)
 }
 
+/// What the VM monitor reads of a VM: reading whole VMs would move every
+/// VM's config and cloud-init data on each tick.
+pub struct ActiveVm {
+    pub id: Uuid,
+    pub status: VmStatus,
+    pub host_id: Uuid,
+}
+
 /// VMs the VM monitor reconciles against their node. VMs held by a job
 /// (`Pending`, `Migrating`, `Committing`) are left to that job.
-pub async fn list_active(pool: &PgPool) -> Result<Vec<Vm>, sqlx::Error> {
-    let vms = sqlx::query_as!(
-        VmRow,
+pub async fn list_active(pool: &PgPool) -> Result<Vec<ActiveVm>, sqlx::Error> {
+    sqlx::query_as!(
+        ActiveVm,
         r#"
-SELECT id,
-        name,
-        tags,
-        status AS "status: _",
-        host_id,
-        hypervisor AS "hypervisor: _",
-        boot_source_id,
-        boot_mode AS "boot_mode: _",
-        description,
-        boot_vcpus,
-        max_vcpus,
-        cpu_topology AS "cpu_topology: _",
-        kvm_hyperv AS "kvm_hyperv!",
-        memory_size,
-        memory_hotplug_size,
-        memory_mergeable AS "memory_mergeable!",
-        memory_shared AS "memory_shared!",
-        memory_hugepages AS "memory_hugepages!",
-        memory_hugepage_size,
-        memory_prefault AS "memory_prefault!",
-        memory_thp AS "memory_thp!",
-        image_ref,
-        cloud_init_user_data,
-        cloud_init_meta_data,
-        cloud_init_network_config,
-        config AS "config: _"
+SELECT id, status AS "status: _", host_id AS "host_id!"
 FROM vms
 WHERE status NOT IN ('SHUTDOWN', 'UNKNOWN', 'PENDING', 'MIGRATING', 'COMMITTING')
   AND host_id IS NOT NULL
         "#
     )
     .fetch_all(pool)
-    .await?;
-
-    Ok(vms.into_iter().map(|vm| vm.into()).collect())
+    .await
 }
 
 /// Start `op` on a VM: move it to `op.target()` if its current status is one
