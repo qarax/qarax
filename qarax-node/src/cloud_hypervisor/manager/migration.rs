@@ -59,6 +59,12 @@ impl VmManager {
                 let _ = tokio::fs::remove_file(&instance.socket_path).await;
             }
         }
+        // Refused while another add of the id is under way: it had no VM yet
+        // for the removal above to find.
+        let adding = self
+            .vms
+            .reserve(vec![vm_id.to_string()])
+            .map_err(VmManagerError::VmAlreadyExists)?;
 
         // Ensure runtime directory exists.
         tokio::fs::create_dir_all(&self.runtime_dir)
@@ -141,10 +147,7 @@ impl VmManager {
             storage_backend_kind: None,
         };
 
-        self.vms
-            .lock()
-            .unwrap()
-            .insert(vm_id.to_string(), ManagedVm::new(instance));
+        adding.finish([(vm_id.to_string(), ManagedVm::new(instance))]);
 
         info!("VM {} restored successfully from {}", vm_id, source_url);
         Ok(())
@@ -171,9 +174,10 @@ impl VmManager {
             vm_id, migration_port
         );
 
-        if self.vms.lock().unwrap().contains_key(vm_id) {
-            return Err(VmManagerError::VmAlreadyExists(vm_id.to_string()));
-        }
+        let adding = self
+            .vms
+            .reserve(vec![vm_id.to_string()])
+            .map_err(VmManagerError::VmAlreadyExists)?;
 
         // Pick a free TCP port if the caller passed 0.
         let port = if migration_port == 0 {
@@ -323,10 +327,7 @@ impl VmManager {
             storage_backend_kind,
         };
 
-        self.vms
-            .lock()
-            .unwrap()
-            .insert(vm_id.to_string(), ManagedVm::new(instance));
+        adding.finish([(vm_id.to_string(), ManagedVm::new(instance))]);
 
         // vm.receive-migration blocks until the sender completes the full transfer.
         // Spawn it as a background task so we can return the receiver URL immediately;

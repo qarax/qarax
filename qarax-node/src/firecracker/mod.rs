@@ -18,7 +18,6 @@
 //!   restore_vm  — spawn + Machine::load_and_resume()
 //!   fork_vm     — snapshot, then load it into new processes (see `fork`)
 
-use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -42,6 +41,7 @@ use crate::rpc::node::{
 };
 use crate::storage::StorageBackend;
 use crate::storage::overlaybd::{OverlayBdBackend, map_oci_disks};
+use crate::vmm::vms::Vms;
 use crate::vmm::{VmmError, VmmManager, guest_agent};
 
 mod exec;
@@ -225,9 +225,8 @@ impl Drop for VmGuard {
 pub struct FirecrackerManager {
     runtime_dir: PathBuf,
     fc_binary: PathBuf,
-    /// The VMs. Locked only to find, add, remove or list them, never across an
-    /// await: a std Mutex, which the Send futures here can't hold across one.
-    vms: std::sync::Mutex<HashMap<String, ManagedVm>>,
+    /// The VMs, and the ids of those being added.
+    vms: Vms<ManagedVm>,
     /// How long `stop_vm` waits for a guest to shut down before killing its
     /// VMM.
     graceful_stop_timeout: Duration,
@@ -253,7 +252,7 @@ impl FirecrackerManager {
         Self {
             runtime_dir,
             fc_binary,
-            vms: std::sync::Mutex::new(HashMap::new()),
+            vms: Vms::default(),
             graceful_stop_timeout,
             overlaybd,
         }
@@ -279,12 +278,7 @@ impl FirecrackerManager {
     /// Wait for `vm_id`'s lock (see [`ManagedVm`]).
     async fn lock_vm(&self, vm_id: &str) -> Result<VmGuard, VmmError> {
         let not_found = || VmmError::VmNotFound(vm_id.to_string());
-        let instance = self
-            .vms
-            .lock()
-            .unwrap()
-            .get(vm_id)
-            .map(|vm| vm.instance.clone());
+        let instance = self.vms.get(vm_id, |vm| vm.instance.clone());
         let instance = instance.ok_or_else(not_found)?.lock_owned().await;
         // Deleted while this waited.
         OwnedMutexGuard::try_map(instance, Option::as_mut)
@@ -295,16 +289,11 @@ impl FirecrackerManager {
     /// Take `vm_id` out of the manager once no operation holds its lock; those
     /// waiting for the lock then find the VM gone.
     async fn remove_vm(&self, vm_id: &str) -> Option<FcVmInstance> {
-        let instance = self
-            .vms
-            .lock()
-            .unwrap()
-            .get(vm_id)
-            .map(|vm| vm.instance.clone())?;
+        let instance = self.vms.get(vm_id, |vm| vm.instance.clone())?;
         let mut instance = instance.lock().await;
         // Another removal took it while this waited.
         let removed = instance.take()?;
-        self.vms.lock().unwrap().remove(vm_id);
+        self.vms.remove(vm_id);
         Some(removed)
     }
 
@@ -582,9 +571,10 @@ impl VmmManager for FirecrackerManager {
         let vm_id = config.vm_id.clone();
         info!("FC: Creating VM {}", vm_id);
 
-        if self.vms.lock().unwrap().contains_key(&vm_id) {
-            return Err(VmmError::VmAlreadyExists(vm_id));
-        }
+        let adding = self
+            .vms
+            .reserve(vec![vm_id.clone()])
+            .map_err(VmmError::VmAlreadyExists)?;
 
         tokio::fs::create_dir_all(&self.runtime_dir)
             .await
@@ -660,10 +650,7 @@ impl VmmManager for FirecrackerManager {
         );
 
         let state = instance.to_vm_state();
-        self.vms
-            .lock()
-            .unwrap()
-            .insert(vm_id.clone(), ManagedVm::new(instance));
+        adding.finish([(vm_id.clone(), ManagedVm::new(instance))]);
         info!("FC: VM {} created successfully", vm_id);
         Ok(state)
     }
@@ -865,12 +852,7 @@ impl VmmManager for FirecrackerManager {
     }
 
     async fn list_vms(&self) -> Vec<VmState> {
-        self.vms
-            .lock()
-            .unwrap()
-            .values()
-            .map(ManagedVm::to_vm_state)
-            .collect()
+        self.vms.list(ManagedVm::to_vm_state)
     }
 
     async fn snapshot_vm(&self, vm_id: &str, destination_url: &str) -> Result<(), VmmError> {
@@ -935,6 +917,12 @@ impl VmmManager for FirecrackerManager {
                 let _ = tokio::fs::remove_file(&instance.socket_path).await;
             }
         }
+        // Refused while another add of the id is under way: it had no VM yet
+        // for the removal above to find.
+        let adding = self
+            .vms
+            .reserve(vec![vm_id.to_string()])
+            .map_err(VmmError::VmAlreadyExists)?;
 
         tokio::fs::create_dir_all(&self.runtime_dir)
             .await
@@ -1000,10 +988,7 @@ impl VmmManager for FirecrackerManager {
             },
         );
 
-        self.vms
-            .lock()
-            .unwrap()
-            .insert(vm_id.to_string(), ManagedVm::new(instance));
+        adding.finish([(vm_id.to_string(), ManagedVm::new(instance))]);
         info!("FC: VM {} restored successfully from {}", vm_id, source_url);
         Ok(())
     }
@@ -1110,10 +1095,7 @@ impl VmmManager for FirecrackerManager {
             }
 
             let status = instance.status();
-            self.vms
-                .lock()
-                .unwrap()
-                .insert(vm_id.clone(), ManagedVm::new(instance));
+            self.vms.insert(vm_id.clone(), ManagedVm::new(instance));
             info!("FC: Recovered VM {} with status {:?}", vm_id, status);
         }
     }

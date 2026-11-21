@@ -52,8 +52,6 @@ async fn add_running_vm(manager: &FirecrackerManager, vm_id: &str) {
     );
     manager
         .vms
-        .lock()
-        .unwrap()
         .insert(vm_id.to_string(), ManagedVm::new(instance));
 }
 
@@ -237,4 +235,66 @@ async fn a_vm_whose_vmm_does_not_answer_is_recovered_with_an_unknown_status() {
     let recovered = manager.list_vms().await;
     assert_eq!(recovered.len(), 1);
     assert_eq!(recovered[0].status(), VmStatus::Unknown);
+}
+
+/// Of concurrent adds of one VM id (creates, a restore), one goes ahead and
+/// the others are refused before they make anything. The id is free again
+/// once that add fails, or is cancelled as when its request is dropped, and a
+/// create of it then adds the VM.
+#[tokio::test]
+async fn a_vm_id_is_added_once_at_a_time() {
+    let directory = TempDir::new().unwrap();
+    // Its VMM, /bin/true, exits without serving the API socket: an add waits
+    // for the socket, then fails.
+    let manager = test_manager(&directory);
+    let vm_id = uuid::Uuid::new_v4().to_string();
+    let config = ProtoVmConfig {
+        vm_id: vm_id.clone(),
+        ..Default::default()
+    };
+
+    let (created, created_again, restored) = tokio::join!(
+        manager.create_vm(config.clone()),
+        manager.create_vm(config.clone()),
+        manager.restore_vm(&vm_id, "file:///no-snapshot"),
+    );
+    let results = [created.map(drop), created_again.map(drop), restored];
+    let refused = results
+        .iter()
+        .filter(|result| matches!(result, Err(VmmError::VmAlreadyExists(_))))
+        .count();
+    assert_eq!(refused, results.len() - 1, "{results:?}");
+
+    // Not refused, so still waiting for its VMM when it is cancelled.
+    assert!(
+        tokio::time::timeout(
+            Duration::from_millis(100),
+            manager.create_vm(config.clone())
+        )
+        .await
+        .is_err(),
+        "a create was refused after the add of its id failed"
+    );
+
+    let log = manager.log_path(&vm_id);
+    std::fs::remove_file(&log).unwrap();
+    let socket = manager.socket_path(&vm_id);
+    let (created, ()) = tokio::join!(manager.create_vm(config), async {
+        // The create opens its VMM's log before spawning it.
+        while !log.exists() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        serve_fake_firecracker(
+            UnixListener::bind(&socket).unwrap(),
+            instance_info(FcInstanceState::NotStarted),
+        );
+    });
+    created.expect("a create of a VM whose VMM serves its API failed");
+    let listed: Vec<String> = manager
+        .list_vms()
+        .await
+        .into_iter()
+        .map(|vm| vm.config.unwrap().vm_id)
+        .collect();
+    assert_eq!(listed, [vm_id]);
 }

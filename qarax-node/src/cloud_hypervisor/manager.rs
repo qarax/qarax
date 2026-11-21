@@ -44,6 +44,7 @@ use crate::rpc::node::{
 };
 use crate::storage::StorageBackendRegistry;
 use crate::vmm::VMM_ANSWER_TIMEOUT;
+use crate::vmm::vms::Vms;
 
 /// A directory with the certificates Cloud Hypervisor uses for migration
 /// TLS: the migration CA, a server certificate valid for the address this
@@ -218,9 +219,8 @@ pub struct VmManager {
     runtime_dir: PathBuf,
     /// Path to cloud-hypervisor binary
     ch_binary: PathBuf,
-    /// The VMs. Locked only to find, add, remove or list them, never across an
-    /// await: a std Mutex, which the Send futures here can't hold across one.
-    vms: std::sync::Mutex<HashMap<String, ManagedVm>>,
+    /// The VMs, and the ids of those being added.
+    vms: Vms<ManagedVm>,
     /// Storage backend registry for attach/detach/map/unmap operations
     storage_backends: StorageBackendRegistry,
     /// Direct reference to OverlayBdManager for import operations
@@ -258,7 +258,7 @@ impl VmManager {
         Self {
             runtime_dir,
             ch_binary,
-            vms: std::sync::Mutex::new(HashMap::new()),
+            vms: Vms::default(),
             storage_backends,
             overlaybd_manager,
             qarax_init_binary,
@@ -302,12 +302,7 @@ impl VmManager {
     /// Wait for `vm_id`'s lock (see [`ManagedVm`]).
     async fn lock_vm(&self, vm_id: &str) -> Result<VmGuard, VmManagerError> {
         let not_found = || VmManagerError::VmNotFound(vm_id.to_string());
-        let instance = self
-            .vms
-            .lock()
-            .unwrap()
-            .get(vm_id)
-            .map(|vm| vm.instance.clone());
+        let instance = self.vms.get(vm_id, |vm| vm.instance.clone());
         let instance = instance.ok_or_else(not_found)?.lock_owned().await;
         // Deleted while this waited.
         OwnedMutexGuard::try_map(instance, Option::as_mut).map_err(|_| not_found())
@@ -316,16 +311,11 @@ impl VmManager {
     /// Take `vm_id` out of the manager once no operation holds its lock; those
     /// waiting for the lock then find the VM gone.
     async fn remove_vm(&self, vm_id: &str) -> Option<VmInstance> {
-        let instance = self
-            .vms
-            .lock()
-            .unwrap()
-            .get(vm_id)
-            .map(|vm| vm.instance.clone())?;
+        let instance = self.vms.get(vm_id, |vm| vm.instance.clone())?;
         let mut instance = instance.lock().await;
         // Another removal took it while this waited.
         let removed = instance.take()?;
-        self.vms.lock().unwrap().remove(vm_id);
+        self.vms.remove(vm_id);
         Some(removed)
     }
 }
