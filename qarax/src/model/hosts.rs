@@ -580,7 +580,10 @@ pub async fn require_by_id(pool: &PgPool, id: Uuid) -> Result<Host, crate::error
 }
 
 /// Returns a host by id, if it exists.
-pub async fn get_by_id(pool: &PgPool, host_id: Uuid) -> Result<Option<Host>, sqlx::Error> {
+pub async fn get_by_id<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
+    host_id: Uuid,
+) -> Result<Option<Host>, sqlx::Error> {
     let row = sqlx::query_as!(
         HostRow,
         r#"
@@ -594,7 +597,7 @@ WHERE id = $1
         "#,
         host_id,
     )
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await?;
 
     Ok(row.map(Host::from))

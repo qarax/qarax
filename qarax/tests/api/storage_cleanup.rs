@@ -1,4 +1,4 @@
-use crate::support::{node_server_tls, spawn_app};
+use crate::support::{node_server_tls, spawn_app, spawn_app_on_one_connection};
 use qarax::model::{
     storage_objects::{self, NewStorageObject, StorageObjectType},
     storage_pools::{self, NewStoragePool, StoragePoolType},
@@ -455,4 +455,53 @@ async fn a_local_pool_on_an_unreachable_host_can_be_detached_and_deleted() {
         "{}",
         res.text().await.unwrap()
     );
+}
+
+/// A cleanup keeps its queue row locked until the nodes have answered, so it
+/// reads in its transaction: on one connection (see
+/// `test_vm_creates_run_on_one_database_connection`), a read on a second
+/// would fail. A shared pool's cleanup reads the pool, its hosts and each
+/// host it asks.
+#[tokio::test]
+async fn a_cleanup_runs_on_one_database_connection() {
+    let app = spawn_app_on_one_connection().await;
+    let client = reqwest::Client::new();
+    // Registered DOWN, and no node listens on its port: the deletion stays
+    // pending.
+    let host_id = crate::support::add_host(&client, &app.address, "nfs-node").await;
+    let pool_id = storage_pools::create(
+        &app.pool,
+        NewStoragePool {
+            name: "shared".into(),
+            pool_type: StoragePoolType::Nfs,
+            config: json!({"server": "127.0.0.1", "export_path": "/exports/shared"}),
+            capacity_bytes: None,
+        },
+    )
+    .await
+    .unwrap();
+    storage_pools::attach_host(&app.pool, pool_id, host_id)
+        .await
+        .unwrap();
+    let disk = storage_objects::create_managed_returning(
+        &app.pool,
+        NewStorageObject {
+            name: "shared-disk".into(),
+            storage_pool_id: Some(pool_id),
+            object_type: StorageObjectType::Disk,
+            size_bytes: 64,
+            config: json!({}),
+            parent_id: None,
+        },
+        host_id,
+    )
+    .await
+    .unwrap();
+
+    let res = client
+        .delete(format!("{}/storage-objects/{}", app.address, disk.id))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::ACCEPTED);
 }
