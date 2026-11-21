@@ -25,7 +25,7 @@ impl VmManager {
     }
 
     async fn ensure_vm_registered(&self, vm_id: &str) -> Result<(), VmManagerError> {
-        if self.vms.lock().unwrap().contains_key(vm_id) {
+        if self.vms.get(vm_id, |_| ()).is_some() {
             return Ok(());
         }
 
@@ -158,10 +158,7 @@ impl VmManager {
                 storage_backend_kind,
             };
 
-            self.vms
-                .lock()
-                .unwrap()
-                .insert(vm_id.clone(), ManagedVm::new(instance));
+            self.vms.insert(vm_id.clone(), ManagedVm::new(instance));
             info!("Recovered VM {} with status {:?}", vm_id, status);
         }
     }
@@ -171,10 +168,10 @@ impl VmManager {
         let vm_id = config.vm_id.clone();
         info!("Creating VM: {}", vm_id);
 
-        // Check if VM already exists
-        if self.vms.lock().unwrap().contains_key(&vm_id) {
-            return Err(VmManagerError::VmAlreadyExists(vm_id));
-        }
+        let adding = self
+            .vms
+            .reserve(vec![vm_id.clone()])
+            .map_err(VmManagerError::VmAlreadyExists)?;
 
         // Create TAP devices for networks that need them, injecting the names
         // into the config so CH uses our managed devices (and we can clean them up).
@@ -417,10 +414,7 @@ impl VmManager {
 
         let state = instance.summary.borrow().to_vm_state();
 
-        self.vms
-            .lock()
-            .unwrap()
-            .insert(vm_id.clone(), ManagedVm::new(instance));
+        adding.finish([(vm_id.clone(), ManagedVm::new(instance))]);
 
         info!("VM {} registered in manager", vm_id);
         Ok(state)
@@ -730,12 +724,7 @@ impl VmManager {
 
     /// List all VMs
     pub async fn list_vms(&self) -> Vec<VmState> {
-        self.vms
-            .lock()
-            .unwrap()
-            .values()
-            .map(|vm| vm.summary.borrow().to_vm_state())
-            .collect()
+        self.vms.list(|vm| vm.summary.borrow().to_vm_state())
     }
 
     /// Check whether the Cloud Hypervisor process for a VM is still alive.

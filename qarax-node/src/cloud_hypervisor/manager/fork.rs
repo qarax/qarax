@@ -123,12 +123,10 @@ impl VmManager {
         if fork_ids.is_empty() {
             return Err(VmmError::InvalidConfig("no VMs to fork into".into()));
         }
-        {
-            let vms = self.vms.lock().unwrap();
-            if let Some(id) = fork_ids.iter().find(|id| vms.contains_key(*id)) {
-                return Err(VmmError::VmAlreadyExists(id.clone()));
-            }
-        }
+        let adding = self
+            .vms
+            .reserve(fork_ids.clone())
+            .map_err(VmmError::VmAlreadyExists)?;
         let (source_config, oci_mapped) = {
             let source = self.lock_vm(source_id).await?;
             (
@@ -174,7 +172,7 @@ impl VmManager {
         for (fork_id, instance) in &forks {
             self.persist_config(fork_id, &instance.config()).await;
         }
-        self.vms.lock().unwrap().extend(
+        adding.finish(
             forks
                 .into_iter()
                 .map(|(fork_id, instance)| (fork_id, ManagedVm::new(instance))),
@@ -194,25 +192,22 @@ impl VmManager {
         source_id: &str,
         fork_ids: &[String],
     ) -> Result<(), VmmError> {
-        let forks = {
-            let vms = self.vms.lock().unwrap();
-            let config = |vm_id: &str| {
-                vms.get(vm_id)
-                    .map(|vm| vm.summary.borrow().config.clone())
-                    .ok_or_else(|| VmmError::VmNotFound(vm_id.to_string()))
-            };
-            let source = config(source_id)?;
-            fork_ids
-                .iter()
-                .map(|fork_id| {
-                    Ok((
-                        fork_id.as_str(),
-                        self.vsock_socket_path(fork_id),
-                        readdress_request(&source, &config(fork_id)?)?,
-                    ))
-                })
-                .collect::<Result<Vec<_>, VmmError>>()?
+        let config = |vm_id: &str| {
+            self.vms
+                .get(vm_id, |vm| vm.summary.borrow().config.clone())
+                .ok_or_else(|| VmmError::VmNotFound(vm_id.to_string()))
         };
+        let source = config(source_id)?;
+        let forks = fork_ids
+            .iter()
+            .map(|fork_id| {
+                Ok((
+                    fork_id.as_str(),
+                    self.vsock_socket_path(fork_id),
+                    readdress_request(&source, &config(fork_id)?)?,
+                ))
+            })
+            .collect::<Result<Vec<_>, VmmError>>()?;
         join_all(
             forks
                 .into_iter()

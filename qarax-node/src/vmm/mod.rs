@@ -19,6 +19,7 @@ use crate::rpc::node::{
 pub mod fork;
 pub mod guest_agent;
 pub mod memory;
+pub(crate) mod vms;
 
 /// How long a VMM gets to answer a request it serves at once (its VM's
 /// status, a shutdown) before it is taken to have stopped answering: far

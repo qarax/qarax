@@ -114,12 +114,10 @@ impl FirecrackerManager {
         if fork_ids.is_empty() {
             return Err(VmmError::InvalidConfig("no VMs to fork into".into()));
         }
-        {
-            let vms = self.vms.lock().unwrap();
-            if let Some(id) = fork_ids.iter().find(|id| vms.contains_key(*id)) {
-                return Err(VmmError::VmAlreadyExists(id.clone()));
-            }
-        }
+        let adding = self
+            .vms
+            .reserve(fork_ids.clone())
+            .map_err(VmmError::VmAlreadyExists)?;
         let (source_config, memory) = {
             let instance = self.lock_vm(source_id).await?;
             let FcPhase::Live { forking, .. } = &instance.phase else {
@@ -180,7 +178,7 @@ impl FirecrackerManager {
                 warn!("FC: Failed to persist config for VM {}: {}", fork_id, e);
             }
         }
-        self.vms.lock().unwrap().extend(
+        adding.finish(
             forks
                 .into_iter()
                 .map(|(fork_id, instance)| (fork_id, ManagedVm::new(instance))),
@@ -200,25 +198,22 @@ impl FirecrackerManager {
         source_id: &str,
         fork_ids: &[String],
     ) -> Result<(), VmmError> {
-        let forks = {
-            let vms = self.vms.lock().unwrap();
-            let config = |vm_id: &str| {
-                vms.get(vm_id)
-                    .map(|vm| &vm.config)
-                    .ok_or_else(|| VmmError::VmNotFound(vm_id.to_string()))
-            };
-            let source = config(source_id)?;
-            fork_ids
-                .iter()
-                .map(|fork_id| {
-                    Ok((
-                        fork_id.as_str(),
-                        self.vsock_socket_path(fork_id),
-                        readdress_request(source, config(fork_id)?)?,
-                    ))
-                })
-                .collect::<Result<Vec<_>, VmmError>>()?
+        let config = |vm_id: &str| {
+            self.vms
+                .get(vm_id, |vm| vm.config.clone())
+                .ok_or_else(|| VmmError::VmNotFound(vm_id.to_string()))
         };
+        let source = config(source_id)?;
+        let forks = fork_ids
+            .iter()
+            .map(|fork_id| {
+                Ok((
+                    fork_id.as_str(),
+                    self.vsock_socket_path(fork_id),
+                    readdress_request(&source, &config(fork_id)?)?,
+                ))
+            })
+            .collect::<Result<Vec<_>, VmmError>>()?;
         join_all(
             forks
                 .into_iter()
