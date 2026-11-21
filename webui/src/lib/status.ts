@@ -32,7 +32,8 @@ export const VM_STATUS_HELP: Record<VmStatus, string> = {
 	created: 'It has never been started. Start it to boot it on its host.',
 	shutdown:
 		'Its guest is off. Its disks and settings are kept, so it boots again when you start it.',
-	pending: 'A start or restore is under way. It turns running when that finishes.',
+	pending:
+		'qarax is preparing its image, starting it or restoring it. Its status changes when that is done.',
 	migrating: 'It is moving to another host while it keeps running.',
 	committing: 'Its disk is being saved as an image. Wait for that to finish before starting it.',
 	unknown: "qarax can't tell its state: its host isn't reporting it."

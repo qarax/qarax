@@ -154,6 +154,7 @@
 									</ul>
 								{:else}
 									<span class="qx-subtle">None created yet.</span>
+									<a href={resolve('/vms/new')}>Create one</a>
 								{/if}
 							</div>
 						</div>

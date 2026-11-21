@@ -70,7 +70,7 @@ export async function runVmAction(vmId: string, action: VmAction): Promise<Accep
 const JOB_POLL_MS = 1000;
 
 /** Resolves when the job completes; rejects with the job's error when it fails. */
-async function jobFinished(jobId: string): Promise<void> {
+export async function jobFinished(jobId: string): Promise<void> {
 	const path = { params: { path: { job_id: jobId } } };
 	for (;;) {
 		const job = await call(api.GET('/v1/jobs/{job_id}', path));
