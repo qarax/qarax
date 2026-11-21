@@ -44,7 +44,8 @@ pub(super) fn tracks_dirty_pages(config: &ProtoVmConfig) -> bool {
 }
 
 /// A running VM's [`ForkMemory`], which a fork round holds from its snapshot
-/// to its new base.
+/// to its new base. Taken before the VM's own lock, never while holding it:
+/// the round takes the VM's lock for its snapshot.
 pub(super) type ForkMemoryLock = Arc<tokio::sync::Mutex<ForkMemory>>;
 
 /// What the next fork of a running VM snapshots of its memory.
@@ -113,14 +114,14 @@ impl FirecrackerManager {
         if fork_ids.is_empty() {
             return Err(VmmError::InvalidConfig("no VMs to fork into".into()));
         }
-        let (source_config, memory) = {
-            let vms = self.vms.lock().await;
+        {
+            let vms = self.vms.lock().unwrap();
             if let Some(id) = fork_ids.iter().find(|id| vms.contains_key(*id)) {
                 return Err(VmmError::VmAlreadyExists(id.clone()));
             }
-            let instance = vms
-                .get(source_id)
-                .ok_or_else(|| VmmError::VmNotFound(source_id.to_string()))?;
+        }
+        let (source_config, memory) = {
+            let instance = self.lock_vm(source_id).await?;
             let FcPhase::Live { forking, .. } = &instance.phase else {
                 return Err(VmmError::ProcessError("VM is not running".into()));
             };
@@ -168,19 +169,22 @@ impl FirecrackerManager {
         }
         let forks = forked?;
 
-        let mut vms = self.vms.lock().await;
-        for (fork_id, instance) in forks {
+        for (fork_id, instance) in &forks {
             // Persist config for recovery, as create_vm does.
             if let Err(e) = tokio::fs::write(
-                self.config_path(&fork_id),
+                self.config_path(fork_id),
                 instance.proto_config.encode_to_vec(),
             )
             .await
             {
                 warn!("FC: Failed to persist config for VM {}: {}", fork_id, e);
             }
-            vms.insert(fork_id, instance);
         }
+        self.vms.lock().unwrap().extend(
+            forks
+                .into_iter()
+                .map(|(fork_id, instance)| (fork_id, ManagedVm::new(instance))),
+        );
         info!(
             "FC: VM {} forked into {} VMs, paused",
             source_id,
@@ -197,22 +201,20 @@ impl FirecrackerManager {
         fork_ids: &[String],
     ) -> Result<(), VmmError> {
         let forks = {
-            let vms = self.vms.lock().await;
-            let source = &vms
-                .get(source_id)
-                .ok_or_else(|| VmmError::VmNotFound(source_id.to_string()))?
-                .proto_config;
+            let vms = self.vms.lock().unwrap();
+            let config = |vm_id: &str| {
+                vms.get(vm_id)
+                    .map(|vm| &vm.config)
+                    .ok_or_else(|| VmmError::VmNotFound(vm_id.to_string()))
+            };
+            let source = config(source_id)?;
             fork_ids
                 .iter()
                 .map(|fork_id| {
-                    let fork = &vms
-                        .get(fork_id)
-                        .ok_or_else(|| VmmError::VmNotFound(fork_id.clone()))?
-                        .proto_config;
                     Ok((
                         fork_id.as_str(),
                         self.vsock_socket_path(fork_id),
-                        readdress_request(source, fork)?,
+                        readdress_request(source, config(fork_id)?)?,
                     ))
                 })
                 .collect::<Result<Vec<_>, VmmError>>()?
@@ -302,10 +304,7 @@ impl FirecrackerManager {
             ))
         })?;
 
-        let mut vms = self.vms.lock().await;
-        let instance = vms
-            .get_mut(source_id)
-            .ok_or_else(|| VmmError::VmNotFound(source_id.to_string()))?;
+        let mut instance = self.lock_vm(source_id).await?;
         let (micro_vm, state) = instance.live("VM is not running")?;
         let was_running = match *state {
             LiveState::Running => true,
@@ -517,17 +516,17 @@ impl FirecrackerManager {
         .await;
 
         match loaded {
-            Ok(micro_vm) => Ok(FcVmInstance {
-                proto_config: config,
-                process: Some(process),
+            Ok(micro_vm) => Ok(FcVmInstance::new(
+                config,
+                Some(process),
                 socket_path,
                 tap_devices,
-                phase: FcPhase::Live {
+                FcPhase::Live {
                     micro_vm,
                     state: LiveState::Paused,
                     forking: ForkMemory::new(tracked),
                 },
-            }),
+            )),
             Err(e) => {
                 self.discard_fork(&fork_id, Some(process), &tap_devices)
                     .await;
