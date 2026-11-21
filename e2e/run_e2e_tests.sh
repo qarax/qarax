@@ -220,6 +220,8 @@ echo ""
 # Setup Python environment with uv
 echo -e "${YELLOW}Installing test dependencies...${NC}"
 uv sync --frozen
+# The browser test_webui.py drives (headless Chromium); a no-op once installed.
+uv run playwright install chromium
 
 # Run the tests
 export WEBHOOK_HOST="${WEBHOOK_HOST:-$(default_webhook_host)}"
