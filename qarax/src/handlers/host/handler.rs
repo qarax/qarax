@@ -509,7 +509,7 @@ pub async fn evacuate(
         let total = resident_vm_ids.len().max(1);
         let mut evacuated_vm_names = Vec::new();
         for (idx, vm_id) in resident_vm_ids.into_iter().enumerate() {
-            let vm = match vms::get(&db_pool, vm_id).await {
+            let vm = match vms::get(&*db_pool, vm_id).await {
                 Ok(vm) => vm,
                 Err(error) => {
                     fail_host_evacuation(

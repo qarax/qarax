@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
+use sqlx::{PgConnection, PgPool};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
@@ -83,7 +83,10 @@ LIMIT $4
     Ok(boot_sources)
 }
 
-pub async fn get(pool: &PgPool, boot_source_id: Uuid) -> Result<BootSource, sqlx::Error> {
+pub async fn get<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
+    boot_source_id: Uuid,
+) -> Result<BootSource, sqlx::Error> {
     let boot_source: BootSourceRow = sqlx::query_as!(
         BootSourceRow,
         r#"
@@ -98,7 +101,7 @@ WHERE id = $1
         "#,
         boot_source_id
     )
-    .fetch_one(pool)
+    .fetch_one(executor)
     .await?;
 
     Ok(boot_source.into())
@@ -149,19 +152,19 @@ pub struct ResolvedBootSource {
 
 /// Resolve a boot source by fetching the storage objects and extracting their paths
 pub async fn resolve(
-    pool: &PgPool,
+    conn: &mut PgConnection,
     boot_source_id: Uuid,
 ) -> Result<ResolvedBootSource, sqlx::Error> {
-    let boot_source = get(pool, boot_source_id).await?;
+    let boot_source = get(&mut *conn, boot_source_id).await?;
 
     // Fetch kernel storage object
-    let kernel_obj = storage_objects::get(pool, boot_source.kernel_image_id).await?;
+    let kernel_obj = storage_objects::get(&mut *conn, boot_source.kernel_image_id).await?;
     let kernel_path = storage_objects::get_path_from_config(&kernel_obj.config)
         .ok_or_else(|| sqlx::Error::RowNotFound)?;
 
     // Fetch initramfs storage object if present
     let initramfs_path = if let Some(initrd_id) = boot_source.initrd_image_id {
-        let initrd_obj = storage_objects::get(pool, initrd_id).await?;
+        let initrd_obj = storage_objects::get(&mut *conn, initrd_id).await?;
         storage_objects::get_path_from_config(&initrd_obj.config)
     } else {
         None

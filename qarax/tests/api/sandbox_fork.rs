@@ -2,7 +2,9 @@
 //! call, and that a fork whose node call fails leaves no rows behind. The fork
 //! itself needs a real node; it is in e2e/test_sandboxes.py.
 
-use crate::support::{TestApp, add_up_host, create_vm, set_vm_status, spawn_app};
+use crate::support::{
+    TestApp, add_up_host, create_vm, set_vm_status, spawn_app, spawn_app_on_one_connection,
+};
 use reqwest::StatusCode;
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -352,6 +354,39 @@ async fn a_fork_needs_room_on_its_source_host_and_a_failed_one_leaves_no_rows() 
     assert_eq!(count(&app, "network_interfaces").await, 1);
     assert_eq!(count(&app, "ip_allocations").await, 1);
     assert_eq!(count(&app, "vm_security_groups").await, 1);
+}
+
+/// On one database connection, as a placement must run (see
+/// `test_vm_creates_run_on_one_database_connection`): the fork's transaction
+/// reads its source's disks and NICs, places it, copies its data disk and only
+/// then finds its network full.
+#[tokio::test]
+async fn a_fork_with_no_address_left_on_its_network_is_refused_and_leaves_no_rows() {
+    let app = spawn_app_on_one_connection().await;
+    let client = reqwest::Client::new();
+    let host_id = add_up_host(&client, &app.address, "fork-host").await;
+    let (sandbox_id, vm_id) =
+        running_sandbox(&app, &client, "fork-full-network", "firecracker", json!({})).await;
+    add_nic(&app, host_id, vm_id).await;
+    // The gateway and the source hold its only addresses.
+    sqlx::query("UPDATE networks SET subnet = '10.9.0.0/30' WHERE name = 'fork-net'")
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    let local = storage_pool(&app, "LOCAL").await;
+    add_disk(
+        &app,
+        vm_id,
+        "vdb",
+        storage_object(&app, local, "DISK").await,
+        None,
+    )
+    .await;
+
+    assert_refused(&app, &client, sandbox_id, "has no address left for a fork").await;
+    assert_eq!(count(&app, "vms").await, 1);
+    assert_eq!(count(&app, "storage_objects").await, 1);
+    assert_eq!(count(&app, "ip_allocations").await, 1);
 }
 
 #[tokio::test]

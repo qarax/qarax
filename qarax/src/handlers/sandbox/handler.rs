@@ -314,8 +314,8 @@ pub(crate) async fn create_forks_tx(
     names: &[String],
 ) -> Result<PendingForks> {
     ensure_forkable(vm)?;
-    let disks = forkable_disks(env, vm).await?;
-    let nics = forkable_nics(env, vm).await?;
+    let disks = forkable_disks(tx, vm).await?;
+    let nics = forkable_nics(tx, vm).await?;
     let host_id = vm
         .host_id
         .ok_or_else(|| Error::UnprocessableEntity("sandbox VM has no assigned host".into()))?;
@@ -366,7 +366,6 @@ pub(crate) async fn create_forks_tx(
                 } => {
                     let copy = storage_objects::create_disk_copy_for_fork_tx(
                         tx,
-                        env.pool(),
                         object,
                         format!("fork-{fork_vm_id}-{drive_id}"),
                         fork_vm_id,
@@ -508,8 +507,8 @@ struct ForkNic {
 /// agent switches the guest to it. Any other NIC is refused, as are NICs whose
 /// guest configures them from cloud-init rather than the kernel command line:
 /// the forks would keep their source's addresses.
-async fn forkable_nics(env: &App, vm: &Vm) -> Result<Vec<ForkNic>> {
-    let nics = network_interfaces::list_by_vm(env.pool(), vm.id).await?;
+async fn forkable_nics(tx: &mut Transaction<'_, Postgres>, vm: &Vm) -> Result<Vec<ForkNic>> {
+    let nics = network_interfaces::list_by_vm(tx.as_mut(), vm.id).await?;
     if !nics.is_empty() && vm.cloud_init_network_config.is_some() {
         return Err(Error::UnprocessableEntity(
             "a sandbox whose network config comes from cloud-init can't be forked with its \
@@ -521,7 +520,7 @@ async fn forkable_nics(env: &App, vm: &Vm) -> Result<Vec<ForkNic>> {
     for nic in nics {
         let managed = match nic.network_id {
             Some(network_id) => {
-                let network = networks::get(env.pool(), network_id).await?;
+                let network = networks::get(tx.as_mut(), network_id).await?;
                 matches!(network.network_type.as_deref(), Some("bridge" | "isolated"))
                     .then_some(network_id)
             }
@@ -574,9 +573,9 @@ impl ForkDisk {
 /// layer belongs to its storage object, a disk outside a storage pool or on
 /// another kind of pool can't be copied: the forks would write to the same
 /// file. Those are refused.
-async fn forkable_disks(env: &App, vm: &Vm) -> Result<Vec<ForkDisk>> {
+async fn forkable_disks(tx: &mut Transaction<'_, Postgres>, vm: &Vm) -> Result<Vec<ForkDisk>> {
     let mut forkable = Vec::new();
-    for disk in vm_disks::list_by_vm(env.pool(), vm.id).await? {
+    for disk in vm_disks::list_by_vm(tx.as_mut(), vm.id).await? {
         if disk.upper_storage_object_id.is_some() {
             return Err(Error::UnprocessableEntity(
                 "a sandbox with a persistent disk layer can't be forked: its forks would \
@@ -585,7 +584,7 @@ async fn forkable_disks(env: &App, vm: &Vm) -> Result<Vec<ForkDisk>> {
             ));
         }
         let object = match disk.storage_object_id {
-            Some(id) => storage_objects::get(env.pool(), id).await?,
+            Some(id) => storage_objects::get(tx.as_mut(), id).await?,
             None => {
                 return Err(Error::UnprocessableEntity(format!(
                     "a sandbox with a disk outside a storage pool can't be forked: its forks \
@@ -605,7 +604,7 @@ async fn forkable_disks(env: &App, vm: &Vm) -> Result<Vec<ForkDisk>> {
                 object_id: object.id,
             }
         } else {
-            let pool = storage_pools::get(env.pool(), object.storage_pool_id).await?;
+            let pool = storage_pools::get(tx.as_mut(), object.storage_pool_id).await?;
             if object.object_type != StorageObjectType::Disk
                 || !matches!(
                     pool.pool_type,

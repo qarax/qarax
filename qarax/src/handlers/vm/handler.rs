@@ -161,7 +161,7 @@ async fn root_disk_scheduling_requirements(
 }
 
 async fn validate_root_disk_for_host(
-    env: &App,
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     host_id: Uuid,
     object_id: Uuid,
     maybe_pool_id: Option<Uuid>,
@@ -170,7 +170,7 @@ async fn validate_root_disk_for_host(
         return Ok(());
     };
 
-    if !storage_pools::host_has_pool(env.pool(), host_id, pool_id).await? {
+    if !storage_pools::host_has_pool(tx.as_mut(), host_id, pool_id).await? {
         return Err(crate::errors::Error::UnprocessableEntity(format!(
             "selected host is not attached to the storage pool backing root_disk_object_id {}",
             object_id
@@ -441,7 +441,6 @@ async fn ensure_storage_object_can_be_attached(
 
 async fn ensure_storage_object_can_be_attached_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    pool: &sqlx::PgPool,
     object: &StorageObject,
     storage_pool: &storage_pools::StoragePool,
     current_vm_id: Option<Uuid>,
@@ -466,7 +465,7 @@ async fn ensure_storage_object_can_be_attached_tx(
         .into_iter()
         .find(|disk| Some(disk.vm_id) != current_vm_id)
     {
-        let conflicting_vm = vms::get(pool, conflict.vm_id).await?;
+        let conflicting_vm = vms::get(tx.as_mut(), conflict.vm_id).await?;
         return Err(crate::errors::Error::Conflict(format!(
             "Storage object '{}' is already attached to VM '{}'. Clone the disk or create a snapshot before reusing it.",
             object.name, conflicting_vm.name
@@ -858,16 +857,15 @@ pub(crate) async fn create_vm_internal(env: &App, vm: ResolvedNewVm) -> Result<U
     ensure_host_matches_architecture(&host, &target_architecture)?;
     if let Some(root_disk_object_id) = vm.root_disk_object_id {
         validate_root_disk_for_host(
-            env,
+            &mut tx,
             host.id,
             root_disk_object_id,
             scheduling_request.storage_pool_id,
         )
         .await?;
         let object = storage_objects::get_for_update(&mut tx, root_disk_object_id).await?;
-        let storage_pool = storage_pools::get(env.pool(), object.storage_pool_id).await?;
-        ensure_storage_object_can_be_attached_tx(&mut tx, env.pool(), &object, &storage_pool, None)
-            .await?;
+        let storage_pool = storage_pools::get(tx.as_mut(), object.storage_pool_id).await?;
+        ensure_storage_object_can_be_attached_tx(&mut tx, &object, &storage_pool, None).await?;
     }
 
     let id = vms::create_tx(&mut tx, &vm, Some(host.id)).await?;
@@ -944,20 +942,19 @@ pub(crate) async fn create_vm_with_image_internal(
     ensure_host_matches_architecture(&host, &target_architecture)?;
     if let Some(root_disk_object_id) = vm.root_disk_object_id {
         validate_root_disk_for_host(
-            env,
+            &mut tx,
             host.id,
             root_disk_object_id,
             scheduling_request.storage_pool_id,
         )
         .await?;
         let object = storage_objects::get_for_update(&mut tx, root_disk_object_id).await?;
-        let storage_pool = storage_pools::get(env.pool(), object.storage_pool_id).await?;
-        ensure_storage_object_can_be_attached_tx(&mut tx, env.pool(), &object, &storage_pool, None)
-            .await?;
+        let storage_pool = storage_pools::get(tx.as_mut(), object.storage_pool_id).await?;
+        ensure_storage_object_can_be_attached_tx(&mut tx, &object, &storage_pool, None).await?;
     }
 
     // The selected host must have an OverlayBD storage pool for OCI image boot.
-    let overlaybd_pool = storage_pools::find_overlaybd_for_host(env.pool(), host.id)
+    let overlaybd_pool = storage_pools::find_overlaybd_for_host(tx.as_mut(), host.id)
         .await
         .map_err(|e| {
             tracing::error!("Failed to query OverlayBD pool for host {}: {}", host.id, e);
@@ -974,7 +971,7 @@ pub(crate) async fn create_vm_with_image_internal(
     match boot_mode {
         BootMode::Kernel => {
             let (_kernel, _initramfs, _cmdline) = if let Some(boot_source_id) = vm.boot_source_id {
-                let resolved = boot_sources::resolve(env.pool(), boot_source_id)
+                let resolved = boot_sources::resolve(tx.as_mut(), boot_source_id)
                     .await
                     .map_err(|e| {
                         tracing::error!(
@@ -1023,7 +1020,7 @@ pub(crate) async fn create_vm_with_image_internal(
     // and already attached to the selected host.
     let persistent_upper_pool_id = vm.persistent_upper_pool_id;
     if let Some(upper_pool_id) = persistent_upper_pool_id {
-        let upper_pool = storage_pools::get(env.pool(), upper_pool_id)
+        let upper_pool = storage_pools::get(tx.as_mut(), upper_pool_id)
             .await
             .map_err(|e| match e {
                 sqlx::Error::RowNotFound => crate::errors::Error::UnprocessableEntity(format!(
@@ -1052,7 +1049,7 @@ pub(crate) async fn create_vm_with_image_internal(
             }
         }
 
-        let attached = storage_pools::host_has_pool(env.pool(), host.id, upper_pool_id)
+        let attached = storage_pools::host_has_pool(tx.as_mut(), host.id, upper_pool_id)
             .await
             .map_err(|e| {
                 tracing::error!("Failed to check pool attachment: {}", e);
@@ -2589,14 +2586,15 @@ async fn build_create_vm_request(env: &App, vm: &Vm) -> Result<CreateVmRequest> 
         }
         BootMode::Kernel => {
             let (k, i, c) = if let Some(boot_source_id) = vm.boot_source_id {
-                let resolved = boot_sources::resolve(env.pool(), boot_source_id)
-                    .await
-                    .map_err(|e| {
-                        crate::errors::Error::UnprocessableEntity(format!(
-                            "Invalid boot_source_id: {}",
-                            e
-                        ))
-                    })?;
+                let resolved =
+                    boot_sources::resolve(&mut *env.pool().acquire().await?, boot_source_id)
+                        .await
+                        .map_err(|e| {
+                            crate::errors::Error::UnprocessableEntity(format!(
+                                "Invalid boot_source_id: {}",
+                                e
+                            ))
+                        })?;
                 (
                     resolved.kernel_path,
                     resolved.initramfs_path,
@@ -3084,7 +3082,7 @@ pub async fn attach_disk(
             )));
         }
     }
-    ensure_storage_object_can_be_attached_tx(&mut tx, env.pool(), &obj, &pool, Some(vm_id)).await?;
+    ensure_storage_object_can_be_attached_tx(&mut tx, &obj, &pool, Some(vm_id)).await?;
     let disk_record = NewVmDisk {
         vm_id,
         storage_object_id: Some(req.storage_object_id),

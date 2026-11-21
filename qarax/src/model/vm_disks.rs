@@ -181,7 +181,10 @@ WHERE id = $1
     Ok(vm_disk.into())
 }
 
-pub async fn list_by_vm(pool: &PgPool, vm_id: Uuid) -> Result<Vec<VmDisk>, sqlx::Error> {
+pub async fn list_by_vm<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
+    vm_id: Uuid,
+) -> Result<Vec<VmDisk>, sqlx::Error> {
     let vm_disks: Vec<VmDiskRow> = sqlx::query_as!(
         VmDiskRow,
         r#"
@@ -209,7 +212,7 @@ ORDER BY boot_order NULLS LAST, device_path
         "#,
         vm_id
     )
-    .fetch_all(pool)
+    .fetch_all(executor)
     .await?;
 
     let vm_disks: Vec<VmDisk> = vm_disks
