@@ -131,10 +131,7 @@ impl FirecrackerManager {
 
     /// The host end of `vm_id`'s guest-agent vsock, while the VM runs.
     pub(super) async fn guest_agent_socket(&self, vm_id: &str) -> Result<PathBuf, VmmError> {
-        let vms = self.vms.lock().await;
-        let instance = vms
-            .get(vm_id)
-            .ok_or_else(|| VmmError::VmNotFound(vm_id.to_string()))?;
+        let instance = self.lock_vm(vm_id).await?;
         if instance.status() != VmStatus::Running {
             return Err(VmmError::ExecUnavailable(format!(
                 "VM {} is not running",

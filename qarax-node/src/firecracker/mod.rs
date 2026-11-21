@@ -19,6 +19,7 @@
 //!   fork_vm     — snapshot, then load it into new processes (see `fork`)
 
 use std::collections::HashMap;
+use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -31,7 +32,7 @@ use firecracker_rust_sdk::models::{
 };
 use prost::Message;
 use tokio::process::{Child, Command};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, OwnedMappedMutexGuard, OwnedMutexGuard, watch};
 use tracing::{debug, info, warn};
 
 use crate::rpc::node::ExecVmResponse;
@@ -47,6 +48,8 @@ mod exec;
 mod fork;
 use fork::{ForkMemory, ForkMemoryLock, tracks_dirty_pages};
 mod helpers;
+#[cfg(test)]
+mod tests;
 
 /// Where a Firecracker VM is in its lifecycle, with the SDK handle that
 /// step needs. The status reported for the VM is derived from it.
@@ -110,9 +113,28 @@ struct FcVmInstance {
     socket_path: PathBuf,
     tap_devices: Vec<String>,
     phase: FcPhase,
+    /// `phase`'s status as the VM's lock was last released (see [`VmGuard`]).
+    published: watch::Sender<VmStatus>,
 }
 
 impl FcVmInstance {
+    fn new(
+        proto_config: ProtoVmConfig,
+        process: Option<Child>,
+        socket_path: PathBuf,
+        tap_devices: Vec<String>,
+        phase: FcPhase,
+    ) -> Self {
+        Self {
+            published: watch::Sender::new(phase.status()),
+            proto_config,
+            process,
+            socket_path,
+            tap_devices,
+            phase,
+        }
+    }
+
     fn status(&self) -> VmStatus {
         self.phase.status()
     }
@@ -141,10 +163,70 @@ impl FcVmInstance {
     }
 }
 
+/// A VM the manager knows. Operations on it hold its lock to use or change its
+/// instance, some of them across requests to its Firecracker (starting,
+/// pausing, resuming or snapshotting it, `get_vm_info`, a fork's snapshot of
+/// its source), so a Firecracker that is slow or hung holds up its own VM's
+/// operations only. Reads of all the node's VMs take each one's config and
+/// last published status from here, without the lock.
+struct ManagedVm {
+    /// A copy of the instance's: nothing changes a Firecracker VM's config.
+    config: ProtoVmConfig,
+    status: watch::Receiver<VmStatus>,
+    /// `None` once the VM is deleted, for the operations that were waiting.
+    instance: Arc<Mutex<Option<FcVmInstance>>>,
+}
+
+impl ManagedVm {
+    fn new(instance: FcVmInstance) -> Self {
+        Self {
+            config: instance.proto_config.clone(),
+            status: instance.published.subscribe(),
+            instance: Arc::new(Mutex::new(Some(instance))),
+        }
+    }
+
+    fn to_vm_state(&self) -> VmState {
+        VmState {
+            config: Some(self.config.clone()),
+            status: (*self.status.borrow()).into(),
+            memory_actual_size: None,
+        }
+    }
+}
+
+/// A VM's instance, while its lock is held. Releasing it publishes the status
+/// its phase was left in, so the reads that don't wait for the lock see each
+/// VM as the last operation on it left it, as they did when they waited for
+/// that operation to end.
+struct VmGuard(OwnedMappedMutexGuard<Option<FcVmInstance>, FcVmInstance>);
+
+impl Deref for VmGuard {
+    type Target = FcVmInstance;
+
+    fn deref(&self) -> &FcVmInstance {
+        &self.0
+    }
+}
+
+impl DerefMut for VmGuard {
+    fn deref_mut(&mut self) -> &mut FcVmInstance {
+        &mut self.0
+    }
+}
+
+impl Drop for VmGuard {
+    fn drop(&mut self) {
+        self.0.published.send_replace(self.0.phase.status());
+    }
+}
+
 pub struct FirecrackerManager {
     runtime_dir: PathBuf,
     fc_binary: PathBuf,
-    vms: Arc<Mutex<HashMap<String, FcVmInstance>>>,
+    /// The VMs. Locked only to find, add, remove or list them, never across an
+    /// await: a std Mutex, which the Send futures here can't hold across one.
+    vms: std::sync::Mutex<HashMap<String, ManagedVm>>,
     /// How long `stop_vm` waits for a guest to shut down before killing its
     /// VMM.
     graceful_stop_timeout: Duration,
@@ -170,7 +252,7 @@ impl FirecrackerManager {
         Self {
             runtime_dir,
             fc_binary,
-            vms: Arc::new(Mutex::new(HashMap::new())),
+            vms: std::sync::Mutex::new(HashMap::new()),
             graceful_stop_timeout,
             overlaybd,
         }
@@ -191,6 +273,38 @@ impl FirecrackerManager {
 
     pub fn fc_binary(&self) -> &Path {
         &self.fc_binary
+    }
+
+    /// Wait for `vm_id`'s lock (see [`ManagedVm`]).
+    async fn lock_vm(&self, vm_id: &str) -> Result<VmGuard, VmmError> {
+        let not_found = || VmmError::VmNotFound(vm_id.to_string());
+        let instance = self
+            .vms
+            .lock()
+            .unwrap()
+            .get(vm_id)
+            .map(|vm| vm.instance.clone());
+        let instance = instance.ok_or_else(not_found)?.lock_owned().await;
+        // Deleted while this waited.
+        OwnedMutexGuard::try_map(instance, Option::as_mut)
+            .map(VmGuard)
+            .map_err(|_| not_found())
+    }
+
+    /// Take `vm_id` out of the manager once no operation holds its lock; those
+    /// waiting for the lock then find the VM gone.
+    async fn remove_vm(&self, vm_id: &str) -> Option<FcVmInstance> {
+        let instance = self
+            .vms
+            .lock()
+            .unwrap()
+            .get(vm_id)
+            .map(|vm| vm.instance.clone())?;
+        let mut instance = instance.lock().await;
+        // Another removal took it while this waited.
+        let removed = instance.take()?;
+        self.vms.lock().unwrap().remove(vm_id);
+        Some(removed)
     }
 
     /// Launch a Firecracker process for `config` and configure it up to
@@ -388,8 +502,7 @@ impl FirecrackerManager {
 
     /// Whether the VM's Firecracker process has exited.
     async fn vmm_exited(&self, vm_id: &str) -> bool {
-        let mut vms = self.vms.lock().await;
-        let Some(instance) = vms.get_mut(vm_id) else {
+        let Ok(mut instance) = self.lock_vm(vm_id).await else {
             return true;
         };
         match &mut instance.process {
@@ -468,11 +581,8 @@ impl VmmManager for FirecrackerManager {
         let vm_id = config.vm_id.clone();
         info!("FC: Creating VM {}", vm_id);
 
-        {
-            let vms = self.vms.lock().await;
-            if vms.contains_key(&vm_id) {
-                return Err(VmmError::VmAlreadyExists(vm_id));
-            }
+        if self.vms.lock().unwrap().contains_key(&vm_id) {
+            return Err(VmmError::VmAlreadyExists(vm_id));
         }
 
         tokio::fs::create_dir_all(&self.runtime_dir)
@@ -540,16 +650,19 @@ impl VmmManager for FirecrackerManager {
             warn!("FC: Failed to persist config for VM {}: {}", vm_id, e);
         }
 
-        let instance = FcVmInstance {
-            proto_config: config.clone(),
-            process: Some(process),
-            socket_path: self.socket_path(&vm_id),
+        let instance = FcVmInstance::new(
+            config,
+            Some(process),
+            self.socket_path(&vm_id),
             tap_devices,
-            phase: FcPhase::PreBoot(machine),
-        };
+            FcPhase::PreBoot(machine),
+        );
 
         let state = instance.to_vm_state();
-        self.vms.lock().await.insert(vm_id.clone(), instance);
+        self.vms
+            .lock()
+            .unwrap()
+            .insert(vm_id.clone(), ManagedVm::new(instance));
         info!("FC: VM {} created successfully", vm_id);
         Ok(state)
     }
@@ -557,10 +670,7 @@ impl VmmManager for FirecrackerManager {
     async fn start_vm(&self, vm_id: &str) -> Result<(), VmmError> {
         info!("FC: Starting VM {}", vm_id);
 
-        let mut vms = self.vms.lock().await;
-        let instance = vms
-            .get_mut(vm_id)
-            .ok_or_else(|| VmmError::VmNotFound(vm_id.to_string()))?;
+        let mut instance = self.lock_vm(vm_id).await?;
 
         // Until the instance starts, a failure leaves the VM stopped, and the
         // next start launches a fresh process.
@@ -605,10 +715,7 @@ impl VmmManager for FirecrackerManager {
         // no power button, and Ctrl+Alt+Del needs an i8042 driver the guest
         // kernel doesn't have.
         let agent_socket = {
-            let vms = self.vms.lock().await;
-            let instance = vms
-                .get(vm_id)
-                .ok_or_else(|| VmmError::VmNotFound(vm_id.to_string()))?;
+            let instance = self.lock_vm(vm_id).await?;
             match instance.phase {
                 FcPhase::Live {
                     state: LiveState::Running,
@@ -622,10 +729,7 @@ impl VmmManager for FirecrackerManager {
             None => false,
         };
 
-        let mut vms = self.vms.lock().await;
-        let instance = vms
-            .get_mut(vm_id)
-            .ok_or_else(|| VmmError::VmNotFound(vm_id.to_string()))?;
+        let mut instance = self.lock_vm(vm_id).await?;
         if !guest_shut_down {
             match instance.process.take() {
                 Some(mut process) => {
@@ -647,10 +751,7 @@ impl VmmManager for FirecrackerManager {
     async fn force_stop_vm(&self, vm_id: &str) -> Result<(), VmmError> {
         info!("FC: Force stopping VM {}", vm_id);
 
-        let mut vms = self.vms.lock().await;
-        let instance = vms
-            .get_mut(vm_id)
-            .ok_or_else(|| VmmError::VmNotFound(vm_id.to_string()))?;
+        let mut instance = self.lock_vm(vm_id).await?;
 
         if let Some(mut process) = instance.process.take()
             && let Err(e) = process.kill().await
@@ -666,10 +767,7 @@ impl VmmManager for FirecrackerManager {
     async fn pause_vm(&self, vm_id: &str) -> Result<(), VmmError> {
         info!("FC: Pausing VM {}", vm_id);
 
-        let mut vms = self.vms.lock().await;
-        let instance = vms
-            .get_mut(vm_id)
-            .ok_or_else(|| VmmError::VmNotFound(vm_id.to_string()))?;
+        let mut instance = self.lock_vm(vm_id).await?;
 
         let (micro_vm, state) = instance.live("VM is not running")?;
         if *state == LiveState::Paused {
@@ -690,10 +788,7 @@ impl VmmManager for FirecrackerManager {
     async fn resume_vm(&self, vm_id: &str) -> Result<(), VmmError> {
         info!("FC: Resuming VM {}", vm_id);
 
-        let mut vms = self.vms.lock().await;
-        let instance = vms
-            .get_mut(vm_id)
-            .ok_or_else(|| VmmError::VmNotFound(vm_id.to_string()))?;
+        let mut instance = self.lock_vm(vm_id).await?;
 
         let (micro_vm, state) = instance.live("VM is not paused")?;
 
@@ -710,11 +805,10 @@ impl VmmManager for FirecrackerManager {
     async fn delete_vm(&self, vm_id: &str) -> Result<(), VmmError> {
         info!("FC: Deleting VM {}", vm_id);
 
-        let mut instance = {
-            let mut vms = self.vms.lock().await;
-            vms.remove(vm_id)
-                .ok_or_else(|| VmmError::VmNotFound(vm_id.to_string()))?
-        };
+        let mut instance = self
+            .remove_vm(vm_id)
+            .await
+            .ok_or_else(|| VmmError::VmNotFound(vm_id.to_string()))?;
 
         if let Some(mut process) = instance.process.take()
             && let Err(e) = process.kill().await
@@ -754,10 +848,7 @@ impl VmmManager for FirecrackerManager {
     }
 
     async fn get_vm_info(&self, vm_id: &str) -> Result<VmState, VmmError> {
-        let mut vms = self.vms.lock().await;
-        let instance = vms
-            .get_mut(vm_id)
-            .ok_or_else(|| VmmError::VmNotFound(vm_id.to_string()))?;
+        let mut instance = self.lock_vm(vm_id).await?;
 
         // Only a live VM is asked: a stopped one recovered after a node
         // restart may still answer on its socket.
@@ -773,8 +864,12 @@ impl VmmManager for FirecrackerManager {
     }
 
     async fn list_vms(&self) -> Vec<VmState> {
-        let vms = self.vms.lock().await;
-        vms.values().map(|i| i.to_vm_state()).collect()
+        self.vms
+            .lock()
+            .unwrap()
+            .values()
+            .map(ManagedVm::to_vm_state)
+            .collect()
     }
 
     async fn snapshot_vm(&self, vm_id: &str, destination_url: &str) -> Result<(), VmmError> {
@@ -782,14 +877,7 @@ impl VmmManager for FirecrackerManager {
 
         // A snapshot resets the dirty-page log a fork diffs against: wait for
         // a fork round of the VM to end, and forget its base.
-        let forking = match &self
-            .vms
-            .lock()
-            .await
-            .get(vm_id)
-            .ok_or_else(|| VmmError::VmNotFound(vm_id.to_string()))?
-            .phase
-        {
+        let forking = match &self.lock_vm(vm_id).await?.phase {
             FcPhase::Live { forking, .. } => Some(forking.clone()),
             _ => None,
         };
@@ -797,10 +885,7 @@ impl VmmManager for FirecrackerManager {
             forking.lock().await.forget_base();
         }
 
-        let mut vms = self.vms.lock().await;
-        let instance = vms
-            .get_mut(vm_id)
-            .ok_or_else(|| VmmError::VmNotFound(vm_id.to_string()))?;
+        let mut instance = self.lock_vm(vm_id).await?;
 
         let (micro_vm, state) = instance.live("VM is not running")?;
         // Only pause if not already paused — FC returns 400 on a redundant pause.
@@ -841,15 +926,12 @@ impl VmmManager for FirecrackerManager {
         info!("FC: Restoring VM {} from {}", vm_id, source_url);
 
         // Clean up any existing instance.
-        {
-            let mut vms = self.vms.lock().await;
-            if let Some(mut instance) = vms.remove(vm_id) {
-                if let Some(mut process) = instance.process.take() {
-                    let _ = process.kill().await;
-                }
-                if instance.socket_path.exists() {
-                    let _ = tokio::fs::remove_file(&instance.socket_path).await;
-                }
+        if let Some(mut instance) = self.remove_vm(vm_id).await {
+            if let Some(mut process) = instance.process.take() {
+                let _ = process.kill().await;
+            }
+            if instance.socket_path.exists() {
+                let _ = tokio::fs::remove_file(&instance.socket_path).await;
             }
         }
 
@@ -904,20 +986,23 @@ impl VmmManager for FirecrackerManager {
                     ..Default::default()
                 });
 
-        let instance = FcVmInstance {
+        let instance = FcVmInstance::new(
             proto_config,
-            process: Some(process),
+            Some(process),
             socket_path,
-            tap_devices: vec![],
+            vec![],
             // Loaded without dirty-page tracking.
-            phase: FcPhase::Live {
+            FcPhase::Live {
                 micro_vm,
                 state: LiveState::Running,
                 forking: ForkMemory::new(false),
             },
-        };
+        );
 
-        self.vms.lock().await.insert(vm_id.to_string(), instance);
+        self.vms
+            .lock()
+            .unwrap()
+            .insert(vm_id.to_string(), ManagedVm::new(instance));
         info!("FC: VM {} restored successfully from {}", vm_id, source_url);
         Ok(())
     }
@@ -1017,21 +1102,17 @@ impl VmmManager for FirecrackerManager {
                 }
             };
 
-            let instance = FcVmInstance {
-                proto_config,
-                process: None,
-                socket_path: path.clone(),
-                tap_devices,
-                phase,
-            };
+            let instance = FcVmInstance::new(proto_config, None, path.clone(), tap_devices, phase);
 
             if let Some(cid) = instance.proto_config.vsock.as_ref().and_then(|v| v.cid) {
                 Self::advance_vsock_cid_past(cid);
             }
 
             let status = instance.status();
-            let mut vms = self.vms.lock().await;
-            vms.insert(vm_id.clone(), instance);
+            self.vms
+                .lock()
+                .unwrap()
+                .insert(vm_id.clone(), ManagedVm::new(instance));
             info!("FC: Recovered VM {} with status {:?}", vm_id, status);
         }
     }
@@ -1045,8 +1126,7 @@ impl VmmManager for FirecrackerManager {
     }
 
     async fn is_vm_process_alive(&self, vm_id: &str) -> bool {
-        let mut vms = self.vms.lock().await;
-        let Some(instance) = vms.get_mut(vm_id) else {
+        let Ok(mut instance) = self.lock_vm(vm_id).await else {
             return false;
         };
         if let FcPhase::Stopped = instance.phase {
