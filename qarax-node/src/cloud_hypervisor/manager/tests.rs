@@ -303,9 +303,8 @@ async fn recovered_vm_deletion_cleans_overlaybd_state_and_preserves_external_upp
         });
         manager.recover_vms().await;
         {
-            let vms = manager.vms.lock().await;
-            let instance = vms.get(&vm_id).unwrap();
-            assert_eq!(instance.status, VmStatus::Running);
+            let instance = manager.lock_vm(&vm_id).await.unwrap();
+            assert_eq!(instance.status(), VmStatus::Running);
             assert_eq!(
                 instance.storage_backend_kind,
                 result.map(|_| StoragePoolKind::Overlaybd)
@@ -358,8 +357,10 @@ fn serve_fake_cloud_hypervisor(
     })
 }
 
-/// A VmInstance for a VMM serving its API on `socket`.
-async fn running_instance(vm_id: &str, socket: PathBuf) -> VmInstance {
+/// Make `vm_id` one of `manager`'s VMs, running, on a VMM serving its API on
+/// its socket.
+async fn add_running_vm(manager: &VmManager, vm_id: &str) {
+    let socket = manager.socket_path(vm_id);
     let vm = Machine::connect(MachineConfig {
         vm_id: Uuid::parse_str(vm_id).unwrap(),
         socket_path: Cow::Owned(socket.clone()),
@@ -367,19 +368,105 @@ async fn running_instance(vm_id: &str, socket: PathBuf) -> VmInstance {
     })
     .await
     .unwrap();
-    VmInstance {
-        proto_config: ProtoVmConfig::default(),
+    let instance = VmInstance {
+        summary: watch::Sender::new(VmSummary {
+            config: ProtoVmConfig {
+                vm_id: vm_id.to_string(),
+                ..Default::default()
+            },
+            status: VmStatus::Running,
+        }),
         process: None,
         vm,
         socket_path: socket,
-        status: VmStatus::Running,
         tap_devices: Vec::new(),
         passt_processes: Vec::new(),
         serial_pty_path: None,
         console_pty_path: None,
         vsock_socket_path: None,
         storage_backend_kind: None,
+    };
+    manager
+        .vms
+        .lock()
+        .unwrap()
+        .insert(vm_id.to_string(), ManagedVm::new(instance));
+}
+
+/// A VMM that stops answering holds up the operations on its own VM only:
+/// those on the node's other VMs go on, and so does listing the node's VMs,
+/// which its firewall, DHCP and probes read.
+#[tokio::test]
+async fn a_vmm_that_does_not_answer_holds_up_only_its_own_vm() {
+    let directory = TempDir::new().unwrap();
+    let manager = Arc::new(test_manager(&directory));
+    let hung = Uuid::new_v4().to_string();
+    let answering = Uuid::new_v4().to_string();
+
+    // Takes requests and never answers them.
+    let listener = tokio::net::UnixListener::bind(manager.socket_path(&hung)).unwrap();
+    let asked = Arc::new(tokio::sync::Notify::new());
+    let notify_asked = asked.clone();
+    tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let asked = notify_asked.clone();
+            tokio::spawn(async move {
+                let mut request = vec![0; 4096];
+                if stream.read(&mut request).await.unwrap() > 0 {
+                    asked.notify_one();
+                }
+                std::future::pending::<()>().await;
+            });
+        }
+    });
+    serve_fake_cloud_hypervisor(
+        tokio::net::UnixListener::bind(manager.socket_path(&answering)).unwrap(),
+        |method, endpoint, _| match (method, endpoint) {
+            ("GET", "vm.info") => serde_json::to_string(&models::VmInfo::new(
+                VmConfig::default(),
+                models::VmState::Paused,
+            ))
+            .unwrap(),
+            _ => panic!("unexpected request: {method} {endpoint}"),
+        },
+    );
+    for vm_id in [&hung, &answering] {
+        add_running_vm(&manager, vm_id).await;
     }
+
+    let waiting = tokio::spawn({
+        let (manager, hung) = (manager.clone(), hung.clone());
+        async move { manager.get_vm_info(&hung).await }
+    });
+    asked.notified().await;
+
+    // Far longer than either takes, even on a loaded machine.
+    const PROMPTLY: Duration = Duration::from_secs(5);
+    let info = tokio::time::timeout(PROMPTLY, manager.get_vm_info(&answering))
+        .await
+        .expect("asking for one VM's info waited for another VM's VMM")
+        .unwrap();
+    assert_eq!(info.status(), VmStatus::Paused);
+    let listed = tokio::time::timeout(PROMPTLY, manager.list_vms())
+        .await
+        .expect("listing the node's VMs waited for a VM's VMM");
+    let mut listed: Vec<(String, VmStatus)> = listed
+        .into_iter()
+        .map(|vm| {
+            (
+                vm.config.unwrap().vm_id,
+                VmStatus::try_from(vm.status).unwrap(),
+            )
+        })
+        .collect();
+    listed.sort();
+    // The VM whose VMM doesn't answer, as it last was.
+    let mut expected = vec![(hung, VmStatus::Running), (answering, VmStatus::Paused)];
+    expected.sort();
+    assert_eq!(listed, expected);
+    assert!(!waiting.is_finished());
+    waiting.abort();
 }
 
 #[tokio::test]
@@ -449,17 +536,13 @@ async fn stop_vm_lets_the_guest_power_off_before_forcing_it() {
                 _ => panic!("unexpected request: {method} {endpoint}"),
             },
         );
-        manager
-            .vms
-            .lock()
-            .await
-            .insert(vm_id.clone(), running_instance(&vm_id, socket).await);
+        add_running_vm(&manager, &vm_id).await;
 
         manager.stop_vm(&vm_id).await.unwrap();
 
         assert_eq!(*puts.lock().unwrap(), expected_puts, "{case}");
         assert_eq!(
-            manager.vms.lock().await[&vm_id].status,
+            manager.lock_vm(&vm_id).await.unwrap().status(),
             VmStatus::Shutdown,
             "{case}"
         );
@@ -564,11 +647,7 @@ async fn send_migration_waits_for_the_migration_to_end() {
                 _ => panic!("unexpected request: {method} {endpoint}"),
             },
         );
-        manager
-            .vms
-            .lock()
-            .await
-            .insert(vm_id.clone(), running_instance(&vm_id, socket).await);
+        add_running_vm(&manager, &vm_id).await;
 
         let request = ProtoSendMigrationRequest {
             vm_id: vm_id.clone(),
@@ -586,7 +665,7 @@ async fn send_migration_waits_for_the_migration_to_end() {
             Ok(()) => {
                 result.unwrap_or_else(|e| panic!("{case}: {e}"));
                 assert_eq!(
-                    manager.vms.lock().await[&vm_id].status,
+                    manager.lock_vm(&vm_id).await.unwrap().status(),
                     VmStatus::Shutdown,
                     "{case}"
                 );
@@ -595,7 +674,7 @@ async fn send_migration_waits_for_the_migration_to_end() {
                 let error = result.expect_err(case).to_string();
                 assert!(error.contains(message), "{case}: {error}");
                 assert_eq!(
-                    manager.vms.lock().await[&vm_id].status,
+                    manager.lock_vm(&vm_id).await.unwrap().status(),
                     VmStatus::Running,
                     "{case}"
                 );
@@ -652,11 +731,7 @@ async fn send_migration_passes_tls_and_settings_to_cloud_hypervisor() {
             _ => panic!("unexpected request: {method} {endpoint}"),
         },
     );
-    manager
-        .vms
-        .lock()
-        .await
-        .insert(vm_id.clone(), running_instance(&vm_id, socket).await);
+    add_running_vm(&manager, &vm_id).await;
 
     manager
         .send_migration(&ProtoSendMigrationRequest {
@@ -750,11 +825,7 @@ async fn remove_disk_device_waits_for_the_guest_to_eject_it() {
             _ => panic!("unexpected request: {method} {endpoint}"),
         },
     );
-    manager
-        .vms
-        .lock()
-        .await
-        .insert(vm_id.clone(), running_instance(&vm_id, socket).await);
+    add_running_vm(&manager, &vm_id).await;
 
     manager.remove_disk_device(&vm_id, "disk0").await.unwrap();
     assert!(

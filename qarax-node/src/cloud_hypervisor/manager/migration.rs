@@ -4,12 +4,7 @@ impl VmManager {
     /// Snapshot a VM
     pub async fn snapshot_vm(&self, vm_id: &str, snapshot_url: &str) -> Result<(), VmManagerError> {
         info!("Snapshotting VM: {}", vm_id);
-        let vms = self.vms.lock().await;
-        let instance = vms
-            .get(vm_id)
-            .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
-        let socket_path = instance.socket_path.clone();
-        drop(vms);
+        let socket_path = self.lock_vm(vm_id).await?.socket_path.clone();
 
         // Cloud Hypervisor requires the destination to be an existing directory.
         let dest_path = snapshot_url.trim_prefix("file://");
@@ -56,15 +51,12 @@ impl VmManager {
         };
 
         // Clean up any existing CH process for this vm_id.
-        {
-            let mut vms = self.vms.lock().await;
-            if let Some(mut instance) = vms.remove(vm_id) {
-                if let Some(mut process) = instance.process.take() {
-                    let _ = process.kill().await;
-                }
-                if instance.socket_path.exists() {
-                    let _ = tokio::fs::remove_file(&instance.socket_path).await;
-                }
+        if let Some(mut instance) = self.remove_vm(vm_id).await {
+            if let Some(mut process) = instance.process.take() {
+                let _ = process.kill().await;
+            }
+            if instance.socket_path.exists() {
+                let _ = tokio::fs::remove_file(&instance.socket_path).await;
             }
         }
 
@@ -134,11 +126,13 @@ impl VmManager {
         let vsock_socket_path = Self::vsock_socket_path_from_config(&proto_config.vsock);
 
         let instance = VmInstance {
-            proto_config,
+            summary: watch::Sender::new(VmSummary {
+                config: proto_config,
+                status: VmStatus::Running,
+            }),
             process: Some(process),
             vm,
             socket_path: socket_path.clone(),
-            status: VmStatus::Running,
             tap_devices: vec![],
             passt_processes: vec![],
             serial_pty_path: serial_pty,
@@ -147,10 +141,10 @@ impl VmManager {
             storage_backend_kind: None,
         };
 
-        {
-            let mut vms = self.vms.lock().await;
-            vms.insert(vm_id.to_string(), instance);
-        }
+        self.vms
+            .lock()
+            .unwrap()
+            .insert(vm_id.to_string(), ManagedVm::new(instance));
 
         info!("VM {} restored successfully from {}", vm_id, source_url);
         Ok(())
@@ -177,11 +171,8 @@ impl VmManager {
             vm_id, migration_port
         );
 
-        {
-            let vms = self.vms.lock().await;
-            if vms.contains_key(vm_id) {
-                return Err(VmManagerError::VmAlreadyExists(vm_id.to_string()));
-            }
+        if self.vms.lock().unwrap().contains_key(vm_id) {
+            return Err(VmManagerError::VmAlreadyExists(vm_id.to_string()));
         }
 
         // Pick a free TCP port if the caller passed 0.
@@ -317,11 +308,13 @@ impl VmManager {
             .map_err(VmManagerError::SdkError)?;
 
         let instance = VmInstance {
-            proto_config: mutable_config,
+            summary: watch::Sender::new(VmSummary {
+                config: mutable_config,
+                status: VmStatus::Created,
+            }),
             process: Some(process),
             vm,
             socket_path: socket_path.clone(),
-            status: VmStatus::Created,
             tap_devices,
             passt_processes: Vec::new(),
             serial_pty_path: None,
@@ -330,10 +323,10 @@ impl VmManager {
             storage_backend_kind,
         };
 
-        {
-            let mut vms = self.vms.lock().await;
-            vms.insert(vm_id.to_string(), instance);
-        }
+        self.vms
+            .lock()
+            .unwrap()
+            .insert(vm_id.to_string(), ManagedVm::new(instance));
 
         // vm.receive-migration blocks until the sender completes the full transfer.
         // Spawn it as a background task so we can return the receiver URL immediately;
@@ -389,13 +382,7 @@ impl VmManager {
         let destination_url = req.destination_url.as_str();
         info!("Sending migration for VM {} to {}", vm_id, destination_url);
 
-        let socket_path = {
-            let vms = self.vms.lock().await;
-            let instance = vms
-                .get(vm_id)
-                .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
-            instance.socket_path.clone()
-        };
+        let socket_path = self.lock_vm(vm_id).await?.socket_path.clone();
 
         // A VMM started by an older qarax-node has no event monitor.
         let events_path = self.events_path(vm_id);
@@ -440,11 +427,8 @@ impl VmManager {
         // Mark the source instance as Shutdown.  We keep it in the map so
         // the control plane can call delete_vm() to clean up TAP devices and
         // other host resources after confirming migration success.
-        {
-            let mut vms = self.vms.lock().await;
-            if let Some(instance) = vms.get_mut(vm_id) {
-                instance.status = VmStatus::Shutdown;
-            }
+        if let Ok(instance) = self.lock_vm(vm_id).await {
+            instance.set_status(VmStatus::Shutdown);
         }
 
         info!(

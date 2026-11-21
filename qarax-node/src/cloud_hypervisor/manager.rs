@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::process::{Child, Command};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, OwnedMappedMutexGuard, OwnedMutexGuard, watch};
 use tokio::time::{Duration, sleep};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
@@ -126,18 +126,34 @@ pub enum VmManagerError {
     ExecTimeout(u64),
 }
 
+/// A VM's config and status, as reads of the node's VMs see them.
+struct VmSummary {
+    config: ProtoVmConfig,
+    status: VmStatus,
+}
+
+impl VmSummary {
+    fn to_vm_state(&self) -> VmState {
+        VmState {
+            config: Some(self.config.clone()),
+            status: self.status.into(),
+            memory_actual_size: None,
+        }
+    }
+}
+
 /// Represents a running VM instance
 struct VmInstance {
-    /// The VM configuration (proto format)
-    proto_config: ProtoVmConfig,
+    /// The VM's config and current status, published for the reads that
+    /// don't wait for the VM's lock (see [`ManagedVm`]). Only the instance
+    /// sends on it, so only a task holding the lock changes them.
+    summary: watch::Sender<VmSummary>,
     /// Cloud Hypervisor process (None for recovered VMs)
     process: Option<Child>,
     /// SDK VM handle
     vm: VM<'static>,
     /// Path to the API socket
     socket_path: PathBuf,
-    /// Current status
-    status: VmStatus,
     /// TAP devices created by qarax-node for this VM (cleaned up on delete)
     tap_devices: Vec<String>,
     /// passt backend processes started by qarax-node for this VM
@@ -154,14 +170,45 @@ struct VmInstance {
 }
 
 impl VmInstance {
-    fn to_vm_state(&self) -> VmState {
-        VmState {
-            config: Some(self.proto_config.clone()),
-            status: self.status.into(),
-            memory_actual_size: None,
+    fn config(&self) -> ProtoVmConfig {
+        self.summary.borrow().config.clone()
+    }
+
+    fn set_config(&self, config: ProtoVmConfig) {
+        self.summary.send_modify(|summary| summary.config = config);
+    }
+
+    fn status(&self) -> VmStatus {
+        self.summary.borrow().status
+    }
+
+    fn set_status(&self, status: VmStatus) {
+        self.summary.send_modify(|summary| summary.status = status);
+    }
+}
+
+/// A VM the manager knows. Operations on it hold its lock to use or change its
+/// instance, some of them across requests to its VMM (`get_vm_info`, adding
+/// a device, a fork's snapshot of its source), so a VMM that is slow or hung
+/// holds up its own VM's operations only. Reads of all the node's VMs take
+/// each one's last known config and status from `summary`, without the lock.
+struct ManagedVm {
+    summary: watch::Receiver<VmSummary>,
+    /// `None` once the VM is deleted, for the operations that were waiting.
+    instance: Arc<Mutex<Option<VmInstance>>>,
+}
+
+impl ManagedVm {
+    fn new(instance: VmInstance) -> Self {
+        Self {
+            summary: instance.summary.subscribe(),
+            instance: Arc::new(Mutex::new(Some(instance))),
         }
     }
 }
+
+/// A VM's instance, while its lock is held.
+type VmGuard = OwnedMappedMutexGuard<Option<VmInstance>, VmInstance>;
 
 /// Manager for Cloud Hypervisor VM instances
 pub struct VmManager {
@@ -169,8 +216,9 @@ pub struct VmManager {
     runtime_dir: PathBuf,
     /// Path to cloud-hypervisor binary
     ch_binary: PathBuf,
-    /// Running VM instances
-    vms: Arc<Mutex<HashMap<String, VmInstance>>>,
+    /// The VMs. Locked only to find, add, remove or list them, never across an
+    /// await: a std Mutex, which the Send futures here can't hold across one.
+    vms: std::sync::Mutex<HashMap<String, ManagedVm>>,
     /// Storage backend registry for attach/detach/map/unmap operations
     storage_backends: StorageBackendRegistry,
     /// Direct reference to OverlayBdManager for import operations
@@ -208,7 +256,7 @@ impl VmManager {
         Self {
             runtime_dir,
             ch_binary,
-            vms: Arc::new(Mutex::new(HashMap::new())),
+            vms: std::sync::Mutex::new(HashMap::new()),
             storage_backends,
             overlaybd_manager,
             qarax_init_binary,
@@ -247,6 +295,36 @@ impl VmManager {
     /// Get the path to the Cloud Hypervisor binary
     pub fn ch_binary(&self) -> &std::path::Path {
         &self.ch_binary
+    }
+
+    /// Wait for `vm_id`'s lock (see [`ManagedVm`]).
+    async fn lock_vm(&self, vm_id: &str) -> Result<VmGuard, VmManagerError> {
+        let not_found = || VmManagerError::VmNotFound(vm_id.to_string());
+        let instance = self
+            .vms
+            .lock()
+            .unwrap()
+            .get(vm_id)
+            .map(|vm| vm.instance.clone());
+        let instance = instance.ok_or_else(not_found)?.lock_owned().await;
+        // Deleted while this waited.
+        OwnedMutexGuard::try_map(instance, Option::as_mut).map_err(|_| not_found())
+    }
+
+    /// Take `vm_id` out of the manager once no operation holds its lock; those
+    /// waiting for the lock then find the VM gone.
+    async fn remove_vm(&self, vm_id: &str) -> Option<VmInstance> {
+        let instance = self
+            .vms
+            .lock()
+            .unwrap()
+            .get(vm_id)
+            .map(|vm| vm.instance.clone())?;
+        let mut instance = instance.lock().await;
+        // Another removal took it while this waited.
+        let removed = instance.take()?;
+        self.vms.lock().unwrap().remove(vm_id);
+        Some(removed)
     }
 }
 

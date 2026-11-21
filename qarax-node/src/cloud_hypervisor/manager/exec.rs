@@ -46,11 +46,8 @@ impl VmManager {
 
     /// The host end of `vm_id`'s guest-agent vsock, while the VM runs.
     pub(super) async fn guest_agent_socket(&self, vm_id: &str) -> Result<PathBuf, VmManagerError> {
-        let vms = self.vms.lock().await;
-        let instance = vms
-            .get(vm_id)
-            .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
-        if instance.status != VmStatus::Running {
+        let instance = self.lock_vm(vm_id).await?;
+        if instance.status() != VmStatus::Running {
             return Err(VmManagerError::ExecUnavailable(format!(
                 "VM {} is not running",
                 vm_id
@@ -179,13 +176,10 @@ impl VmManager {
         &self,
         vm_id: &str,
     ) -> Result<(Option<String>, Option<String>), VmManagerError> {
-        let vms = self.vms.lock().await;
-        let instance = vms
-            .get(vm_id)
-            .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
+        let instance = self.lock_vm(vm_id).await?;
+        let config = instance.config();
 
-        let serial_pty = if instance
-            .proto_config
+        let serial_pty = if config
             .serial
             .as_ref()
             .map(|s| s.mode == ProtoConsoleMode::Pty as i32)
@@ -196,8 +190,7 @@ impl VmManager {
             None
         };
 
-        let console_pty = if instance
-            .proto_config
+        let console_pty = if config
             .console
             .as_ref()
             .map(|c| c.mode == ProtoConsoleMode::Pty as i32)
@@ -219,16 +212,13 @@ impl VmManager {
     pub async fn get_serial_pty_path(&self, vm_id: &str) -> Result<Option<String>, VmManagerError> {
         // Fast path: return cached value if available.
         let (socket_path, proto_config) = {
-            let vms = self.vms.lock().await;
-            let instance = vms
-                .get(vm_id)
-                .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
+            let instance = self.lock_vm(vm_id).await?;
 
             if let Some(path) = &instance.serial_pty_path {
                 return Ok(Some(path.clone()));
             }
 
-            (instance.socket_path.clone(), instance.proto_config.clone())
+            (instance.socket_path.clone(), instance.config())
         };
 
         let (pty_path, _) = self.query_pty_paths(&socket_path, &proto_config).await;
@@ -236,22 +226,22 @@ impl VmManager {
         // Cache the result so subsequent calls don't re-query the API
         if let Some(path) = &pty_path {
             info!("Discovered serial PTY path via vm.info: {}", path);
-            let mut vms = self.vms.lock().await;
-            if let Some(instance) = vms.get_mut(vm_id) {
+            if let Ok(mut instance) = self.lock_vm(vm_id).await {
                 instance.serial_pty_path = Some(path.clone());
-                if !instance
-                    .proto_config
+                let mut config = instance.config();
+                if !config
                     .serial
                     .as_ref()
                     .map(|serial| serial.mode == ProtoConsoleMode::Pty as i32)
                     .unwrap_or(false)
                 {
-                    instance.proto_config.serial = Some(ProtoConsoleConfig {
+                    config.serial = Some(ProtoConsoleConfig {
                         mode: ProtoConsoleMode::Pty as i32,
                         file: None,
                         socket: None,
                         iommu: None,
                     });
+                    instance.set_config(config);
                 }
             }
         }
@@ -264,13 +254,10 @@ impl VmManager {
         &self,
         vm_id: &str,
     ) -> Result<Option<String>, VmManagerError> {
-        let vms = self.vms.lock().await;
-        let instance = vms
-            .get(vm_id)
-            .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
+        let instance = self.lock_vm(vm_id).await?;
 
         // Check if console is configured in PTY mode
-        if let Some(console) = &instance.proto_config.console
+        if let Some(console) = &instance.config().console
             && console.mode == ProtoConsoleMode::Pty as i32
         {
             return Ok(instance.console_pty_path.clone());
