@@ -187,7 +187,9 @@
 				</div>
 				{#if action.kind === 'failed'}
 					<div class="failed">
-						<Notice tone="danger" title="That didn't work">{action.message}</Notice>
+						<Notice tone="danger" title="That didn't work"
+							><span class="message">{action.message}</span></Notice
+						>
 					</div>
 				{/if}
 			</div>
@@ -465,6 +467,12 @@
 
 	.failed {
 		margin-top: var(--pf-t--global--spacer--md);
+	}
+
+	/* Errors from a node can span lines (a command's output, say). */
+	.message {
+		white-space: pre-wrap;
+		overflow-wrap: anywhere;
 	}
 
 	.log-intro {

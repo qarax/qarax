@@ -18,6 +18,26 @@ use crate::model::vms::{MigrationMemoryMode, MigrationOptions, MigrationTimeoutA
 /// SYN retry budget, about two minutes, before failing.
 const NODE_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// An error a node answered with, which reads as the node's message. tonic's
+/// own `Display` of a `Status` adds its code, details and metadata and quotes
+/// the message, escaping its line breaks, so a node's multi-line error (an
+/// `nft` failure, say) reached job errors and logs as one unreadable line.
+/// No `source()`: anyhow would print the `Status` that way again as a cause.
+#[derive(Debug)]
+struct NodeError(tonic::Status);
+
+impl std::fmt::Display for NodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0.message() {
+            // A peer may send a status without a message; its code still says something.
+            "" => write!(f, "{}", self.0.code()),
+            message => f.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for NodeError {}
+
 /// The TLS every [`NodeClient`] connects with, set by [`init_node_tls`].
 static NODE_TLS: OnceLock<ClientTlsConfig> = OnceLock::new();
 
@@ -486,6 +506,7 @@ impl NodeClient {
         client
             .create_vm(config)
             .await
+            .map_err(NodeError)
             .context("Failed to create VM on qarax-node")?;
 
         debug!("VM {} created successfully", vm_id);
@@ -506,6 +527,7 @@ impl NodeClient {
                 id: vm_id.to_string(),
             })
             .await
+            .map_err(NodeError)
             .context("Failed to start VM on qarax-node")?;
 
         debug!("VM {} started successfully", vm_id);
@@ -536,7 +558,7 @@ impl NodeClient {
                 | tonic::Code::Unknown
                 | tonic::Code::Unavailable
                 | tonic::Code::Internal => crate::errors::Error::NotFound.into(),
-                _ => anyhow::anyhow!("Failed to stop VM on qarax-node: {}", s),
+                _ => anyhow::Error::new(NodeError(s)).context("Failed to stop VM on qarax-node"),
             })?;
 
         debug!("VM {} stopped successfully", vm_id);
@@ -566,7 +588,8 @@ impl NodeClient {
                 | tonic::Code::Unknown
                 | tonic::Code::Unavailable
                 | tonic::Code::Internal => crate::errors::Error::NotFound.into(),
-                _ => anyhow::anyhow!("Failed to force stop VM on qarax-node: {}", s),
+                _ => anyhow::Error::new(NodeError(s))
+                    .context("Failed to force stop VM on qarax-node"),
             })?;
 
         debug!("VM {} force stopped successfully", vm_id);
@@ -585,6 +608,7 @@ impl NodeClient {
                 id: vm_id.to_string(),
             })
             .await
+            .map_err(NodeError)
             .context("Failed to pause VM on qarax-node")?;
 
         debug!("VM {} paused successfully", vm_id);
@@ -603,6 +627,7 @@ impl NodeClient {
                 id: vm_id.to_string(),
             })
             .await
+            .map_err(NodeError)
             .context("Failed to resume VM on qarax-node")?;
 
         debug!("VM {} resumed successfully", vm_id);
@@ -619,6 +644,7 @@ impl NodeClient {
                 snapshot_url: snapshot_url.to_string(),
             })
             .await
+            .map_err(NodeError)
             .context("Failed to snapshot VM on qarax-node")?;
         Ok(())
     }
@@ -632,6 +658,7 @@ impl NodeClient {
                 snapshot_url: snapshot_url.to_string(),
             })
             .await
+            .map_err(NodeError)
             .context("Failed to delete snapshot on qarax-node")?;
         Ok(())
     }
@@ -656,6 +683,7 @@ impl NodeClient {
                 hypervisor: proto_hypervisor,
             })
             .await
+            .map_err(NodeError)
             .context("Failed to restore VM on qarax-node")?;
         Ok(())
     }
@@ -678,7 +706,9 @@ impl NodeClient {
                 | tonic::Code::Unimplemented => {
                     crate::errors::Error::UnprocessableEntity(status.message().to_string()).into()
                 }
-                _ => anyhow::anyhow!("Failed to fork VM on qarax-node: {}", status),
+                _ => {
+                    anyhow::Error::new(NodeError(status)).context("Failed to fork VM on qarax-node")
+                }
             })?;
         Ok(())
     }
@@ -699,7 +729,8 @@ impl NodeClient {
             .await
             .map_err(|s| match s.code() {
                 tonic::Code::NotFound => crate::errors::Error::NotFound.into(),
-                _ => anyhow::anyhow!("Failed to get VM info from qarax-node: {}", s),
+                _ => anyhow::Error::new(NodeError(s))
+                    .context("Failed to get VM info from qarax-node"),
             })?;
 
         Ok(response.into_inner())
@@ -717,6 +748,7 @@ impl NodeClient {
                 id: vm_id.to_string(),
             })
             .await
+            .map_err(NodeError)
             .context("Failed to get VM counters from qarax-node")?;
 
         Ok(response.into_inner())
@@ -959,6 +991,7 @@ impl NodeClient {
                 id: vm_id.to_string(),
             })
             .await
+            .map_err(NodeError)
             .context("Failed to delete VM on qarax-node")?;
 
         debug!("VM {} deleted successfully", vm_id);
@@ -1231,6 +1264,7 @@ impl NodeClient {
                 id: vm_id.to_string(),
             })
             .await
+            .map_err(NodeError)
             .context("Failed to read console log from qarax-node")?;
 
         Ok(response.into_inner())
@@ -1273,7 +1307,8 @@ impl NodeClient {
                         ))
                         .into()
                     }
-                    _ => anyhow::anyhow!("Failed to exec command on qarax-node: {}", status),
+                    _ => anyhow::Error::new(NodeError(status))
+                        .context("Failed to exec command on qarax-node"),
                 }
             })?;
 
@@ -1304,6 +1339,7 @@ impl NodeClient {
         let response = client
             .get_node_info(())
             .await
+            .map_err(NodeError)
             .context("Failed to get node info from qarax-node")?;
 
         Ok(response.into_inner())
@@ -1348,6 +1384,7 @@ impl NodeClient {
         let response = client
             .attach_console(input_stream)
             .await
+            .map_err(NodeError)
             .context("Failed to attach to console")?;
 
         let mut output_stream = response.into_inner();
@@ -1384,6 +1421,7 @@ impl NodeClient {
                 config: Some(config),
             })
             .await
+            .map_err(NodeError)
             .context("Failed to hotplug disk device on qarax-node")?;
         Ok(())
     }
@@ -1402,6 +1440,7 @@ impl NodeClient {
                 device_id: device_id.to_string(),
             })
             .await
+            .map_err(NodeError)
             .context("Failed to hotunplug disk device on qarax-node")?;
         Ok(())
     }
@@ -1420,6 +1459,7 @@ impl NodeClient {
                 config: Some(config),
             })
             .await
+            .map_err(NodeError)
             .context("Failed to hotplug network device on qarax-node")?;
         Ok(())
     }
@@ -1438,6 +1478,7 @@ impl NodeClient {
                 device_id: device_id.to_string(),
             })
             .await
+            .map_err(NodeError)
             .context("Failed to hotunplug network device on qarax-node")?;
         Ok(())
     }
@@ -1462,6 +1503,7 @@ impl NodeClient {
                 desired_ram,
             })
             .await
+            .map_err(NodeError)
             .context("Failed to resize VM on qarax-node")?;
         Ok(())
     }
@@ -1490,6 +1532,7 @@ impl NodeClient {
                 image_format: image_format as i32,
             })
             .await
+            .map_err(NodeError)
             .context("Failed to resize disk on qarax-node")?;
         Ok(())
     }
@@ -1503,6 +1546,7 @@ impl NodeClient {
                 path: path.to_string(),
             })
             .await
+            .map_err(NodeError)
             .context("Failed to read the disk image's format on qarax-node")?;
         Ok(response.into_inner().image_format())
     }
@@ -1528,6 +1572,7 @@ impl NodeClient {
                 migration_port: migration_port as i32,
             })
             .await
+            .map_err(NodeError)
             .context("receive_migration RPC failed")?;
 
         Ok(response.into_inner().receiver_url)
@@ -1566,6 +1611,7 @@ impl NodeClient {
                 } as i32,
             })
             .await
+            .map_err(NodeError)
             .context("send_migration RPC failed")?;
 
         Ok(())
@@ -1639,5 +1685,22 @@ mod tests {
         assert!(file_transfer_service.is_err());
         // Each connect gives up at the timeout instead of the kernel's ~2 min SYN budget.
         assert!(started.elapsed() < NODE_CONNECT_TIMEOUT + Duration::from_secs(5));
+    }
+
+    #[test]
+    fn a_node_error_reads_as_its_message_or_else_its_code() {
+        let refusal = tonic::Status::internal(
+            "nft failed: Could not process rule\nadd rule bridge qarax prerouting iifname vmap @nic_out",
+        );
+        let error =
+            anyhow::Error::new(NodeError(refusal)).context("Failed to create VM on qarax-node");
+        assert_eq!(
+            format!("{error:#}"),
+            "Failed to create VM on qarax-node: nft failed: Could not process rule\n\
+             add rule bridge qarax prerouting iifname vmap @nic_out"
+        );
+
+        let silent = NodeError(tonic::Status::new(tonic::Code::Unavailable, ""));
+        assert_eq!(silent.to_string(), "The service is currently unavailable");
     }
 }
