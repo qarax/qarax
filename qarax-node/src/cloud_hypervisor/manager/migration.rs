@@ -292,23 +292,11 @@ impl VmManager {
             process.id()
         );
 
-        // Wait for the API socket to become available.
-        let max_retries = 50;
-        let mut retries = 0;
-        loop {
-            match UnixStream::connect(&socket_path).await {
-                Ok(_) => break,
-                Err(_) if retries < max_retries => {
-                    retries += 1;
-                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                }
-                Err(e) => {
-                    for tap in &tap_devices {
-                        Self::delete_tap_device(tap).await;
-                    }
-                    return Err(VmManagerError::SpawnError(e));
-                }
+        if let Err(e) = Self::wait_for_api_socket(&socket_path).await {
+            for tap in &tap_devices {
+                Self::delete_tap_device(tap).await;
             }
+            return Err(e);
         }
 
         let receiver_url = format!("tcp:0.0.0.0:{}", port);
