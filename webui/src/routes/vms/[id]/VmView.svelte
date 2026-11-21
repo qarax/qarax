@@ -5,6 +5,7 @@
 	import { page } from '$app/state';
 	import { allHosts, allNetworks, api, call, type Host, type Vm } from '#lib/api/client.ts';
 	import { Remote, keepFresh } from '#lib/remote.svelte.ts';
+	import { MetricsSampler } from '#lib/metrics.svelte.ts';
 	import { session } from '#lib/session.svelte.ts';
 	import { VM_STATUS, VM_STATUS_HELP } from '#lib/status.ts';
 	import { HYPERVISOR, bytes } from '#lib/format.ts';
@@ -21,6 +22,7 @@
 	import Loaded from '#lib/components/Loaded.svelte';
 	import Notice from '#lib/components/Notice.svelte';
 	import StatusLabel from '#lib/components/StatusLabel.svelte';
+	import MetricsTab from './MetricsTab.svelte';
 
 	let { id }: { id: string } = $props();
 
@@ -50,6 +52,7 @@
 
 	const TABS = [
 		{ id: 'details', label: 'Details' },
+		{ id: 'metrics', label: 'Metrics' },
 		{ id: 'console', label: 'Console' },
 		{ id: 'log', label: 'Console log' }
 	] as const;
@@ -58,6 +61,18 @@
 
 	$effect(() => {
 		if (tab === 'log') untrack(() => consoleLog.refresh());
+	});
+
+	// The metrics tab reads counters while it is open and the VM runs. What it
+	// read stays when the tab closes, so coming back shows a gap, not a blank.
+	const sampler = new MetricsSampler(vmId);
+	const running = $derived(
+		(detail.state.kind === 'ready' || detail.state.kind === 'stale') &&
+			detail.state.data.vm.status === 'running'
+	);
+	$effect(() => {
+		if (tab !== 'metrics' || !running) return;
+		return untrack(() => sampler.run());
 	});
 
 	/** Actions that can't be taken back ask first, saying what they do. */
@@ -371,6 +386,8 @@
 								</div>
 							</div>
 						</div>
+					{:else if tab === 'metrics'}
+						<MetricsTab {vm} {sampler} />
 					{:else if tab === 'console'}
 						<div class="pf-v6-c-card">
 							<div class="pf-v6-c-card__body">
