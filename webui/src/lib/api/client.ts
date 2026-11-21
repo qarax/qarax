@@ -12,6 +12,13 @@ export type Hypervisor = Schemas['Hypervisor'];
 export type NetworkInterface = Schemas['NetworkInterface'];
 export type Network = Schemas['Network'];
 export type NewVm = Schemas['NewVm'];
+export type StoragePool = Schemas['StoragePool'];
+export type StoragePoolStatus = Schemas['StoragePoolStatus'];
+export type StoragePoolType = Schemas['StoragePoolType'];
+export type StorageObject = Schemas['StorageObject'];
+export type StorageObjectType = Schemas['StorageObjectType'];
+export type NetworkStatus = Schemas['NetworkStatus'];
+export type TransferStatus = Schemas['TransferStatus'];
 
 /** A request the control plane answered with an error status. */
 export class ApiError extends Error {
@@ -103,12 +110,23 @@ export const allStoragePools = () =>
 		call(api.GET('/v1/storage-pools', { params: { query: { limit: 1000, cursor } } }))
 	);
 
-/** The storage objects of a type, in every pool. */
-export const allStorageObjects = (objectType: Schemas['StorageObjectType']) =>
+/** The storage objects of a type, or of every type, in one pool or in all of them. */
+export const allStorageObjects = (filter: { objectType?: StorageObjectType; poolId?: string }) =>
 	listAll((cursor) =>
 		call(
 			api.GET('/v1/storage-objects', {
-				params: { query: { object_type: objectType, limit: 1000, cursor } }
+				params: {
+					query: { object_type: filter.objectType, pool_id: filter.poolId, limit: 1000, cursor }
+				}
+			})
+		)
+	);
+
+export const allTransfers = (poolId: string) =>
+	listAll((cursor) =>
+		call(
+			api.GET('/v1/storage-pools/{pool_id}/transfers', {
+				params: { path: { pool_id: poolId }, query: { limit: 1000, cursor } }
 			})
 		)
 	);

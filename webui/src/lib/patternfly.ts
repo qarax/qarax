@@ -22,6 +22,7 @@ import '@patternfly/patternfly/components/Icon/icon.css';
 import '@patternfly/patternfly/components/InputGroup/input-group.css';
 import '@patternfly/patternfly/components/Label/label.css';
 import '@patternfly/patternfly/components/Label/label-group.css';
+import '@patternfly/patternfly/components/List/list.css';
 import '@patternfly/patternfly/components/Login/login.css';
 import '@patternfly/patternfly/components/Masthead/masthead.css';
 import '@patternfly/patternfly/components/ModalBox/modal-box.css';

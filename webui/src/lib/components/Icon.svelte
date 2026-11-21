@@ -11,6 +11,8 @@
 	import server from '@patternfly/patternfly/icons/PfIcons/server.svg?raw';
 	import virtualMachine from '@patternfly/patternfly/icons/PfIcons/virtual-machine.svg?raw';
 	import disconnected from '@patternfly/patternfly/icons/PfIcons/disconnected.svg?raw';
+	import storage from '@patternfly/patternfly/icons/PfIcons/storage-domain.svg?raw';
+	import network from '@patternfly/patternfly/icons/PfIcons/network.svg?raw';
 
 	const glyph = (viewBox: string, d: string) =>
 		`<svg fill="currentColor" viewBox="${viewBox}"><path d="${d}" /></svg>`;
@@ -25,6 +27,8 @@
 		server,
 		virtualMachine,
 		disconnected,
+		storage,
+		network,
 		danger: glyph(
 			'0 0 32 32',
 			'M16 1C7.729 1 1 7.729 1 16s6.729 15 15 15 15-6.729 15-15S24.271 1 16 1Zm-1.5 8a1.5 1.5 0 1 1 3 0v7a1.5 1.5 0 1 1-3 0V9ZM16 25.001a2 2 0 1 1-.001-3.999A2 2 0 0 1 16 25.001Z'
