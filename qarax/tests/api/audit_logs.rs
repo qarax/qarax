@@ -1,10 +1,8 @@
-mod support;
-
+use crate::support::{add_host, add_up_host, create_vm, set_vm_status, spawn_app};
 use qarax::model::storage_pools::{self, NewStoragePool, StoragePoolType};
 use reqwest::StatusCode;
 use serde_json::{Value, json};
 use sqlx::PgPool;
-use support::{add_host, add_up_host, create_vm, set_vm_status, spawn_app};
 use uuid::Uuid;
 
 async fn add_overlaybd_pool(pool: &PgPool, host_id: Uuid) {

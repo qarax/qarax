@@ -1,8 +1,6 @@
-mod support;
-
+use crate::support::spawn_app;
 use reqwest::StatusCode;
 use serde_json::{Value, json};
-use support::spawn_app;
 
 async fn create_hook(client: &reqwest::Client, address: &str, body: Value) -> String {
     let res = client

@@ -1,9 +1,6 @@
 //! Shared harness for the HTTP integration tests: a real Axum server and its
 //! background tasks, backed by a fresh Postgres database per test.
 
-// Each test file is its own crate and uses a different subset of these helpers.
-#![allow(dead_code)]
-
 use std::{
     net::TcpListener as StdTcpListener,
     sync::{

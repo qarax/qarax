@@ -12,7 +12,7 @@ Done when every in-scope test has a recorded baseline result.
 
 Split the surface into **lanes** along production owner boundaries, not file names. Starting points for qarax:
 
-- control-plane HTTP API (`qarax/tests/*.rs`, `qarax/src/handlers/**`)
+- control-plane HTTP API (`qarax/tests/api/*.rs`, `qarax/src/handlers/**`)
 - control-plane models, scheduling and background monitors (`qarax/src/model/**`, `*_monitor.rs`, `host_deployer.rs`, `secret_provider.rs`)
 - node: VMM backends, storage, networking, file transfer (`qarax-node/src/**`)
 - shared crates and CLI (`common/`, `cli/`)
