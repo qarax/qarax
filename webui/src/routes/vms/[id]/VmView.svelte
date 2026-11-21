@@ -17,6 +17,7 @@
 		runVmAction,
 		type VmAction
 	} from '#lib/vm-actions.ts';
+	import ConfirmModal from '#lib/components/ConfirmModal.svelte';
 	import Fact from '#lib/components/Fact.svelte';
 	import Icon from '#lib/components/Icon.svelte';
 	import Loaded from '#lib/components/Loaded.svelte';
@@ -84,13 +85,6 @@
 		| { kind: 'running'; action: VmAction | 'delete' }
 		| { kind: 'failed'; message: string };
 	let action: ActionState = $state({ kind: 'idle' });
-
-	let dialog: HTMLDialogElement | undefined = $state();
-	$effect(() => {
-		if (!dialog) return;
-		if (action.kind === 'confirming' && !dialog.open) dialog.showModal();
-		if (action.kind !== 'confirming' && dialog.open) dialog.close();
-	});
 
 	const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -314,7 +308,8 @@
 										<dl class="pf-v6-c-description-list pf-m-horizontal">
 											<Fact term="Host">
 												{#if host}
-													{host.name} <span class="qx-mono qx-subtle">{host.address}</span>
+													<a href={resolve('/hosts/[id]', { id: host.id })}>{host.name}</a>
+													<span class="qx-mono qx-subtle">{host.address}</span>
 												{:else if vm.host_id}
 													<span class="qx-mono">{vm.host_id}</span>
 												{:else}
@@ -443,56 +438,23 @@
 			</div>
 		</section>
 
-		<dialog class="qx-modal" bind:this={dialog} onclose={cancel} aria-labelledby="confirm-title">
-			{#if action.kind === 'confirming'}
-				{@const drastic = action.action}
-				<div class="pf-v6-c-modal-box pf-m-sm pf-m-danger">
-					<div class="pf-v6-c-modal-box__close">
-						<button
-							class="pf-v6-c-button pf-m-plain"
-							type="button"
-							aria-label="Close"
-							onclick={cancel}
-						>
-							<span class="pf-v6-c-button__icon"><Icon name="close" /></span>
-						</button>
-					</div>
-					<header class="pf-v6-c-modal-box__header">
-						<div class="pf-v6-c-modal-box__header-main">
-							<h1 class="pf-v6-c-modal-box__title pf-m-icon pf-m-danger" id="confirm-title">
-								<span class="pf-v6-c-modal-box__title-icon"><Icon name="danger" /></span>
-								<span class="pf-v6-c-modal-box__title-text">
-									{drastic === 'delete' ? `Delete ${vm.name}?` : `Force stop ${vm.name}?`}
-								</span>
-							</h1>
-						</div>
-					</header>
-					<div class="pf-v6-c-modal-box__body">
-						{#if drastic === 'delete'}
-							Its snapshots and backups are deleted with it, and so are disks nothing else uses.
-							This can't be undone.
-						{:else}
-							Its guest gets no chance to shut down, like pulling the power cord. Stop lets it shut
-							down cleanly.
-						{/if}
-					</div>
-					<footer class="pf-v6-c-modal-box__footer">
-						<button
-							class="pf-v6-c-button pf-m-danger"
-							type="button"
-							onclick={() => (drastic === 'delete' ? remove() : act('force-stop'))}
-						>
-							<span class="pf-v6-c-button__text"
-								>{drastic === 'delete' ? 'Delete' : 'Force stop'}</span
-							>
-						</button>
-						<button class="pf-v6-c-button pf-m-link" type="button" onclick={cancel}>
-							<span class="pf-v6-c-button__text">Cancel</span>
-						</button>
-					</footer>
-				</div>
-			{/if}
-		</dialog>
+		{#if action.kind === 'confirming'}
+			{@const drastic = action.action}
+			<ConfirmModal
+				title={drastic === 'delete' ? `Delete ${vm.name}?` : `Force stop ${vm.name}?`}
+				confirm={drastic === 'delete' ? 'Delete' : 'Force stop'}
+				onconfirm={() => (drastic === 'delete' ? remove() : act('force-stop'))}
+				oncancel={cancel}
+			>
+				{#if drastic === 'delete'}
+					Its snapshots and backups are deleted with it, and so are disks nothing else uses. This
+					can't be undone.
+				{:else}
+					Its guest gets no chance to shut down, like pulling the power cord. Stop lets it shut down
+					cleanly.
+				{/if}
+			</ConfirmModal>
+		{/if}
 	{/snippet}
 </Loaded>
 

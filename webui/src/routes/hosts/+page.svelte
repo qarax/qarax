@@ -1,5 +1,7 @@
 <script lang="ts">
-	import { allVms, hostsWithCapacity, type Host } from '#lib/api/client.ts';
+	import { resolve } from '$app/paths';
+	import { allVms, hostsWithCapacity } from '#lib/api/client.ts';
+	import { hostSituation } from '#lib/hosts.ts';
 	import { Remote, keepFresh } from '#lib/remote.svelte.ts';
 	import { HOST_STATUS } from '#lib/status.ts';
 	import { ago, bytes } from '#lib/format.ts';
@@ -17,25 +19,6 @@
 		}));
 	});
 	keepFresh(list.refresh);
-
-	/** Why a host isn't simply up, in a sentence; null when it is. */
-	function why(host: Host): string | null {
-		switch (host.status) {
-			case 'down':
-				return `Not answering at ${host.address}:${host.port}.`;
-			case 'installation_failed':
-				return host.installation_error ?? 'Its last deploy or upgrade failed.';
-			case 'maintenance':
-				return 'Takes no new VMs until maintenance ends.';
-			case 'installing':
-				return 'A deploy or upgrade is running.';
-			case 'unknown':
-			case 'initializing':
-				return "qarax hasn't heard from it yet.";
-			case 'up':
-				return null;
-		}
-	}
 </script>
 
 <section class="pf-v6-c-page__main-section">
@@ -74,10 +57,12 @@
 							</thead>
 							<tbody class="pf-v6-c-table__tbody">
 								{#each units as { host, capacity, vmCount } (host.id)}
-									{@const reason = why(host)}
+									{@const reason = host.status === 'up' ? null : hostSituation(host)}
 									<tr class="pf-v6-c-table__tr">
 										<td class="pf-v6-c-table__td" data-label="Name">
-											<strong>{host.name}</strong>
+											<strong
+												><a href={resolve('/hosts/[id]', { id: host.id })}>{host.name}</a></strong
+											>
 											<div class="qx-mono qx-subtle">{host.address}:{host.port}</div>
 											<div class="qx-subtle">
 												{[host.architecture, host.node_version && `qarax-node ${host.node_version}`]

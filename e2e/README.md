@@ -93,7 +93,7 @@ printed in the summary (`-rs`).
 | `test_telemetry.py` | OTLP trace propagation and metrics (needs `ENABLE_OTEL=1`) |
 | `test_transfers.py` | Local copy transfer into a storage pool |
 | `test_vm_lifecycle.py` | VM lifecycle, start/stop cycles, force stop, guest exec, monitor tick |
-| `test_webui.py` | The image serves the web UI, its console connection reaches a VM's serial console, and in headless Chromium the UI signs in, loads each section, and creates, starts and deletes a VM |
+| `test_webui.py` | The image serves the web UI, its console connection reaches a VM's serial console, and in headless Chromium the UI signs in, loads each section and a host's page, and creates, starts and deletes a VM |
 
 ## Writing Tests
 
