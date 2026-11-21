@@ -40,7 +40,7 @@ pub async fn start_vm_monitor(env: App) {
             continue;
         }
 
-        // Group VMs by host so we open one gRPC connection per host per tick
+        // Group VMs by host, one task per host
         let mut by_host: HashMap<Uuid, Vec<_>> = HashMap::new();
         for vm in active_vms {
             by_host.entry(vm.host_id).or_default().push(vm);
@@ -63,7 +63,6 @@ pub async fn start_vm_monitor(env: App) {
                     }
                 };
 
-                // One channel per host per tick; reused for all VMs on this host.
                 let client = NodeClient::new(&host.address, host.port as u16);
 
                 for vm in vms {

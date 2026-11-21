@@ -79,6 +79,14 @@ pub fn node_server_tls() -> tonic::transport::ServerTlsConfig {
         .client_ca_root(Certificate::from_pem(read("ca-cert.pem")))
 }
 
+/// Makes the NodeClients of this test process connect with the control
+/// plane's TLS, as spawn_app does, for tests that call a fake node directly.
+pub fn init_node_tls() {
+    qarax::grpc_client::init_node_tls(
+        NodeTls::load(&NODE_TLS_DIR.path().join("control-plane")).unwrap(),
+    );
+}
+
 pub struct TestApp {
     /// The API's base URL (`/v1` on the server).
     pub address: String,

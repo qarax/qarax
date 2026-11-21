@@ -1,12 +1,19 @@
 // gRPC client for communicating with qarax-node
 
+use std::collections::HashMap;
 use std::path::Path;
-use std::sync::OnceLock;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock};
+use std::task::Poll;
 
 use anyhow::{Context, Result};
+use hyper_util::client::legacy::connect::HttpConnector;
+use hyper_util::rt::TokioIo;
+use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio::time::{Duration, sleep};
-use tonic::transport::{Certificate, ClientTlsConfig, Endpoint, Identity};
+use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint, Identity, Uri};
 use tracing::{debug, instrument, warn};
 use uuid::Uuid;
 
@@ -17,6 +24,35 @@ use crate::model::vms::{MigrationMemoryMode, MigrationOptions, MigrationTimeoutA
 /// host whose address drops packets holds the request for the kernel's full
 /// SYN retry budget, about two minutes, before failing.
 const NODE_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How long a connection to a node may go without a frame from it before it
+/// is pinged, and how long the ping may then go unanswered before the
+/// connection is dropped. A node whose host died without closing the
+/// connection (no FIN or RST) is noticed within their sum, 15 s: the calls
+/// waiting on it fail, and the next ones connect afresh. The timeout is the
+/// generous one because dropping the connection fails every call on it, a
+/// migration's included.
+const NODE_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(5);
+const NODE_KEEPALIVE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// HTTP/2's largest flow-control window, for a node connection. The calls on
+/// a connection share its window: at hyper's default (5 MiB, with 2 MiB per
+/// call), a few calls whose responses nobody reads (a stalled console) would
+/// stop every other call to the node. With it, such a call holds at most its
+/// own 2 MiB, as when each call had its own connection.
+const NODE_CONNECTION_WINDOW: u32 = (1 << 31) - 1;
+
+/// The connection to each node, by address, that every [`NodeClient`] calls
+/// it over while the connection lasts.
+static NODE_CHANNELS: LazyLock<Mutex<HashMap<String, NodeChannel>>> =
+    LazyLock::new(Default::default);
+
+struct NodeChannel {
+    channel: Channel,
+    /// Set once the channel's connection takes no more calls (see
+    /// [`NodeConnector`]).
+    retired: Arc<AtomicBool>,
+}
 
 /// The TLS every [`NodeClient`] connects with, set by [`init_node_tls`].
 static NODE_TLS: OnceLock<ClientTlsConfig> = OnceLock::new();
@@ -141,12 +177,10 @@ use node::{
     file_transfer_service_client::FileTransferServiceClient, vm_service_client::VmServiceClient,
 };
 
-/// Client for communicating with qarax-node via gRPC.
-/// The VM service channel is lazily connected and cached so that multiple
-/// RPCs in the same monitor tick share a single TCP connection.
+/// Client for communicating with qarax-node via gRPC. The clients for a node
+/// share one connection to it, which carries both its services.
 pub struct NodeClient {
     address: String,
-    vm_channel: tokio::sync::OnceCell<tonic::transport::Channel>,
 }
 
 /// Parameters for creating a VM on the node
@@ -272,7 +306,6 @@ impl NodeClient {
     pub fn new(host: &str, port: u16) -> Self {
         Self {
             address: format!("https://{}:{}", host, port),
-            vm_channel: tokio::sync::OnceCell::new(),
         }
     }
 
@@ -282,40 +315,59 @@ impl NodeClient {
             .context("invalid qarax-node address")?
             .tls_config(tls.clone())
             .context("invalid node TLS configuration")?
-            .connect_timeout(NODE_CONNECT_TIMEOUT))
+            .http2_keep_alive_interval(NODE_KEEPALIVE_INTERVAL)
+            .keep_alive_timeout(NODE_KEEPALIVE_TIMEOUT)
+            .keep_alive_while_idle(true)
+            .initial_connection_window_size(NODE_CONNECTION_WINDOW))
+    }
+
+    /// The node's shared channel while its connection lasts, else a new
+    /// connection, which fails as any connect does: within
+    /// [`NODE_CONNECT_TIMEOUT`] for a node that doesn't answer.
+    async fn channel(&self) -> Result<Channel> {
+        let shared = NODE_CHANNELS
+            .lock()
+            .unwrap()
+            .get(&self.address)
+            .filter(|node| !node.retired.load(Ordering::Acquire))
+            .map(|node| node.channel.clone());
+        if let Some(channel) = shared {
+            return Ok(channel);
+        }
+        let retired = Arc::new(AtomicBool::new(false));
+        let channel = self
+            .endpoint()?
+            .connect_with_connector(NodeConnector::new(retired.clone()))
+            .await
+            .context("Failed to connect to qarax-node")?;
+        NODE_CHANNELS.lock().unwrap().insert(
+            self.address.clone(),
+            NodeChannel {
+                channel: channel.clone(),
+                retired,
+            },
+        );
+        Ok(channel)
     }
 
     async fn connect_vm_service(&self) -> Result<VmClient> {
-        // OnceCell only stores on success; a failed init is retried on the next call.
-        let channel = self
-            .vm_channel
-            .get_or_try_init(|| async {
-                self.endpoint()?
-                    .connect()
-                    .await
-                    .context("Failed to connect to qarax-node")
-            })
-            .await?;
+        let channel = self.channel().await?;
 
         #[cfg(feature = "otel")]
         {
             Ok(VmServiceClient::with_interceptor(
-                channel.clone(),
+                channel,
                 trace_propagation::inject_trace_context as fn(_) -> _,
             ))
         }
         #[cfg(not(feature = "otel"))]
         {
-            Ok(VmServiceClient::new(channel.clone()))
+            Ok(VmServiceClient::new(channel))
         }
     }
 
     async fn connect_file_transfer_service(&self) -> Result<FileTransferClient> {
-        let channel = self
-            .endpoint()?
-            .connect()
-            .await
-            .context("Failed to connect to qarax-node")?;
+        let channel = self.channel().await?;
 
         #[cfg(feature = "otel")]
         {
@@ -1608,6 +1660,118 @@ where
 
 /// Type alias for console channel used in attach_console
 pub type ConsoleChannel = (mpsc::Sender<Vec<u8>>, mpsc::Receiver<Result<Vec<u8>>>);
+
+/// Connects a node channel's TCP stream as [`Endpoint::connect`] does, and
+/// retires the channel once its connection takes no more calls.
+struct NodeConnector {
+    http: HttpConnector,
+    retired: Arc<AtomicBool>,
+    connected: bool,
+}
+
+impl NodeConnector {
+    fn new(retired: Arc<AtomicBool>) -> Self {
+        let mut http = HttpConnector::new();
+        http.enforce_http(false);
+        http.set_nodelay(true);
+        http.set_connect_timeout(Some(NODE_CONNECT_TIMEOUT));
+        Self {
+            http,
+            retired,
+            connected: false,
+        }
+    }
+}
+
+impl tower::Service<Uri> for NodeConnector {
+    type Response = NodeStream;
+    type Error = Box<dyn std::error::Error + Send + Sync>;
+    type Future =
+        Pin<Box<dyn std::future::Future<Output = Result<NodeStream, Self::Error>> + Send>>;
+
+    fn poll_ready(&mut self, cx: &mut std::task::Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.http.poll_ready(cx).map_err(Into::into)
+    }
+
+    fn call(&mut self, uri: Uri) -> Self::Future {
+        // tonic connects a channel again, inside a call, once the connection
+        // takes no more calls but its socket is still open (the node is
+        // draining its calls before it shuts down, say). Retiring the channel
+        // then sends the calls after this one to NodeClient::channel, where
+        // failing to connect reads as such.
+        if std::mem::replace(&mut self.connected, true) {
+            self.retired.store(true, Ordering::Release);
+        }
+        let connecting = self.http.call(uri);
+        let retired = self.retired.clone();
+        Box::pin(async move {
+            Ok(NodeStream {
+                io: connecting.await?,
+                retired,
+            })
+        })
+    }
+}
+
+/// The TCP stream of a node channel's connection. hyper drops it when the
+/// connection closes (the node closed it, or the keepalive gave up on it),
+/// which retires the channel.
+struct NodeStream {
+    io: TokioIo<TcpStream>,
+    retired: Arc<AtomicBool>,
+}
+
+impl Drop for NodeStream {
+    fn drop(&mut self) {
+        self.retired.store(true, Ordering::Release);
+    }
+}
+
+impl hyper::rt::Read for NodeStream {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: hyper::rt::ReadBufCursor<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        hyper::rt::Read::poll_read(Pin::new(&mut self.io), cx, buf)
+    }
+}
+
+impl hyper::rt::Write for NodeStream {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        hyper::rt::Write::poll_write(Pin::new(&mut self.io), cx, buf)
+    }
+
+    fn poll_flush(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        hyper::rt::Write::poll_flush(Pin::new(&mut self.io), cx)
+    }
+
+    fn poll_shutdown(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        hyper::rt::Write::poll_shutdown(Pin::new(&mut self.io), cx)
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        hyper::rt::Write::is_write_vectored(&self.io)
+    }
+
+    fn poll_write_vectored(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        bufs: &[std::io::IoSlice<'_>],
+    ) -> Poll<std::io::Result<usize>> {
+        hyper::rt::Write::poll_write_vectored(Pin::new(&mut self.io), cx, bufs)
+    }
+}
 
 #[cfg(test)]
 mod tests {

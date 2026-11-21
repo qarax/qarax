@@ -25,6 +25,14 @@ use qarax_node::storage::nfs::NfsBackend;
 use qarax_node::storage::overlaybd::OverlayBdBackend;
 use qarax_node::vmm::VmmManager;
 
+/// HTTP/2's largest flow-control window, for each connection the gRPC server
+/// accepts. The control plane makes all its calls to this node over one
+/// connection, whose window they share: at hyper's default (1 MiB, as much as
+/// one call may hold), the input of one console that isn't read (its VM isn't
+/// reading its serial port) would stop the control plane's other calls. With
+/// it, such a call holds at most its own 1 MiB.
+const CONNECTION_WINDOW: u32 = (1 << 31) - 1;
+
 #[derive(Parser, Debug)]
 #[clap(
     name = "qarax-node",
@@ -255,6 +263,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         Server::builder()
             .tls_config(tls)?
+            .initial_connection_window_size(CONNECTION_WINDOW)
             .layer(trace_extraction::OtelGrpcLayer)
             .add_service(VmServiceServer::new(vm_service))
             .add_service(FileTransferServiceServer::new(file_transfer_service))
@@ -266,6 +275,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         Server::builder()
             .tls_config(tls)?
+            .initial_connection_window_size(CONNECTION_WINDOW)
             .add_service(VmServiceServer::new(vm_service))
             .add_service(FileTransferServiceServer::new(file_transfer_service))
             .serve_with_shutdown(addr, shutdown_signal())

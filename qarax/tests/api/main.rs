@@ -7,6 +7,7 @@ mod audit_logs;
 mod auth;
 mod hosts;
 mod lifecycle_hooks;
+mod node_connections;
 mod pagination;
 mod sandbox_fork;
 mod sandbox_pools;
