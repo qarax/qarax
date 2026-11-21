@@ -1,4 +1,5 @@
 use super::*;
+use crate::vmm::testing::{PAST_VMM_ANSWER_TIMEOUT, serve_vmm};
 use firecracker_rust_sdk::models::InstanceInfo;
 use tempfile::TempDir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -62,39 +63,17 @@ async fn add_running_vm(manager: &FirecrackerManager, vm_id: &str) {
 #[tokio::test]
 async fn a_vmm_that_does_not_answer_holds_up_only_its_own_vm() {
     let directory = TempDir::new().unwrap();
-    let manager = Arc::new(FirecrackerManager::new(
-        directory.path(),
-        "/bin/true",
-        Duration::from_secs(1),
-        None,
-    ));
+    let manager = Arc::new(test_manager(&directory));
     let hung = uuid::Uuid::new_v4().to_string();
     let answering = uuid::Uuid::new_v4().to_string();
 
-    // Takes requests and never answers them.
-    let listener = UnixListener::bind(manager.socket_path(&hung)).unwrap();
-    let asked = Arc::new(tokio::sync::Notify::new());
-    let notify_asked = asked.clone();
-    tokio::spawn(async move {
-        loop {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            let asked = notify_asked.clone();
-            tokio::spawn(async move {
-                let mut request = vec![0; 4096];
-                if stream.read(&mut request).await.unwrap() > 0 {
-                    asked.notify_one();
-                }
-                std::future::pending::<()>().await;
-            });
-        }
-    });
+    let asked = serve_vmm(
+        UnixListener::bind(manager.socket_path(&hung)).unwrap(),
+        watch::channel(None).1,
+    );
     serve_fake_firecracker(
         UnixListener::bind(manager.socket_path(&answering)).unwrap(),
-        serde_json::to_string(&InstanceInfo {
-            state: FcInstanceState::Paused,
-            ..Default::default()
-        })
-        .unwrap(),
+        instance_info(FcInstanceState::Paused),
     );
     for vm_id in [&hung, &answering] {
         add_running_vm(&manager, vm_id).await;
@@ -132,4 +111,130 @@ async fn a_vmm_that_does_not_answer_holds_up_only_its_own_vm() {
     assert_eq!(listed, expected);
     assert!(!waiting.is_finished());
     waiting.abort();
+}
+
+fn instance_info(state: FcInstanceState) -> String {
+    serde_json::to_string(&InstanceInfo {
+        state,
+        ..Default::default()
+    })
+    .unwrap()
+}
+
+fn test_manager(directory: &TempDir) -> FirecrackerManager {
+    FirecrackerManager::new(directory.path(), "/bin/true", Duration::from_secs(1), None)
+}
+
+/// A status query to a Firecracker that doesn't answer is given up, and the
+/// VM is reported as it last was. That leaves nothing broken for the next
+/// query, which sees Firecracker's state once it answers again.
+#[tokio::test]
+async fn status_of_a_vm_whose_vmm_does_not_answer_is_its_last_known_one() {
+    let directory = TempDir::new().unwrap();
+    let manager = test_manager(&directory);
+    let vm_id = uuid::Uuid::new_v4().to_string();
+    let (answer, answers) = watch::channel(None);
+    serve_vmm(
+        UnixListener::bind(manager.socket_path(&vm_id)).unwrap(),
+        answers,
+    );
+    add_running_vm(&manager, &vm_id).await;
+
+    let info = tokio::time::timeout(PAST_VMM_ANSWER_TIMEOUT, manager.get_vm_info(&vm_id))
+        .await
+        .expect("asking for the VM's status waited for a Firecracker that does not answer")
+        .unwrap();
+    assert_eq!(info.status(), VmStatus::Running);
+
+    answer.send_replace(Some(instance_info(FcInstanceState::Paused)));
+    let info = tokio::time::timeout(PAST_VMM_ANSWER_TIMEOUT, manager.get_vm_info(&vm_id))
+        .await
+        .expect("asking for the VM's status again waited")
+        .unwrap();
+    assert_eq!(info.status(), VmStatus::Paused);
+}
+
+/// Make `vm_id` one of `manager`'s VMs, running, on a Firecracker that has
+/// stopped answering, and have the VM monitor's status query of it in flight.
+async fn add_vm_whose_vmm_does_not_answer(
+    manager: &Arc<FirecrackerManager>,
+    vm_id: &str,
+) -> tokio::task::JoinHandle<Result<VmState, VmmError>> {
+    let asked = serve_vmm(
+        UnixListener::bind(manager.socket_path(vm_id)).unwrap(),
+        watch::channel(None).1,
+    );
+    add_running_vm(manager, vm_id).await;
+    let monitor = tokio::spawn({
+        let (manager, vm_id) = (manager.clone(), vm_id.to_string());
+        async move { manager.get_vm_info(&vm_id).await }
+    });
+    asked.notified().await;
+    monitor
+}
+
+/// Force-stopping a VM whose Firecracker doesn't answer asks it nothing: it
+/// waits at most for a status query in flight to be given up.
+#[tokio::test]
+async fn a_vm_whose_vmm_does_not_answer_can_be_force_stopped() {
+    let directory = TempDir::new().unwrap();
+    let manager = Arc::new(test_manager(&directory));
+    let vm_id = uuid::Uuid::new_v4().to_string();
+    let monitor = add_vm_whose_vmm_does_not_answer(&manager, &vm_id).await;
+
+    tokio::time::timeout(PAST_VMM_ANSWER_TIMEOUT, manager.force_stop_vm(&vm_id))
+        .await
+        .expect("force-stopping the VM waited for its Firecracker")
+        .unwrap();
+    assert_eq!(
+        manager.lock_vm(&vm_id).await.unwrap().status(),
+        VmStatus::Shutdown
+    );
+    monitor.abort();
+}
+
+/// Deleting a VM whose Firecracker doesn't answer asks it nothing either: it
+/// waits at most for a status query in flight to be given up, then cleans up
+/// after the VM.
+#[tokio::test]
+async fn a_vm_whose_vmm_does_not_answer_can_be_deleted() {
+    let directory = TempDir::new().unwrap();
+    let manager = Arc::new(test_manager(&directory));
+    let vm_id = uuid::Uuid::new_v4().to_string();
+    let monitor = add_vm_whose_vmm_does_not_answer(&manager, &vm_id).await;
+
+    tokio::time::timeout(PAST_VMM_ANSWER_TIMEOUT, manager.delete_vm(&vm_id))
+        .await
+        .expect("deleting the VM waited for its Firecracker")
+        .unwrap();
+    assert!(manager.list_vms().await.is_empty());
+    assert!(!manager.socket_path(&vm_id).exists());
+    monitor.abort();
+}
+
+/// A Firecracker that doesn't answer doesn't hold up the node's startup: its
+/// VM is recovered with an unknown status.
+#[tokio::test]
+async fn a_vm_whose_vmm_does_not_answer_is_recovered_with_an_unknown_status() {
+    let directory = TempDir::new().unwrap();
+    let manager = test_manager(&directory);
+    let vm_id = uuid::Uuid::new_v4().to_string();
+    let config = ProtoVmConfig {
+        vm_id: vm_id.clone(),
+        ..Default::default()
+    };
+    tokio::fs::write(manager.config_path(&vm_id), config.encode_to_vec())
+        .await
+        .unwrap();
+    serve_vmm(
+        UnixListener::bind(manager.socket_path(&vm_id)).unwrap(),
+        watch::channel(None).1,
+    );
+
+    tokio::time::timeout(PAST_VMM_ANSWER_TIMEOUT, manager.recover_vms())
+        .await
+        .expect("recovering the node's VMs waited for a Firecracker that does not answer");
+    let recovered = manager.list_vms().await;
+    assert_eq!(recovered.len(), 1);
+    assert_eq!(recovered[0].status(), VmStatus::Unknown);
 }

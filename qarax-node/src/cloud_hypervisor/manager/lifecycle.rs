@@ -102,7 +102,7 @@ impl VmManager {
                 exec_path: Cow::Owned(self.ch_binary.clone()),
             };
 
-            let mut vm = match Machine::connect(machine_config).await {
+            let vm = match Machine::connect(machine_config).await {
                 Ok(v) => v,
                 Err(e) => {
                     warn!(
@@ -114,7 +114,7 @@ impl VmManager {
             };
 
             // Get current status from Cloud Hypervisor
-            let status = match vm.get_info().await {
+            let status = match Self::query_vm_info(&socket_path).await {
                 Ok(info) => vm_status_from_sdk(info.state),
                 Err(e) => {
                     warn!("Failed to get info for recovered VM {}: {}", vm_id, e);
@@ -619,9 +619,16 @@ impl VmManager {
             .await
             .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
 
-        // Try to shutdown via SDK first
-        if let Err(e) = instance.vm.shutdown().await {
-            warn!("Failed to shutdown VM via SDK: {}", e);
+        // Try to shutdown via SDK first, without waiting on a VMM that has
+        // stopped answering.
+        match tokio::time::timeout(VMM_ANSWER_TIMEOUT, instance.vm.shutdown()).await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => warn!("Failed to shutdown VM via SDK: {}", e),
+            Err(_) => warn!(
+                "VM {} Cloud Hypervisor did not answer vm.shutdown within {}s",
+                vm_id,
+                VMM_ANSWER_TIMEOUT.as_secs()
+            ),
         }
 
         // Kill the process if we have it
@@ -683,11 +690,11 @@ impl VmManager {
 
     /// Get VM info
     pub async fn get_vm_info(&self, vm_id: &str) -> Result<VmState, VmManagerError> {
-        let mut instance = self.lock_vm(vm_id).await?;
+        let instance = self.lock_vm(vm_id).await?;
 
-        // Try to get live status from CH via SDK
+        // Live status from CH; the last known one if it can't be had.
         let mut memory_actual_size = None;
-        if let Ok(info) = instance.vm.get_info().await {
+        if let Ok(info) = Self::query_vm_info(&instance.socket_path).await {
             instance.set_status(vm_status_from_sdk(info.state));
             memory_actual_size = info.memory_actual_size;
         }
