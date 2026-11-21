@@ -144,8 +144,8 @@ pub fn record_monitor_cycle(monitor: &str, start: std::time::Instant) {
 ///
 /// A `Created` VM has a host (OCI image VMs are placed when their image is
 /// imported) but is only defined on the node when it is first started, so
-/// "not found" is its normal state. Marking it `Unknown` would also make
-/// start skip the create request and fail with NotFound.
+/// "not found" is its normal state. Any other VM its node doesn't have was
+/// lost with it (a restart, a reboot); starting it defines it there again.
 fn status_when_missing_on_node(current: VmStatus) -> Option<VmStatus> {
     match current {
         VmStatus::Created => None,

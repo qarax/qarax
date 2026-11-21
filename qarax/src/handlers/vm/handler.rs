@@ -1466,7 +1466,23 @@ pub(crate) async fn start_vm_internal(env: &App, vm_id: Uuid) -> Result<Uuid> {
             return;
         }
 
-        // For a VM in Created state, call create_vm first
+        // A VM is defined on its node when it first starts (`Created`). A node
+        // that restarted has forgotten the VMs it didn't find running (a host
+        // reboot takes them all), so one it no longer has is defined there
+        // again from its record, as failover does on another host.
+        let create_req = match create_req {
+            Some(req) => Some(req),
+            None if node_lost_vm(&node_client, vm_id).await => {
+                match build_create_vm_request(&env_for_start, &vm).await {
+                    Ok(req) => Some(req),
+                    Err(e) => {
+                        fail(format!("defining the VM on its node again failed: {e:#}")).await;
+                        return;
+                    }
+                }
+            }
+            None => None,
+        };
         if let Some(req) = create_req {
             if let Err(e) = node_client.create_vm(req).await {
                 fail(format!("create_vm failed: {:#}", e)).await;
@@ -1509,6 +1525,18 @@ pub(crate) async fn start_vm_internal(env: &App, vm_id: Uuid) -> Result<Uuid> {
     });
 
     Ok(job_id)
+}
+
+/// Whether the VM's node answers that it doesn't have the VM. Any other error
+/// (the node unreachable, say) is left to the start request to report.
+async fn node_lost_vm(client: &NodeClient, vm_id: Uuid) -> bool {
+    match client.get_vm_info(vm_id).await {
+        Ok(_) => false,
+        Err(e) => matches!(
+            e.downcast_ref::<crate::errors::Error>(),
+            Some(crate::errors::Error::NotFound)
+        ),
+    }
 }
 
 async fn ensure_vm_start_allowed(

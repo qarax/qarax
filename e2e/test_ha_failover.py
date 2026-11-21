@@ -20,16 +20,13 @@ service), so it must run against the standard e2e compose project.
 
 import asyncio
 import os
-import subprocess
 import time
 import uuid
-from pathlib import Path
 from uuid import UUID
 
 import httpx2
 import pytest
 from qarax_api_client import Client
-from qarax_api_client.api.hosts import init as init_host
 from qarax_api_client.api.hosts import update as update_host
 from qarax_api_client.api.vms import delete as delete_vm
 from qarax_api_client.api.vms import get as get_vm
@@ -39,16 +36,15 @@ from qarax_api_client.models.vm_status import VmStatus
 
 from helpers import (
     AUTH_HEADERS,
-    DOCKER_TIMEOUT,
     call_api,
-    call_api_detailed,
+    compose,
+    reinit_host,
     wait_for_host_status,
     wait_for_status,
 )
 
 QARAX_URL = os.getenv("QARAX_URL", "http://localhost:8000")
 
-E2E_DIR = Path(__file__).parent
 
 VM_OPERATION_TIMEOUT = 60
 # Host-down detection (resource monitor tick, 30s) + HA grace + HA tick + boot
@@ -56,42 +52,11 @@ FAILOVER_TIMEOUT = 180
 # The resource monitor marks an unreachable host DOWN on its next 30s tick, so
 # waiting exactly one period can miss it.
 HOST_DOWN_TIMEOUT = 60
-# How long a restarted qarax-node may take to accept gRPC again.
-NODE_RESTART_TIMEOUT = 120
 
 
 @pytest.fixture
 def client():
     return Client(base_url=QARAX_URL, headers=AUTH_HEADERS)
-
-
-def _compose(*args):
-    subprocess.run(
-        ["docker", "compose", *args],
-        cwd=E2E_DIR,
-        check=True,
-        capture_output=True,
-        timeout=DOCKER_TIMEOUT,
-    )
-
-
-async def _reinit_host(c, host_id, timeout=NODE_RESTART_TIMEOUT):
-    """Initialize a host whose node was restarted, retrying until its gRPC port is back.
-
-    Init probes the node and only then marks the host UP; a status PATCH would
-    only write the database.
-    """
-    deadline = time.time() + timeout
-    while True:
-        resp = await call_api_detailed(init_host, client=c, host_id=host_id)
-        if resp.status_code == 200:
-            return
-        if time.time() >= deadline:
-            raise TimeoutError(
-                f"init of host {host_id} still failing after {timeout}s: "
-                f"HTTP {resp.status_code.value} {resp.content.decode(errors='replace')}"
-            )
-        await asyncio.sleep(2)
 
 
 async def _wait_for_failover(c, vm_id, source_host_id, timeout=FAILOVER_TIMEOUT):
@@ -190,7 +155,7 @@ async def test_ha_failover_on_host_failure(client, two_hosts):
             # Kill host1's node.
             dead_host_id = host1_id
             stopped_service = node_service_by_host[host1_id]
-            _compose("stop", stopped_service)
+            compose("stop", stopped_service)
 
             # The dead host must be marked DOWN before failover can start.
             await wait_for_host_status(
@@ -217,8 +182,8 @@ async def test_ha_failover_on_host_failure(client, two_hosts):
                     body=UpdateHostRequest(status=HostStatus.UP),
                 )
             if stopped_service is not None:
-                _compose("start", stopped_service)
-                await _reinit_host(c, dead_host_id)
+                compose("start", stopped_service)
+                await reinit_host(c, dead_host_id)
             # Delete tolerates node errors, so it also cleans up the VM left
             # on the restarted node.
             for vm_id in (ha_vm_id, plain_vm_id):

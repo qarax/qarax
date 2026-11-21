@@ -237,6 +237,28 @@ async fn a_vm_whose_vmm_does_not_answer_is_recovered_with_an_unknown_status() {
     assert_eq!(recovered[0].status(), VmStatus::Unknown);
 }
 
+/// A Firecracker that died with the node left its socket, which refuses
+/// connections: its VM isn't recovered, so it reads as gone, and the control
+/// plane defines it again when it next starts.
+#[tokio::test]
+async fn a_vm_whose_vmm_died_is_not_recovered() {
+    let directory = TempDir::new().unwrap();
+    let manager = test_manager(&directory);
+    let vm_id = uuid::Uuid::new_v4().to_string();
+    let config = ProtoVmConfig {
+        vm_id: vm_id.clone(),
+        ..Default::default()
+    };
+    tokio::fs::write(manager.config_path(&vm_id), config.encode_to_vec())
+        .await
+        .unwrap();
+    // Bound, then closed: the socket file stays and refuses connections.
+    drop(UnixListener::bind(manager.socket_path(&vm_id)).unwrap());
+
+    manager.recover_vms().await;
+    assert!(manager.list_vms().await.is_empty());
+}
+
 /// Of concurrent adds of one VM id (creates, a restore), one goes ahead and
 /// the others are refused before they make anything. The id is free again
 /// once that add fails, or is cancelled as when its request is dropped, and a
