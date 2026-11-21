@@ -18,7 +18,11 @@ struct Cleanup {
 }
 
 /// Returns false while cleanup is pending. Concurrent workers serialize on
-/// the queue row; failed RPCs leave a durable record for the next attempt.
+/// the queue row, which stays locked until the nodes have answered: a worker
+/// waiting for it then sees what this one left, and detaching or deleting a
+/// host waits rather than have its change written over. Waiting workers hold
+/// connections, so this one reads on its transaction's. Failed RPCs leave a
+/// durable record for the next attempt.
 pub async fn process(pool: &PgPool, object_id: Uuid) -> Result<bool, sqlx::Error> {
     let mut tx = pool.begin().await?;
     let task = sqlx::query_as!(
@@ -32,16 +36,16 @@ pub async fn process(pool: &PgPool, object_id: Uuid) -> Result<bool, sqlx::Error
     let Some(task) = task else {
         return Ok(true);
     };
-    let storage_pool = storage_pools::get(pool, task.pool_id).await?;
+    let storage_pool = storage_pools::get(tx.as_mut(), task.pool_id).await?;
     let shared = storage_pool.pool_type == storage_pools::StoragePoolType::Nfs;
     let mut remaining = task.host_ids;
     if shared || remaining.is_empty() {
-        remaining = storage_pools::list_host_ids(pool, task.pool_id).await?;
+        remaining = storage_pools::list_host_ids(tx.as_mut(), task.pool_id).await?;
     }
     let mut last_error = "No node is available to clean up this pool".to_string();
     let mut completed = false;
     for host_id in remaining.clone() {
-        let Some(host) = hosts::get_by_id(pool, host_id).await? else {
+        let Some(host) = hosts::get_by_id(tx.as_mut(), host_id).await? else {
             last_error = format!("Cleanup host {host_id} no longer exists");
             continue;
         };

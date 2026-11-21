@@ -655,6 +655,61 @@ async fn test_vm_creates_run_on_one_database_connection() {
     );
 }
 
+/// Attaching a disk and resizing one lock its storage object in a
+/// transaction, then read its pool in it (and, for a stopped VM, whether the
+/// VM's host has that pool): on one connection (see
+/// `test_vm_creates_run_on_one_database_connection`), a read on a second
+/// would fail.
+#[tokio::test]
+async fn test_disk_attach_and_resize_run_on_one_database_connection() {
+    let app = spawn_app_on_one_connection().await;
+    let client = reqwest::Client::new();
+    let host_id = add_up_host(&client, &app.address, "test-host").await;
+    let vm_id = create_vm(&client, &app.address, vm_body("vm-one-connection-disks")).await;
+    let pool_id =
+        create_local_pool(&client, &app.address, &app.pool, host_id, "one-connection").await;
+    let object_id = create_disk_object(&client, &app.address, pool_id, "data-disk", 2 * GIB).await;
+
+    let res = attach_disk(
+        &client,
+        &app.address,
+        vm_id,
+        json!({"storage_object_id": object_id}),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let res = client
+        .put(format!("{}/vms/{vm_id}/disks/disk0/resize", app.address))
+        .json(&json!({"new_size_bytes": GIB}))
+        .send()
+        .await
+        .unwrap();
+    assert_unprocessable(res, "must be greater than current size").await;
+
+    // A stopped VM's disk is added on its host, which must have the pool.
+    set_vm_status(&app.pool, vm_id, "SHUTDOWN").await;
+    let elsewhere = storage_pools::create(
+        &app.pool,
+        storage_pools::NewStoragePool {
+            name: "one-connection-elsewhere".into(),
+            pool_type: storage_pools::StoragePoolType::Local,
+            config: json!({"path": "/tmp/one-connection-elsewhere"}),
+            capacity_bytes: None,
+        },
+    )
+    .await
+    .unwrap();
+    let object_id = create_disk_object(&client, &app.address, elsewhere, "other-disk", GIB).await;
+    let res = attach_disk(
+        &client,
+        &app.address,
+        vm_id,
+        json!({"storage_object_id": object_id}),
+    )
+    .await;
+    assert_unprocessable(res, "is not attached to local storage pool").await;
+}
+
 #[tokio::test]
 async fn test_block_disk_has_one_writer_even_with_concurrent_attachments() {
     let app = spawn_app().await;

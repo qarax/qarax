@@ -3065,7 +3065,7 @@ pub async fn attach_disk(
 
     let mut tx = env.pool().begin().await?;
     let obj = storage_objects::get_for_update(&mut tx, req.storage_object_id).await?;
-    let pool = storage_pools::get(env.pool(), obj.storage_pool_id).await?;
+    let pool = storage_pools::get(tx.as_mut(), obj.storage_pool_id).await?;
     if pool.pool_type == storage_pools::StoragePoolType::Local
         && matches!(vm.status, VmStatus::Running | VmStatus::Shutdown)
     {
@@ -3074,7 +3074,7 @@ pub async fn attach_disk(
                 "Cannot attach a local disk to a VM with no assigned host".into(),
             )
         })?;
-        let has_pool = storage_pools::host_has_pool(env.pool(), host_id, pool.id).await?;
+        let has_pool = storage_pools::host_has_pool(tx.as_mut(), host_id, pool.id).await?;
         if !has_pool {
             return Err(crate::errors::Error::UnprocessableEntity(format!(
                 "VM's host {} is not attached to local storage pool {}",
@@ -4427,7 +4427,7 @@ pub async fn resize_disk(
 
     let mut tx = env.pool().begin().await?;
     let obj = storage_objects::get_for_update(&mut tx, so_id).await?;
-    let pool_record = storage_pools::get(env.pool(), obj.storage_pool_id).await?;
+    let pool_record = storage_pools::get(tx.as_mut(), obj.storage_pool_id).await?;
     let target = resolve_disk_resize_target(&disk, &obj, &pool_record)?;
 
     if req.new_size_bytes <= obj.size_bytes {
