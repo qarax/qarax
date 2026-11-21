@@ -7,7 +7,6 @@ use qarax::{
     grpc_client::NodeTls,
     startup::run,
 };
-use sqlx::PgPool;
 
 #[cfg(feature = "dhat-heap")]
 #[global_allocator]
@@ -61,8 +60,7 @@ async fn main() -> std::io::Result<()> {
         configuration.application.host, configuration.application.port
     );
 
-    let db_options = configuration.database.without_db();
-    let connection_pool = PgPool::connect_lazy_with(db_options);
+    let connection_pool = database::connect_lazy(&configuration.database);
     tracing::info!("Starting server on {}", address);
     let listener = TcpListener::bind(address).await?;
     let vm_defaults = configuration.vm_defaults.clone();

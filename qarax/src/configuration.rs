@@ -260,6 +260,10 @@ impl DatabaseSettings {
             .ssl_mode(PgSslMode::Prefer)
     }
 
+    pub fn with_db(&self) -> PgConnectOptions {
+        self.without_db().database(&self.name)
+    }
+
     pub fn connection_string(&self) -> String {
         format!(
             "postgres://{}:{}@{}:{}/{}",
