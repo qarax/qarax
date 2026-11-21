@@ -81,6 +81,7 @@ tar -xzf qarax-vX.Y.Z-x86_64-linux-musl.tar.gz && cd qarax-vX.Y.Z-x86_64-linux-m
 useradd --system --home-dir /var/lib/qarax --shell /usr/sbin/nologin qarax
 install -m 0755 bin/qarax-server /usr/local/bin/
 install -d /etc/qarax && cp -r configuration /etc/qarax/
+install -d /usr/share/qarax && cp -r ui /usr/share/qarax/   # the web UI
 install -d -m 0750 -g qarax /etc/qarax/node-tls
 install -m 0640 -g qarax ../node-tls/control-plane/* /etc/qarax/node-tls/
 install -m 0640 -g qarax /dev/null /etc/qarax/qarax.env   # then fill in the variables above
@@ -93,7 +94,9 @@ The unit runs as `qarax`, with its home (and so the pinned SSH host keys) in
 
 Check it: `curl http://localhost:8000/` answers `hello`, and
 `curl -H "Authorization: Bearer $QARAX_TOKEN" http://localhost:8000/v1/hosts`
-returns an empty page. The API reference is at `/swagger-ui`.
+returns an empty page. The API reference is at `/swagger-ui`, and the web UI
+at `/ui` (the image has it; elsewhere `qarax-server` serves it from `ui_dir`,
+`UI_DIR`, by default `/usr/share/qarax/ui`).
 
 ## 4. Nodes
 

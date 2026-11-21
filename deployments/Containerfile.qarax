@@ -1,10 +1,22 @@
 # The control plane (qarax-server) as a container image, built from the
-# release binary (`make build-release` first; the Release workflow does).
+# release binary (`make build-release` first; the Release workflow does), with
+# the web UI (webui/), which this file builds, at /usr/share/qarax/ui.
 # The e2e stack runs this image too, with APP_ENVIRONMENT=local.
 #
 # Configure it with environment variables (see docs/INSTALL.md): DATABASE_*,
 # AUTH_TOKENS, NODE_TLS_DIR (mount the control plane's node TLS files) and the
 # VM_* boot defaults.
+
+# Node 24 still ships corepack, which runs the pnpm that webui/package.json pins.
+FROM node:24-alpine AS webui
+RUN corepack enable
+WORKDIR /src/webui
+COPY webui/package.json webui/pnpm-lock.yaml webui/pnpm-workspace.yaml webui/.npmrc ./
+RUN pnpm install --frozen-lockfile
+COPY openapi.yaml /src/openapi.yaml
+COPY webui/ ./
+RUN pnpm build
+
 FROM alpine:3.22
 
 # pg_dump and pg_restore for database backups, curl for health checks.
@@ -12,6 +24,7 @@ RUN apk add --no-cache postgresql16-client curl
 
 COPY --chmod=0755 target/x86_64-unknown-linux-musl/release/qarax-server /usr/local/bin/qarax-server
 COPY configuration /etc/qarax/configuration
+COPY --from=webui /src/webui/build /usr/share/qarax/ui
 
 ENV APP_ENVIRONMENT=production \
     QARAX_CONFIG_DIR=/etc/qarax/configuration

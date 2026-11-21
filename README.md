@@ -23,6 +23,7 @@ Communication flow: control plane -> gRPC (`proto/node.proto`) -> qarax-node -> 
 make build       # build all packages and generate OpenAPI spec
 make test        # run tests (auto-starts Postgres via Docker)
 make lint        # cargo clippy --workspace -- -D warnings
+make webui       # build the web UI (needs pnpm)
 make ci-checks   # run every CI check (make test-deps first)
 ```
 
@@ -39,6 +40,9 @@ Requires Docker, Docker Compose, KVM (`/dev/kvm`), and a Rust toolchain.
 The API is served under `/v1` (e.g. `http://localhost:8000/v1/vms`), with Swagger UI at
 `http://localhost:8000/swagger-ui`. Lists return one page, `{"items": [...], "next_cursor": ...}`:
 pass `limit` (1 to 1000, default 100) and the previous page's `next_cursor` as `cursor` for the next.
+
+The web UI is at `http://localhost:8000/ui`: sign in with the API token (`e2e-test-token` on the
+local stack). [webui/README.md](webui/README.md) covers working on it.
 
 ## Installing a release
 

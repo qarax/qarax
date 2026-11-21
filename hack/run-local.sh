@@ -215,6 +215,7 @@ $(echo -e "${GREEN}Qarax is running.${NC}")
 
   API:          ${SERVER}/
   Swagger UI:   ${SERVER}/swagger-ui
+  Web UI:       ${SERVER}/ui
   Token:        export QARAX_TOKEN=${QARAX_TOKEN}
   CLI:          ${QARAX_BIN} (or cargo run -p cli --)
 

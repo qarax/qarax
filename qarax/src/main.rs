@@ -85,6 +85,7 @@ async fn main() -> std::io::Result<()> {
         configuration.ha.clone(),
         default_control_plane_architecture(),
         node_tls,
+        configuration.ui_dir.clone(),
     )
     .await
     {

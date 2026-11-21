@@ -1,0 +1,32 @@
+/* What qarax adds to PatternFly: only what it has no component for. */
+
+.qx-subtle {
+	color: var(--pf-t--global--text--color--subtle);
+}
+
+.qx-mono {
+	font-family: var(--pf-t--global--font--family--mono);
+}
+
+/* A status: its icon and its word. */
+.qx-status {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--pf-t--global--spacer--sm);
+	white-space: nowrap;
+}
+
+/* Native <dialog> around a PatternFly modal box: the dialog brings focus
+   handling and Escape, PatternFly the look. */
+dialog.qx-modal {
+	padding: 0;
+	border: 0;
+	background: transparent;
+	max-width: none;
+	max-height: none;
+	overflow: visible;
+}
+
+dialog.qx-modal::backdrop {
+	background: var(--pf-t--global--background--color--backdrop--default);
+}

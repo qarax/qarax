@@ -2520,6 +2520,10 @@ paths:
       tags:
       - vms
       summary: WebSocket console attachment for interactive terminal access
+      description: |-
+        Authenticate with the Authorization header or, where it can't be set (in a
+        browser), with the subprotocol `qarax.bearer.<the token, hex-encoded>`,
+        offered along with `qarax.console`, which the server then selects.
       operationId: console_attach
       parameters:
       - name: vm_id

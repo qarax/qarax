@@ -59,6 +59,10 @@ def sync_detailed(
 ) -> Response[Any]:
     """WebSocket console attachment for interactive terminal access
 
+     Authenticate with the Authorization header or, where it can't be set (in a
+    browser), with the subprotocol `qarax.bearer.<the token, hex-encoded>`,
+    offered along with `qarax.console`, which the server then selects.
+
     Args:
         vm_id (UUID):
 
@@ -87,6 +91,10 @@ async def asyncio_detailed(
     client: AuthenticatedClient | Client,
 ) -> Response[Any]:
     """WebSocket console attachment for interactive terminal access
+
+     Authenticate with the Authorization header or, where it can't be set (in a
+    browser), with the subprotocol `qarax.bearer.<the token, hex-encoded>`,
+    offered along with `qarax.console`, which the server then selects.
 
     Args:
         vm_id (UUID):

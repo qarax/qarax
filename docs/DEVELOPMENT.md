@@ -108,3 +108,21 @@ docker compose -f e2e/docker-compose.yml exec bootc-vm \
   pin.
 - Workload VMs fail with `/dev/kvm` missing in the node: the host doesn't
   allow nested virtualization.
+
+## The web UI
+
+`webui/` is a SvelteKit single-page app on PatternFly 6, built to static files that
+qarax-server serves at `/ui` from `ui_dir` (`UI_DIR`); the control-plane image
+builds it in (`deployments/Containerfile.qarax`). To work on it against a
+running stack (`make run-local`), run `pnpm dev` in `webui/`: Vite serves the
+UI on `http://localhost:5173/ui` and passes `/v1`, the console's WebSocket
+included, to `QARAX_URL` (default `http://localhost:8000`).
+
+Its API types are generated from `openapi.yaml` (`pnpm gen`, which `dev`,
+`build` and `check` run first), so after an API change `make openapi` and
+`pnpm check` show what the UI has to follow. `make check-webui`, CI's Web UI
+job, runs that with the formatting check and the build.
+
+A browser can't set the Authorization header on a WebSocket, so the console
+sends the token as the subprotocol `qarax.bearer.<the token, hex-encoded>`,
+which the auth middleware accepts like the header (`qarax/src/auth.rs`).

@@ -1,4 +1,4 @@
-use std::future::IntoFuture;
+use std::{future::IntoFuture, path::PathBuf};
 use tokio::net::TcpListener;
 
 use sqlx::PgPool;
@@ -24,6 +24,7 @@ pub async fn run(
     ha: HaSettings,
     control_plane_architecture: String,
     node_tls: crate::grpc_client::NodeTls,
+    ui_dir: PathBuf,
 ) -> Result<
     impl IntoFuture<Output = std::io::Result<()>> + Send,
     Box<dyn std::error::Error + Send + Sync>,
@@ -62,7 +63,7 @@ pub async fn run(
         a.clone(),
     ));
 
-    let app = app(a);
+    let app = app(a, &ui_dir);
     let server = axum::serve(listener, app);
     Ok(server)
 }

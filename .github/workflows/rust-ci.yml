@@ -68,6 +68,22 @@ jobs:
       - run: make check-sdk
       - run: make check-e2e-lint
 
+  webui:
+    name: Web UI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      # Installs the pnpm that webui/package.json pins (packageManager).
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: webui/package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: webui/pnpm-lock.yaml
+      - run: make check-webui
+
   audit-and-shell:
     name: Audit and shell lint
     runs-on: ubuntu-latest

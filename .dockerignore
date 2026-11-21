@@ -12,3 +12,7 @@ target/x86_64-unknown-linux-musl/release/*
 !target/x86_64-unknown-linux-musl/release/qarax-server
 !target/x86_64-unknown-linux-musl/release/qarax-node
 !target/x86_64-unknown-linux-musl/release/qarax-init
+# The web UI is built in its own stage of Containerfile.qarax, from source.
+webui/node_modules
+webui/build
+webui/.svelte-kit

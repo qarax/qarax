@@ -1,0 +1,40 @@
+// PatternFly 6, its framework-free CSS (@patternfly/patternfly): the base
+// (tokens, Red Hat fonts, light and dark themes) and the components and
+// layouts this app uses. Markup follows the package's docs/ examples.
+import '@patternfly/patternfly/patternfly-base.css';
+import '@patternfly/patternfly/components/Alert/alert.css';
+import '@patternfly/patternfly/components/Alert/alert-group.css';
+import '@patternfly/patternfly/components/Backdrop/backdrop.css';
+import '@patternfly/patternfly/components/Breadcrumb/breadcrumb.css';
+import '@patternfly/patternfly/components/Button/button.css';
+import '@patternfly/patternfly/components/Card/card.css';
+import '@patternfly/patternfly/components/CodeBlock/code-block.css';
+import '@patternfly/patternfly/components/Content/content.css';
+import '@patternfly/patternfly/components/DescriptionList/description-list.css';
+import '@patternfly/patternfly/components/Divider/divider.css';
+import '@patternfly/patternfly/components/EmptyState/empty-state.css';
+import '@patternfly/patternfly/components/Form/form.css';
+import '@patternfly/patternfly/components/FormControl/form-control.css';
+import '@patternfly/patternfly/components/HelperText/helper-text.css';
+import '@patternfly/patternfly/components/Icon/icon.css';
+import '@patternfly/patternfly/components/Label/label.css';
+import '@patternfly/patternfly/components/Label/label-group.css';
+import '@patternfly/patternfly/components/Login/login.css';
+import '@patternfly/patternfly/components/Masthead/masthead.css';
+import '@patternfly/patternfly/components/ModalBox/modal-box.css';
+import '@patternfly/patternfly/components/Nav/nav.css';
+import '@patternfly/patternfly/components/Page/page.css';
+import '@patternfly/patternfly/components/Progress/progress.css';
+import '@patternfly/patternfly/components/SkipToContent/skip-to-content.css';
+import '@patternfly/patternfly/components/Spinner/spinner.css';
+import '@patternfly/patternfly/components/Table/table.css';
+import '@patternfly/patternfly/components/Table/table-grid.css';
+import '@patternfly/patternfly/components/Tabs/tabs.css';
+import '@patternfly/patternfly/components/TextInputGroup/text-input-group.css';
+import '@patternfly/patternfly/components/Title/title.css';
+import '@patternfly/patternfly/components/Toolbar/toolbar.css';
+import '@patternfly/patternfly/layouts/Bullseye/bullseye.css';
+import '@patternfly/patternfly/layouts/Flex/flex.css';
+import '@patternfly/patternfly/layouts/Grid/grid.css';
+import '@patternfly/patternfly/layouts/Split/split.css';
+import '@patternfly/patternfly/layouts/Stack/stack.css';

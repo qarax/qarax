@@ -32,3 +32,5 @@ auth:
 # ca-cert.pem, client-cert.pem and client-key.pem for qarax-node's gRPC API
 # (scripts/gen-node-tls.sh writes them to DIR/control-plane).
 node_tls_dir: /etc/qarax/node-tls
+# The web UI's static build (webui/, `pnpm build`), served at /ui.
+ui_dir: /usr/share/qarax/ui

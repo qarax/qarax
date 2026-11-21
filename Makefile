@@ -1,4 +1,4 @@
-.PHONY: build build-release test test-deps clean openapi sdk help lint fmt shfmt shellcheck ruff-check ruff-fmt ci-checks check-fmt check-clippy check-test check-sqlx check-openapi check-sdk check-e2e-lint check-audit check-shell appliance-build appliance-push run-local stop-local
+.PHONY: build build-release test test-deps clean openapi sdk help lint fmt shfmt shellcheck ruff-check ruff-fmt ci-checks check-fmt check-clippy check-test check-sqlx check-openapi check-sdk check-e2e-lint check-audit check-shell check-webui webui appliance-build appliance-push run-local stop-local
 
 # On macOS, override default musl target (linker fails cross-compiling from Mac)
 UNAME_S := $(shell uname -s)
@@ -29,6 +29,7 @@ help:
 	@echo "  make fmt        - Run cargo fmt + shfmt (format)"
 	@echo "  make ci-checks  - Run every CI check (CI jobs run the check-* targets; needs make test-deps)"
 	@echo "  make ruff-check - Run ruff check on Python SDK and e2e tests"
+	@echo "  make webui      - Build the web UI (webui/build, served at /ui with UI_DIR=webui/build)"
 	@echo "  make ruff-fmt   - Run ruff format on Python SDK"
 	@echo "  make appliance-build - Build bootc appliance image locally"
 	@echo "  make appliance-push  - Push appliance image to registry"
@@ -90,7 +91,7 @@ fmt: ruff-fmt shfmt
 # Postgres (make test-deps). CI builds with the OpenTelemetry features.
 OTEL_FEATURES = --features qarax/otel,qarax-node/otel
 
-ci-checks: check-fmt check-clippy check-test check-sqlx check-openapi check-sdk check-e2e-lint check-audit check-shell
+ci-checks: check-fmt check-clippy check-test check-sqlx check-openapi check-sdk check-e2e-lint check-audit check-shell check-webui
 
 check-fmt:
 	cargo +nightly fmt --all -- --check
@@ -123,6 +124,16 @@ check-e2e-lint:
 
 check-audit:
 	cargo audit
+
+# The web UI against the committed spec: formatting, types (its API types are
+# generated from openapi.yaml, so an API change it doesn't follow fails here)
+# and the build.
+check-webui:
+	cd webui && pnpm install --frozen-lockfile && pnpm lint && pnpm check && pnpm build
+
+# The web UI's static build, in webui/build.
+webui:
+	cd webui && pnpm install --frozen-lockfile && pnpm build
 
 check-shell:
 	shellcheck --severity=warning $(SHELL_SCRIPTS)
