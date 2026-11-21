@@ -1,0 +1,38 @@
+{
+	"name": "qarax-webui",
+	"version": "0.0.1",
+	"private": true,
+	"type": "module",
+	"imports": {
+		"#lib/*": "./src/lib/*"
+	},
+	"scripts": {
+		"gen": "node gen-api.js",
+		"dev": "pnpm gen && vite dev",
+		"build": "pnpm gen && vite build",
+		"prepare": "svelte-kit sync || echo ''",
+		"check": "pnpm gen && svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+		"lint": "prettier --check .",
+		"format": "prettier --write ."
+	},
+	"devDependencies": {
+		"@sveltejs/adapter-static": "^4.0.1",
+		"@sveltejs/kit": "^3.2.0",
+		"@sveltejs/vite-plugin-svelte": "^7.3.1",
+		"@types/node": "^26.6.6",
+		"openapi-typescript": "^7.13.0",
+		"prettier": "^3.10.1",
+		"prettier-plugin-svelte": "^4.1.1",
+		"svelte": "^5.57.3",
+		"svelte-check": "^4.7.8",
+		"typescript": "^6.0.3",
+		"vite": "^8.3.8"
+	},
+	"dependencies": {
+		"@patternfly/patternfly": "^6.7.0",
+		"@xterm/addon-fit": "^0.11.0",
+		"@xterm/xterm": "^6.0.0",
+		"openapi-fetch": "^0.17.0"
+	},
+	"packageManager": "pnpm@12.21.0"
+}

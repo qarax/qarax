@@ -40,6 +40,12 @@ The first release.
 - Lifecycle hooks (webhooks), a Server-Sent Events stream of VM changes, an
   audit log of API mutations, OpenTelemetry traces and metrics.
 - A CLI (`qarax`) and a generated Python SDK.
+- A web UI at `/ui`: the fleet at a glance, VMs and hosts, a VM's details and
+  actions (start, stop, pause, resume, force stop, delete) and its serial
+  console in the browser, kept current from the event stream. For clients that
+  can't set the Authorization header on a WebSocket, as browsers can't, the
+  console also takes the API token as the subprotocol
+  `qarax.bearer.<the token, hex-encoded>`.
 
 ### Changed since pre-release builds of master
 

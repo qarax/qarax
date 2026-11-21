@@ -2299,7 +2299,14 @@ pub async fn console_log(
         .unwrap())
 }
 
+/// The WebSocket subprotocol of the console: raw terminal bytes both ways.
+pub const CONSOLE_PROTOCOL: &str = "qarax.console";
+
 /// WebSocket console attachment for interactive terminal access
+///
+/// Authenticate with the Authorization header or, where it can't be set (in a
+/// browser), with the subprotocol `qarax.bearer.<the token, hex-encoded>`,
+/// offered along with `qarax.console`, which the server then selects.
 #[utoipa::path(
     get,
     path = "/v1/vms/{vm_id}/console/attach",
@@ -2325,7 +2332,11 @@ pub async fn console_attach(
     // Verify VM exists and get host
     let host = host_for_vm(&env, vm_id).await?;
 
-    Ok(ws.on_upgrade(move |socket| handle_console_websocket(socket, vm_id, host)))
+    // A browser that offers subprotocols drops the connection unless the
+    // server selects one of them.
+    Ok(ws
+        .protocols([CONSOLE_PROTOCOL])
+        .on_upgrade(move |socket| handle_console_websocket(socket, vm_id, host)))
 }
 
 #[utoipa::path(

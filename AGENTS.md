@@ -10,6 +10,7 @@ Qarax is a two-tier VM management platform for Cloud Hypervisor and Firecracker:
 - **common**: Shared logging/telemetry helpers
 - **cli**: Command-line client (clap)
 - **qarax-init**: PID 1 init process for OCI-booted VMs
+- **webui**: Web UI (SvelteKit single-page app on PatternFly 6, pnpm), built to static files the control plane serves at `/ui`. Its design context (users, voice, principles) is in `.impeccable.md`: read it before UI work
 
 Communication flow: Control plane → gRPC (`proto/node.proto`) → Data plane → hypervisor API (Cloud Hypervisor or Firecracker, chosen per VM). VMs are scheduled onto hosts in "up" state; subsequent VM operations route to the scheduled host.
 
@@ -30,6 +31,8 @@ make appliance-build # Build bootc container image for qarax-node (hypervisor ho
 make appliance-push  # Push appliance image to registry
 make ruff-check      # Lint the Python SDK (run after make sdk) and pyflakes over e2e/
 make ruff-fmt        # Auto-format Python SDK with ruff
+make webui           # Build the web UI (webui/build); `pnpm dev` in webui/ serves it against a running stack
+make check-webui     # The web UI's CI check: prettier, svelte-check, build
 SKIP_DOCKER=1 make test  # Run tests skipping Postgres startup (if already running)
 ```
 
@@ -85,6 +88,7 @@ Do not jump to code investigation when services may not be running or the wrong 
 
 - `qarax/src/handlers/` — Axum HTTP handlers by resource (hosts, vms, instance_types, vm_templates, storage_pools, storage_objects, boot_sources, networks, security_groups, transfers, lifecycle_hooks, jobs, sandboxes, backups, events (SSE), audit_log)
 - `qarax/src/auth.rs` — Bearer-token middleware (see API Authentication)
+- `qarax/src/handlers/ui.rs` — Serves the web UI's build at `/ui` from `ui_dir` (`UI_DIR`), `index.html` for any page
 - `qarax/src/secret_provider.rs` — Resolves host `credential_ref`s (`env://NAME`, `file:///path`); passwords are never stored in the DB
 - `qarax/src/model/` — Database models with inline SQLx queries
 - `qarax/src/grpc_client.rs` — Tonic client for communicating with qarax-node instances, over mTLS (`NodeTls`, loaded from `node_tls_dir` at startup)
@@ -157,7 +161,7 @@ gRPC services in `qarax-node/src/services/` implement generated tonic traits:
 
 ## Configuration
 
-YAML files in `configuration/` (base.yaml, local.yaml, production.yaml), selected by `APP_ENVIRONMENT` env var (default: local). Key env var overrides: `DATABASE_HOST`, `DATABASE_PORT`, `DATABASE_USERNAME`, `DATABASE_PASSWORD`, `DATABASE_NAME`, `NODE_TLS_DIR`.
+YAML files in `configuration/` (base.yaml, local.yaml, production.yaml), selected by `APP_ENVIRONMENT` env var (default: local). Key env var overrides: `DATABASE_HOST`, `DATABASE_PORT`, `DATABASE_USERNAME`, `DATABASE_PASSWORD`, `DATABASE_NAME`, `NODE_TLS_DIR`, `UI_DIR`.
 
 ### Node gRPC TLS
 
@@ -169,7 +173,7 @@ Static bearer tokens, configured by `AUTH_ENABLED` / `AUTH_TOKENS` (comma-separa
 
 - **Off** by default (`base.yaml`; `local.yaml` doesn't override it), e.g. `cargo run` against `make test-deps`.
 - **On** in `production.yaml` (no default tokens: set `AUTH_TOKENS`) and in `e2e/docker-compose.yml`, which is also what `make run-local` uses. There the token is `${QARAX_TEST_TOKEN:-e2e-test-token}`.
-- Public routes: `/`, `/swagger-ui*`, `/api-docs/openapi.json`. Everything else needs `Authorization: Bearer <token>`.
+- Public routes: `/`, `/swagger-ui*`, `/api-docs/openapi.json`, `/ui*` (the web UI asks for a token itself). Everything else needs `Authorization: Bearer <token>`, or, for a WebSocket from a browser (which can't set headers), the subprotocol `qarax.bearer.<the token, hex-encoded>`.
 - The API itself is under `/v1` (`/v1/vms`, `/v1/hosts`, ...); only those public routes are at the root. Raw callers (curl in `demos/`, `hack/`, `scripts/`, raw httpx in `e2e/`) must include it; the CLI and the generated SDK add it themselves.
 - The CLI reads `--token` / `QARAX_TOKEN`. `demos/lib.sh` (sourced by `hack/run-local.sh` and `e2e/setup_host.sh`) and `e2e/run_e2e_tests.sh` default it to `e2e-test-token`.
 
@@ -186,6 +190,7 @@ On every PR and push to master, in parallel:
 | Format | `make check-fmt`: `cargo +nightly fmt --all -- --check` |
 | Clippy | `make check-clippy`: clippy over all targets (tests included) with the otel features, `-D warnings` |
 | Test | against a Postgres 16 service: `make check-test` (nextest with the otel features), `make check-sqlx` (`cargo sqlx prepare --workspace --check` after migrating), `make check-openapi` and `make check-sdk` (regenerate `openapi.yaml` and the Python SDK and fail on a diff), `make check-e2e-lint` (pyflakes over `e2e/`, since E2E itself skips unlabelled PRs) |
+| Web UI | `make check-webui`: prettier, `svelte-check` against API types generated from `openapi.yaml` (so an API change the UI doesn't follow fails here), and the build |
 | Audit and shell lint | `make check-audit` (`cargo audit`, ignores in `.cargo/audit.toml`), `make check-shell` (`shellcheck --severity=warning` and `shfmt -d` over every `*.sh`; nothing else exercises `demos/` and `hack/`) |
 | Build | `make build-release` (musl, otel features); uploads the four binaries as a workflow artifact |
 | E2E | downloads the build artifacts, starts a Docker Compose stack with KVM passthrough, runs pytest |
@@ -248,13 +253,13 @@ E2E runs only on master and labelled PRs, so a contract that needs no real VM or
 
 ## Rules
 
-- **Never modify generated files directly.** Generated files: `python-sdk/` (from `openapi.yaml` via `make sdk`) and `openapi.yaml` (from utoipa annotations via `make openapi`). Fix the source, then regenerate.
+- **Never modify generated files directly.** Generated files: `python-sdk/` (from `openapi.yaml` via `make sdk`), `openapi.yaml` (from utoipa annotations via `make openapi`) and `webui/src/lib/api/schema.d.ts` (from `openapi.yaml` via `pnpm gen`; not committed). Fix the source, then regenerate.
 - **Never modify production config files for test purposes.** Fix the Dockerfile or compose file instead.
 - **Always run `make lint` after changes.** Zero clippy warnings are required. Check all workspace crates, not just the one you edited.
 - **Verify changes work before reporting done.** After any Rust code change: `make lint` to confirm zero warnings, then `cargo nextest run -p <crate>` (or `make test`) to confirm tests pass. Do not present a change as complete without verifying it compiles and tests pass.
 - **After any SQL query change:** run `cargo sqlx prepare --workspace` to update the offline query cache.
 - **When renaming anything:** search `hack/`, `e2e/`, `demos/`, `.github/`, and all workspace crates for stale references before finishing.
-- **When changing an API request shape, CLI flag, or auth behavior:** grep `demos/` and `hack/` for raw callers (`curl`, python `requests`, CLI invocations). Nothing in CI exercises them, so they break silently. Some request types (e.g. `NewHost`) use `#[serde(deny_unknown_fields)]`, so removing a field from them turns old callers into 422s.
+- **When changing an API request shape, CLI flag, or auth behavior:** run `make check-webui` (the web UI type-checks against the spec), and grep `demos/` and `hack/` for raw callers (`curl`, python `requests`, CLI invocations). Nothing in CI exercises them, so they break silently. Some request types (e.g. `NewHost`) use `#[serde(deny_unknown_fields)]`, so removing a field from them turns old callers into 422s.
 - **When making user facing changes** Make sure you have implemented a CLI and added working e2e tests.
 - **Never embed credentials, secrets, or personal data in source code.** Use environment variables or config files excluded from version control.
 - **When the user redirects or interrupts, stop immediately.** Do not continue the previous approach. Ask a clarifying question if the new direction is unclear.

@@ -1,0 +1,4 @@
+# Like Cargo's registry.global-min-publish-age (.cargo/config.toml) and
+# Renovate's minimumReleaseAge: don't resolve a version published less than a
+# week ago.
+minimumReleaseAge: 10080

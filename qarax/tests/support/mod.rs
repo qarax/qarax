@@ -54,6 +54,19 @@ static NODE_TLS_DIR: LazyLock<tempfile::TempDir> = LazyLock::new(|| {
     dir
 });
 
+/// The web UI's entry page in [`UI_DIR`].
+pub const UI_INDEX: &str = "<!doctype html><title>qarax</title>";
+
+/// A stand-in for the web UI's build, served at /ui: its entry page and one
+/// of its hashed files.
+static UI_DIR: LazyLock<tempfile::TempDir> = LazyLock::new(|| {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("index.html"), UI_INDEX).unwrap();
+    std::fs::create_dir_all(dir.path().join("_app/immutable")).unwrap();
+    std::fs::write(dir.path().join("_app/immutable/app.js"), "").unwrap();
+    dir
+});
+
 /// The TLS a fake node registered as 127.0.0.1 serves with, as qarax-node
 /// does: it accepts only the control plane's client certificate.
 pub fn node_server_tls() -> tonic::transport::ServerTlsConfig {
@@ -132,6 +145,7 @@ pub async fn spawn_app_with_auth(auth: AuthSettings) -> TestApp {
                 configuration.ha,
                 default_control_plane_architecture(),
                 node_tls,
+                UI_DIR.path().to_owned(),
             )
             .await
             .expect("Failed to start the control plane");

@@ -43,6 +43,7 @@ mod security_group;
 mod storage_object;
 mod storage_pool;
 mod transfer;
+mod ui;
 pub(crate) mod vm;
 mod vm_template;
 
@@ -403,9 +404,9 @@ async fn reject_maintenance_requests(
     next.run(request).await
 }
 
-pub fn app(env: App) -> Router {
+pub fn app(env: App, ui_dir: &std::path::Path) -> Router {
     let x_request_id = HeaderName::from_static("x-request-id");
-    // Everything but the root and the API docs is versioned.
+    // Everything but the root, the API docs and the web UI is versioned.
     let api = Router::new()
         .merge(hosts())
         .merge(backups())
@@ -428,6 +429,7 @@ pub fn app(env: App) -> Router {
         .route("/", get(|| async { "hello" }))
         .nest("/v1", api)
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
+        .merge(ui::router(ui_dir))
         .layer(
             ServiceBuilder::new()
                 .layer(PropagateRequestIdLayer::new(x_request_id.clone()))

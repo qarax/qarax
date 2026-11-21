@@ -46,6 +46,18 @@ jobs:
       - name: Build release binaries
         run: make build-release
 
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: webui/package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: webui/pnpm-lock.yaml
+
+      - name: Build the web UI
+        run: make webui
+
       - name: Package
         run: |
           name="qarax-${GITHUB_REF_NAME}-x86_64-linux-musl"
@@ -54,6 +66,7 @@ jobs:
             cp "target/${TARGET_TRIPLE}/release/${bin}" "dist/${name}/bin/"
           done
           cp -r configuration "dist/${name}/"
+          cp -r webui/build "dist/${name}/ui"
           cp CHANGELOG.md scripts/gen-node-tls.sh deployments/qarax.service \
             deployments/qarax-node.service "dist/${name}/"
           tar -C dist -czf "dist/${name}.tar.gz" "${name}"

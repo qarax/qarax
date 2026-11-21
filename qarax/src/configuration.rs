@@ -231,6 +231,9 @@ pub struct Settings {
     /// Directory with the control plane's TLS files for qarax-node's gRPC API
     /// (see [`crate::grpc_client::NodeTls::load`]). Overridden by NODE_TLS_DIR.
     pub node_tls_dir: std::path::PathBuf,
+    /// Directory with the web UI's static build (`webui/`), served at `/ui`.
+    /// Overridden by UI_DIR.
+    pub ui_dir: std::path::PathBuf,
 }
 
 #[derive(serde::Deserialize, Debug, Clone)]
@@ -386,6 +389,10 @@ pub fn get_configuration() -> Result<Settings, config::ConfigError> {
         .set_override_option(
             "node_tls_dir",
             std::env::var("NODE_TLS_DIR").ok().filter(|s| !s.is_empty()),
+        )?
+        .set_override_option(
+            "ui_dir",
+            std::env::var("UI_DIR").ok().filter(|s| !s.is_empty()),
         )?
         .build()?;
     let settings = settings.try_deserialize::<Settings>()?;

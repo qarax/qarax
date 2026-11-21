@@ -14,6 +14,7 @@ dependencies = [
     "qarax-api-client",
     "asyncssh>=2.22.0",
     "pytest-timeout>=2.2.0",
+    "websockets>=15.0",
 ]
 
 [project.optional-dependencies]

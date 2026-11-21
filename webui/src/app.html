@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="color-scheme" content="light dark" />
+		<title>qarax</title>
+		<link rel="icon" href="%sveltekit.assets%/favicon.svg" />
+		<script>
+			// PatternFly's dark theme is a class on <html>; follow the OS, and set it
+			// before the first paint so a dark screen never flashes light.
+			const dark = matchMedia('(prefers-color-scheme: dark)');
+			const theme = () =>
+				document.documentElement.classList.toggle('pf-v6-theme-dark', dark.matches);
+			theme();
+			dark.addEventListener('change', theme);
+		</script>
+		%sveltekit.head%
+	</head>
+	<body data-sveltekit-preload-data="hover">
+		<div style="display: contents">%sveltekit.body%</div>
+	</body>
+</html>
