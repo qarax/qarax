@@ -71,7 +71,7 @@ These need action if you ran a build from before them:
   place, so importing it again gave an empty disk. An image you pushed to the
   local registry that an earlier build imported holds OverlayBD layers under
   its own tag now: push it again before importing it.
-- The control plane's database pool follows `database.max_connections` (200
+- The control plane's database pool follows `database.max_connections` (50
   in `production.yaml`) and `database_name`. It was 10 connections whatever
   the setting said, on the database named after the user. Postgres's own
   `max_connections` (100 unless changed) has to allow the pool's.
