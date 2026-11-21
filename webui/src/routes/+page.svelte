@@ -42,7 +42,7 @@
 			const affected = on.length
 				? `${on.length === 1 ? 'Its VM' : 'Its VMs'}, ${names(on)}, can't be managed until it's back.`
 				: 'No VMs run on it.';
-			const href = resolve('/hosts');
+			const href = resolve('/hosts/[id]', { id: host.id });
 			switch (host.status) {
 				case 'down':
 					items.push({
@@ -216,7 +216,8 @@
 															><StatusIcon
 																tone={HOST_STATUS[host.status].tone}
 																label={HOST_STATUS[host.status].text}
-															/>{host.name}</span
+															/><a href={resolve('/hosts/[id]', { id: host.id })}>{host.name}</a
+															></span
 														>
 													</td>
 													<td class="pf-v6-c-table__td" data-label="vCPUs allocated">

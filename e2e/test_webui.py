@@ -114,8 +114,8 @@ async def page():
 
 
 async def test_browser_pages_load(page: Page):
-    """Each section of the sidebar loads what it lists from the API, in the
-    browser, without an error."""
+    """Each section of the sidebar, and a host's own page, loads what it shows
+    from the API, in the browser, without an error."""
     sections = ["Virtual machines", "Hosts", "Networks", "Storage pools", "Overview"]
     for section in sections:
         await (
@@ -131,6 +131,17 @@ async def test_browser_pages_load(page: Page):
         await expect(
             page.get_by_role("alert").filter(has_text="Couldn't load")
         ).to_have_count(0)
+
+    nav = page.get_by_role("navigation", name="Global")
+    await nav.get_by_role("link", name="Hosts").click()
+    host = page.get_by_role("table", name="Hosts").get_by_role("link").first
+    name = await host.inner_text()
+    await host.click()
+    await expect(page.get_by_role("heading", level=1, name=name)).to_be_visible()
+    await expect(page.get_by_role("heading", level=2, name="Capacity")).to_be_visible()
+    await expect(
+        page.get_by_role("alert").filter(has_text="Couldn't load")
+    ).to_have_count(0)
 
 
 async def test_browser_create_start_delete_vm(page: Page):
