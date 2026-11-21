@@ -25,11 +25,8 @@ impl VmManager {
     }
 
     async fn ensure_vm_registered(&self, vm_id: &str) -> Result<(), VmManagerError> {
-        {
-            let vms = self.vms.lock().await;
-            if vms.contains_key(vm_id) {
-                return Ok(());
-            }
+        if self.vms.lock().unwrap().contains_key(vm_id) {
+            return Ok(());
         }
 
         let Some(config) = self.load_persisted_vm_config(vm_id).await? else {
@@ -146,11 +143,13 @@ impl VmManager {
             };
 
             let instance = VmInstance {
-                proto_config,
+                summary: watch::Sender::new(VmSummary {
+                    config: proto_config,
+                    status,
+                }),
                 process: None, // We don't have the child process handle for recovered VMs
                 vm,
                 socket_path,
-                status,
                 tap_devices,
                 passt_processes: Vec::new(),
                 serial_pty_path: None,
@@ -159,8 +158,10 @@ impl VmManager {
                 storage_backend_kind,
             };
 
-            let mut vms = self.vms.lock().await;
-            vms.insert(vm_id.clone(), instance);
+            self.vms
+                .lock()
+                .unwrap()
+                .insert(vm_id.clone(), ManagedVm::new(instance));
             info!("Recovered VM {} with status {:?}", vm_id, status);
         }
     }
@@ -171,11 +172,8 @@ impl VmManager {
         info!("Creating VM: {}", vm_id);
 
         // Check if VM already exists
-        {
-            let vms = self.vms.lock().await;
-            if vms.contains_key(&vm_id) {
-                return Err(VmManagerError::VmAlreadyExists(vm_id));
-            }
+        if self.vms.lock().unwrap().contains_key(&vm_id) {
+            return Err(VmManagerError::VmAlreadyExists(vm_id));
         }
 
         // Create TAP devices for networks that need them, injecting the names
@@ -402,11 +400,13 @@ impl VmManager {
         };
 
         let instance = VmInstance {
-            proto_config: config.clone(),
+            summary: watch::Sender::new(VmSummary {
+                config,
+                status: VmStatus::Created,
+            }),
             process: Some(process),
             vm,
             socket_path: socket_path.clone(),
-            status: VmStatus::Created,
             tap_devices,
             passt_processes,
             serial_pty_path: serial_pty,
@@ -415,12 +415,12 @@ impl VmManager {
             storage_backend_kind,
         };
 
-        let state = instance.to_vm_state();
+        let state = instance.summary.borrow().to_vm_state();
 
-        {
-            let mut vms = self.vms.lock().await;
-            vms.insert(vm_id.clone(), instance);
-        }
+        self.vms
+            .lock()
+            .unwrap()
+            .insert(vm_id.clone(), ManagedVm::new(instance));
 
         info!("VM {} registered in manager", vm_id);
         Ok(state)
@@ -433,35 +433,27 @@ impl VmManager {
         self.ensure_vm_registered(vm_id).await?;
 
         let (socket_path, proto_config) = {
-            let mut vms = self.vms.lock().await;
-            let instance = vms
-                .get_mut(vm_id)
-                .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
-
-            (instance.socket_path.clone(), instance.proto_config.clone())
+            let instance = self.lock_vm(vm_id).await?;
+            (instance.socket_path.clone(), instance.config())
         };
 
         // Use raw API for boot so we get the full error response body
         Self::send_api_request(&socket_path, "PUT", "/api/v1/vm.boot", None).await?;
 
-        {
-            let mut vms = self.vms.lock().await;
-            if let Some(instance) = vms.get_mut(vm_id) {
-                instance.status = VmStatus::Running;
-            }
+        if let Ok(instance) = self.lock_vm(vm_id).await {
+            instance.set_status(VmStatus::Running);
         }
 
         // Re-query PTY paths after boot in case they weren't available at create time.
         let (serial_pty, console_pty) = self.query_pty_paths(&socket_path, &proto_config).await;
-        if serial_pty.is_some() || console_pty.is_some() {
-            let mut vms = self.vms.lock().await;
-            if let Some(instance) = vms.get_mut(vm_id) {
-                if serial_pty.is_some() {
-                    instance.serial_pty_path = serial_pty;
-                }
-                if console_pty.is_some() {
-                    instance.console_pty_path = console_pty;
-                }
+        if (serial_pty.is_some() || console_pty.is_some())
+            && let Ok(mut instance) = self.lock_vm(vm_id).await
+        {
+            if serial_pty.is_some() {
+                instance.serial_pty_path = serial_pty;
+            }
+            if console_pty.is_some() {
+                instance.console_pty_path = console_pty;
             }
         }
 
@@ -479,13 +471,7 @@ impl VmManager {
     pub async fn stop_vm(&self, vm_id: &str) -> Result<(), VmManagerError> {
         info!("Stopping VM: {}", vm_id);
 
-        let socket_path = {
-            let vms = self.vms.lock().await;
-            let instance = vms
-                .get(vm_id)
-                .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
-            instance.socket_path.clone()
-        };
+        let socket_path = self.lock_vm(vm_id).await?.socket_path.clone();
 
         let takes_power_button = matches!(
             Self::query_vm_state(&socket_path).await,
@@ -505,11 +491,8 @@ impl VmManager {
             }
         }
 
-        {
-            let mut vms = self.vms.lock().await;
-            if let Some(instance) = vms.get_mut(vm_id) {
-                instance.status = VmStatus::Shutdown;
-            }
+        if let Ok(instance) = self.lock_vm(vm_id).await {
+            instance.set_status(VmStatus::Shutdown);
         }
 
         info!("VM {} stopped successfully", vm_id);
@@ -581,10 +564,7 @@ impl VmManager {
     pub async fn force_stop_vm(&self, vm_id: &str) -> Result<(), VmManagerError> {
         info!("Force stopping VM: {}", vm_id);
 
-        let mut vms = self.vms.lock().await;
-        let instance = vms
-            .get_mut(vm_id)
-            .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
+        let mut instance = self.lock_vm(vm_id).await?;
 
         if let Some(mut process) = instance.process.take()
             && let Err(e) = process.kill().await
@@ -592,7 +572,7 @@ impl VmManager {
             warn!("Failed to kill CH process for VM {}: {}", vm_id, e);
         }
 
-        instance.status = VmStatus::Shutdown;
+        instance.set_status(VmStatus::Shutdown);
 
         info!("VM {} force stopped successfully", vm_id);
         Ok(())
@@ -602,19 +582,12 @@ impl VmManager {
     pub async fn pause_vm(&self, vm_id: &str) -> Result<(), VmManagerError> {
         info!("Pausing VM: {}", vm_id);
 
-        let socket_path = {
-            let vms = self.vms.lock().await;
-            let instance = vms
-                .get(vm_id)
-                .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
-            instance.socket_path.clone()
-        };
+        let socket_path = self.lock_vm(vm_id).await?.socket_path.clone();
 
         Self::send_api_request(&socket_path, "PUT", "/api/v1/vm.pause", None).await?;
 
-        let mut vms = self.vms.lock().await;
-        if let Some(instance) = vms.get_mut(vm_id) {
-            instance.status = VmStatus::Paused;
+        if let Ok(instance) = self.lock_vm(vm_id).await {
+            instance.set_status(VmStatus::Paused);
         }
 
         info!("VM {} paused successfully", vm_id);
@@ -625,19 +598,12 @@ impl VmManager {
     pub async fn resume_vm(&self, vm_id: &str) -> Result<(), VmManagerError> {
         info!("Resuming VM: {}", vm_id);
 
-        let socket_path = {
-            let vms = self.vms.lock().await;
-            let instance = vms
-                .get(vm_id)
-                .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
-            instance.socket_path.clone()
-        };
+        let socket_path = self.lock_vm(vm_id).await?.socket_path.clone();
 
         Self::send_api_request(&socket_path, "PUT", "/api/v1/vm.resume", None).await?;
 
-        let mut vms = self.vms.lock().await;
-        if let Some(instance) = vms.get_mut(vm_id) {
-            instance.status = VmStatus::Running;
+        if let Ok(instance) = self.lock_vm(vm_id).await {
+            instance.set_status(VmStatus::Running);
         }
 
         info!("VM {} resumed successfully", vm_id);
@@ -648,11 +614,10 @@ impl VmManager {
     pub async fn delete_vm(&self, vm_id: &str) -> Result<(), VmManagerError> {
         info!("Deleting VM: {}", vm_id);
 
-        let mut instance = {
-            let mut vms = self.vms.lock().await;
-            vms.remove(vm_id)
-                .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?
-        };
+        let mut instance = self
+            .remove_vm(vm_id)
+            .await
+            .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
 
         // Try to shutdown via SDK first
         if let Err(e) = instance.vm.shutdown().await {
@@ -718,21 +683,19 @@ impl VmManager {
 
     /// Get VM info
     pub async fn get_vm_info(&self, vm_id: &str) -> Result<VmState, VmManagerError> {
-        let mut vms = self.vms.lock().await;
-        let instance = vms
-            .get_mut(vm_id)
-            .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
-
-        let mut state = instance.to_vm_state();
+        let mut instance = self.lock_vm(vm_id).await?;
 
         // Try to get live status from CH via SDK
+        let mut memory_actual_size = None;
         if let Ok(info) = instance.vm.get_info().await {
-            state.status = vm_status_from_sdk(info.state).into();
-            state.memory_actual_size = info.memory_actual_size;
-            instance.status = VmStatus::try_from(state.status).unwrap_or(VmStatus::Unknown);
+            instance.set_status(vm_status_from_sdk(info.state));
+            memory_actual_size = info.memory_actual_size;
         }
 
-        Ok(state)
+        Ok(VmState {
+            memory_actual_size,
+            ..instance.summary.borrow().to_vm_state()
+        })
     }
 
     /// Get VM counters from Cloud Hypervisor's /vm.counters endpoint
@@ -740,13 +703,7 @@ impl VmManager {
         &self,
         vm_id: &str,
     ) -> Result<HashMap<String, HashMap<String, i64>>, VmManagerError> {
-        let socket_path = {
-            let vms = self.vms.lock().await;
-            let instance = vms
-                .get(vm_id)
-                .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
-            instance.socket_path.clone()
-        };
+        let socket_path = self.lock_vm(vm_id).await?.socket_path.clone();
 
         let body =
             match Self::send_api_request(&socket_path, "GET", "/api/v1/vm.counters", None).await {
@@ -766,9 +723,11 @@ impl VmManager {
 
     /// List all VMs
     pub async fn list_vms(&self) -> Vec<VmState> {
-        let vms = self.vms.lock().await;
-        vms.values()
-            .map(|instance| instance.to_vm_state())
+        self.vms
+            .lock()
+            .unwrap()
+            .values()
+            .map(|vm| vm.summary.borrow().to_vm_state())
             .collect()
     }
 
@@ -777,8 +736,7 @@ impl VmManager {
     /// Returns `false` if the process has exited, is a zombie, or was never
     /// tracked (e.g. a recovered VM).
     pub async fn is_vm_process_alive(&self, vm_id: &str) -> bool {
-        let mut vms = self.vms.lock().await;
-        let Some(instance) = vms.get_mut(vm_id) else {
+        let Ok(mut instance) = self.lock_vm(vm_id).await else {
             return false;
         };
         match &mut instance.process {

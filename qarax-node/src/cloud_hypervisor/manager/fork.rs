@@ -123,16 +123,16 @@ impl VmManager {
         if fork_ids.is_empty() {
             return Err(VmmError::InvalidConfig("no VMs to fork into".into()));
         }
-        let (source_config, oci_mapped) = {
-            let vms = self.vms.lock().await;
+        {
+            let vms = self.vms.lock().unwrap();
             if let Some(id) = fork_ids.iter().find(|id| vms.contains_key(*id)) {
                 return Err(VmmError::VmAlreadyExists(id.clone()));
             }
-            let source = vms
-                .get(source_id)
-                .ok_or_else(|| VmmError::VmNotFound(source_id.to_string()))?;
+        }
+        let (source_config, oci_mapped) = {
+            let source = self.lock_vm(source_id).await?;
             (
-                source.proto_config.clone(),
+                source.config(),
                 source.storage_backend_kind == Some(StoragePoolKind::Overlaybd),
             )
         };
@@ -171,11 +171,14 @@ impl VmManager {
         }
         let forks = forked?;
 
-        let mut vms = self.vms.lock().await;
-        for (fork_id, instance) in forks {
-            self.persist_config(&fork_id, &instance.proto_config).await;
-            vms.insert(fork_id, instance);
+        for (fork_id, instance) in &forks {
+            self.persist_config(fork_id, &instance.config()).await;
         }
+        self.vms.lock().unwrap().extend(
+            forks
+                .into_iter()
+                .map(|(fork_id, instance)| (fork_id, ManagedVm::new(instance))),
+        );
         info!(
             "VM {} forked into {} VMs, paused",
             source_id,
@@ -192,22 +195,20 @@ impl VmManager {
         fork_ids: &[String],
     ) -> Result<(), VmmError> {
         let forks = {
-            let vms = self.vms.lock().await;
-            let source = &vms
-                .get(source_id)
-                .ok_or_else(|| VmmError::VmNotFound(source_id.to_string()))?
-                .proto_config;
+            let vms = self.vms.lock().unwrap();
+            let config = |vm_id: &str| {
+                vms.get(vm_id)
+                    .map(|vm| vm.summary.borrow().config.clone())
+                    .ok_or_else(|| VmmError::VmNotFound(vm_id.to_string()))
+            };
+            let source = config(source_id)?;
             fork_ids
                 .iter()
                 .map(|fork_id| {
-                    let fork = &vms
-                        .get(fork_id)
-                        .ok_or_else(|| VmmError::VmNotFound(fork_id.clone()))?
-                        .proto_config;
                     Ok((
                         fork_id.as_str(),
                         self.vsock_socket_path(fork_id),
-                        readdress_request(source, fork)?,
+                        readdress_request(&source, &config(fork_id)?)?,
                     ))
                 })
                 .collect::<Result<Vec<_>, VmmError>>()?
@@ -241,11 +242,8 @@ impl VmManager {
             ))
         })?;
 
-        let mut vms = self.vms.lock().await;
-        let source = vms
-            .get_mut(source_id)
-            .ok_or_else(|| VmmError::VmNotFound(source_id.to_string()))?;
-        let was_running = match source.status {
+        let source = self.lock_vm(source_id).await?;
+        let was_running = match source.status() {
             VmStatus::Running => true,
             VmStatus::Paused => false,
             _ => return Err(VmmError::ProcessError("VM is not running".into())),
@@ -253,7 +251,7 @@ impl VmManager {
         let socket = source.socket_path.clone();
         if was_running {
             Self::send_api_request(&socket, "PUT", "/api/v1/vm.pause", None).await?;
-            source.status = VmStatus::Paused;
+            source.set_status(VmStatus::Paused);
         }
         let snapshot = async {
             let body =
@@ -266,7 +264,7 @@ impl VmManager {
         if was_running {
             // Even when the snapshot failed: a fork mustn't leave its source paused.
             Self::send_api_request(&socket, "PUT", "/api/v1/vm.resume", None).await?;
-            source.status = VmStatus::Running;
+            source.set_status(VmStatus::Running);
         }
         snapshot
     }
@@ -375,11 +373,13 @@ impl VmManager {
 
         match restored {
             Ok((vm, socket_path, serial_pty_path, console_pty_path)) => Ok(VmInstance {
-                proto_config: config,
+                summary: watch::Sender::new(VmSummary {
+                    config,
+                    status: VmStatus::Paused,
+                }),
                 process,
                 vm,
                 socket_path,
-                status: VmStatus::Paused,
                 tap_devices,
                 passt_processes: vec![],
                 serial_pty_path,

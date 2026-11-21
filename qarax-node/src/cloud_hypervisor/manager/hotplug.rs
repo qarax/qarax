@@ -11,15 +11,12 @@ impl VmManager {
         vm_id: &str,
         config: &ProtoNetConfig,
     ) -> Result<(), VmManagerError> {
-        let mut vms = self.vms.lock().await;
-        let instance = vms
-            .get_mut(vm_id)
-            .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
+        let mut instance = self.lock_vm(vm_id).await?;
+        let mut vm_config = instance.config();
 
         let mut net = config.clone();
         let created_tap = if !net.vhost_user.unwrap_or(false) && net.tap.is_none() {
-            let in_use: Vec<&str> = instance
-                .proto_config
+            let in_use: Vec<&str> = vm_config
                 .networks
                 .iter()
                 .filter_map(|n| n.tap.as_deref())
@@ -65,9 +62,10 @@ impl VmManager {
             return Err(e);
         }
 
-        instance.proto_config.networks.push(net);
+        vm_config.networks.push(net);
         instance.tap_devices.extend(created_tap);
-        self.persist_config(vm_id, &instance.proto_config).await;
+        self.persist_config(vm_id, &vm_config).await;
+        instance.set_config(vm_config);
         Ok(())
     }
 
@@ -76,13 +74,7 @@ impl VmManager {
         vm_id: &str,
         device_id: &str,
     ) -> Result<(), VmManagerError> {
-        let socket_path = {
-            let vms = self.vms.lock().await;
-            let instance = vms
-                .get(vm_id)
-                .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
-            instance.socket_path.clone()
-        };
+        let socket_path = self.lock_vm(vm_id).await?.socket_path.clone();
 
         let body = serde_json::json!({ "id": device_id }).to_string();
         Self::send_api_request(&socket_path, "PUT", "/api/v1/vm.remove-device", Some(&body))
@@ -136,26 +128,20 @@ impl VmManager {
     ) -> Result<(), VmManagerError> {
         self.remove_device_by_id(vm_id, device_id).await?;
 
-        let mut vms = self.vms.lock().await;
-        let instance = vms
-            .get_mut(vm_id)
-            .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
-        let Some(index) = instance
-            .proto_config
-            .networks
-            .iter()
-            .position(|n| n.id == device_id)
-        else {
+        let mut instance = self.lock_vm(vm_id).await?;
+        let mut config = instance.config();
+        let Some(index) = config.networks.iter().position(|n| n.id == device_id) else {
             return Ok(());
         };
-        let net = instance.proto_config.networks.remove(index);
+        let net = config.networks.remove(index);
         if let Some(tap) = net.tap
             && instance.tap_devices.contains(&tap)
         {
             Self::delete_tap_device(&tap).await;
             instance.tap_devices.retain(|t| *t != tap);
         }
-        self.persist_config(vm_id, &instance.proto_config).await;
+        self.persist_config(vm_id, &config).await;
+        instance.set_config(config);
         Ok(())
     }
 
@@ -165,10 +151,7 @@ impl VmManager {
         vm_id: &str,
         config: &ProtoDiskConfig,
     ) -> Result<(), VmManagerError> {
-        let vms = self.vms.lock().await;
-        let instance = vms
-            .get(vm_id)
-            .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
+        let instance = self.lock_vm(vm_id).await?;
 
         let sdk_config = Self::proto_disk_to_sdk(config)?;
         let body = serde_json::to_string(&sdk_config)
@@ -201,13 +184,7 @@ impl VmManager {
         desired_vcpus: Option<i32>,
         desired_ram: Option<i64>,
     ) -> Result<(), VmManagerError> {
-        let socket_path = {
-            let vms = self.vms.lock().await;
-            let instance = vms
-                .get(vm_id)
-                .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
-            instance.socket_path.clone()
-        };
+        let socket_path = self.lock_vm(vm_id).await?.socket_path.clone();
 
         #[derive(serde::Serialize)]
         struct VmResizeBody {
@@ -249,13 +226,7 @@ impl VmManager {
             ));
         }
 
-        let socket_path = {
-            let vms = self.vms.lock().await;
-            vms.get(vm_id)
-                .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?
-                .socket_path
-                .clone()
-        };
+        let socket_path = self.lock_vm(vm_id).await?.socket_path.clone();
         if matches!(
             Self::query_vm_state(&socket_path).await,
             Ok(models::VmState::Running | models::VmState::Paused)
@@ -281,10 +252,7 @@ impl VmManager {
         vm_id: &str,
         config: &ProtoVfioDeviceConfig,
     ) -> Result<(), VmManagerError> {
-        let vms = self.vms.lock().await;
-        let instance = vms
-            .get(vm_id)
-            .ok_or_else(|| VmManagerError::VmNotFound(vm_id.to_string()))?;
+        let instance = self.lock_vm(vm_id).await?;
 
         let sdk_config = Self::proto_vfio_device_to_sdk(config)?;
         let body = serde_json::to_string(&sdk_config)
