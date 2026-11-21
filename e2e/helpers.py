@@ -6,8 +6,10 @@ import os
 import shlex
 import subprocess
 import time
+from pathlib import Path
 from uuid import UUID
 
+from qarax_api_client.api.hosts import init as init_host
 from qarax_api_client.api.hosts import list_ as list_hosts
 from qarax_api_client.api.networks import attach_host as attach_network_host
 from qarax_api_client.api.networks import create as create_network
@@ -31,6 +33,9 @@ COMPOSE_PROJECT = os.getenv("QARAX_COMPOSE_PROJECT", "e2e")
 NODE_CONTAINER_PREFIX = f"{COMPOSE_PROJECT}-qarax-node"
 # Upper bound for a single docker CLI call made by a test.
 DOCKER_TIMEOUT = 120
+E2E_DIR = Path(__file__).parent
+# How long a restarted qarax-node may take to accept gRPC again.
+NODE_RESTART_TIMEOUT = 120
 # qarax-node --runtime-dir default: VM sockets, logs and cloud-init seed images.
 NODE_RUNTIME_DIR = "/var/lib/qarax/vms"
 # The test registry as seen from the test runner (host-side port mapping), and
@@ -211,6 +216,36 @@ def docker(*args, check=True) -> subprocess.CompletedProcess:
         text=True,
         timeout=DOCKER_TIMEOUT,
     )
+
+
+def compose(*args):
+    """Run a docker compose command against the e2e stack."""
+    subprocess.run(
+        ["docker", "compose", *args],
+        cwd=E2E_DIR,
+        check=True,
+        capture_output=True,
+        timeout=DOCKER_TIMEOUT,
+    )
+
+
+async def reinit_host(c, host_id, timeout=NODE_RESTART_TIMEOUT):
+    """Initialize a host whose node was restarted, retrying until its gRPC port is back.
+
+    Init probes the node and only then marks the host UP; a status PATCH would
+    only write the database.
+    """
+    deadline = time.time() + timeout
+    while True:
+        resp = await call_api_detailed(init_host, client=c, host_id=host_id)
+        if resp.status_code == 200:
+            return
+        if time.time() >= deadline:
+            raise TimeoutError(
+                f"init of host {host_id} still failing after {timeout}s: "
+                f"HTTP {resp.status_code.value} {resp.content.decode(errors='replace')}"
+            )
+        await asyncio.sleep(2)
 
 
 def containers(prefix):

@@ -1060,6 +1060,17 @@ impl VmmManager for FirecrackerManager {
                 }
             };
 
+            // A Firecracker that died with the node left its socket behind,
+            // refusing connections. Its VM is no longer the node's: the
+            // control plane defines it again when it next starts.
+            if let Err(e) = tokio::net::UnixStream::connect(&path).await {
+                warn!(
+                    "FC: VM {} socket is not answering (process has died): {}",
+                    vm_id, e
+                );
+                continue;
+            }
+
             let tap_devices: Vec<String> = proto_config
                 .networks
                 .iter()

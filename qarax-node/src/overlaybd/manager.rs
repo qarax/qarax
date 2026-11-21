@@ -453,10 +453,12 @@ impl OverlayBdManager {
             })?;
         }
 
-        // Remove stale backstore from a previous (failed) attempt if present.
-        if tcmu_dir.exists() {
-            let _ = tokio::fs::write(tcmu_dir.join("enable"), "0\n").await;
-            let _ = tokio::fs::remove_dir(&tcmu_dir).await;
+        // A device under these names is a leftover: a mount is only ever for an
+        // id with no device (a VM the node is adding, a preflight or commit),
+        // so it was left by a failed attempt, or by a VM that died with the
+        // node, whose LUN still links its backstore.
+        if Self::remove_tcmu_device(&tcmu_name, &wwn).await {
+            info!("Removed a stale OverlayBD device of VM {}", vm_id);
         }
 
         tokio::fs::create_dir(&tcmu_dir).await.map_err(|e| {
@@ -824,8 +826,31 @@ impl OverlayBdManager {
             (self.cache_dir.join(vm_id), tcmu_name, wwn)
         };
 
-        // Tear down loopback fabric.
+        Self::remove_tcmu_device(&tcmu_name, &wwn).await;
+
+        // Remove the per-VM config directory.
+        if config_dir.exists() {
+            if let Err(e) = tokio::fs::remove_dir_all(&config_dir).await {
+                warn!(
+                    "Failed to remove OverlayBD config dir for VM {}: {}",
+                    vm_id, e
+                );
+            } else {
+                info!("OverlayBD config dir removed for VM {}", vm_id);
+            }
+        }
+    }
+
+    /// Remove the configfs objects of the TCMU device `tcmu_name` / `wwn`:
+    /// its loopback fabric first, since a backstore that a LUN still links
+    /// can't be removed, then the backstore. Returns whether there were any.
+    async fn remove_tcmu_device(tcmu_name: &str, wwn: &str) -> bool {
         let loopback_dir = PathBuf::from(format!("/sys/kernel/config/target/loopback/{}", wwn));
+        let tcmu_dir = PathBuf::from(format!(
+            "/sys/kernel/config/target/core/user_1/{}",
+            tcmu_name
+        ));
+        let found = loopback_dir.exists() || tcmu_dir.exists();
         if loopback_dir.exists() {
             let tpg_dir = loopback_dir.join("tpgt_1");
             // Disable the TPG first.
@@ -850,11 +875,6 @@ impl OverlayBdManager {
             }
         }
 
-        // Tear down the TCMU backstore.
-        let tcmu_dir = PathBuf::from(format!(
-            "/sys/kernel/config/target/core/user_1/{}",
-            tcmu_name
-        ));
         if tcmu_dir.exists() {
             let _ = tokio::fs::write(tcmu_dir.join("enable"), "0\n").await;
             if let Err(e) = tokio::fs::remove_dir(&tcmu_dir).await {
@@ -865,18 +885,7 @@ impl OverlayBdManager {
                 );
             }
         }
-
-        // Remove the per-VM config directory.
-        if config_dir.exists() {
-            if let Err(e) = tokio::fs::remove_dir_all(&config_dir).await {
-                warn!(
-                    "Failed to remove OverlayBD config dir for VM {}: {}",
-                    vm_id, e
-                );
-            } else {
-                info!("OverlayBD config dir removed for VM {}", vm_id);
-            }
-        }
+        found
     }
 
     /// The TCMU config is also an ownership record. Its result file can contain
