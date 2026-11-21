@@ -8,6 +8,7 @@ use std::{
         atomic::{AtomicU8, Ordering},
     },
     thread::JoinHandle,
+    time::Duration,
 };
 
 use ::common::telemtry::{get_subscriber, init_subscriber};
@@ -20,7 +21,7 @@ use qarax::{
 };
 use reqwest::StatusCode;
 use serde_json::json;
-use sqlx::{Connection, Executor, PgConnection, PgPool};
+use sqlx::{Connection, Executor, PgConnection, PgPool, postgres::PgPoolOptions};
 use tokio::{runtime::Runtime, sync::oneshot};
 use uuid::Uuid;
 
@@ -105,6 +106,26 @@ pub async fn spawn_app() -> TestApp {
 }
 
 pub async fn spawn_app_with_auth(auth: AuthSettings) -> TestApp {
+    spawn(auth, PgPoolOptions::new()).await
+}
+
+/// Spawns the control plane, with authentication disabled, on a pool of one
+/// database connection, for requests that must not hold one and wait for
+/// another: they fail when the pool gives up waiting, after 5 s.
+pub async fn spawn_app_on_one_connection() -> TestApp {
+    spawn(
+        AuthSettings {
+            enabled: false,
+            tokens: vec![],
+        },
+        PgPoolOptions::new()
+            .max_connections(1)
+            .acquire_timeout(Duration::from_secs(5)),
+    )
+    .await
+}
+
+async fn spawn(auth: AuthSettings, app_pool: PgPoolOptions) -> TestApp {
     LazyLock::force(&TRACING);
     let mut configuration = get_configuration().expect("Failed to read configuration");
     configuration.database.name = Uuid::new_v4().to_string();
@@ -127,7 +148,8 @@ pub async fn spawn_app_with_auth(auth: AuthSettings) -> TestApp {
     let handle = std::thread::spawn(move || {
         let rt = Runtime::new().unwrap();
         rt.block_on(async move {
-            let app_pool = PgPool::connect(&database.connection_string())
+            let app_pool = app_pool
+                .connect(&database.connection_string())
                 .await
                 .expect("Failed to connect to Postgres");
             let listener = tokio::net::TcpListener::from_std(listener).unwrap();

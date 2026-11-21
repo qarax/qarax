@@ -203,7 +203,10 @@ LIMIT $4
     Ok(rows.into_iter().map(|r| r.into()).collect())
 }
 
-pub async fn get(pool: &PgPool, pool_id: Uuid) -> Result<StoragePool, sqlx::Error> {
+pub async fn get<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
+    pool_id: Uuid,
+) -> Result<StoragePool, sqlx::Error> {
     let row: StoragePoolRow = sqlx::query_as!(
         StoragePoolRow,
         r#"
@@ -213,7 +216,7 @@ WHERE id = $1
         "#,
         pool_id,
     )
-    .fetch_one(pool)
+    .fetch_one(executor)
     .await?;
 
     Ok(row.into())
@@ -317,9 +320,11 @@ pub async fn pick_active_local_pool(
 }
 
 /// Return an active storage pool ID (used when none is specified for disk creation).
-pub async fn pick_active(pool: &PgPool) -> Result<Option<Uuid>, sqlx::Error> {
+pub async fn pick_active<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
+) -> Result<Option<Uuid>, sqlx::Error> {
     let row = sqlx::query_scalar!("SELECT id FROM storage_pools WHERE status = 'ACTIVE' LIMIT 1")
-        .fetch_optional(pool)
+        .fetch_optional(executor)
         .await?;
 
     Ok(row)
@@ -466,8 +471,8 @@ ORDER BY h.name
 }
 
 /// Check whether a host is attached to a given storage pool.
-pub async fn host_has_pool(
-    pool: &PgPool,
+pub async fn host_has_pool<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
     host_id: Uuid,
     pool_id: Uuid,
 ) -> Result<bool, sqlx::Error> {
@@ -476,15 +481,15 @@ pub async fn host_has_pool(
         host_id,
         pool_id,
     )
-    .fetch_one(pool)
+    .fetch_one(executor)
     .await?;
 
     Ok(row > 0)
 }
 
 /// Return the first active OverlayBD storage pool that the given host is attached to, if any.
-pub async fn find_overlaybd_for_host(
-    pool: &PgPool,
+pub async fn find_overlaybd_for_host<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
     host_id: Uuid,
 ) -> Result<Option<StoragePool>, sqlx::Error> {
     let row = sqlx::query_as!(
@@ -501,7 +506,7 @@ LIMIT 1
         "#,
         host_id,
     )
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await?;
 
     Ok(row.map(|r| r.into()))

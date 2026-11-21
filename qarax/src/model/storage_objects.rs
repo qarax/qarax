@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use sqlx::{PgPool, Postgres, Transaction, Type, types::Json};
+use sqlx::{PgConnection, PgPool, Postgres, Transaction, Type, types::Json};
 use strum_macros::{Display, EnumString};
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -150,7 +150,10 @@ WHERE id = ANY($1)
     Ok(rows.into_iter().map(|r| r.into()).collect())
 }
 
-pub async fn get(pool: &PgPool, object_id: Uuid) -> Result<StorageObject, sqlx::Error> {
+pub async fn get<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
+    object_id: Uuid,
+) -> Result<StorageObject, sqlx::Error> {
     let storage_object: StorageObjectRow = sqlx::query_as!(
         StorageObjectRow,
         r#"
@@ -167,7 +170,7 @@ WHERE id = $1
         "#,
         object_id
     )
-    .fetch_one(pool)
+    .fetch_one(executor)
     .await?;
 
     Ok(storage_object.into())
@@ -203,12 +206,12 @@ FOR UPDATE
 /// Resolve pool ID and derive config for a new storage object.
 /// Returns `(id, pool_id, config)` ready for INSERT.
 async fn resolve_new_object(
-    pool: &PgPool,
+    conn: &mut PgConnection,
     new_object: &NewStorageObject,
 ) -> Result<(Uuid, Uuid, serde_json::Value), sqlx::Error> {
     let pool_id = match new_object.storage_pool_id {
         Some(id) => id,
-        None => storage_pools::pick_active(pool)
+        None => storage_pools::pick_active(&mut *conn)
             .await?
             .ok_or_else(|| sqlx::Error::RowNotFound)?,
     };
@@ -223,7 +226,7 @@ async fn resolve_new_object(
         && new_object.config.get("upper_data").is_none()
     {
         // Derive upper.data / upper.index paths from pool layout.
-        if let Ok(storage_pool) = storage_pools::get(pool, pool_id).await {
+        if let Ok(storage_pool) = storage_pools::get(&mut *conn, pool_id).await {
             let base_path = match storage_pool.pool_type {
                 storage_pools::StoragePoolType::Local => storage_pool
                     .config
@@ -252,7 +255,7 @@ async fn resolve_new_object(
         && new_object.config.get("path").is_none()
         && new_object.config.get("lun").is_none()
     {
-        if let Ok(storage_pool) = storage_pools::get(pool, pool_id).await {
+        if let Ok(storage_pool) = storage_pools::get(&mut *conn, pool_id).await {
             let derived_path = match storage_pool.pool_type {
                 storage_pools::StoragePoolType::Local => storage_pool
                     .config
@@ -291,7 +294,7 @@ async fn resolve_new_object(
     {
         // Block disks: caller supplies {"lun": N}; we enrich with pool portal/iqn
         // so the node backend has everything it needs without a pool lookup.
-        match storage_pools::get(pool, pool_id).await {
+        match storage_pools::get(&mut *conn, pool_id).await {
             Ok(storage_pool) if storage_pool.pool_type == storage_pools::StoragePoolType::Block => {
                 let portal = storage_pool
                     .config
@@ -368,8 +371,16 @@ async fn insert_object(
     managed_host_ids: Option<Vec<Uuid>>,
     owner_vm_id: Option<Uuid>,
 ) -> Result<StorageObject, sqlx::Error> {
-    let resolved = resolve_new_object(pool, &new_object).await?;
-    insert_resolved(pool, resolved, new_object, managed_host_ids, owner_vm_id).await
+    let mut conn = pool.acquire().await?;
+    let resolved = resolve_new_object(&mut conn, &new_object).await?;
+    insert_resolved(
+        &mut *conn,
+        resolved,
+        new_object,
+        managed_host_ids,
+        owner_vm_id,
+    )
+    .await
 }
 
 /// Make `fork_vm_id`'s copy of disk object `object`: a new disk named `name`
@@ -378,7 +389,6 @@ async fn insert_object(
 /// source's.
 pub async fn create_disk_copy_for_fork_tx(
     tx: &mut PgTransaction<'_>,
-    pool: &PgPool,
     object: &StorageObject,
     name: String,
     fork_vm_id: Uuid,
@@ -397,7 +407,7 @@ pub async fn create_disk_copy_for_fork_tx(
         config,
         parent_id: None,
     };
-    let resolved = resolve_new_object(pool, &new_object).await?;
+    let resolved = resolve_new_object(tx.as_mut(), &new_object).await?;
     insert_resolved(
         tx.as_mut(),
         resolved,

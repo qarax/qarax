@@ -152,7 +152,10 @@ pub enum VhostMode {
     Server,
 }
 
-pub async fn list_by_vm(pool: &PgPool, vm_id: Uuid) -> Result<Vec<NetworkInterface>, sqlx::Error> {
+pub async fn list_by_vm<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
+    vm_id: Uuid,
+) -> Result<Vec<NetworkInterface>, sqlx::Error> {
     let interfaces: Vec<NetworkInterfaceRow> = sqlx::query_as!(
         NetworkInterfaceRow,
         r#"
@@ -183,7 +186,7 @@ ORDER BY device_id
         "#,
         vm_id
     )
-    .fetch_all(pool)
+    .fetch_all(executor)
     .await?;
 
     Ok(interfaces.into_iter().map(|i| i.into()).collect())

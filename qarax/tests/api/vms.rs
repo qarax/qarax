@@ -1,4 +1,6 @@
-use crate::support::{add_host, add_up_host, create_vm, set_vm_status, spawn_app};
+use crate::support::{
+    add_host, add_up_host, create_vm, set_vm_status, spawn_app, spawn_app_on_one_connection,
+};
 use qarax::model::{
     networks as network_model, storage_pools, vm_disks,
     vms::{self, VmStatus},
@@ -557,6 +559,99 @@ async fn test_create_vm_rejects_root_disk_reused_by_other_vm() {
             .as_str()
             .unwrap_or_default()
             .contains("vm-root-owner")
+    );
+}
+
+/// A placement keeps its host locked until it commits, and others wait for
+/// it: a query of its own on a second connection could wait behind them for
+/// as long as the pool lets it. Each create here runs every query of its
+/// placement: on one connection, one that needed two would fail.
+#[tokio::test]
+async fn test_vm_creates_run_on_one_database_connection() {
+    let app = spawn_app_on_one_connection().await;
+    let client = reqwest::Client::new();
+    let host_id = add_up_host(&client, &app.address, "test-host").await;
+    let pool_id =
+        create_local_pool(&client, &app.address, &app.pool, host_id, "one-connection").await;
+    let object_id = create_disk_object(&client, &app.address, pool_id, "root-disk", GIB).await;
+
+    create_vm(
+        &client,
+        &app.address,
+        with(
+            vm_body("vm-root-owner"),
+            json!({"root_disk_object_id": object_id}),
+        ),
+    )
+    .await;
+    let res = client
+        .post(format!("{}/vms", app.address))
+        .json(&with(
+            vm_body("vm-root-other"),
+            json!({"root_disk_object_id": object_id}),
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+
+    // From an OCI image, onto the host's OverlayBD pool, with a boot source
+    // and a persistent writable layer on the local pool.
+    let overlaybd_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO storage_pools (id, name, pool_type, status, config) \
+         VALUES ($1, 'one-connection-overlaybd', 'OVERLAYBD', 'ACTIVE', $2)",
+    )
+    .bind(overlaybd_id)
+    .bind(json!({"url": "http://registry.invalid:5000"}))
+    .execute(&app.pool)
+    .await
+    .unwrap();
+    storage_pools::attach_host(&app.pool, overlaybd_id, host_id)
+        .await
+        .unwrap();
+    let res = client
+        .post(format!("{}/storage-objects", app.address))
+        .json(&json!({
+            "name": "kernel",
+            "storage_pool_id": pool_id,
+            "object_type": "kernel",
+            "size_bytes": MIB,
+            "config": {"path": "/tmp/one-connection/vmlinux"}
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let kernel_id: Uuid = res.text().await.unwrap().parse().unwrap();
+    let res = client
+        .post(format!("{}/boot-sources", app.address))
+        .json(&json!({"name": "one-connection", "kernel_image_id": kernel_id}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let boot_source_id: Uuid = res.text().await.unwrap().parse().unwrap();
+
+    let res = client
+        .post(format!("{}/vms", app.address))
+        .json(&with(
+            vm_body("vm-from-image"),
+            json!({
+                "image_ref": "registry.invalid/img:latest",
+                "boot_source_id": boot_source_id,
+                "persistent_upper_pool_id": pool_id
+            }),
+        ))
+        .send()
+        .await
+        .unwrap();
+    let status = res.status();
+    assert_eq!(
+        status,
+        StatusCode::ACCEPTED,
+        "{}",
+        res.text().await.unwrap()
     );
 }
 

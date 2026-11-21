@@ -605,17 +605,32 @@ pub async fn pick_host_tx(
     request: &SchedulingRequest,
     config: &crate::configuration::SchedulingSettings,
 ) -> Result<Option<Host>, sqlx::Error> {
-    if let Some(host_id) = request.required_host_id {
-        // With one candidate, wait for a placement on it to commit rather than
-        // skip it as the query below would (SKIP LOCKED). Lock it in a
-        // statement of its own: a statement that waited for a row lock still
-        // reads the rest from the snapshot it started with, which would miss
-        // that placement's VMs.
-        sqlx::query_scalar!("SELECT id FROM hosts WHERE id = $1 FOR UPDATE", host_id)
-            .fetch_optional(tx.as_mut())
-            .await?;
+    if let Some(host) = pick_unlocked_host(tx, request, config).await? {
+        return Ok(Some(host));
     }
 
+    // Every host that could take the VM, if any, is locked, mostly by
+    // placements that haven't committed yet. Wait for all of them rather than
+    // refuse, since any could still have room. Lock them in id order, so that
+    // two waiters can't deadlock, and in a statement of its own: a statement
+    // that waited for a row lock still reads the rest from the snapshot it
+    // started with, which would miss the VMs of the placements it waited for.
+    // The pick after it sees them.
+    let mut lock = QueryBuilder::<Postgres>::new("SELECT h.id ");
+    push_candidate_hosts(&mut lock, request, config);
+    lock.push("ORDER BY h.id FOR UPDATE OF h");
+    lock.build().execute(tx.as_mut()).await?;
+
+    pick_unlocked_host(tx, request, config).await
+}
+
+/// The best host for `request` that no other transaction holds, locked until
+/// `tx` ends.
+async fn pick_unlocked_host(
+    tx: &mut Transaction<'_, Postgres>,
+    request: &SchedulingRequest,
+    config: &crate::configuration::SchedulingSettings,
+) -> Result<Option<Host>, sqlx::Error> {
     let mut qb = QueryBuilder::<Postgres>::new(
         r#"
 SELECT h.id, h.name, h.address, h.port, h.host_user, h.credential_ref,
@@ -626,11 +641,63 @@ SELECT h.id, h.name, h.address, h.port, h.host_user, h.credential_ref,
        h.load_average, h.disk_total_bytes, h.disk_available_bytes,
        h.resources_updated_at,
        h.installation_error
-FROM hosts h
+"#,
+    );
+    push_candidate_hosts(&mut qb, request, config);
+
+    qb.push("ORDER BY ");
+    if let Some(policy) = request.placement_policy.as_ref() {
+        if !policy.preferred_host_labels.is_empty() {
+            qb.push("(h.placement_labels @> CAST(");
+            qb.push_bind(serde_json::json!(policy.preferred_host_labels));
+            qb.push(" AS jsonb)) DESC, ");
+        }
+
+        if !policy.affinity_tags.is_empty() {
+            qb.push(
+                "(SELECT COUNT(*)
+                  FROM vms policy_vms
+                  WHERE policy_vms.host_id = h.id
+                    AND policy_vms.status NOT IN ('SHUTDOWN', 'UNKNOWN')
+                    AND policy_vms.tags @> ",
+            );
+            qb.push_bind(&policy.affinity_tags);
+            qb.push(") DESC, ");
+        }
+
+        if !policy.spread_tags.is_empty() {
+            qb.push(
+                "(SELECT COUNT(*)
+                  FROM vms policy_vms
+                  WHERE policy_vms.host_id = h.id
+                    AND policy_vms.status NOT IN ('SHUTDOWN', 'UNKNOWN')
+                    AND policy_vms.tags @> ",
+            );
+            qb.push_bind(&policy.spread_tags);
+            qb.push(") ASC, ");
+        }
+    }
+
+    qb.push("h.load_average ASC NULLS LAST, h.name ASC LIMIT 1 FOR UPDATE OF h SKIP LOCKED");
+
+    let row = qb
+        .build_query_as::<HostRow>()
+        .fetch_optional(tx.as_mut())
+        .await?;
+    Ok(row.map(Host::from))
+}
+
+/// FROM and WHERE of the hosts, `h`, that can take `request`.
+fn push_candidate_hosts<'a>(
+    qb: &mut QueryBuilder<'a, Postgres>,
+    request: &'a SchedulingRequest,
+    config: &crate::configuration::SchedulingSettings,
+) {
+    qb.push(
+        r#"FROM hosts h
 LEFT JOIN (
     SELECT host_id,
-           SUM(vm_memory_charge(memory_size, memory_copy_on_write, memory_private_bytes, "#
-            .to_string(),
+           SUM(vm_memory_charge(memory_size, memory_copy_on_write, memory_private_bytes, "#,
     );
     qb.push_bind(config.fork_memory_headroom_ratio);
     qb.push(
@@ -759,47 +826,6 @@ LEFT JOIN (
         qb.push_bind(gpu.count as i64);
         qb.push(") ");
     }
-
-    qb.push("ORDER BY ");
-    if let Some(policy) = request.placement_policy.as_ref() {
-        if !policy.preferred_host_labels.is_empty() {
-            qb.push("(h.placement_labels @> CAST(");
-            qb.push_bind(serde_json::json!(policy.preferred_host_labels));
-            qb.push(" AS jsonb)) DESC, ");
-        }
-
-        if !policy.affinity_tags.is_empty() {
-            qb.push(
-                "(SELECT COUNT(*)
-                  FROM vms policy_vms
-                  WHERE policy_vms.host_id = h.id
-                    AND policy_vms.status NOT IN ('SHUTDOWN', 'UNKNOWN')
-                    AND policy_vms.tags @> ",
-            );
-            qb.push_bind(&policy.affinity_tags);
-            qb.push(") DESC, ");
-        }
-
-        if !policy.spread_tags.is_empty() {
-            qb.push(
-                "(SELECT COUNT(*)
-                  FROM vms policy_vms
-                  WHERE policy_vms.host_id = h.id
-                    AND policy_vms.status NOT IN ('SHUTDOWN', 'UNKNOWN')
-                    AND policy_vms.tags @> ",
-            );
-            qb.push_bind(&policy.spread_tags);
-            qb.push(") ASC, ");
-        }
-    }
-
-    qb.push("h.load_average ASC NULLS LAST, h.name ASC LIMIT 1 FOR UPDATE OF h SKIP LOCKED");
-
-    let row = qb
-        .build_query_as::<HostRow>()
-        .fetch_optional(tx.as_mut())
-        .await?;
-    Ok(row.map(Host::from))
 }
 
 /// Return all UP hosts.
@@ -1253,13 +1279,29 @@ mod tests {
             .await
             .expect("insert vm");
 
-        let mut tx2 = db.pool.begin().await.expect("begin tx2");
-        let skipped = super::pick_host_tx(&mut tx2, &request, &scheduling_config())
-            .await
-            .expect("pick host");
-        assert!(skipped.is_none(), "locked host should be skipped");
+        // A second placement waits for the first to commit, then counts it:
+        // 800 + 800 doesn't fit in 1024.
+        let pool = db.pool.clone();
+        let concurrent = request.clone();
+        let waiting = tokio::spawn(async move {
+            let mut tx2 = pool.begin().await.expect("begin tx2");
+            super::pick_host_tx(&mut tx2, &concurrent, &scheduling_config())
+                .await
+                .expect("pick host")
+                .map(|host| host.id)
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        assert!(
+            !waiting.is_finished(),
+            "the second placement didn't wait for the first"
+        );
 
         tx1.commit().await.expect("commit tx1");
+        assert_eq!(
+            waiting.await.expect("join"),
+            None,
+            "ledger should prevent over-allocation"
+        );
 
         let mut tx3 = db.pool.begin().await.expect("begin tx3");
         let over_capacity = super::pick_host_tx(
@@ -1290,6 +1332,82 @@ mod tests {
         .expect("pick host")
         .expect("expected host");
         assert_eq!(remaining_capacity.id, host_id);
+    }
+
+    #[tokio::test]
+    async fn pick_host_waits_for_placements_holding_every_candidate() {
+        let db = TestDatabase::new().await;
+        let first_id = db
+            .insert_up_host("first-host", Some("x86_64"), 8, 1024, 10_000, 0.1)
+            .await;
+        let second_id = db
+            .insert_up_host("second-host", Some("x86_64"), 8, 1024, 10_000, 0.2)
+            .await;
+        let request = |memory_bytes| SchedulingRequest {
+            memory_bytes,
+            vcpus: 1,
+            disk_bytes: 0,
+            architecture: None,
+            storage_pool_id: None,
+            required_network_ids: vec![],
+            requires_overlaybd: false,
+            gpu: None,
+            placement_policy: None,
+            excluded_host_ids: vec![],
+            required_host_id: None,
+        };
+
+        let mut tx1 = db.pool.begin().await.expect("begin tx1");
+        let picked = super::pick_host_tx(&mut tx1, &request(800), &scheduling_config())
+            .await
+            .expect("pick host")
+            .expect("expected host");
+        assert_eq!(picked.id, first_id);
+        vms::create_tx(&mut tx1, &resolved_vm("vm-a", 800, 1), Some(first_id))
+            .await
+            .expect("insert vm");
+
+        // A host is left unlocked: the next placement takes it without waiting.
+        let mut tx2 = db.pool.begin().await.expect("begin tx2");
+        let picked = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            super::pick_host_tx(&mut tx2, &request(400), &scheduling_config()),
+        )
+        .await
+        .expect("waited for the locked host although the other had room")
+        .expect("pick host")
+        .expect("expected host");
+        assert_eq!(picked.id, second_id);
+        vms::create_tx(&mut tx2, &resolved_vm("vm-b", 400, 1), Some(second_id))
+            .await
+            .expect("insert vm");
+
+        // Both are locked now: the third waits for both placements to commit,
+        // since either could leave room.
+        let pool = db.pool.clone();
+        let third = request(400);
+        let waiting = tokio::spawn(async move {
+            let mut tx3 = pool.begin().await.expect("begin tx3");
+            super::pick_host_tx(&mut tx3, &third, &scheduling_config())
+                .await
+                .expect("pick host")
+                .map(|host| host.id)
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        assert!(
+            !waiting.is_finished(),
+            "the placement didn't wait for the ones holding the hosts"
+        );
+        tx1.commit().await.expect("commit tx1");
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        assert!(
+            !waiting.is_finished(),
+            "the placement didn't wait for the one on the second host"
+        );
+        tx2.commit().await.expect("commit tx2");
+
+        // The first host has 224 left, the second 624.
+        assert_eq!(waiting.await.expect("join"), Some(second_id));
     }
 
     #[tokio::test]

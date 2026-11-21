@@ -1099,7 +1099,7 @@ ORDER BY name
     Ok(vms.into_iter().map(Into::into).collect())
 }
 
-pub async fn get(pool: &PgPool, vm_id: Uuid) -> Result<Vm, sqlx::Error> {
+pub async fn get<'e>(executor: impl sqlx::PgExecutor<'e>, vm_id: Uuid) -> Result<Vm, sqlx::Error> {
     let vm: VmRow = sqlx::query_as!(
         VmRow,
         r#"
@@ -1134,7 +1134,7 @@ WHERE id = $1
         "#,
         vm_id
     )
-    .fetch_one(pool)
+    .fetch_one(executor)
     .await?;
 
     Ok(vm.into())

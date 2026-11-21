@@ -186,7 +186,10 @@ LIMIT $4
     Ok(rows.into_iter().map(|r| r.into()).collect())
 }
 
-pub async fn get(pool: &PgPool, network_id: Uuid) -> Result<Network, sqlx::Error> {
+pub async fn get<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
+    network_id: Uuid,
+) -> Result<Network, sqlx::Error> {
     let row: NetworkRow = sqlx::query_as!(
         NetworkRow,
         r#"
@@ -196,7 +199,7 @@ WHERE id = $1
         "#,
         network_id,
     )
-    .fetch_one(pool)
+    .fetch_one(executor)
     .await?;
 
     Ok(row.into())

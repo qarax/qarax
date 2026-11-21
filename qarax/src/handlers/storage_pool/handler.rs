@@ -97,7 +97,7 @@ pub async fn create(
     if new_pool.pool_type.is_shared() {
         let db_pool = env.pool_arc();
         tokio::spawn(async move {
-            let pool = match storage_pools::get(&db_pool, id).await {
+            let pool = match storage_pools::get(&*db_pool, id).await {
                 Ok(p) => p,
                 Err(e) => {
                     warn!(pool_id = %id, error = %e, "Failed to fetch new pool for host attachment");
