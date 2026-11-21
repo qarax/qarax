@@ -1,6 +1,8 @@
 use super::*;
 use std::assert_matches;
 
+use crate::vmm::testing::{PAST_VMM_ANSWER_TIMEOUT, serve_vmm};
+
 use crate::rpc::node::{CpuPinning as ProtoCpuPinning, NumaPlacement as ProtoNumaPlacement};
 use tempfile::TempDir;
 
@@ -197,7 +199,6 @@ fn build_guest_exec_request_is_newline_framed_json() {
 #[tokio::test]
 async fn recovered_vm_deletion_cleans_overlaybd_state_and_preserves_external_upper() {
     use crate::storage::overlaybd::OverlayBdBackend;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::UnixListener;
 
     // Cover both historical device-path results and daemon status messages,
@@ -256,51 +257,18 @@ async fn recovered_vm_deletion_cleans_overlaybd_state_and_preserves_external_upp
             .await
             .unwrap();
         let socket = manager.socket_path(&vm_id);
-        let listener = UnixListener::bind(&socket).unwrap();
-        let hypervisor = tokio::spawn(async move {
-            // Recovery first checks that the socket answers, with a connection
-            // it closes without a request; serve the one that sends requests.
-            let (mut stream, mut pending) = loop {
-                let (mut stream, _) = listener.accept().await.unwrap();
-                let mut request = vec![0; 4096];
-                let size = stream.read(&mut request).await.unwrap();
-                if size > 0 {
-                    request.truncate(size);
-                    break (stream, Some(request));
+        let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let served = requests.clone();
+        serve_fake_cloud_hypervisor(
+            UnixListener::bind(&socket).unwrap(),
+            move |method, endpoint, _| {
+                served.lock().unwrap().push(format!("{method} {endpoint}"));
+                match endpoint {
+                    "vm.info" => vm_info(models::VmState::Running),
+                    _ => String::new(),
                 }
-            };
-            for expected in ["GET /api/v1/vm.info", "PUT /api/v1/vm.shutdown"] {
-                let request = match pending.take() {
-                    Some(request) => request,
-                    None => {
-                        let mut request = vec![0; 4096];
-                        let size = stream.read(&mut request).await.unwrap();
-                        request.truncate(size);
-                        request
-                    }
-                };
-                let request = String::from_utf8_lossy(&request);
-                let (method, path) = expected.split_once(' ').unwrap();
-                let mut parts = request.split_whitespace();
-                assert_eq!(parts.next(), Some(method), "{request}");
-                assert!(parts.next().unwrap().ends_with(path), "{request}");
-                let response = if expected.starts_with("GET") {
-                    let body = serde_json::to_string(&models::VmInfo::new(
-                        VmConfig::default(),
-                        models::VmState::Running,
-                    ))
-                    .unwrap();
-                    format!(
-                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}",
-                        body.len(),
-                        body
-                    )
-                } else {
-                    "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n".into()
-                };
-                stream.write_all(response.as_bytes()).await.unwrap();
-            }
-        });
+            },
+        );
         manager.recover_vms().await;
         {
             let instance = manager.lock_vm(&vm_id).await.unwrap();
@@ -311,10 +279,12 @@ async fn recovered_vm_deletion_cleans_overlaybd_state_and_preserves_external_upp
             );
         }
         manager.delete_vm(&vm_id).await.unwrap();
-        tokio::time::timeout(std::time::Duration::from_secs(5), hypervisor)
-            .await
-            .unwrap()
-            .unwrap();
+        // Its process isn't the node's to kill: Cloud Hypervisor is asked to
+        // stop the VM.
+        assert_eq!(
+            *requests.lock().unwrap(),
+            ["GET vm.info", "PUT vm.shutdown"]
+        );
         assert!(!mapping_dir.exists());
         assert!(!overlaybd.has_mapping(&vm_id).await);
         assert!(!socket.exists());
@@ -403,31 +373,14 @@ async fn a_vmm_that_does_not_answer_holds_up_only_its_own_vm() {
     let hung = Uuid::new_v4().to_string();
     let answering = Uuid::new_v4().to_string();
 
-    // Takes requests and never answers them.
-    let listener = tokio::net::UnixListener::bind(manager.socket_path(&hung)).unwrap();
-    let asked = Arc::new(tokio::sync::Notify::new());
-    let notify_asked = asked.clone();
-    tokio::spawn(async move {
-        loop {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            let asked = notify_asked.clone();
-            tokio::spawn(async move {
-                let mut request = vec![0; 4096];
-                if stream.read(&mut request).await.unwrap() > 0 {
-                    asked.notify_one();
-                }
-                std::future::pending::<()>().await;
-            });
-        }
-    });
+    let asked = serve_vmm(
+        tokio::net::UnixListener::bind(manager.socket_path(&hung)).unwrap(),
+        watch::channel(None).1,
+    );
     serve_fake_cloud_hypervisor(
         tokio::net::UnixListener::bind(manager.socket_path(&answering)).unwrap(),
         |method, endpoint, _| match (method, endpoint) {
-            ("GET", "vm.info") => serde_json::to_string(&models::VmInfo::new(
-                VmConfig::default(),
-                models::VmState::Paused,
-            ))
-            .unwrap(),
+            ("GET", "vm.info") => vm_info(models::VmState::Paused),
             _ => panic!("unexpected request: {method} {endpoint}"),
         },
     );
@@ -467,6 +420,127 @@ async fn a_vmm_that_does_not_answer_holds_up_only_its_own_vm() {
     assert_eq!(listed, expected);
     assert!(!waiting.is_finished());
     waiting.abort();
+}
+
+fn vm_info(state: models::VmState) -> String {
+    serde_json::to_string(&models::VmInfo::new(VmConfig::default(), state)).unwrap()
+}
+
+/// A status query to a VMM that doesn't answer is given up, and the VM is
+/// reported as it last was. That leaves nothing broken for the next query,
+/// which sees the VMM's state once it answers again.
+#[tokio::test]
+async fn status_of_a_vm_whose_vmm_does_not_answer_is_its_last_known_one() {
+    let directory = TempDir::new().unwrap();
+    let manager = test_manager(&directory);
+    let vm_id = Uuid::new_v4().to_string();
+    let (answer, answers) = watch::channel(None);
+    serve_vmm(
+        tokio::net::UnixListener::bind(manager.socket_path(&vm_id)).unwrap(),
+        answers,
+    );
+    add_running_vm(&manager, &vm_id).await;
+
+    let info = tokio::time::timeout(PAST_VMM_ANSWER_TIMEOUT, manager.get_vm_info(&vm_id))
+        .await
+        .expect("asking for the VM's status waited for a VMM that does not answer")
+        .unwrap();
+    assert_eq!(info.status(), VmStatus::Running);
+
+    answer.send_replace(Some(vm_info(models::VmState::Paused)));
+    let info = tokio::time::timeout(PAST_VMM_ANSWER_TIMEOUT, manager.get_vm_info(&vm_id))
+        .await
+        .expect("asking for the VM's status again waited")
+        .unwrap();
+    assert_eq!(info.status(), VmStatus::Paused);
+}
+
+/// Make `vm_id` one of `manager`'s VMs, running, on a VMM that has stopped
+/// answering, and have the VM monitor's status query of it in flight.
+async fn add_vm_whose_vmm_does_not_answer(
+    manager: &Arc<VmManager>,
+    vm_id: &str,
+) -> tokio::task::JoinHandle<Result<VmState, VmManagerError>> {
+    let asked = serve_vmm(
+        tokio::net::UnixListener::bind(manager.socket_path(vm_id)).unwrap(),
+        watch::channel(None).1,
+    );
+    add_running_vm(manager, vm_id).await;
+    let monitor = tokio::spawn({
+        let (manager, vm_id) = (manager.clone(), vm_id.to_string());
+        async move { manager.get_vm_info(&vm_id).await }
+    });
+    asked.notified().await;
+    monitor
+}
+
+/// Force-stopping a VM whose VMM doesn't answer asks the VMM nothing: it
+/// waits at most for a status query in flight to be given up.
+#[tokio::test]
+async fn a_vm_whose_vmm_does_not_answer_can_be_force_stopped() {
+    let directory = TempDir::new().unwrap();
+    let manager = Arc::new(test_manager(&directory));
+    let vm_id = Uuid::new_v4().to_string();
+    let monitor = add_vm_whose_vmm_does_not_answer(&manager, &vm_id).await;
+
+    tokio::time::timeout(PAST_VMM_ANSWER_TIMEOUT, manager.force_stop_vm(&vm_id))
+        .await
+        .expect("force-stopping the VM waited for its VMM")
+        .unwrap();
+    assert_eq!(
+        manager.lock_vm(&vm_id).await.unwrap().status(),
+        VmStatus::Shutdown
+    );
+    monitor.abort();
+}
+
+/// Deleting a VM whose VMM doesn't answer waits at most for a status query
+/// in flight to be given up and for `vm.shutdown` to go unanswered as long,
+/// then cleans up after the VM.
+#[tokio::test]
+async fn a_vm_whose_vmm_does_not_answer_can_be_deleted() {
+    let directory = TempDir::new().unwrap();
+    let manager = Arc::new(test_manager(&directory));
+    let vm_id = Uuid::new_v4().to_string();
+    let monitor = add_vm_whose_vmm_does_not_answer(&manager, &vm_id).await;
+
+    tokio::time::timeout(
+        PAST_VMM_ANSWER_TIMEOUT + VMM_ANSWER_TIMEOUT,
+        manager.delete_vm(&vm_id),
+    )
+    .await
+    .expect("deleting the VM waited for its VMM")
+    .unwrap();
+    assert!(manager.list_vms().await.is_empty());
+    assert!(!manager.socket_path(&vm_id).exists());
+    monitor.abort();
+}
+
+/// A VMM that doesn't answer doesn't hold up the node's startup: its VM is
+/// recovered with an unknown status.
+#[tokio::test]
+async fn a_vm_whose_vmm_does_not_answer_is_recovered_with_an_unknown_status() {
+    let directory = TempDir::new().unwrap();
+    let manager = test_manager(&directory);
+    let vm_id = Uuid::new_v4().to_string();
+    let config = ProtoVmConfig {
+        vm_id: vm_id.clone(),
+        ..Default::default()
+    };
+    tokio::fs::write(manager.config_path(&vm_id), config.encode_to_vec())
+        .await
+        .unwrap();
+    serve_vmm(
+        tokio::net::UnixListener::bind(manager.socket_path(&vm_id)).unwrap(),
+        watch::channel(None).1,
+    );
+
+    tokio::time::timeout(PAST_VMM_ANSWER_TIMEOUT, manager.recover_vms())
+        .await
+        .expect("recovering the node's VMs waited for a VMM that does not answer");
+    let recovered = manager.list_vms().await;
+    assert_eq!(recovered.len(), 1);
+    assert_eq!(recovered[0].status(), VmStatus::Unknown);
 }
 
 #[tokio::test]

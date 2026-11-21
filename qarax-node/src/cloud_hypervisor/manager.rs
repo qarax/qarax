@@ -43,6 +43,7 @@ use crate::rpc::node::{
     VmConfig as ProtoVmConfig, VmState, VmStatus, VsockConfig as ProtoVsockConfig,
 };
 use crate::storage::StorageBackendRegistry;
+use crate::vmm::VMM_ANSWER_TIMEOUT;
 
 /// A directory with the certificates Cloud Hypervisor uses for migration
 /// TLS: the migration CA, a server certificate valid for the address this
@@ -188,10 +189,11 @@ impl VmInstance {
 }
 
 /// A VM the manager knows. Operations on it hold its lock to use or change its
-/// instance, some of them across requests to its VMM (`get_vm_info`, adding
-/// a device, a fork's snapshot of its source), so a VMM that is slow or hung
-/// holds up its own VM's operations only. Reads of all the node's VMs take
-/// each one's last known config and status from `summary`, without the lock.
+/// instance, some of them across requests to its VMM (`get_vm_info`, for at
+/// most [`VMM_ANSWER_TIMEOUT`]; adding a device; a fork's snapshot of its
+/// source), so a VMM that is slow or hung holds up its own VM's operations
+/// only. Reads of all the node's VMs take each one's last known config and
+/// status from `summary`, without the lock.
 struct ManagedVm {
     summary: watch::Receiver<VmSummary>,
     /// `None` once the VM is deleted, for the operations that were waiting.

@@ -165,8 +165,9 @@ impl FcVmInstance {
 
 /// A VM the manager knows. Operations on it hold its lock to use or change its
 /// instance, some of them across requests to its Firecracker (starting,
-/// pausing, resuming or snapshotting it, `get_vm_info`, a fork's snapshot of
-/// its source), so a Firecracker that is slow or hung holds up its own VM's
+/// pausing, resuming or snapshotting it; `get_vm_info`, for at most
+/// [`VMM_ANSWER_TIMEOUT`](crate::vmm::VMM_ANSWER_TIMEOUT); a fork's snapshot
+/// of its source), so a Firecracker that is slow or hung holds up its own VM's
 /// operations only. Reads of all the node's VMs take each one's config and
 /// last published status from here, without the lock.
 struct ManagedVm {
@@ -848,14 +849,14 @@ impl VmmManager for FirecrackerManager {
     }
 
     async fn get_vm_info(&self, vm_id: &str) -> Result<VmState, VmmError> {
-        let mut instance = self.lock_vm(vm_id).await?;
+        let mut guard = self.lock_vm(vm_id).await?;
+        let instance = &mut *guard;
 
         // Only a live VM is asked: a stopped one recovered after a node
-        // restart may still answer on its socket.
-        if let FcPhase::Live {
-            micro_vm, state, ..
-        } = &mut instance.phase
-            && let Ok(info) = micro_vm.describe_instance().await
+        // restart may still answer on its socket. One that can't say keeps
+        // its last known state.
+        if let FcPhase::Live { state, .. } = &mut instance.phase
+            && let Ok(info) = Self::describe_instance(&instance.socket_path).await
         {
             *state = info.state.into();
         }
@@ -1084,8 +1085,8 @@ impl VmmManager for FirecrackerManager {
             // Attach to the socket and check live status.
             let phase = match Machine::attach(&path).await {
                 Ok(machine) => {
-                    let mut micro_vm = machine.assume_running();
-                    let state = match micro_vm.describe_instance().await {
+                    let micro_vm = machine.assume_running();
+                    let state = match Self::describe_instance(&path).await {
                         Ok(info) => info.state.into(),
                         Err(_) => LiveState::Unknown,
                     };

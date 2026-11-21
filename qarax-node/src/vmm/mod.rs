@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use async_trait::async_trait;
 
@@ -18,6 +19,15 @@ use crate::rpc::node::{
 pub mod fork;
 pub mod guest_agent;
 pub mod memory;
+
+/// How long a VMM gets to answer a request it serves at once (its VM's
+/// status, a shutdown) before it is taken to have stopped answering: far
+/// longer than one takes on a loaded host. One busy with a long request (a
+/// snapshot, an incoming migration) can take longer still, and the callers
+/// carry on without the answer: a status query keeps the VM's last known
+/// status. The control plane's VM monitor asks for a host's VMs in turn, so
+/// each VMM there that has stopped answering adds this much to its tick.
+pub const VMM_ANSWER_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, thiserror::Error)]
 pub enum VmmError {
@@ -243,5 +253,56 @@ pub trait VmmManager: Send + Sync + 'static {
 
     async fn is_vm_process_alive(&self, _vm_id: &str) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod testing {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::UnixListener;
+    use tokio::sync::{Notify, watch};
+
+    /// Longer than a request to a VMM that doesn't answer takes to be given
+    /// up, even on a loaded machine.
+    pub(crate) const PAST_VMM_ANSWER_TIMEOUT: Duration =
+        Duration::from_secs(super::VMM_ANSWER_TIMEOUT.as_secs() + 5);
+
+    /// Serves `listener` as a VMM that answers each request with the JSON
+    /// `answer` holds, and while it holds none, as one that has stopped
+    /// answering: it takes requests and answers none, and notifies the
+    /// returned `Notify` of each.
+    pub(crate) fn serve_vmm(
+        listener: UnixListener,
+        answer: watch::Receiver<Option<String>>,
+    ) -> Arc<Notify> {
+        let asked = Arc::new(Notify::new());
+        let notify_asked = asked.clone();
+        tokio::spawn(async move {
+            loop {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let (asked, answer) = (notify_asked.clone(), answer.clone());
+                tokio::spawn(async move {
+                    let mut request = vec![0; 4096];
+                    // One connection can carry several requests (an SDK handle's does).
+                    while let Ok(1..) = stream.read(&mut request).await {
+                        let body = answer.borrow().clone();
+                        let Some(body) = body else {
+                            asked.notify_one();
+                            return std::future::pending().await;
+                        };
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}",
+                            body.len(),
+                            body
+                        );
+                        stream.write_all(response.as_bytes()).await.unwrap();
+                    }
+                });
+            }
+        });
+        asked
     }
 }

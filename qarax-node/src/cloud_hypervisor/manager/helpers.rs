@@ -301,6 +301,29 @@ impl VmManager {
         Ok(info.state)
     }
 
+    /// Cloud Hypervisor's `vm.info`, given up on if it doesn't answer within
+    /// [`VMM_ANSWER_TIMEOUT`]. A request dropped unanswered closes the
+    /// connection it went on, so this one has its own: the SDK handle's would
+    /// fail every request after it.
+    pub(super) async fn query_vm_info(
+        socket_path: &PathBuf,
+    ) -> Result<models::VmInfo, VmManagerError> {
+        let request = Self::send_api_request(socket_path, "GET", "/api/v1/vm.info", None);
+        let Ok(body) = tokio::time::timeout(VMM_ANSWER_TIMEOUT, request).await else {
+            warn!(
+                "Cloud Hypervisor at {} did not answer vm.info within {}s",
+                socket_path.display(),
+                VMM_ANSWER_TIMEOUT.as_secs()
+            );
+            return Err(VmManagerError::ProcessError(format!(
+                "no answer to vm.info within {}s",
+                VMM_ANSWER_TIMEOUT.as_secs()
+            )));
+        };
+        serde_json::from_str(&body?)
+            .map_err(|e| VmManagerError::ProcessError(format!("unexpected vm.info: {e}")))
+    }
+
     /// Whether the Cloud Hypervisor serving `socket_path` was started with
     /// `--no-shutdown`. Every process this node starts is (see
     /// [`Self::spawn_cloud_hypervisor`]), but one that survived a restart from

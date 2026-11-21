@@ -1,14 +1,19 @@
 use std::{
+    convert::Infallible,
     path::{Path, PathBuf},
     time::Duration,
 };
 
 use bytes::Bytes;
-use firecracker_rust_sdk::{client::TokioIo, models::Vsock};
-use http_body_util::{BodyExt, Full, combinators::BoxBody};
+use firecracker_rust_sdk::{
+    client::TokioIo,
+    models::{InstanceInfo, Vsock},
+};
+use http_body_util::{BodyExt, Empty, Full, combinators::BoxBody};
 use hyper::Request;
 
 use super::*;
+use crate::vmm::VMM_ANSWER_TIMEOUT;
 
 #[derive(serde::Deserialize)]
 struct GuestExecResponse {
@@ -63,6 +68,54 @@ impl FirecrackerManager {
         path: &str,
         body: &impl serde::Serialize,
     ) -> Result<(), VmmError> {
+        let body = serde_json::to_vec(body)
+            .map_err(|e| VmmError::InvalidConfig(format!("invalid body for {path}: {e}")))?;
+        let request = Request::builder()
+            .method(method)
+            .uri(format!("http://localhost{path}"))
+            .header("Accept", "application/json")
+            .header("Content-Type", "application/json")
+            .body(BoxBody::new(Full::<Bytes>::new(Bytes::from(body))))
+            .map_err(|e| VmmError::ProcessError(format!("failed to build {method} {path}: {e}")))?;
+        Self::send(socket_path, request).await?;
+        Ok(())
+    }
+
+    /// What Firecracker reports of its instance, given up on if it doesn't
+    /// answer within [`VMM_ANSWER_TIMEOUT`]. A request dropped unanswered
+    /// closes the connection it went on, so this one has its own: the SDK
+    /// handle's would fail every request after it.
+    pub(super) async fn describe_instance(socket_path: &Path) -> Result<InstanceInfo, VmmError> {
+        let request = Request::builder()
+            .method("GET")
+            .uri("http://localhost/")
+            .header("Accept", "application/json")
+            .body(BoxBody::new(Empty::<Bytes>::new()))
+            .map_err(|e| VmmError::ProcessError(format!("failed to build GET /: {e}")))?;
+        let Ok(body) =
+            tokio::time::timeout(VMM_ANSWER_TIMEOUT, Self::send(socket_path, request)).await
+        else {
+            warn!(
+                "Firecracker at {} did not answer GET / within {}s",
+                socket_path.display(),
+                VMM_ANSWER_TIMEOUT.as_secs()
+            );
+            return Err(VmmError::ProcessError(format!(
+                "no answer to GET / within {}s",
+                VMM_ANSWER_TIMEOUT.as_secs()
+            )));
+        };
+        serde_json::from_slice(&body?)
+            .map_err(|e| VmmError::ProcessError(format!("unexpected instance info: {e}")))
+    }
+
+    /// Send `request` to the Firecracker API at `socket_path` on a connection
+    /// of its own, and read the body of its answer.
+    async fn send(
+        socket_path: &Path,
+        request: Request<BoxBody<Bytes, Infallible>>,
+    ) -> Result<Bytes, VmmError> {
+        let (method, path) = (request.method().clone(), request.uri().path().to_string());
         let stream = tokio::net::UnixStream::connect(socket_path)
             .await
             .map_err(|e| {
@@ -92,33 +145,22 @@ impl FirecrackerManager {
             ))
         })?;
 
-        let body = serde_json::to_vec(body)
-            .map_err(|e| VmmError::InvalidConfig(format!("invalid body for {path}: {e}")))?;
-        let request = Request::builder()
-            .method(method)
-            .uri(format!("http://localhost{path}"))
-            .header("Accept", "application/json")
-            .header("Content-Type", "application/json")
-            .body(BoxBody::new(Full::<Bytes>::new(Bytes::from(body))))
-            .map_err(|e| VmmError::ProcessError(format!("failed to build {method} {path}: {e}")))?;
-
         let response = sender
             .send_request(request)
             .await
             .map_err(|e| VmmError::ProcessError(format!("Firecracker {method} {path}: {e}")))?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response
-                .into_body()
-                .collect()
-                .await
-                .map_err(|e| {
-                    VmmError::ProcessError(format!(
-                        "failed to read Firecracker's answer to {method} {path}: {e}"
-                    ))
-                })?
-                .to_bytes();
+        let status = response.status();
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .map_err(|e| {
+                VmmError::ProcessError(format!(
+                    "failed to read Firecracker's answer to {method} {path}: {e}"
+                ))
+            })?
+            .to_bytes();
+        if !status.is_success() {
             return Err(VmmError::ProcessError(format!(
                 "Firecracker {method} {path} failed ({}): {}",
                 status,
@@ -126,7 +168,7 @@ impl FirecrackerManager {
             )));
         }
 
-        Ok(())
+        Ok(body)
     }
 
     /// The host end of `vm_id`'s guest-agent vsock, while the VM runs.
