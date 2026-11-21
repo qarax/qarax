@@ -44,8 +44,9 @@ The first release.
   and the addresses VMs hold) and storage pools (their hosts, objects and
   transfers); creating a VM from an OCI image, a kernel or a disk, sized by
   vCPUs and memory or an instance type, on a network with security groups; a
-  VM's details and actions (start, stop, pause, resume, force stop, delete) and
-  its serial console in the browser, all kept current from the event stream.
+  VM's details and actions (start, stop, pause, resume, force stop, delete),
+  live charts of its disk and network throughput, and its serial console in the
+  browser, all kept current from the event stream.
   For clients that can't set the Authorization header on a WebSocket, as
   browsers can't, the console also takes the API token as the subprotocol
   `qarax.bearer.<the token, hex-encoded>`.

@@ -37,6 +37,7 @@ import '@patternfly/patternfly/components/Table/table-grid.css';
 import '@patternfly/patternfly/components/Tabs/tabs.css';
 import '@patternfly/patternfly/components/TextInputGroup/text-input-group.css';
 import '@patternfly/patternfly/components/Title/title.css';
+import '@patternfly/patternfly/components/Tooltip/tooltip.css';
 import '@patternfly/patternfly/components/Toolbar/toolbar.css';
 import '@patternfly/patternfly/layouts/Bullseye/bullseye.css';
 import '@patternfly/patternfly/layouts/Flex/flex.css';
