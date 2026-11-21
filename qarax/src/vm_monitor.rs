@@ -43,9 +43,7 @@ pub async fn start_vm_monitor(env: App) {
         // Group VMs by host so we open one gRPC connection per host per tick
         let mut by_host: HashMap<Uuid, Vec<_>> = HashMap::new();
         for vm in active_vms {
-            if let Some(host_id) = vm.host_id {
-                by_host.entry(host_id).or_default().push(vm);
-            }
+            by_host.entry(vm.host_id).or_default().push(vm);
         }
 
         let mut join_set = tokio::task::JoinSet::new();
@@ -111,7 +109,7 @@ pub async fn start_vm_monitor(env: App) {
 /// Write a status this tick derived for `vm`, unless another writer (a lifecycle
 /// handler, a job) changed the VM after `list_active` read it. That newer
 /// status wins; the next tick compares it against the node again.
-async fn record_status(env: &App, vm: &vms::Vm, status: VmStatus, reason: &str) {
+async fn record_status(env: &App, vm: &vms::ActiveVm, status: VmStatus, reason: &str) {
     match vms::transition(env.pool(), vm.id, &[vm.status], status).await {
         Ok(Some(_)) => info!(
             "VM monitor: VM {} {}: {:?} -> {:?}",
