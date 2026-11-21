@@ -37,16 +37,20 @@ help:
 	@echo "  make run-local VM=1  - Same, but the node is the appliance image as a bootc microVM"
 	@echo "  make stop-local      - Stop and remove the local Docker stack and volumes"
 
+# Writes openapi.yaml. Naming no package resolves features as a --workspace
+# build does, so with that build's features (OPENAPI_FEATURES) it reuses it.
+GENERATE_OPENAPI = cargo run $(CARGO_TARGET) $(OPENAPI_FEATURES) --bin generate-openapi
+
 build:
 	cargo build --workspace $(CARGO_TARGET)
-	cargo run $(CARGO_TARGET) -p qarax --bin generate-openapi
+	$(GENERATE_OPENAPI)
 
 # The release binaries CI hands to the e2e job (musl, with OpenTelemetry).
 build-release:
 	SQLX_OFFLINE=true cargo build --workspace --release $(OTEL_FEATURES) $(CARGO_TARGET)
 
 openapi:
-	cargo run $(CARGO_TARGET) -p qarax --bin generate-openapi
+	$(GENERATE_OPENAPI)
 
 sdk: openapi
 	cd python-sdk && uv run openapi-python-client generate --path ../openapi.yaml --meta setup --overwrite
@@ -91,7 +95,7 @@ fmt: ruff-fmt shfmt
 # Postgres (make test-deps). CI builds with the OpenTelemetry features.
 OTEL_FEATURES = --features qarax/otel,qarax-node/otel
 
-ci-checks: check-fmt check-clippy check-test check-sqlx check-openapi check-sdk check-e2e-lint check-audit check-shell check-webui
+ci-checks: check-fmt check-clippy check-test check-openapi check-sdk check-sqlx check-e2e-lint check-audit check-shell check-webui
 
 check-fmt:
 	cargo +nightly fmt --all -- --check
@@ -102,12 +106,10 @@ check-clippy:
 check-test:
 	SQLX_OFFLINE=true $(DB_ENV) cargo nextest run --workspace $(OTEL_FEATURES) $(CARGO_TARGET)
 
-# The committed offline query cache (.sqlx) matches the queries in the source.
-check-sqlx:
-	DATABASE_URL=$(DATABASE_URL) cargo sqlx migrate run
-	DATABASE_URL=$(DATABASE_URL) cargo sqlx prepare --workspace --check
+# The committed spec and Python SDK are what the source generates. The
+# generator is the one check-test built, so these run right after it.
+check-openapi check-sdk: OPENAPI_FEATURES = $(OTEL_FEATURES)
 
-# The committed spec and Python SDK are what the source generates.
 check-openapi: openapi
 	@git diff --exit-code -- openapi.yaml || \
 		(echo "openapi.yaml is out of date: run 'make openapi' and commit it"; exit 1)
@@ -115,6 +117,13 @@ check-openapi: openapi
 check-sdk: sdk
 	@git diff --exit-code -- python-sdk || \
 		(echo "python-sdk is out of date: run 'make sdk' and commit it"; exit 1)
+
+# The committed offline query cache (.sqlx) matches the queries in the source.
+# Last of the checks that build: it makes cargo rebuild every crate with
+# queries, for whatever builds next.
+check-sqlx:
+	DATABASE_URL=$(DATABASE_URL) cargo sqlx migrate run
+	DATABASE_URL=$(DATABASE_URL) cargo sqlx prepare --workspace --check
 
 # Pyflakes over the e2e tests (rules in e2e/pyproject.toml), with the SDK's
 # pinned ruff. E2E only runs on master and labelled PRs, so without this an
