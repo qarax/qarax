@@ -1,7 +1,8 @@
 <script lang="ts">
-	import { untrack } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
+	import { page } from '$app/state';
 	import { allHosts, allNetworks, api, call, type Host, type Vm } from '#lib/api/client.ts';
 	import { Remote, keepFresh } from '#lib/remote.svelte.ts';
 	import { session } from '#lib/session.svelte.ts';
@@ -11,6 +12,7 @@
 		ACTION_LABEL,
 		ACTION_PROGRESS,
 		VM_ACTIONS,
+		jobFinished,
 		runVmAction,
 		type VmAction
 	} from '#lib/vm-actions.ts';
@@ -92,6 +94,23 @@
 		}
 	}
 
+	// A VM booted from an image comes from the create page with the job that
+	// prepares its image (?job=); it stays pending until that job is done. If
+	// the job fails, the control plane marks the VM unknown, which only this
+	// page can tell apart from a host that stopped reporting it.
+	let creationError: string | null = $state(null);
+	onMount(() => {
+		const job = page.url.searchParams.get('job');
+		if (!job) return;
+		jobFinished(job).then(
+			() => void detail.refresh(),
+			(e) => {
+				creationError = message(e);
+				void detail.refresh();
+			}
+		);
+	});
+
 	async function remove() {
 		action = { kind: 'running', action: 'delete' };
 		try {
@@ -106,6 +125,8 @@
 
 	/** What the status means here: where it runs, or what the status is. */
 	function explain(vm: Vm, host: Host | undefined): string {
+		if (creationError !== null)
+			return 'Creating it failed, so it never got to its host. Delete it, then create it again.';
 		if (vm.status === 'running' && host) return `Running on ${host.name}.`;
 		return VM_STATUS_HELP[vm.status];
 	}
@@ -185,6 +206,13 @@
 						</button>
 					</div>
 				</div>
+				{#if creationError !== null}
+					<div class="failed">
+						<Notice tone="danger" title="Its image couldn't be prepared"
+							><span class="message">{creationError}</span></Notice
+						>
+					</div>
+				{/if}
 				{#if action.kind === 'failed'}
 					<div class="failed">
 						<Notice tone="danger" title="That didn't work"

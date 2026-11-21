@@ -11,6 +11,7 @@ export type HostCapacity = Schemas['HostResourceCapacity'];
 export type Hypervisor = Schemas['Hypervisor'];
 export type NetworkInterface = Schemas['NetworkInterface'];
 export type Network = Schemas['Network'];
+export type NewVm = Schemas['NewVm'];
 
 /** A request the control plane answered with an error status. */
 export class ApiError extends Error {
@@ -80,6 +81,36 @@ export const allHosts = () =>
 export const allNetworks = () =>
 	listAll((cursor) =>
 		call(api.GET('/v1/networks', { params: { query: { limit: 1000, cursor } } }))
+	);
+
+export const allInstanceTypes = () =>
+	listAll((cursor) =>
+		call(api.GET('/v1/instance-types', { params: { query: { limit: 1000, cursor } } }))
+	);
+
+export const allBootSources = () =>
+	listAll((cursor) =>
+		call(api.GET('/v1/boot-sources', { params: { query: { limit: 1000, cursor } } }))
+	);
+
+export const allSecurityGroups = () =>
+	listAll((cursor) =>
+		call(api.GET('/v1/security-groups', { params: { query: { limit: 1000, cursor } } }))
+	);
+
+export const allStoragePools = () =>
+	listAll((cursor) =>
+		call(api.GET('/v1/storage-pools', { params: { query: { limit: 1000, cursor } } }))
+	);
+
+/** The storage objects of a type, in every pool. */
+export const allStorageObjects = (objectType: Schemas['StorageObjectType']) =>
+	listAll((cursor) =>
+		call(
+			api.GET('/v1/storage-objects', {
+				params: { query: { object_type: objectType, limit: 1000, cursor } }
+			})
+		)
 	);
 
 export const hostCapacity = (hostId: string) =>

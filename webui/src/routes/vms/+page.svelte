@@ -43,12 +43,18 @@
 				{#if vms.length === 0}
 					<div>
 						<Empty icon="virtualMachine" title="No virtual machines yet">
-							A VM boots from an OCI image, a kernel or a disk image on one of your hosts. Creating
-							one here isn't possible yet, but the CLI can:
+							A VM boots from an OCI image, a kernel or a disk on one of your hosts. Create one
+							here, or from the CLI:
 							<CodeBlock
-								code={'qarax vm create --name my-first-vm --image-ref public.ecr.aws/docker/library/alpine:latest\nqarax vm start my-first-vm'}
+								code={'qarax vm create --name my-first-vm --vcpus 1 --memory 1GiB --image-ref public.ecr.aws/docker/library/alpine:latest\nqarax vm start my-first-vm'}
 							/>
-							It shows up here as soon as it's created.
+							{#snippet footer()}
+								<div class="pf-v6-c-empty-state__actions">
+									<a class="pf-v6-c-button pf-m-primary" href={resolve('/vms/new')}>
+										<span class="pf-v6-c-button__text">Create VM</span>
+									</a>
+								</div>
+							{/snippet}
 						</Empty>
 					</div>
 				{:else}
@@ -59,6 +65,11 @@
 								<div class="pf-v6-c-toolbar__content-section">
 									<div class="pf-v6-c-toolbar__item search">
 										<SearchInput bind:value={filter} label="Filter by name or tag" />
+									</div>
+									<div class="pf-v6-c-toolbar__item">
+										<a class="pf-v6-c-button pf-m-primary" href={resolve('/vms/new')}>
+											<span class="pf-v6-c-button__text">Create VM</span>
+										</a>
 									</div>
 									<div class="pf-v6-c-toolbar__item pf-m-align-end qx-subtle count">
 										{shown.length === vms.length
