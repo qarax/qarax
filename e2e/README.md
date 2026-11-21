@@ -40,6 +40,8 @@ VMs boot the Cloud Hypervisor test kernel with a BusyBox initramfs that runs
 - [uv](https://docs.astral.sh/uv/)
 - Rust toolchain (the runner builds the release musl binaries on every run;
   cargo is a no-op when they're current)
+- The browser tests in `test_webui.py` run headless Chromium, which the runner
+  installs with Playwright (`~/.cache/ms-playwright`, about 125 MiB, once)
 
 ## Running
 
@@ -91,6 +93,7 @@ printed in the summary (`-rs`).
 | `test_telemetry.py` | OTLP trace propagation and metrics (needs `ENABLE_OTEL=1`) |
 | `test_transfers.py` | Local copy transfer into a storage pool |
 | `test_vm_lifecycle.py` | VM lifecycle, start/stop cycles, force stop, guest exec, monitor tick |
+| `test_webui.py` | The image serves the web UI, its console connection reaches a VM's serial console, and in headless Chromium the UI signs in, loads each section, and creates, starts and deletes a VM |
 
 ## Writing Tests
 
