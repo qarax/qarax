@@ -639,9 +639,10 @@ fn fork_name(source: &str, fork_id: Uuid) -> String {
 }
 
 /// A sandbox from the template's pool, when it has one to give: a ready
-/// member, or else a fork of its seed. `None` when the request asks for what
-/// a pool's VMs don't have (an instance type, a network) or the pool has
-/// neither: the sandbox boots a VM of its own.
+/// member, or else a fork of its seed; either starts a refill of the pool.
+/// `None` when the request asks for what a pool's VMs don't have (an
+/// instance type, a network) or the pool has neither: the sandbox boots a VM
+/// of its own.
 async fn claim_from_pool(
     env: &App,
     req: &NewSandbox,
@@ -650,10 +651,20 @@ async fn claim_from_pool(
     if req.instance_type_id.is_some() || req.network_id.is_some() {
         return Ok(None);
     }
-    if let Some(claimed) = claim_ready_member(env, req, idle_timeout_secs).await? {
-        return Ok(Some(claimed));
-    }
-    fork_pool_seed(env, req, idle_timeout_secs).await
+    let claimed = match claim_ready_member(env, req, idle_timeout_secs).await? {
+        Some(claimed) => claimed,
+        None => match fork_pool_seed(env, req, idle_timeout_secs).await? {
+            Some(forked) => forked,
+            None => return Ok(None),
+        },
+    };
+    // The pool makes up for what it handed out.
+    let env = env.clone();
+    let vm_template_id = req.vm_template_id;
+    tokio::spawn(async move {
+        let _ = sandbox_pool_manager::sync_pool_for_template(&env, vm_template_id).await;
+    });
+    Ok(Some(claimed))
 }
 
 /// The pool's oldest ready member, renamed as the sandbox and handed to it.
@@ -707,12 +718,6 @@ async fn claim_ready_member(
         .await
         .map_err(crate::errors::Error::Sqlx)?;
     tx.commit().await.map_err(crate::errors::Error::Sqlx)?;
-
-    let env_for_refill = env.clone();
-    let vm_template_id = req.vm_template_id;
-    tokio::spawn(async move {
-        let _ = sandbox_pool_manager::sync_pool_for_template(&env_for_refill, vm_template_id).await;
-    });
 
     Ok(Some(CreateSandboxResponse {
         id: sandbox_id,
