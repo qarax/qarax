@@ -1,6 +1,7 @@
 import type {
 	HostStatus,
 	NetworkStatus,
+	SandboxStatus,
 	StoragePoolStatus,
 	TransferStatus,
 	VmStatus
@@ -49,6 +50,23 @@ export const VM_STATUS_HELP: Record<VmStatus, string> = {
 export function vmStatusLook(status: string): StatusLook {
 	return status in VM_STATUS ? VM_STATUS[status as VmStatus] : { tone: 'unknown', text: status };
 }
+
+/** A sandbox's status; a pool's seeds have the same ones. */
+export const SANDBOX_STATUS: Record<SandboxStatus, StatusLook> = {
+	ready: { tone: 'run', text: 'Ready' },
+	provisioning: { tone: 'busy', text: 'Provisioning' },
+	destroying: { tone: 'busy', text: 'Deleting' },
+	error: { tone: 'fault', text: 'Error' }
+};
+
+/** What a sandbox's status means (SandboxStatus in qarax/src/model/sandboxes.rs). */
+export const SANDBOX_STATUS_HELP: Record<SandboxStatus, string> = {
+	ready: 'Its guest agent answers, so it runs commands.',
+	provisioning:
+		'Its VM is booting. It is ready once the guest agent in it answers, usually within seconds.',
+	destroying: 'qarax is deleting it and its VM.',
+	error: "It didn't get ready, so it can't run commands. Delete it and create another."
+};
 
 export const HOST_STATUS: Record<HostStatus, StatusLook> = {
 	up: { tone: 'run', text: 'Up' },

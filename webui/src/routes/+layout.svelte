@@ -41,6 +41,7 @@
 	const sections = [
 		{ href: home, label: 'Overview' },
 		{ href: resolve('/vms'), label: 'Virtual machines' },
+		{ href: resolve('/sandboxes'), label: 'Sandboxes' },
 		{ href: resolve('/hosts'), label: 'Hosts' },
 		{ href: resolve('/networks'), label: 'Networks' },
 		{ href: resolve('/storage'), label: 'Storage pools' }

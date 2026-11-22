@@ -13,14 +13,25 @@ export function bytes(n: number): string {
 	return `${parseFloat(value.toFixed(1))} ${UNITS[unit]}`;
 }
 
+/** A while, in its largest unit, rounded down: `12 s`, `5 min`, `3 h`, `2 d`. */
+export function span(seconds: number): string {
+	if (seconds < 60) return `${seconds} s`;
+	if (seconds < 3600) return `${Math.floor(seconds / 60)} min`;
+	if (seconds < 86_400) return `${Math.floor(seconds / 3600)} h`;
+	return `${Math.floor(seconds / 86_400)} d`;
+}
+
+/** A configured length of time, exactly: `90 s`, `5 min`, `2 h`. */
+export function seconds(n: number): string {
+	if (n >= 3600 && n % 3600 === 0) return `${n / 3600} h`;
+	if (n >= 60 && n % 60 === 0) return `${n / 60} min`;
+	return `${n} s`;
+}
+
 /** How long ago an instant was: `12 s ago`, `5 min ago`. */
 export function ago(iso: string, now = Date.now()): string {
-	const seconds = Math.max(0, Math.round((now - Date.parse(iso)) / 1000));
-	if (seconds < 5) return 'just now';
-	if (seconds < 60) return `${seconds} s ago`;
-	if (seconds < 3600) return `${Math.floor(seconds / 60)} min ago`;
-	if (seconds < 86_400) return `${Math.floor(seconds / 3600)} h ago`;
-	return `${Math.floor(seconds / 86_400)} d ago`;
+	const elapsed = Math.max(0, Math.round((now - Date.parse(iso)) / 1000));
+	return elapsed < 5 ? 'just now' : `${span(elapsed)} ago`;
 }
 
 /** The time of day of an instant, to the second. */

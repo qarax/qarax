@@ -1,7 +1,8 @@
 """
 E2E tests for the web UI: the control-plane image serves its build at /ui, the
 console connection the UI makes reaches a VM's serial console, and in a real
-browser (headless Chromium) the UI signs in, creates, starts and deletes a VM.
+browser (headless Chromium) the UI signs in, creates, starts and deletes a VM,
+and creates a sandbox, runs a command in it and deletes it.
 """
 
 import asyncio
@@ -116,7 +117,14 @@ async def page():
 async def test_browser_pages_load(page: Page):
     """Each section of the sidebar, and a host's own page, loads what it shows
     from the API, in the browser, without an error."""
-    sections = ["Virtual machines", "Hosts", "Networks", "Storage pools", "Overview"]
+    sections = [
+        "Virtual machines",
+        "Sandboxes",
+        "Hosts",
+        "Networks",
+        "Storage pools",
+        "Overview",
+    ]
     for section in sections:
         await (
             page.get_by_role("navigation", name="Global")
@@ -180,6 +188,77 @@ async def test_browser_create_start_delete_vm(page: Page):
     finally:
         for vm in vms_named(name):
             httpx2.delete(f"{QARAX_URL}/v1/vms/{vm['id']}", headers=AUTH_HEADERS)
+
+
+async def test_browser_sandbox_runs_a_command(page: Page):
+    """A sandbox's life through the UI: the create form makes it from a
+    template, its page follows it to ready and runs a command in it, showing
+    what the command printed, and Delete, once confirmed, removes it."""
+    suffix = uuid.uuid4().hex[:8]
+    name = f"test-webui-sandbox-{suffix}"
+    # The control plane's default kernel and initramfs, whose init answers as
+    # the guest agent.
+    template = httpx2.post(
+        f"{QARAX_URL}/v1/vm-templates",
+        json={
+            "name": f"test-webui-sandbox-template-{suffix}",
+            "hypervisor": "cloud_hv",
+            "boot_vcpus": 1,
+            "memory_size": 256 * 1024 * 1024,
+        },
+        headers=AUTH_HEADERS,
+    )
+    template.raise_for_status()
+    # The new template's id, as text.
+    template_id = template.text.strip('"')
+    try:
+        nav = page.get_by_role("navigation", name="Global")
+        await nav.get_by_role("link", name="Sandboxes").click()
+        await page.get_by_role("link", name="Create sandbox").click()
+
+        await page.get_by_role("combobox", name="Template").select_option(
+            label=f"test-webui-sandbox-template-{suffix}"
+        )
+        await page.get_by_role("textbox", name="Name", exact=True).fill(name)
+        await page.get_by_role("button", name="Create", exact=True).click()
+
+        await expect(page).to_have_url(re.compile(r"/ui/sandboxes/[0-9a-f-]{36}$"))
+        await expect(page.get_by_role("heading", level=1, name=name)).to_be_visible()
+        await expect(page.get_by_text("Ready", exact=True)).to_be_visible(
+            timeout=START_DEADLINE_MS
+        )
+
+        command = page.get_by_role("textbox", name="Command")
+        await command.fill("echo ui-$((6 * 7)); echo to-stderr >&2; exit 3")
+        await page.get_by_role("button", name="Run", exact=True).click()
+        # The shell ran it: the arithmetic is done, each stream is shown, and
+        # so is the exit code.
+        await expect(page.get_by_text("Exit code 3", exact=True)).to_be_visible()
+        await expect(page.get_by_text("ui-42", exact=True)).to_be_visible()
+        await expect(page.get_by_text("to-stderr", exact=True)).to_be_visible()
+
+        await page.get_by_role("button", name="Delete", exact=True).click()
+        dialog = page.get_by_role("dialog", name=f"Delete {name}?")
+        await dialog.get_by_role("button", name="Delete", exact=True).click()
+        await expect(page).to_have_url(re.compile(r"/ui/sandboxes$"))
+        await expect(page.get_by_role("link", name=name, exact=True)).to_have_count(0)
+        assert not sandboxes_named(name), f"{name} is still there after Delete"
+    finally:
+        for sandbox in sandboxes_named(name):
+            httpx2.delete(
+                f"{QARAX_URL}/v1/sandboxes/{sandbox['id']}", headers=AUTH_HEADERS
+            )
+        httpx2.delete(
+            f"{QARAX_URL}/v1/vm-templates/{template_id}", headers=AUTH_HEADERS
+        )
+
+
+def sandboxes_named(name: str) -> list[dict]:
+    response = httpx2.get(
+        f"{QARAX_URL}/v1/sandboxes", params={"limit": 1000}, headers=AUTH_HEADERS
+    )
+    response.raise_for_status()
+    return [s for s in response.json()["items"] if s["name"] == name]
 
 
 def vms_named(name: str) -> list[dict]:
