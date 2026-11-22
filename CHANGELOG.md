@@ -87,3 +87,5 @@ These need action if you ran a build from before them:
   gives it, which holds the address and port the node logged in to. A LUN of
   a pool created with a hostname portal can't be used: create the pool again
   with the target's address and register its LUNs again.
+- A sandbox pool that forks keeps its seed with `min_ready` 0, and forks a
+  sandbox from it on each request, where it used to keep nothing.
