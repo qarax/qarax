@@ -3032,6 +3032,33 @@ pub struct AttachDiskRequest {
     pub rate_limiter: Option<RateLimiterConfig>,
 }
 
+/// A VM's disks, in boot order, then by device path.
+#[utoipa::path(
+    get,
+    path = "/v1/vms/{vm_id}/disks",
+    params(
+        ("vm_id" = uuid::Uuid, Path, description = "VM unique identifier")
+    ),
+    responses(
+        (status = 200, description = "The disks attached to the VM", body = Vec<crate::model::vm_disks::VmDisk>),
+        (status = 404, description = "VM not found"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "vms"
+)]
+#[instrument(skip(env))]
+pub async fn list_disks(
+    Extension(env): Extension<App>,
+    Path(vm_id): Path<Uuid>,
+) -> Result<ApiResponse<Vec<vm_disks::VmDisk>>> {
+    vms::get(env.pool(), vm_id).await?; // 404 if VM not found
+    let disks = vm_disks::list_by_vm(env.pool(), vm_id).await?;
+    Ok(ApiResponse {
+        data: disks,
+        code: StatusCode::OK,
+    })
+}
+
 /// Attach a storage object to a VM as a disk.
 /// For VMs in `Created` state the disk is only recorded in the database and will be
 /// passed to Cloud Hypervisor when the VM starts.  For VMs in `Running` or `Shutdown`
