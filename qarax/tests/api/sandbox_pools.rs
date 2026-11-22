@@ -1,4 +1,4 @@
-use crate::support::spawn_app;
+use crate::support::{create_vm, fake_node::add_forking_node, set_vm_status, spawn_app};
 use reqwest::StatusCode;
 use serde_json::json;
 use uuid::Uuid;
@@ -300,10 +300,13 @@ async fn a_forking_pool_s_seed_is_never_claimed() {
     let created: serde_json::Value = res.json().await.unwrap();
     assert_eq!(created["vm_id"], member_vm.to_string());
 
-    // With only the seed left, a sandbox boots a VM of its own, here on no
-    // host at all.
+    // With only the seed left, a sandbox forks it. This one can't fork (no
+    // guest agent, no host), so the sandbox boots a VM of its own instead,
+    // here on no host at all.
     let res = claim("second").await.unwrap();
     assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = res.text().await.unwrap();
+    assert!(body.contains("no hosts in UP state"), "{body}");
     let pool: serde_json::Value = client
         .get(&pool_url)
         .send()
@@ -314,4 +317,119 @@ async fn a_forking_pool_s_seed_is_never_claimed() {
         .unwrap();
     assert_eq!(pool["current_ready"], 0);
     assert_eq!(pool["seed_vm_id"], seed_vm.to_string());
+}
+
+#[tokio::test]
+async fn a_sandbox_forks_the_seed_of_a_pool_with_no_member_ready() {
+    let app = spawn_app().await;
+    let client = reqwest::Client::new();
+    let (_, node) = add_forking_node(&app, "fork-node").await;
+    let template_id = create_template(&client, &app.address, "seed-only-template", json!({})).await;
+    let seed_vm = create_vm(
+        &client,
+        &app.address,
+        json!({
+            "name": "seed",
+            "hypervisor": "firecracker",
+            "boot_vcpus": 1,
+            "max_vcpus": 1,
+            "memory_size": 268435456,
+            "guest_agent": true,
+            "config": {}
+        }),
+    )
+    .await;
+    set_vm_status(&app.pool, seed_vm, "RUNNING").await;
+    // The pool with its seed at once: the pool manager boots a seed of its own
+    // for a forking pool without one.
+    let mut tx = app.pool.begin().await.unwrap();
+    let pool_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO sandbox_pools (vm_template_id, min_ready, fork) VALUES ($1, 0, true) \
+         RETURNING id",
+    )
+    .bind(template_id)
+    .fetch_one(&mut *tx)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO sandbox_pool_members (sandbox_pool_id, vm_id, status, seed) \
+         VALUES ($1, $2, 'READY', true)",
+    )
+    .bind(pool_id)
+    .bind(seed_vm)
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+
+    let res = client
+        .post(format!("{}/sandboxes", app.address))
+        .json(&json!({
+            "name": "forked",
+            "vm_template_id": template_id,
+            "idle_timeout_secs": 600
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::ACCEPTED);
+    let created: serde_json::Value = res.json().await.unwrap();
+    let vm_id = created["vm_id"].as_str().unwrap().to_string();
+    assert_ne!(vm_id, seed_vm.to_string());
+
+    // The node forked the seed into the sandbox's VM.
+    let forks = node.forks();
+    assert_eq!(forks.len(), 1);
+    assert_eq!(forks[0].source_vm_id, seed_vm.to_string());
+    let fork_ids: Vec<&str> = forks[0].forks.iter().map(|f| f.vm_id.as_str()).collect();
+    assert_eq!(fork_ids, [vm_id.as_str()]);
+
+    // Ready when the request returns, as the request asked for it.
+    let sandbox: serde_json::Value = client
+        .get(format!(
+            "{}/sandboxes/{}",
+            app.address,
+            created["id"].as_str().unwrap()
+        ))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(sandbox["status"], "ready");
+    assert_eq!(sandbox["vm_status"], "running");
+    assert_eq!(sandbox["name"], "forked");
+    assert_eq!(sandbox["idle_timeout_secs"], 600);
+    let job: serde_json::Value = client
+        .get(format!(
+            "{}/jobs/{}",
+            app.address,
+            created["job_id"].as_str().unwrap()
+        ))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(job["status"], "completed");
+    assert_eq!(job["job_type"], "sandbox_claim");
+    assert_eq!(job["result"]["seed_vm_id"], seed_vm.to_string());
+
+    // The seed stays the pool's, still its only member.
+    let pool: serde_json::Value = client
+        .get(format!(
+            "{}/vm-templates/{template_id}/sandbox-pool",
+            app.address
+        ))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(pool["seed_vm_id"], seed_vm.to_string());
+    assert_eq!(pool["seed_status"], "ready");
+    assert_eq!(pool["current_ready"], 0);
 }

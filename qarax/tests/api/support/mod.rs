@@ -25,6 +25,8 @@ use sqlx::{Connection, Executor, PgConnection, PgPool, postgres::PgPoolOptions};
 use tokio::{runtime::Runtime, sync::oneshot};
 use uuid::Uuid;
 
+pub mod fake_node;
+
 static TRACING: LazyLock<()> = LazyLock::new(|| {
     let level = "info".to_string();
     let name = "test".to_string();
@@ -226,7 +228,8 @@ impl Drop for TestApp {
     }
 }
 
-static NEXT_HOST: AtomicU8 = AtomicU8::new(1);
+/// 127.0.0.1 is a fake node's: the address its certificate names.
+static NEXT_HOST: AtomicU8 = AtomicU8::new(2);
 
 /// Registers a host through the API. Each host gets its own loopback address
 /// (`hosts.address` is unique) and port 1, where no qarax-node listens, so node

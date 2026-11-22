@@ -166,10 +166,11 @@ async fn sync_pool(env: &App, pool: SandboxPool) {
 }
 
 /// A forking pool's seed, the VM of its template it keeps booted and forks
-/// its members from: returned once it runs. The pool boots a seed when it has
-/// none, and replaces one that failed (destroyed with the pool's other failed
-/// members) or whose VM stopped running. A pool that doesn't fork, or keeps
-/// no members, has no seed.
+/// its members from, and a sandbox from when it has no member ready: returned
+/// once it runs. The pool boots a seed when it has none, whatever its
+/// `min_ready`, and replaces one that failed (destroyed with the pool's other
+/// failed members) or whose VM stopped running. A pool that doesn't fork has
+/// no seed.
 async fn sync_seed(env: &App, pool: &SandboxPool) -> Option<Vm> {
     let seed = match sandbox_pool_members::seed(env.pool(), pool.id).await {
         Ok(seed) => seed,
@@ -182,8 +183,7 @@ async fn sync_seed(env: &App, pool: &SandboxPool) -> Option<Vm> {
             return None;
         }
     };
-    let wanted = pool.fork && pool.min_ready > 0;
-    let seed = match (seed, wanted) {
+    let seed = match (seed, pool.fork) {
         (None, false) => return None,
         (None, true) => {
             if let Err(e) = provision_pool_member(env, pool, true).await {

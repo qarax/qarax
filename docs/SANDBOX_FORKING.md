@@ -201,19 +201,33 @@ one VM of the template it keeps booted, its seed, instead of booting each:
 qarax sandbox pool set --template agent-base --min-ready 8 --fork
 ```
 
-- The pool boots its seed when it has members to keep (`min_ready` above 0),
-  and forks it, up to 16 at a time, for each member it is short of: a refill
-  after a sandbox is claimed takes milliseconds, not a boot.
-- Each member shares the seed's memory until it writes it, and counts
-  against the host as a fork does (see above); the seed counts in full.
-  Members run on the seed's host.
+- The pool keeps its seed booted, whatever its `min_ready`, and forks it, up
+  to 16 at a time, for each member it is short of: a refill after a sandbox
+  is claimed takes milliseconds, not a boot.
+- A sandbox asked for when the pool has no member ready is forked from the
+  seed on the request: it is ready when `POST /v1/sandboxes` returns, a
+  fork's time later (see "What it costs"). With `min_ready` 0 the pool keeps
+  nothing but its seed, and forks each sandbox when it is asked for:
+
+  ```bash
+  qarax sandbox pool set --template agent-base --min-ready 0 --fork
+  ```
+
+  The node makes one fork round of a source at a time, so requests that fork
+  the seed together wait for each other; members kept ready take a burst. A
+  seed that isn't running (booting, or being replaced) or can't be forked
+  (its host has no room, say) leaves the request to boot a VM of its own, as
+  a template without a pool does.
+- Each member, and each sandbox forked on its request, shares the seed's
+  memory until it writes it, and counts against the host as a fork does (see
+  above); the seed counts in full. They run on the seed's host.
 - A member continues from the seed's state when it was made. The seed is
   never handed out; `GET /v1/vm-templates/{id}/sandbox-pool` shows it as
   `seed_vm_id` and `seed_status`, and its counts are of the members alone.
 - A seed that fails to boot, or whose VM stops running, is replaced. When
   forking the seed fails (its host has no room, say), the pool logs it and
-  tries again on its next pass. A pool set to stop forking, or to keep no
-  members, destroys its seed; its members stay until they're claimed.
+  tries again on its next pass. A pool set to stop forking destroys its
+  seed; its members stay until they're claimed.
 - The template must be forkable as a sandbox is (see "What forks").
 - A template booting an OCI image takes a pool too. A pool that boots its
   members pulls the image for each, as `POST /v1/sandboxes` does; a pool that

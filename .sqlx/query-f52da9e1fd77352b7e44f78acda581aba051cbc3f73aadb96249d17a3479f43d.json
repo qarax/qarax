@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nSELECT seed.vm_id\nFROM sandbox_pool_members seed\nJOIN sandbox_pools sp\n  ON sp.id = seed.sandbox_pool_id\nJOIN vms v\n  ON v.id = seed.vm_id\nWHERE sp.vm_template_id = $1\n  AND sp.fork\n  AND seed.seed\n  AND seed.status = 'READY'\n  AND v.status = 'RUNNING'\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "vm_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "f52da9e1fd77352b7e44f78acda581aba051cbc3f73aadb96249d17a3479f43d"
+}
