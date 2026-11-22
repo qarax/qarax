@@ -2,6 +2,7 @@
 	import { onMount, tick } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
+	import { page } from '$app/state';
 	import {
 		allBootSources,
 		allHosts,
@@ -10,12 +11,14 @@
 		allSecurityGroups,
 		allStorageObjects,
 		allStoragePools,
+		allVmTemplates,
 		api,
 		call
 	} from '#lib/api/client.ts';
 	import { Remote } from '#lib/remote.svelte.ts';
-	import { bytes } from '#lib/format.ts';
-	import { newVmForm, toNewVm, type Field } from '#lib/vm-create.ts';
+	import { HYPERVISOR, bytes } from '#lib/format.ts';
+	import { newVmForm, pickTemplate, toNewVm, type Field } from '#lib/vm-create.ts';
+	import { templateBoots, templateSize } from '#lib/templates.ts';
 	import FormControl from '#lib/components/FormControl.svelte';
 	import FormGroup from '#lib/components/FormGroup.svelte';
 	import Icon from '#lib/components/Icon.svelte';
@@ -25,7 +28,7 @@
 	// What the form offers to pick from. Loaded once: choices that changed
 	// under someone filling in the form would be worse than ones a minute old.
 	const choices = new Remote(async () => {
-		const [instanceTypes, bootSources, disks, networks, securityGroups, pools, hosts] =
+		const [instanceTypes, bootSources, disks, networks, securityGroups, pools, hosts, templates] =
 			await Promise.all([
 				allInstanceTypes(),
 				allBootSources(),
@@ -33,9 +36,11 @@
 				allNetworks(),
 				allSecurityGroups(),
 				allStoragePools(),
-				allHosts()
+				allHosts(),
+				allVmTemplates()
 			]);
 		return {
+			templates,
 			instanceTypes,
 			bootSources,
 			disks,
@@ -45,10 +50,21 @@
 			hostsUp: hosts.filter((host) => host.status === 'up').length
 		};
 	});
-	onMount(choices.refresh);
-
 	let form = $state(newVmForm());
-	const checked = $derived(toNewVm(form));
+	const templates = $derived('data' in choices.state ? choices.state.data.templates : []);
+	const template = $derived(templates.find((t) => t.id === form.templateId));
+	const checked = $derived(toNewVm(form, template));
+
+	// A template's page links here with ?template= to make a VM from it.
+	onMount(async () => {
+		await choices.refresh();
+		const id = page.url.searchParams.get('template');
+		if (id)
+			pickTemplate(
+				form,
+				templates.find((t) => t.id === id)
+			);
+	});
 
 	/** Errors show once a create was tried, and then follow each change. */
 	type Submit = { kind: 'editing'; tried: boolean; error: string | null } | { kind: 'creating' };
@@ -127,6 +143,7 @@
 	<div class="pf-v6-c-page__main-body">
 		<Loaded remote={choices} what="what a VM can use">
 			{#snippet children({
+				templates,
 				instanceTypes,
 				bootSources,
 				disks,
@@ -150,8 +167,43 @@
 						</Notice>
 					</div>
 				{/if}
+				{@const templateHas = template ? templateSize(template) : null}
+				{@const templateNetwork = networks.find((network) => network.id === template?.network_id)}
+				{@const names = {
+					bootSources: new Map(bootSources.map((source) => [source.id, source.name])),
+					disks: new Map(disks.map((disk) => [disk.id, disk.name]))
+				}}
 				<form class="pf-v6-c-form pf-m-limit-width" novalidate onsubmit={create}>
 					<section class="pf-v6-c-form__section" role="group">
+						{#if templates.length}
+							<FormGroup id="vm-template" label="Template">
+								<FormControl kind="select">
+									<select
+										id="vm-template"
+										value={form.templateId}
+										onchange={(event) =>
+											pickTemplate(
+												form,
+												templates.find((t) => t.id === event.currentTarget.value)
+											)}
+										aria-describedby="vm-template-helper"
+									>
+										<option value="">None: choose everything here</option>
+										{#each templates as t (t.id)}
+											<option value={t.id}>{t.name}</option>
+										{/each}
+									</select>
+								</FormControl>
+								{#snippet helper()}
+									{template
+										? [
+												`It boots ${templateBoots(template, names)}.`,
+												"What you set below takes the place of the template's."
+											].join(' ')
+										: 'A VM template sets what a VM boots and its size, so VMs of a kind are alike.'}
+								{/snippet}
+							</FormGroup>
+						{/if}
 						<FormGroup id="vm-name" label="Name" required error={errors.name}>
 							<FormControl invalid={!!errors.name}>
 								<input
@@ -192,176 +244,207 @@
 
 					<section class="pf-v6-c-form__section" role="group" aria-labelledby="vm-boot-title">
 						<h2 class="pf-v6-c-form__section-title" id="vm-boot-title">Boot</h2>
-						<FormGroup id="vm-boot" label="Boots from" choices="radio">
-							<div class="pf-v6-c-radio">
-								<input
-									class="pf-v6-c-radio__input"
-									type="radio"
-									id="vm-boot-image"
-									value="image"
-									bind:group={form.boot}
-									aria-describedby="vm-boot-image-description"
-								/>
-								<label class="pf-v6-c-radio__label" for="vm-boot-image">An OCI image</label>
-								<span class="pf-v6-c-radio__description" id="vm-boot-image-description">
-									A container image, such as one from Docker Hub. It boots before the whole image is
-									downloaded: the host reads its blocks as the guest needs them.
-								</span>
-							</div>
-							<div class="pf-v6-c-radio">
-								<input
-									class="pf-v6-c-radio__input"
-									type="radio"
-									id="vm-boot-kernel"
-									value="kernel"
-									bind:group={form.boot}
-									aria-describedby="vm-boot-kernel-description"
-								/>
-								<label class="pf-v6-c-radio__label" for="vm-boot-kernel">A kernel</label>
-								<span class="pf-v6-c-radio__description" id="vm-boot-kernel-description">
-									Linux booted straight from a kernel and initramfs.
-								</span>
-							</div>
-							<div class="pf-v6-c-radio">
-								<input
-									class="pf-v6-c-radio__input"
-									type="radio"
-									id="vm-boot-disk"
-									value="disk"
-									bind:group={form.boot}
-									aria-describedby="vm-boot-disk-description"
-								/>
-								<label class="pf-v6-c-radio__label" for="vm-boot-disk">A disk</label>
-								<span class="pf-v6-c-radio__description" id="vm-boot-disk-description">
-									A disk with its own bootloader, such as a cloud image, booted through UEFI
-									firmware.
-								</span>
-							</div>
-						</FormGroup>
-
-						{#if form.boot === 'image'}
-							<FormGroup id="vm-image-ref" label="Image" required error={errors.imageRef}>
-								<FormControl invalid={!!errors.imageRef}>
-									<input
-										type="text"
-										id="vm-image-ref"
-										required
-										autocomplete="off"
-										spellcheck="false"
-										placeholder="docker.io/library/alpine:latest"
-										bind:value={form.imageRef}
-										aria-invalid={errors.imageRef ? 'true' : undefined}
-										aria-describedby={describedBy('vm-image-ref', errors.imageRef, true)}
-									/>
-								</FormControl>
-								{#snippet helper()}
-									{#if hasOverlayBd}
-										qarax prepares the image on the VM's host before the VM can start, which can
-										take a minute for a large one.
-									{:else}
-										Booting an image needs an OverlayBD storage pool on the VM's host, and there is
-										none yet. Create one with <code
-											>qarax storage-pool create --name overlaybd --pool-type overlaybd --url
-											&lt;registry&gt;</code
-										>, then <code>qarax storage-pool attach-host overlaybd --all</code>.
-									{/if}
-								{/snippet}
-							</FormGroup>
-						{:else if form.boot === 'kernel'}
-							<FormGroup id="vm-boot-source" label="Boot source">
-								<FormControl kind="select">
-									<select
-										id="vm-boot-source"
-										bind:value={form.bootSourceId}
-										aria-describedby="vm-boot-source-helper"
-									>
-										<option value="">The default kernel</option>
-										{#each bootSources as source (source.id)}
-											<option value={source.id}>{source.name}</option>
-										{/each}
-									</select>
-								</FormControl>
-								{#snippet helper()}
-									A boot source is a kernel, an optional initramfs and kernel parameters. The
-									default is the kernel the control plane is configured with (<code
-										>vm_defaults</code
-									>).
-								{/snippet}
-							</FormGroup>
+						{#if template}
+							<p class="qx-subtle">
+								It boots {templateBoots(template, names)}, as {template.name} says.
+							</p>
 						{:else}
-							<FormGroup
-								id="vm-disk"
-								label="Disk"
-								required
-								error={errors.diskId}
-								helper={disks.length ? undefined : noDisks}
-							>
-								<FormControl kind="select" invalid={!!errors.diskId}>
-									<select
-										id="vm-disk"
-										required
-										bind:value={form.diskId}
-										aria-invalid={errors.diskId ? 'true' : undefined}
-										aria-describedby={describedBy('vm-disk', errors.diskId, disks.length === 0)}
-									>
-										<option value="" disabled>
-											{disks.length ? 'Pick a disk' : 'No disks yet'}
-										</option>
-										{#each disks as disk (disk.id)}
-											<option value={disk.id}>{disk.name} ({bytes(disk.size_bytes)})</option>
-										{/each}
-									</select>
-								</FormControl>
+							<FormGroup id="vm-boot" label="Boots from" choices="radio">
+								<div class="pf-v6-c-radio">
+									<input
+										class="pf-v6-c-radio__input"
+										type="radio"
+										id="vm-boot-image"
+										value="image"
+										bind:group={form.boot}
+										aria-describedby="vm-boot-image-description"
+									/>
+									<label class="pf-v6-c-radio__label" for="vm-boot-image">An OCI image</label>
+									<span class="pf-v6-c-radio__description" id="vm-boot-image-description">
+										A container image, such as one from Docker Hub. It boots before the whole image
+										is downloaded: the host reads its blocks as the guest needs them.
+									</span>
+								</div>
+								<div class="pf-v6-c-radio">
+									<input
+										class="pf-v6-c-radio__input"
+										type="radio"
+										id="vm-boot-kernel"
+										value="kernel"
+										bind:group={form.boot}
+										aria-describedby="vm-boot-kernel-description"
+									/>
+									<label class="pf-v6-c-radio__label" for="vm-boot-kernel">A kernel</label>
+									<span class="pf-v6-c-radio__description" id="vm-boot-kernel-description">
+										Linux booted straight from a kernel and initramfs.
+									</span>
+								</div>
+								<div class="pf-v6-c-radio">
+									<input
+										class="pf-v6-c-radio__input"
+										type="radio"
+										id="vm-boot-disk"
+										value="disk"
+										bind:group={form.boot}
+										aria-describedby="vm-boot-disk-description"
+									/>
+									<label class="pf-v6-c-radio__label" for="vm-boot-disk">A disk</label>
+									<span class="pf-v6-c-radio__description" id="vm-boot-disk-description">
+										A disk with its own bootloader, such as a cloud image, booted through UEFI
+										firmware.
+									</span>
+								</div>
 							</FormGroup>
+
+							{#if form.boot === 'image'}
+								<FormGroup id="vm-image-ref" label="Image" required error={errors.imageRef}>
+									<FormControl invalid={!!errors.imageRef}>
+										<input
+											type="text"
+											id="vm-image-ref"
+											required
+											autocomplete="off"
+											spellcheck="false"
+											placeholder="docker.io/library/alpine:latest"
+											bind:value={form.imageRef}
+											aria-invalid={errors.imageRef ? 'true' : undefined}
+											aria-describedby={describedBy('vm-image-ref', errors.imageRef, true)}
+										/>
+									</FormControl>
+									{#snippet helper()}
+										{#if hasOverlayBd}
+											qarax prepares the image on the VM's host before the VM can start, which can
+											take a minute for a large one.
+										{:else}
+											Booting an image needs an OverlayBD storage pool on the VM's host, and there
+											is none yet. Create one with <code
+												>qarax storage-pool create --name overlaybd --pool-type overlaybd --url
+												&lt;registry&gt;</code
+											>, then <code>qarax storage-pool attach-host overlaybd --all</code>.
+										{/if}
+									{/snippet}
+								</FormGroup>
+							{:else if form.boot === 'kernel'}
+								<FormGroup id="vm-boot-source" label="Boot source">
+									<FormControl kind="select">
+										<select
+											id="vm-boot-source"
+											bind:value={form.bootSourceId}
+											aria-describedby="vm-boot-source-helper"
+										>
+											<option value="">The default kernel</option>
+											{#each bootSources as source (source.id)}
+												<option value={source.id}>{source.name}</option>
+											{/each}
+										</select>
+									</FormControl>
+									{#snippet helper()}
+										A boot source is a kernel, an optional initramfs and kernel parameters. The
+										default is the kernel the control plane is configured with (<code
+											>vm_defaults</code
+										>).
+									{/snippet}
+								</FormGroup>
+							{:else}
+								<FormGroup
+									id="vm-disk"
+									label="Disk"
+									required
+									error={errors.diskId}
+									helper={disks.length ? undefined : noDisks}
+								>
+									<FormControl kind="select" invalid={!!errors.diskId}>
+										<select
+											id="vm-disk"
+											required
+											bind:value={form.diskId}
+											aria-invalid={errors.diskId ? 'true' : undefined}
+											aria-describedby={describedBy('vm-disk', errors.diskId, disks.length === 0)}
+										>
+											<option value="" disabled>
+												{disks.length ? 'Pick a disk' : 'No disks yet'}
+											</option>
+											{#each disks as disk (disk.id)}
+												<option value={disk.id}>{disk.name} ({bytes(disk.size_bytes)})</option>
+											{/each}
+										</select>
+									</FormControl>
+								</FormGroup>
+							{/if}
 						{/if}
 
-						<FormGroup
-							id="vm-hypervisor"
-							label="Hypervisor"
-							choices="radio"
-							error={errors.hypervisor}
-						>
-							<div class="pf-v6-c-radio">
-								<input
-									class="pf-v6-c-radio__input"
-									type="radio"
-									id="vm-hypervisor-cloud_hv"
-									value="cloud_hv"
-									bind:group={form.hypervisor}
-									aria-describedby="vm-hypervisor-cloud_hv-description"
-								/>
-								<label class="pf-v6-c-radio__label" for="vm-hypervisor-cloud_hv"
-									>Cloud Hypervisor</label
-								>
-								<span class="pf-v6-c-radio__description" id="vm-hypervisor-cloud_hv-description">
-									Boots kernels, and disks through UEFI firmware.
-								</span>
-							</div>
-							<div class="pf-v6-c-radio">
-								<input
-									class="pf-v6-c-radio__input"
-									type="radio"
-									id="vm-hypervisor-firecracker"
-									value="firecracker"
-									bind:group={form.hypervisor}
-									aria-describedby={errors.hypervisor
-										? 'vm-hypervisor-helper'
-										: 'vm-hypervisor-firecracker-description'}
-								/>
-								<label class="pf-v6-c-radio__label" for="vm-hypervisor-firecracker"
-									>Firecracker</label
-								>
-								<span class="pf-v6-c-radio__description" id="vm-hypervisor-firecracker-description">
-									A minimal microVM for kernels, quick to boot and light on memory.
-								</span>
-							</div>
-						</FormGroup>
+						{#if template?.hypervisor}
+							<p class="qx-subtle">
+								It runs on {HYPERVISOR[template.hypervisor]}, as {template.name} says.
+							</p>
+						{:else}
+							<FormGroup
+								id="vm-hypervisor"
+								label="Hypervisor"
+								choices="radio"
+								error={errors.hypervisor}
+							>
+								<div class="pf-v6-c-radio">
+									<input
+										class="pf-v6-c-radio__input"
+										type="radio"
+										id="vm-hypervisor-cloud_hv"
+										value="cloud_hv"
+										bind:group={form.hypervisor}
+										aria-describedby="vm-hypervisor-cloud_hv-description"
+									/>
+									<label class="pf-v6-c-radio__label" for="vm-hypervisor-cloud_hv"
+										>Cloud Hypervisor</label
+									>
+									<span class="pf-v6-c-radio__description" id="vm-hypervisor-cloud_hv-description">
+										Boots kernels, and disks through UEFI firmware.
+									</span>
+								</div>
+								<div class="pf-v6-c-radio">
+									<input
+										class="pf-v6-c-radio__input"
+										type="radio"
+										id="vm-hypervisor-firecracker"
+										value="firecracker"
+										bind:group={form.hypervisor}
+										aria-describedby={errors.hypervisor
+											? 'vm-hypervisor-helper'
+											: 'vm-hypervisor-firecracker-description'}
+									/>
+									<label class="pf-v6-c-radio__label" for="vm-hypervisor-firecracker"
+										>Firecracker</label
+									>
+									<span
+										class="pf-v6-c-radio__description"
+										id="vm-hypervisor-firecracker-description"
+									>
+										A minimal microVM for kernels, quick to boot and light on memory.
+									</span>
+								</div>
+							</FormGroup>
+						{/if}
 					</section>
 
 					<section class="pf-v6-c-form__section" role="group" aria-labelledby="vm-size-title">
 						<h2 class="pf-v6-c-form__section-title" id="vm-size-title">Size</h2>
-						{#if instanceTypes.length}
+						{#if instanceTypes.length || templateHas}
 							<FormGroup id="vm-size" label="Size from" choices="radio">
+								{#if template && templateHas}
+									<div class="pf-v6-c-radio">
+										<input
+											class="pf-v6-c-radio__input"
+											type="radio"
+											id="vm-size-template"
+											value="template"
+											bind:group={form.size}
+											aria-describedby="vm-size-template-description"
+										/>
+										<label class="pf-v6-c-radio__label" for="vm-size-template">Its template</label>
+										<span class="pf-v6-c-radio__description" id="vm-size-template-description">
+											{templateHas}, as {template.name} says.
+										</span>
+									</div>
+								{/if}
 								<div class="pf-v6-c-radio">
 									<input
 										class="pf-v6-c-radio__input"
@@ -372,22 +455,24 @@
 									/>
 									<label class="pf-v6-c-radio__label" for="vm-size-custom">vCPUs and memory</label>
 								</div>
-								<div class="pf-v6-c-radio">
-									<input
-										class="pf-v6-c-radio__input"
-										type="radio"
-										id="vm-size-instance-type"
-										value="instance-type"
-										bind:group={form.size}
-										aria-describedby="vm-size-instance-type-description"
-									/>
-									<label class="pf-v6-c-radio__label" for="vm-size-instance-type"
-										>An instance type</label
-									>
-									<span class="pf-v6-c-radio__description" id="vm-size-instance-type-description">
-										A named size your fleet defines, so VMs of a kind are sized alike.
-									</span>
-								</div>
+								{#if instanceTypes.length}
+									<div class="pf-v6-c-radio">
+										<input
+											class="pf-v6-c-radio__input"
+											type="radio"
+											id="vm-size-instance-type"
+											value="instance-type"
+											bind:group={form.size}
+											aria-describedby="vm-size-instance-type-description"
+										/>
+										<label class="pf-v6-c-radio__label" for="vm-size-instance-type"
+											>An instance type</label
+										>
+										<span class="pf-v6-c-radio__description" id="vm-size-instance-type-description">
+											A named size your fleet defines, so VMs of a kind are sized alike.
+										</span>
+									</div>
+								{/if}
 							</FormGroup>
 						{/if}
 						{#if form.size === 'instance-type'}
@@ -416,7 +501,7 @@
 									</select>
 								</FormControl>
 							</FormGroup>
-						{:else}
+						{:else if form.size === 'custom'}
 							<FormGroup id="vm-vcpus" label="vCPUs" required error={errors.vcpus}>
 								<FormControl invalid={!!errors.vcpus}>
 									<input
@@ -469,8 +554,12 @@
 									bind:value={form.networkId}
 									aria-describedby="vm-network-helper"
 								>
-									<option value="">No network</option>
-									{#each networks as network (network.id)}
+									<option value=""
+										>{templateNetwork
+											? `${templateNetwork.name} (the template's)`
+											: 'No network'}</option
+									>
+									{#each networks.filter((network) => network.id !== templateNetwork?.id) as network (network.id)}
 										<option value={network.id}>{network.name} ({network.subnet})</option>
 									{/each}
 								</select>
