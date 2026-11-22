@@ -19,6 +19,12 @@ export type StorageObject = Schemas['StorageObject'];
 export type StorageObjectType = Schemas['StorageObjectType'];
 export type NetworkStatus = Schemas['NetworkStatus'];
 export type TransferStatus = Schemas['TransferStatus'];
+export type Sandbox = Schemas['Sandbox'];
+export type NewSandbox = Schemas['NewSandbox'];
+export type SandboxStatus = Schemas['SandboxStatus'];
+export type SandboxPool = Schemas['SandboxPool'];
+export type VmTemplate = Schemas['VmTemplate'];
+export type ExecResult = Schemas['ExecSandboxResponse'];
 
 /** A request the control plane answered with an error status. */
 export class ApiError extends Error {
@@ -103,6 +109,21 @@ export const allBootSources = () =>
 export const allSecurityGroups = () =>
 	listAll((cursor) =>
 		call(api.GET('/v1/security-groups', { params: { query: { limit: 1000, cursor } } }))
+	);
+
+export const allSandboxes = () =>
+	listAll((cursor) =>
+		call(api.GET('/v1/sandboxes', { params: { query: { limit: 1000, cursor } } }))
+	);
+
+export const allSandboxPools = () =>
+	listAll((cursor) =>
+		call(api.GET('/v1/sandbox-pools', { params: { query: { limit: 1000, cursor } } }))
+	);
+
+export const allVmTemplates = () =>
+	listAll((cursor) =>
+		call(api.GET('/v1/vm-templates', { params: { query: { limit: 1000, cursor } } }))
 	);
 
 export const allStoragePools = () =>
