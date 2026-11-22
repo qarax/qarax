@@ -1260,14 +1260,15 @@ async def test_a_forking_sandbox_pool_fills_with_forks_of_its_seed(
                 seed_vm_id = uuid.UUID(pool["seed_vm_id"])
 
                 # The member the pool has made doesn't have this; the next does.
+                # Synced, so that the member reads it from its image's disk
+                # rather than from the page cache it inherits (a kernel
+                # template's root is in memory, and its initramfs has no sync).
+                write = "echo seeded > /root/marker" + (" && sync" if image else "")
                 result = await call_api(
                     exec_vm,
                     client=c,
                     vm_id=seed_vm_id,
-                    body=ExecVmRequest(
-                        command=["/bin/sh", "-c", "echo seeded > /root/marker && sync"],
-                        timeout_secs=15,
-                    ),
+                    body=ExecVmRequest(command=["/bin/sh", "-c", write], timeout_secs=15),
                 )
                 assert result.exit_code == 0, result.stderr
 
