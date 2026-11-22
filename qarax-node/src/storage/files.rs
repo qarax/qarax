@@ -4,6 +4,7 @@ use std::fs::{File, OpenOptions};
 use std::io;
 use std::ops::Range;
 use std::os::fd::AsRawFd;
+use std::os::unix::fs::FileExt;
 use std::path::Path;
 
 use nix::fcntl::{PosixFadviseAdvice, posix_fadvise};
@@ -41,6 +42,13 @@ pub fn copy_sparse(src: &Path, dst: &Path) -> io::Result<()> {
 /// the same size, at the same offsets: `dst` keeps what is in `src`'s holes.
 /// Lays the pages of a Firecracker diff snapshot over a copy of the memory
 /// image it is a diff of.
+///
+/// The data goes through the page cache, to be written back later, rather
+/// than through `copy_file_range`: on XFS that reflinks each extent, which
+/// first writes back that part of `src` (Firecracker leaves its snapshot
+/// files in the page cache) and logs a transaction for each, far slower for a
+/// diff of many small extents. This way the diff, deleted once laid over,
+/// needn't reach the disk at all.
 pub fn overlay_extents(src: &Path, dst: &Path) -> io::Result<()> {
     let src = File::open(src)?;
     let len = regular_file_len(&src)?;
@@ -51,8 +59,21 @@ pub fn overlay_extents(src: &Path, dst: &Path) -> io::Result<()> {
             "the files' sizes differ",
         ));
     }
-    copy_extents(&src, &dst, len)
+    let mut buf = vec![0; OVERLAY_CHUNK];
+    for extent in data_extents(&src, len)? {
+        let mut offset = extent.start;
+        while offset < extent.end {
+            let chunk = &mut buf[..(extent.end - offset).min(OVERLAY_CHUNK as u64) as usize];
+            src.read_exact_at(chunk, offset)?;
+            dst.write_all_at(chunk, offset)?;
+            offset += chunk.len() as u64;
+        }
+    }
+    Ok(())
 }
+
+/// How much of a diff [`overlay_extents`] copies at a time.
+const OVERLAY_CHUNK: usize = 1024 * 1024;
 
 /// Start reading `ranges` of `file` (byte ranges) into the page cache. The
 /// kernel queues the reads and returns, but may wait for room in the
@@ -82,14 +103,14 @@ fn regular_file_len(file: &File) -> io::Result<u64> {
     Ok(metadata.len())
 }
 
-/// Copy `src`'s data extents, within its first `len` bytes, to the same
-/// offsets of `dst`.
-fn copy_extents(src: &File, dst: &File, len: u64) -> io::Result<()> {
+/// `file`'s data extents within its first `len` bytes, in order.
+fn data_extents(file: &File, len: u64) -> io::Result<Vec<Range<u64>>> {
     let len = i64::try_from(len).map_err(io::Error::other)?;
+    let mut extents = Vec::new();
     let mut offset = 0;
     while offset < len {
         // SAFETY: the descriptor is open for the whole call.
-        let data = unsafe { libc::lseek(src.as_raw_fd(), offset, libc::SEEK_DATA) };
+        let data = unsafe { libc::lseek(file.as_raw_fd(), offset, libc::SEEK_DATA) };
         if data < 0 {
             let error = io::Error::last_os_error();
             // No data from `offset` on.
@@ -99,11 +120,22 @@ fn copy_extents(src: &File, dst: &File, len: u64) -> io::Result<()> {
             return Err(error);
         }
         // SAFETY: as above.
-        let hole = unsafe { libc::lseek(src.as_raw_fd(), data, libc::SEEK_HOLE) };
+        let hole = unsafe { libc::lseek(file.as_raw_fd(), data, libc::SEEK_HOLE) };
         if hole < 0 {
             return Err(io::Error::last_os_error());
         }
-        let (mut from, mut to) = (data, data);
+        extents.push(data as u64..hole as u64);
+        offset = hole;
+    }
+    Ok(extents)
+}
+
+/// Copy `src`'s data extents, within its first `len` bytes, to the same
+/// offsets of `dst`.
+fn copy_extents(src: &File, dst: &File, len: u64) -> io::Result<()> {
+    for extent in data_extents(src, len)? {
+        let (mut from, mut to) = (extent.start as i64, extent.start as i64);
+        let hole = extent.end as i64;
         while from < hole {
             // SAFETY: both descriptors are open, and the offsets are valid
             // pointers the call advances.
@@ -123,7 +155,6 @@ fn copy_extents(src: &File, dst: &File, len: u64) -> io::Result<()> {
                 _ => {}
             }
         }
-        offset = hole;
     }
     Ok(())
 }

@@ -72,7 +72,11 @@ fork round, its fork base, in the node's runtime directory; the next round
 takes a diff snapshot, the pages dirtied since, so the pause lasts as long as
 writing those does. Once the source runs again, the node lays them over a copy
 of the base (a reflink where the filesystem has them, a copy of the memory
-otherwise) and the forks load that, the new base. A base is never written to:
+otherwise) and the forks load that, the new base. The node starts writing
+each new base back to disk as soon as it is made: a reflink of it has to wait
+for what of it is still only in the page cache (all of a full snapshot's
+memory, at first), so the next round finds less of it left. A base is never
+written to:
 the forks that loaded it map it, and keep it when it's replaced. One fork round
 of a source runs at a time, and a snapshot of the source through the API or a
 restart forgets the base, so its next fork takes a full snapshot again; so
