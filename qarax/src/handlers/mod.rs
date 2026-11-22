@@ -135,6 +135,7 @@ pub struct BackupListQuery {
         vm::handler::console_log,
         vm::handler::console_attach,
         vm::handler::exec,
+        vm::handler::list_disks,
         vm::handler::attach_disk,
         vm::handler::remove_disk,
         vm::handler::list_nics,
@@ -535,7 +536,10 @@ fn vms() -> Router {
             get(vm::handler::console_attach),
         )
         .route("/vms/{vm_id}/exec", post(vm::handler::exec))
-        .route("/vms/{vm_id}/disks", post(vm::handler::attach_disk))
+        .route(
+            "/vms/{vm_id}/disks",
+            get(vm::handler::list_disks).post(vm::handler::attach_disk),
+        )
         .route(
             "/vms/{vm_id}/disks/{device_id}",
             axum::routing::delete(vm::handler::remove_disk),

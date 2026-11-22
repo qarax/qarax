@@ -2,8 +2,9 @@
 E2E tests for the web UI: the control-plane image serves its build at /ui, the
 console connection the UI makes reaches a VM's serial console, and in a real
 browser (headless Chromium) the UI signs in, creates, starts and deletes a VM,
-creates a sandbox, runs a command in it and deletes it, and creates a network
-and a storage pool, attaches each to a host, detaches it and deletes it.
+takes a VM's snapshot and restores it from it, creates a sandbox, runs a
+command in it and deletes it, and creates a network and a storage pool,
+attaches each to a host, detaches it and deletes it.
 """
 
 import asyncio
@@ -189,6 +190,88 @@ async def test_browser_create_start_delete_vm(page: Page):
     finally:
         for vm in vms_named(name):
             httpx2.delete(f"{QARAX_URL}/v1/vms/{vm['id']}", headers=AUTH_HEADERS)
+
+
+async def test_browser_vm_snapshot_restore(page: Page):
+    """A VM's Storage tab: it lists the VM's disks (none, for a VM booted
+    from a kernel), takes a snapshot of the running VM, restores the stopped
+    VM from it to running, and deletes it once confirmed."""
+    suffix = uuid.uuid4().hex[:8]
+    name = f"test-webui-snapshot-{suffix}"
+    snapshot = f"before-{suffix}"
+    hosts = httpx2.get(f"{QARAX_URL}/v1/hosts", headers=AUTH_HEADERS).json()["items"]
+    up = [host for host in hosts if host["status"] == "up"]
+    assert up, "Expected at least one UP host"
+    # Snapshots go to an active pool that isn't OverlayBD.
+    pool = httpx2.post(
+        f"{QARAX_URL}/v1/storage-pools",
+        json={
+            "name": f"test-webui-snapshots-{suffix}",
+            "pool_type": "local",
+            "config": {"path": "/var/lib/qarax/snapshots"},
+        },
+        headers=AUTH_HEADERS,
+    )
+    pool.raise_for_status()
+    pool_id = pool.text.strip('"')
+    async with Client(base_url=QARAX_URL, headers=AUTH_HEADERS) as c:
+        try:
+            httpx2.post(
+                f"{QARAX_URL}/v1/storage-pools/{pool_id}/hosts",
+                json={"host_id": up[0]["id"]},
+                headers=AUTH_HEADERS,
+            ).raise_for_status()
+            new_vm = NewVm(
+                name=name,
+                hypervisor=Hypervisor.CLOUD_HV,
+                boot_vcpus=1,
+                max_vcpus=1,
+                memory_size=256 * 1024 * 1024,
+            )
+            vm_id = str(await call_api(create_vm, client=c, body=new_vm))
+            await call_api(start_vm, client=c, vm_id=vm_id)
+            await wait_for_status(c, vm_id, VmStatus.RUNNING)
+
+            nav = page.get_by_role("navigation", name="Global")
+            await nav.get_by_role("link", name="Virtual machines").click()
+            await page.get_by_role("link", name=name, exact=True).click()
+            await page.get_by_role("tab", name="Storage").click()
+            await expect(
+                page.get_by_text("None: it boots from a kernel")
+            ).to_be_visible()
+            await expect(
+                page.get_by_role("alert").filter(has_text="Couldn't load")
+            ).to_have_count(0)
+
+            await page.get_by_role("textbox", name="Snapshot name").fill(snapshot)
+            await page.get_by_role("button", name="Take snapshot").click()
+            snapshots = page.get_by_role("table", name="Snapshots")
+            await expect(
+                snapshots.get_by_role("row", name=re.compile(snapshot))
+            ).to_contain_text("Ready", timeout=START_DEADLINE_MS)
+
+            await page.get_by_role("button", name="Stop", exact=True).click()
+            restore = page.get_by_role("button", name=f"Restore from {snapshot}")
+            await expect(restore).to_be_visible(timeout=START_DEADLINE_MS)
+            await restore.click()
+            dialog = page.get_by_role("dialog", name=f"Restore {name} from {snapshot}?")
+            await dialog.get_by_role("button", name="Restore", exact=True).click()
+            await expect(page.get_by_text("Running", exact=True)).to_be_visible(
+                timeout=START_DEADLINE_MS
+            )
+            await expect(page.get_by_role("alert")).to_have_count(0)
+
+            await page.get_by_role("button", name=f"Delete {snapshot}").click()
+            dialog = page.get_by_role("dialog", name=f"Delete {snapshot}?")
+            await dialog.get_by_role("button", name="Delete", exact=True).click()
+            await expect(page.get_by_text("None yet.")).to_be_visible()
+        finally:
+            for vm in vms_named(name):
+                await call_api_detailed(force_stop_vm, client=c, vm_id=vm["id"])
+                await call_api(delete_vm, client=c, vm_id=vm["id"])
+            httpx2.delete(
+                f"{QARAX_URL}/v1/storage-pools/{pool_id}", headers=AUTH_HEADERS
+            )
 
 
 async def test_browser_sandbox_runs_a_command(page: Page):

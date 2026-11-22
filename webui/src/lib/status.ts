@@ -2,6 +2,7 @@ import type {
 	HostStatus,
 	NetworkStatus,
 	SandboxStatus,
+	SnapshotStatus,
 	StoragePoolStatus,
 	TransferStatus,
 	VmStatus
@@ -66,6 +67,12 @@ export const SANDBOX_STATUS_HELP: Record<SandboxStatus, string> = {
 		'Its VM is booting. It is ready once the guest agent in it answers, usually within seconds.',
 	destroying: 'qarax is deleting it and its VM.',
 	error: "It didn't get ready, so it can't run commands. Delete it and create another."
+};
+
+export const SNAPSHOT_STATUS: Record<SnapshotStatus, StatusLook> = {
+	ready: { tone: 'run', text: 'Ready' },
+	creating: { tone: 'busy', text: 'Taking' },
+	failed: { tone: 'fault', text: 'Failed' }
 };
 
 export const HOST_STATUS: Record<HostStatus, StatusLook> = {
