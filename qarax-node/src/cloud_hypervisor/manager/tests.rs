@@ -355,6 +355,7 @@ async fn add_running_vm(manager: &VmManager, vm_id: &str) {
         console_pty_path: None,
         vsock_socket_path: None,
         storage_backend_kind: None,
+        seed_snapshot: None,
     };
     manager
         .vms

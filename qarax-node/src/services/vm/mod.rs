@@ -216,6 +216,60 @@ impl VmServiceImpl {
         }
     }
 
+    /// The manager of `req`'s source, with each fork's NICs given MACs of
+    /// their own.
+    #[allow(clippy::result_large_err)]
+    async fn fork_manager(&self, req: &mut ForkVmRequest) -> Result<Arc<dyn VmmManager>, Status> {
+        for fork in &mut req.forks {
+            assign_nic_macs(&fork.vm_id, &mut fork.networks);
+        }
+        self.find_manager(&req.source_vm_id)
+            .await
+            .ok_or_else(|| Status::not_found(format!("VM {} not found", req.source_vm_id)))
+    }
+
+    /// Resume the forks `manager` loaded for `req`, once their firewall is in
+    /// place. When that fails, the forks go.
+    #[allow(clippy::result_large_err)]
+    async fn start_loaded_forks(
+        &self,
+        manager: Arc<dyn VmmManager>,
+        req: &ForkVmRequest,
+    ) -> Result<Response<()>, Status> {
+        let fork_ids: Vec<String> = req.forks.iter().map(|fork| fork.vm_id.clone()).collect();
+        // Loaded and paused: their NICs are filtered before they run.
+        let node_vms = self.node_vms();
+        let started = async {
+            firewall_status(node_vms.sync_nic_firewall().await, true)?;
+            for fork in &req.forks {
+                node_vms
+                    .sync_security_groups(&fork.vm_id, &fork.firewall)
+                    .await?;
+            }
+            manager
+                .resume_forks(&req.source_vm_id, &fork_ids)
+                .await
+                .map_err(map_vmm_error)
+        }
+        .await;
+        if let Err(status) = started {
+            error!(
+                "Failed to start the forks of VM {}: {}",
+                req.source_vm_id,
+                status.message()
+            );
+            for fork_id in &fork_ids {
+                if let Err(e) = manager.delete_vm(fork_id).await {
+                    error!("Failed to delete fork {fork_id}: {e}");
+                }
+            }
+            firewall_status(node_vms.sync_nic_firewall().await, false)?;
+            return Err(status);
+        }
+        info!("VM {} forked into {:?}", req.source_vm_id, fork_ids);
+        Ok(Response::new(()))
+    }
+
     /// Find which manager currently owns the given VM, trying CH first then FC.
     async fn find_manager(&self, vm_id: &str) -> Option<Arc<dyn VmmManager>> {
         if self.ch_manager.get_vm_info(vm_id).await.is_ok() {
@@ -410,15 +464,8 @@ impl VmService for VmServiceImpl {
 
     async fn fork_vm(&self, request: Request<ForkVmRequest>) -> Result<Response<()>, Status> {
         let mut req = request.into_inner();
-        let fork_ids: Vec<String> = req.forks.iter().map(|fork| fork.vm_id.clone()).collect();
-        info!("Forking VM {} into {:?}", req.source_vm_id, fork_ids);
-        for fork in &mut req.forks {
-            assign_nic_macs(&fork.vm_id, &mut fork.networks);
-        }
-        let manager = self
-            .find_manager(&req.source_vm_id)
-            .await
-            .ok_or_else(|| Status::not_found(format!("VM {} not found", req.source_vm_id)))?;
+        info!("Forking VM {}", req.source_vm_id);
+        let manager = self.fork_manager(&mut req).await?;
         manager
             .fork_vm(&req.source_vm_id, &req.forks)
             .await
@@ -426,38 +473,21 @@ impl VmService for VmServiceImpl {
                 error!("Failed to fork VM {}: {}", req.source_vm_id, e);
                 map_vmm_error(e)
             })?;
+        self.start_loaded_forks(manager, &req).await
+    }
 
-        // Loaded and paused: their NICs are filtered before they run.
-        let node_vms = self.node_vms();
-        let started = async {
-            firewall_status(node_vms.sync_nic_firewall().await, true)?;
-            for fork in &req.forks {
-                node_vms
-                    .sync_security_groups(&fork.vm_id, &fork.firewall)
-                    .await?;
-            }
-            manager
-                .resume_forks(&req.source_vm_id, &fork_ids)
-                .await
-                .map_err(map_vmm_error)
-        }
-        .await;
-        if let Err(status) = started {
-            error!(
-                "Failed to start the forks of VM {}: {}",
-                req.source_vm_id,
-                status.message()
-            );
-            for fork_id in &fork_ids {
-                if let Err(e) = manager.delete_vm(fork_id).await {
-                    error!("Failed to delete fork {fork_id}: {e}");
-                }
-            }
-            firewall_status(node_vms.sync_nic_firewall().await, false)?;
-            return Err(status);
-        }
-        info!("VM {} forked into {} VMs", req.source_vm_id, fork_ids.len());
-        Ok(Response::new(()))
+    async fn fork_seed(&self, request: Request<ForkVmRequest>) -> Result<Response<()>, Status> {
+        let mut req = request.into_inner();
+        info!("Forking seed {}", req.source_vm_id);
+        let manager = self.fork_manager(&mut req).await?;
+        manager
+            .fork_seed(&req.source_vm_id, &req.forks)
+            .await
+            .map_err(|e| {
+                error!("Failed to fork seed {}: {}", req.source_vm_id, e);
+                map_vmm_error(e)
+            })?;
+        self.start_loaded_forks(manager, &req).await
     }
 
     async fn delete_snapshot(

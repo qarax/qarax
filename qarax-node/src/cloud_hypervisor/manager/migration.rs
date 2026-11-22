@@ -145,6 +145,7 @@ impl VmManager {
             console_pty_path: console_pty,
             vsock_socket_path,
             storage_backend_kind: None,
+            seed_snapshot: None,
         };
 
         adding.finish([(vm_id.to_string(), ManagedVm::new(instance))]);
@@ -325,6 +326,7 @@ impl VmManager {
             console_pty_path: None,
             vsock_socket_path,
             storage_backend_kind,
+            seed_snapshot: None,
         };
 
         adding.finish([(vm_id.to_string(), ManagedVm::new(instance))]);
@@ -428,8 +430,8 @@ impl VmManager {
         // Mark the source instance as Shutdown.  We keep it in the map so
         // the control plane can call delete_vm() to clean up TAP devices and
         // other host resources after confirming migration success.
-        if let Ok(instance) = self.lock_vm(vm_id).await {
-            instance.set_status(VmStatus::Shutdown);
+        if let Ok(mut instance) = self.lock_vm(vm_id).await {
+            instance.stopped();
         }
 
         info!(

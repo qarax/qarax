@@ -328,6 +328,14 @@ impl<'a> ForkDisks<'a> {
                 (disk.path.clone(), copies)
             })
             .collect();
+        Self::with_copies(oci, copies)
+    }
+
+    /// `oci`, and each data disk's file with its copies.
+    pub(crate) fn with_copies(
+        oci: Option<&'a SourceDisk>,
+        copies: Vec<(PathBuf, Vec<PathBuf>)>,
+    ) -> Self {
         ForkDisks { oci, copies }
     }
 
@@ -393,26 +401,29 @@ impl<'a> ForkDisks<'a> {
             }
         }
         match (self.oci, frozen) {
+            // The forks that get a disk have their own link to the layer,
+            // which goes once they have.
             (Some(oci), Some(frozen)) => {
-                let devices = mount_fork_disks(&oci.overlaybd, &frozen, fork_ids).await;
-                // The forks that got a disk have their own link to the layer.
-                oci.overlaybd.release(frozen).await;
-                Ok(devices?.into_iter().map(Some).collect())
+                oci.overlaybd.seal(&frozen).await.map_err(overlaybd_err)?;
+                Ok(mount_fork_disks(&oci.overlaybd, &frozen, fork_ids)
+                    .await?
+                    .into_iter()
+                    .map(Some)
+                    .collect())
             }
             _ => Ok(vec![None; fork_ids.len()]),
         }
     }
 }
 
-/// Seal the frozen layer and mount a disk for each fork on it, one at a
-/// time (finding a new TCMU device is serial anyway). None is left mounted
-/// if one fails.
+/// Mount a disk for each fork on the sealed `frozen` layer, one at a time
+/// (finding a new TCMU device is serial anyway). None is left mounted if one
+/// fails.
 pub(crate) async fn mount_fork_disks(
     overlaybd: &OverlayBdManager,
     frozen: &FrozenUpper,
     fork_ids: &[String],
 ) -> Result<Vec<String>, VmmError> {
-    overlaybd.seal(frozen).await.map_err(overlaybd_err)?;
     let mut devices = Vec::with_capacity(fork_ids.len());
     for fork_id in fork_ids {
         match overlaybd.mount_fork(fork_id, frozen).await {

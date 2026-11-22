@@ -11,6 +11,10 @@
 //! rewritten for the fork: its own vsock socket, TAPs and disk files. The
 //! directory goes with the fork.
 //!
+//! A seed (see [`crate::vmm::seed`]) keeps the snapshot its first fork as a
+//! seed takes, and its forks from then on restore that one: their directories
+//! link its memory file, which they all map.
+//!
 //! Cloud Hypervisor restores a VM paused: the forks are resumed in a second
 //! step, so that their firewall is in place before they run.
 
@@ -24,6 +28,8 @@ use crate::vmm::fork::{
     ForkDisks, SourceDisk, check_forkable, data_disks, fork_config, give_fork_its_seed,
     readdress_request, source_disk, tell_fork,
 };
+use crate::vmm::seed::{SeedDir, SeedSnapshot};
+use crate::vmm::vms::Adding;
 
 /// The snapshot config a fork restores from: its source's, `snapshot`, on the
 /// fork's own vsock socket, TAPs (with their host-side addresses) and disk
@@ -118,15 +124,7 @@ impl VmManager {
     }
 
     pub(super) async fn fork(&self, source_id: &str, forks: &[Fork]) -> Result<(), VmmError> {
-        let fork_ids: Vec<String> = forks.iter().map(|fork| fork.vm_id.clone()).collect();
-        info!("Forking VM {} into {:?}", source_id, fork_ids);
-        if fork_ids.is_empty() {
-            return Err(VmmError::InvalidConfig("no VMs to fork into".into()));
-        }
-        let adding = self
-            .vms
-            .reserve(fork_ids.clone())
-            .map_err(VmmError::VmAlreadyExists)?;
+        let (adding, fork_ids) = self.begin_fork(source_id, forks)?;
         let (source_config, oci_mapped) = {
             let source = self.lock_vm(source_id).await?;
             (
@@ -167,22 +165,98 @@ impl VmManager {
                 e
             );
         }
-        let forks = forked?;
+        self.add_forks(source_id, adding, forked?).await;
+        Ok(())
+    }
 
+    /// Fork `seed_id`, a seed, into `forks`, paused: from the snapshot of it
+    /// the node keeps, which its first fork as a seed takes.
+    pub(super) async fn fork_seed(&self, seed_id: &str, forks: &[Fork]) -> Result<(), VmmError> {
+        let (adding, _) = self.begin_fork(seed_id, forks)?;
+        let seed = self.seed_snapshot(seed_id, forks).await?;
+        let configs = forks
+            .iter()
+            .map(|fork| fork_config(&seed.config, fork))
+            .collect::<Result<Vec<_>, _>>()?;
+        let devices = seed.give_disks(forks, &configs).await?;
+        let forked = self
+            .restore_forks(seed_id, configs, seed.oci_disk(), &devices, &seed.vm())
+            .await?;
+        self.add_forks(seed_id, adding, forked).await;
+        Ok(())
+    }
+
+    /// `seed_id`'s snapshot as a seed: the one it has, or a new one, taken
+    /// with the seed's lock held so that its forks as a seed take one at a
+    /// time.
+    async fn seed_snapshot(
+        &self,
+        seed_id: &str,
+        forks: &[Fork],
+    ) -> Result<Arc<SeedSnapshot>, VmmError> {
+        let mut seed = self.lock_vm(seed_id).await?;
+        let config = seed.config();
+        // A seed resized, or with a device added or removed, since its
+        // snapshot gets a new one: its forks have its config as it is.
+        if let Some(snapshot) = seed
+            .seed_snapshot
+            .as_ref()
+            .filter(|snapshot| snapshot.config == config)
+        {
+            return Ok(snapshot.clone());
+        }
+        check_forkable(&config)?;
+        let data = data_disks(&config, forks)?;
+        let oci = self
+            .overlaybd_manager
+            .clone()
+            .filter(|_| seed.storage_backend_kind == Some(StoragePoolKind::Overlaybd));
+        let disk = source_disk(seed_id, &config, &data, oci)?;
+        let dir = SeedDir::new(&self.runtime_dir, seed_id).await?;
+        let (disks, kept) = dir.disks(disk.as_ref(), &data);
+        disks.write_back(seed_id).await?;
+        let frozen = Self::pause_for_snapshot(seed_id, &seed, &disks, &dir.vm()).await?;
+        let snapshot = Arc::new(dir.keep(config, disk, frozen, kept).await?);
+        info!("Took the snapshot of VM {seed_id} its forks as a seed restore");
+        seed.seed_snapshot = Some(snapshot.clone());
+        Ok(snapshot)
+    }
+
+    /// Start a fork round of `source_id` into `forks`: reserve their IDs.
+    fn begin_fork(
+        &self,
+        source_id: &str,
+        forks: &[Fork],
+    ) -> Result<(Adding<'_, ManagedVm>, Vec<String>), VmmError> {
+        let fork_ids: Vec<String> = forks.iter().map(|fork| fork.vm_id.clone()).collect();
+        info!("Forking VM {} into {:?}", source_id, fork_ids);
+        if fork_ids.is_empty() {
+            return Err(VmmError::InvalidConfig("no VMs to fork into".into()));
+        }
+        let adding = self
+            .vms
+            .reserve(fork_ids.clone())
+            .map_err(VmmError::VmAlreadyExists)?;
+        Ok((adding, fork_ids))
+    }
+
+    /// Make `forks`, restored from `source_id`, the manager's VMs.
+    async fn add_forks(
+        &self,
+        source_id: &str,
+        adding: Adding<'_, ManagedVm>,
+        forks: Vec<(String, VmInstance)>,
+    ) {
         for (fork_id, instance) in &forks {
             self.persist_config(fork_id, &instance.config()).await;
         }
+        let count = forks.len();
         adding.finish(
             forks
                 .into_iter()
                 .map(|(fork_id, instance)| (fork_id, ManagedVm::new(instance))),
         );
-        info!(
-            "VM {} forked into {} VMs, paused",
-            source_id,
-            fork_ids.len()
-        );
-        Ok(())
+        info!("VM {} forked into {} VMs, paused", source_id, count);
     }
 
     /// Resume forks [`Self::fork`] restored, and tell each one's guest that it
@@ -238,6 +312,17 @@ impl VmManager {
         })?;
 
         let source = self.lock_vm(source_id).await?;
+        Self::pause_for_snapshot(source_id, &source, disks, dir).await
+    }
+
+    /// Pause `source`, VM `source_id` with its lock held, if it runs,
+    /// snapshot it into `dir`, freeze its `disks`, and resume it.
+    async fn pause_for_snapshot(
+        source_id: &str,
+        source: &VmInstance,
+        disks: &ForkDisks<'_>,
+        dir: &Path,
+    ) -> Result<Option<FrozenUpper>, VmmError> {
         let was_running = match source.status() {
             VmStatus::Running => true,
             VmStatus::Paused => false,
@@ -381,6 +466,7 @@ impl VmManager {
                 console_pty_path,
                 vsock_socket_path: Some(vsock_path),
                 storage_backend_kind: disk.map(|_| StoragePoolKind::Overlaybd),
+                seed_snapshot: None,
             }),
             Err(e) => {
                 self.discard_fork(&fork_id, process, &tap_devices).await;

@@ -18,6 +18,20 @@ use crate::model::vms::{MigrationMemoryMode, MigrationOptions, MigrationTimeoutA
 /// SYN retry budget, about two minutes, before failing.
 const NODE_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// What a node's refusal of a fork means to the caller: a fork the node can't
+/// make is the request's to fix (422); anything else is the node's failure.
+fn fork_error(status: tonic::Status, context: &'static str) -> anyhow::Error {
+    match status.code() {
+        tonic::Code::NotFound
+        | tonic::Code::InvalidArgument
+        | tonic::Code::FailedPrecondition
+        | tonic::Code::Unimplemented => {
+            crate::errors::Error::UnprocessableEntity(status.message().to_string()).into()
+        }
+        _ => anyhow::Error::new(NodeError(status)).context(context),
+    }
+}
+
 /// An error a node answered with, which reads as the node's message. tonic's
 /// own `Display` of a `Status` adds its code, details and metadata and quotes
 /// the message, escaping its line breaks, so a node's multi-line error (an
@@ -699,17 +713,23 @@ impl NodeClient {
                 forks,
             })
             .await
-            .map_err(|status| match status.code() {
-                tonic::Code::NotFound
-                | tonic::Code::InvalidArgument
-                | tonic::Code::FailedPrecondition
-                | tonic::Code::Unimplemented => {
-                    crate::errors::Error::UnprocessableEntity(status.message().to_string()).into()
-                }
-                _ => {
-                    anyhow::Error::new(NodeError(status)).context("Failed to fork VM on qarax-node")
-                }
-            })?;
+            .map_err(|status| fork_error(status, "Failed to fork VM on qarax-node"))?;
+        Ok(())
+    }
+
+    /// Start `forks` of `seed_id`, a pool's seed, on the node: new VMs that
+    /// continue from the snapshot of the seed the node keeps, which the seed's
+    /// first fork takes. Either all of them start or none does.
+    #[instrument(skip(self, forks))]
+    pub async fn fork_seed(&self, seed_id: Uuid, forks: Vec<Fork>) -> Result<()> {
+        let mut client = self.connect_vm_service().await?;
+        client
+            .fork_seed(ForkVmRequest {
+                source_vm_id: seed_id.to_string(),
+                forks,
+            })
+            .await
+            .map_err(|status| fork_error(status, "Failed to fork seed on qarax-node"))?;
         Ok(())
     }
 

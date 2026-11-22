@@ -1,6 +1,6 @@
 //! A qarax-node that forks VMs and does nothing else, for what the control
-//! plane does around a fork: it answers ForkVM, keeping each request, and
-//! refuses every other call.
+//! plane does around a fork: it answers ForkVM and ForkSeed, keeping each
+//! request, and refuses every other call.
 
 use std::sync::{Arc, Mutex};
 
@@ -17,12 +17,18 @@ use super::{TestApp, node_server_tls};
 #[derive(Clone, Default)]
 pub struct ForkingNode {
     forks: Arc<Mutex<Vec<node::ForkVmRequest>>>,
+    seed_forks: Arc<Mutex<Vec<node::ForkVmRequest>>>,
 }
 
 impl ForkingNode {
     /// The ForkVM requests it has answered, oldest first.
     pub fn forks(&self) -> Vec<node::ForkVmRequest> {
         self.forks.lock().unwrap().clone()
+    }
+
+    /// The ForkSeed requests it has answered, oldest first.
+    pub fn seed_forks(&self) -> Vec<node::ForkVmRequest> {
+        self.seed_forks.lock().unwrap().clone()
     }
 }
 
@@ -85,6 +91,14 @@ vm_service! {
             request: Request<node::ForkVmRequest>,
         ) -> Result<Response<()>, Status> {
             self.forks.lock().unwrap().push(request.into_inner());
+            Ok(Response::new(()))
+        }
+
+        async fn fork_seed(
+            &self,
+            request: Request<node::ForkVmRequest>,
+        ) -> Result<Response<()>, Status> {
+            self.seed_forks.lock().unwrap().push(request.into_inner());
             Ok(Response::new(()))
         }
     }

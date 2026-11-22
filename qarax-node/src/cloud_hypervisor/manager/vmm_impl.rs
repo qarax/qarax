@@ -199,6 +199,14 @@ impl crate::vmm::VmmManager for VmManager {
         self.fork(source_id, forks).await
     }
 
+    async fn fork_seed(
+        &self,
+        seed_id: &str,
+        forks: &[crate::rpc::node::Fork],
+    ) -> Result<(), crate::vmm::VmmError> {
+        VmManager::fork_seed(self, seed_id, forks).await
+    }
+
     async fn resume_forks(
         &self,
         source_id: &str,

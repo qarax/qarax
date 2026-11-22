@@ -1232,9 +1232,10 @@ async def test_a_forking_sandbox_pool_fills_with_forks_of_its_seed(
     client, bootable_oci_image_ref, image, hypervisor
 ):
     """A pool that forks keeps one booted VM of its template, its seed, and
-    makes its members by forking it: a member continues from the seed's state
-    as it was when the member was made, files on its image's disk included,
-    and the seed is never handed out."""
+    makes its members by forking it from the snapshot of it its node took at
+    the seed's first fork: every member continues from the seed's state then,
+    files on its image's disk included, not as it was when the member was
+    made, and the seed is never handed out."""
     async with client as c:
         httpx_client = c.get_async_httpx_client()
         template = (
@@ -1288,10 +1289,11 @@ async def test_a_forking_sandbox_pool_fills_with_forks_of_its_seed(
                 assert seed["status"] == "ready", pool
                 seed_vm_id = uuid.UUID(seed["vm_id"])
 
-                # The member the pool has made doesn't have this; the next does.
-                # Synced, so that the member reads it from its image's disk
-                # rather than from the page cache it inherits (a kernel
-                # template's root is in memory, and its initramfs has no sync).
+                # The pool has made a member, so the seed's snapshot is from
+                # before this: neither that member nor the next has it. Synced,
+                # so that a member would read it from its image's disk rather
+                # than from the page cache it inherits (a kernel template's root
+                # is in memory, and its initramfs has no sync).
                 write = "echo seeded > /root/marker" + (" && sync" if image else "")
                 result = await call_api(
                     exec_vm,
@@ -1308,10 +1310,17 @@ async def test_a_forking_sandbox_pool_fills_with_forks_of_its_seed(
                 await wait_for_sandbox_pool_ready(c, template_id, min_ready=1)
                 second = await claim()
                 assert second.vm_id != seed_vm_id
-                assert await marker(second.id) == "seeded"
+                assert await marker(second.id) == "none"
 
                 seed = await call_api(get_vm, client=c, vm_id=seed_vm_id)
                 assert seed.status == VmStatus.RUNNING, seed.status
+                result = await call_api(
+                    exec_vm,
+                    client=c,
+                    vm_id=seed_vm_id,
+                    body=ExecVmRequest(command=["cat", "/root/marker"], timeout_secs=15),
+                )
+                assert result.stdout.strip() == "seeded", result
             finally:
                 for sandbox_id in sandbox_ids:
                     await delete_sandbox.asyncio_detailed(client=c, sandbox_id=sandbox_id)
@@ -1323,8 +1332,9 @@ async def test_a_forking_sandbox_pool_fills_with_forks_of_its_seed(
 @pytest.mark.asyncio
 async def test_a_pool_that_keeps_only_its_seed_forks_it_for_each_sandbox(client):
     """A forking pool with min_ready 0 keeps its seed and nothing else: each
-    sandbox asked for is forked from the seed on its request, with the seed's
-    state as it is then, and the seed keeps running."""
+    sandbox asked for is forked from the seed on its request, from the
+    snapshot of the seed its node took for the first, and the seed keeps
+    running."""
     async with client as c:
         httpx_client = c.get_async_httpx_client()
         async with bootable_sandbox_template(c, "firecracker") as template_id:
@@ -1372,7 +1382,8 @@ async def test_a_pool_that_keeps_only_its_seed_forks_it_for_each_sandbox(client)
                         body=ExecSandboxRequest(command=["cat", "/root/marker"], timeout_secs=15),
                     )
                     assert result.exit_code == 0, result.stderr
-                    assert result.stdout.strip() == marker
+                    # The first took the seed's snapshot; the second loads it.
+                    assert result.stdout.strip() == "first"
 
                 # It kept nothing ready, and the same seed.
                 pool = (await httpx_client.get(pool_url)).json()
@@ -1444,11 +1455,8 @@ async def test_a_forking_pool_keeps_a_seed_on_each_of_its_seed_hosts(client):
                 )
                 seeds = {uuid.UUID(seed["host_id"]): uuid.UUID(seed["vm_id"]) for seed in pool["seeds"]}
                 assert len(seeds) == 2, f"two seeds on one host: {pool}"
-
-                response = await httpx_client.put(pool_url, json={**body, "min_ready": 2})
-                assert response.status_code == 200, response.text
-                await wait_for_sandbox_pool_ready(c, template_id, min_ready=2)
-                # Each seed marks the members forked from it from now on.
+                # Each seed marks the snapshot its first fork takes, so every
+                # member forked from it has its host's mark.
                 for host_id, seed_vm_id in seeds.items():
                     result = await call_api(
                         exec_vm,
@@ -1461,17 +1469,21 @@ async def test_a_forking_pool_keeps_a_seed_on_each_of_its_seed_hosts(client):
                     )
                     assert result.exit_code == 0, result.stderr
 
-                # The two members made before, one on each host; then the two
-                # the pool makes up for them, one on each host too, forked
-                # from that host's seed.
+                response = await httpx_client.put(pool_url, json={**body, "min_ready": 2})
+                assert response.status_code == 200, response.text
+                await wait_for_sandbox_pool_ready(c, template_id, min_ready=2)
+
+                # The two members made first, one on each host; then the two
+                # the pool makes up for them, one on each host too: each
+                # forked from that host's seed.
                 before = [await claim(), await claim()]
                 assert {await host_of(created) for created in before} == set(seeds)
                 await wait_for_sandbox_pool_ready(c, template_id, min_ready=2)
                 after = [await claim(), await claim()]
                 after_hosts = [await host_of(created) for created in after]
                 assert set(after_hosts) == set(seeds), after_hosts
-                for created, host_id in zip(after, after_hosts):
-                    assert await marker(created) == str(host_id)
+                for created in before + after:
+                    assert await marker(created) == str(await host_of(created))
 
                 for seed_vm_id in seeds.values():
                     seed = await call_api(get_vm, client=c, vm_id=seed_vm_id)

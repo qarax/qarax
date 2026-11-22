@@ -82,11 +82,11 @@ pub struct MountedDevice {
 
 /// A VM's writable layer as it was when the VM was forked, with the layers
 /// it stacked on: each fork of the VM stacks a writable layer of its own on
-/// both. Sealed (read-only) before a fork mounts it.
+/// both. Sealed (read-only) before a fork mounts it. Its files go with it:
+/// each fork that got a disk on it has its own link to the layer.
 #[derive(Debug)]
 pub struct FrozenUpper {
-    /// In the cache dir, on the forks' filesystem (for reflinks and links);
-    /// removed by [`OverlayBdManager::release`].
+    /// In the cache dir, on the forks' filesystem (for reflinks and links).
     dir: PathBuf,
     data: PathBuf,
     index: PathBuf,
@@ -94,6 +94,21 @@ pub struct FrozenUpper {
     repo_blob_url: serde_json::Value,
     lowers: Vec<serde_json::Value>,
 }
+
+impl Drop for FrozenUpper {
+    fn drop(&mut self) {
+        if let Err(e) = std::fs::remove_dir_all(&self.dir) {
+            warn!(
+                "Failed to remove frozen upper layer {}: {}",
+                self.dir.display(),
+                e
+            );
+        }
+    }
+}
+
+/// What names a frozen layer's directory in the cache dir: `<vm>.fork-<uuid>`.
+const FROZEN_INFIX: &str = ".fork-";
 
 /// Manages OverlayBD block devices for VMs.
 pub struct OverlayBdManager {
@@ -603,7 +618,7 @@ impl OverlayBdManager {
 
         let dir = self
             .cache_dir
-            .join(format!("{vm_id}.fork-{}", Uuid::new_v4()));
+            .join(format!("{vm_id}{FROZEN_INFIX}{}", Uuid::new_v4()));
         tokio::fs::create_dir(&dir).await?;
         let frozen = FrozenUpper {
             data: dir.join("upper.data"),
@@ -615,17 +630,6 @@ impl OverlayBdManager {
         tokio::fs::copy(&data, &frozen.data).await?;
         tokio::fs::copy(&index, &frozen.index).await?;
         Ok(frozen)
-    }
-
-    /// Remove a frozen layer once every fork that needs it has its own link.
-    pub async fn release(&self, frozen: FrozenUpper) {
-        if let Err(e) = tokio::fs::remove_dir_all(&frozen.dir).await {
-            warn!(
-                "Failed to remove frozen upper layer {}: {}",
-                frozen.dir.display(),
-                e
-            );
-        }
     }
 
     /// Seal a frozen writable layer into a read-only one, in place.
@@ -909,6 +913,19 @@ impl OverlayBdManager {
                 Ok(s) => s,
                 Err(_) => continue,
             };
+            // A frozen layer of the last run: of a fork round it ended, or a
+            // seed's snapshot, which the node no longer keeps. Its forks
+            // have links of their own.
+            if vm_id.contains(FROZEN_INFIX) {
+                if let Err(e) = tokio::fs::remove_dir_all(entry.path()).await {
+                    warn!(
+                        "Failed to remove stale frozen layer {}: {}",
+                        entry.path().display(),
+                        e
+                    );
+                }
+                continue;
+            }
 
             let result_file = entry.path().join("result");
             if !result_file.exists() {
@@ -1572,8 +1589,29 @@ mod tests {
         );
 
         let frozen_dir = frozen.dir.clone();
-        manager.release(frozen).await;
+        drop(frozen);
         assert!(!frozen_dir.exists());
+    }
+
+    #[tokio::test]
+    async fn a_restarted_node_removes_the_frozen_layers_of_its_last_run() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (manager, cache) = cache_with_disk(&dir, "source", None).await;
+        let device = dir.path().join("device");
+        tokio::fs::write(&device, b"").await.unwrap();
+        let frozen = manager
+            .freeze_upper("source", device.to_str().unwrap())
+            .await
+            .unwrap();
+        let frozen_dir = frozen.dir.clone();
+        // The node stopped with it, a seed's say, still there.
+        std::mem::forget(frozen);
+
+        let restarted = OverlayBdManager::new("unused-convertor", &cache);
+        restarted.recover().await;
+        assert!(!frozen_dir.exists());
+        // The VM's own config dir stays.
+        assert!(cache.join("source").join("config.json").is_file());
     }
 
     #[tokio::test]

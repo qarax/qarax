@@ -44,6 +44,7 @@ use crate::rpc::node::{
 };
 use crate::storage::StorageBackendRegistry;
 use crate::vmm::VMM_ANSWER_TIMEOUT;
+use crate::vmm::seed::SeedSnapshot;
 use crate::vmm::vms::Vms;
 
 /// A directory with the certificates Cloud Hypervisor uses for migration
@@ -169,6 +170,9 @@ struct VmInstance {
     /// Which storage backend mapped a disk for this VM (if any).
     /// Used by delete_vm to call the correct backend's unmap().
     storage_backend_kind: Option<StoragePoolKind>,
+    /// Its snapshot as a seed, which its forks as a seed load
+    /// ([`VmManager::fork_seed`]): taken at the first, dropped when it stops.
+    seed_snapshot: Option<Arc<SeedSnapshot>>,
 }
 
 impl VmInstance {
@@ -186,6 +190,14 @@ impl VmInstance {
 
     fn set_status(&self, status: VmStatus) {
         self.summary.send_modify(|summary| summary.status = status);
+    }
+
+    /// Mark it stopped. A seed's snapshot goes with its run, as a Firecracker
+    /// seed's does: the next fork as a seed of the VM started again takes a
+    /// new one.
+    fn stopped(&mut self) {
+        self.set_status(VmStatus::Shutdown);
+        self.seed_snapshot = None;
     }
 }
 

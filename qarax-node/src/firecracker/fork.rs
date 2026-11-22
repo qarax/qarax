@@ -27,6 +27,10 @@
 //! soon as the image is made, while its forks load: they touch the same pages
 //! first.
 //!
+//! A seed (see [`crate::vmm::seed`]) forks from a snapshot the node keeps
+//! instead: its first fork as a seed takes a full snapshot of it, and its forks
+//! from then on load that one, whose memory image they all map.
+//!
 //! The forks load paused and are resumed in a second step, so that their
 //! firewall is in place before they run.
 
@@ -44,6 +48,8 @@ use crate::vmm::fork::{
     DataDisk, ForkDisks, SourceDisk, blocking, check_forkable, data_disks, fork_config,
     give_fork_its_seed, readdress_request, source_disk, tell_fork,
 };
+use crate::vmm::seed::{SeedDir, SeedSnapshot};
+use crate::vmm::vms::Adding;
 
 /// Whether Firecracker tracks the pages a VM dirties: for a VM with the guest
 /// agent, which can be forked, so that its forks after the first take a diff
@@ -73,6 +79,10 @@ pub(super) enum ForkMemory {
         base: Option<ForkBase>,
         startup: Vec<Range<u64>>,
     },
+    /// A seed: its forks as a seed load this snapshot of it
+    /// ([`FirecrackerManager::fork_seed`]), and a fork of its current state
+    /// takes a full snapshot, as an untracked VM's does.
+    Seed(Arc<SeedSnapshot>),
 }
 
 impl ForkMemory {
@@ -128,22 +138,7 @@ enum MemorySnapshot {
 
 impl FirecrackerManager {
     pub(super) async fn fork(&self, source_id: &str, forks: &[Fork]) -> Result<(), VmmError> {
-        let fork_ids: Vec<String> = forks.iter().map(|fork| fork.vm_id.clone()).collect();
-        info!("FC: Forking VM {} into {:?}", source_id, fork_ids);
-        if fork_ids.is_empty() {
-            return Err(VmmError::InvalidConfig("no VMs to fork into".into()));
-        }
-        let adding = self
-            .vms
-            .reserve(fork_ids.clone())
-            .map_err(VmmError::VmAlreadyExists)?;
-        let (source_config, memory) = {
-            let instance = self.lock_vm(source_id).await?;
-            let FcPhase::Live { forking, .. } = &instance.phase else {
-                return Err(VmmError::ProcessError("VM is not running".into()));
-            };
-            (instance.proto_config.clone(), forking.clone())
-        };
+        let (adding, source_config, memory) = self.begin_fork(source_id, forks).await?;
         // One fork round of a VM at a time: each diffs against the last one's
         // memory image.
         let mut memory = memory.lock().await;
@@ -153,13 +148,7 @@ impl FirecrackerManager {
             .map(|fork| fork_config(&source_config, fork))
             .collect::<Result<Vec<_>, _>>()?;
         let data = data_disks(&source_config, forks)?;
-        let oci = match &self.overlaybd {
-            Some(backend) if backend.has_mapping(source_id).await => {
-                Some(backend.manager().clone())
-            }
-            _ => None,
-        };
-        let disk = source_disk(source_id, &source_config, &data, oci)?;
+        let disk = self.oci_disk(source_id, &source_config, &data).await?;
 
         let snapshot_dir = self
             .runtime_dir
@@ -184,8 +173,125 @@ impl FirecrackerManager {
                 e
             );
         }
-        let forks = forked?;
+        self.add_forks(source_id, adding, forked?).await;
+        Ok(())
+    }
 
+    /// Fork `seed_id`, a seed, into `forks`, paused: from the snapshot of it
+    /// the node keeps, which its first fork as a seed takes.
+    pub(super) async fn fork_seed(&self, seed_id: &str, forks: &[Fork]) -> Result<(), VmmError> {
+        let (adding, seed_config, memory) = self.begin_fork(seed_id, forks).await?;
+        let seed = {
+            let mut memory = memory.lock().await;
+            match &*memory {
+                ForkMemory::Seed(seed) => seed.clone(),
+                ForkMemory::Untracked | ForkMemory::Tracked { .. } => {
+                    let taken = self.take_seed_snapshot(seed_id, seed_config, forks).await;
+                    // Its full snapshot reset the dirty-page log, if it got so far.
+                    memory.forget_base();
+                    let seed = Arc::new(taken?);
+                    *memory = ForkMemory::Seed(seed.clone());
+                    seed
+                }
+            }
+        };
+        let configs = forks
+            .iter()
+            .map(|fork| fork_config(&seed.config, fork))
+            .collect::<Result<Vec<_>, _>>()?;
+        let devices = seed.give_disks(forks, &configs).await?;
+        let snapshot = seed.vm();
+        let forked = self
+            .load_forks(
+                seed_id,
+                configs,
+                seed.oci_disk(),
+                &devices,
+                seed.data(),
+                &snapshot,
+                &snapshot.join("mem.snap"),
+            )
+            .await?;
+        self.add_forks(seed_id, adding, forked).await;
+        Ok(())
+    }
+
+    /// Take a snapshot of `seed_id`, whose config is `config`, as a seed: all
+    /// of its memory, its devices' state and its disks as they are, during a
+    /// pause.
+    async fn take_seed_snapshot(
+        &self,
+        seed_id: &str,
+        config: ProtoVmConfig,
+        forks: &[Fork],
+    ) -> Result<SeedSnapshot, VmmError> {
+        check_forkable(&config)?;
+        let data = data_disks(&config, forks)?;
+        let disk = self.oci_disk(seed_id, &config, &data).await?;
+        let dir = SeedDir::new(&self.runtime_dir, seed_id).await?;
+        let (disks, kept) = dir.disks(disk.as_ref(), &data);
+        disks.write_back(seed_id).await?;
+        let snapshot = dir.vm();
+        let frozen = self
+            .pause_for_snapshot(
+                seed_id,
+                &disks,
+                &snapshot,
+                &snapshot.join("mem.snap"),
+                SnapshotType::Full,
+            )
+            .await?;
+        info!("FC: Took the snapshot of VM {seed_id} its forks as a seed load");
+        dir.keep(config, disk, frozen, kept).await
+    }
+
+    /// Start a fork round of `source_id` into `forks`: reserve their IDs, and
+    /// take its config and [`ForkMemory`].
+    async fn begin_fork(
+        &self,
+        source_id: &str,
+        forks: &[Fork],
+    ) -> Result<(Adding<'_, ManagedVm>, ProtoVmConfig, ForkMemoryLock), VmmError> {
+        let fork_ids: Vec<String> = forks.iter().map(|fork| fork.vm_id.clone()).collect();
+        info!("FC: Forking VM {} into {:?}", source_id, fork_ids);
+        if fork_ids.is_empty() {
+            return Err(VmmError::InvalidConfig("no VMs to fork into".into()));
+        }
+        let adding = self
+            .vms
+            .reserve(fork_ids)
+            .map_err(VmmError::VmAlreadyExists)?;
+        let instance = self.lock_vm(source_id).await?;
+        let FcPhase::Live { forking, .. } = &instance.phase else {
+            return Err(VmmError::ProcessError("VM is not running".into()));
+        };
+        Ok((adding, instance.proto_config.clone(), forking.clone()))
+    }
+
+    /// `source_id`'s OCI image disk, which its forks get a disk of their own
+    /// on ([`source_disk`]).
+    async fn oci_disk(
+        &self,
+        source_id: &str,
+        config: &ProtoVmConfig,
+        data: &[DataDisk],
+    ) -> Result<Option<SourceDisk>, VmmError> {
+        let oci = match &self.overlaybd {
+            Some(backend) if backend.has_mapping(source_id).await => {
+                Some(backend.manager().clone())
+            }
+            _ => None,
+        };
+        source_disk(source_id, config, data, oci)
+    }
+
+    /// Make `forks`, loaded from `source_id`, the manager's VMs.
+    async fn add_forks(
+        &self,
+        source_id: &str,
+        adding: Adding<'_, ManagedVm>,
+        forks: Vec<(String, FcVmInstance)>,
+    ) {
         for (fork_id, instance) in &forks {
             // Persist config for recovery, as create_vm does.
             if let Err(e) = tokio::fs::write(
@@ -197,17 +303,13 @@ impl FirecrackerManager {
                 warn!("FC: Failed to persist config for VM {}: {}", fork_id, e);
             }
         }
+        let count = forks.len();
         adding.finish(
             forks
                 .into_iter()
                 .map(|(fork_id, instance)| (fork_id, ManagedVm::new(instance))),
         );
-        info!(
-            "FC: VM {} forked into {} VMs, paused",
-            source_id,
-            fork_ids.len()
-        );
-        Ok(())
+        info!("FC: VM {} forked into {} VMs, paused", source_id, count);
     }
 
     /// Resume forks [`Self::fork`] loaded, and tell each one's guest that it
@@ -316,10 +418,28 @@ impl FirecrackerManager {
         };
         let image = self.memory_image(source_id, snapshot, memory).await?;
         let devices = disks.finish(frozen, &fork_ids).await?;
+        self.load_forks(source_id, configs, disk, &devices, data, dir, &image)
+            .await
+    }
 
-        let loaded = join_all(configs.into_iter().zip(&devices).map(|(config, device)| {
+    /// Load every fork, `configs`, of `source_id` paused from the snapshot in
+    /// `dir` with the memory image `image`, each with `disk`'s drive on its own
+    /// `devices` entry. Either all of them load, or none is left.
+    #[allow(clippy::too_many_arguments)]
+    async fn load_forks(
+        &self,
+        source_id: &str,
+        configs: Vec<ProtoVmConfig>,
+        disk: Option<&SourceDisk>,
+        devices: &[Option<String>],
+        data: &[DataDisk],
+        dir: &Path,
+        image: &Path,
+    ) -> Result<Vec<(String, FcVmInstance)>, VmmError> {
+        let fork_ids: Vec<String> = configs.iter().map(|config| config.vm_id.clone()).collect();
+        let loaded = join_all(configs.into_iter().zip(devices).map(|(config, device)| {
             let disk = disk.zip(device.as_deref());
-            self.load_fork(config, disk, data, dir, &image)
+            self.load_fork(config, disk, data, dir, image)
         }))
         .await;
         let mut forks = Vec::with_capacity(loaded.len());
@@ -353,6 +473,44 @@ impl FirecrackerManager {
         dir: &Path,
         memory: &ForkMemory,
     ) -> Result<(Option<FrozenUpper>, MemorySnapshot), VmmError> {
+        let image = dir.join("mem.snap");
+        let (mem_file, snapshot_type, taken) = match memory {
+            ForkMemory::Tracked {
+                base: Some(base),
+                startup,
+            } => {
+                let diff = dir.join("mem.diff");
+                let taken = MemorySnapshot::Diff {
+                    base: base.0.clone(),
+                    diff: diff.clone(),
+                    image,
+                    startup: startup.clone(),
+                };
+                (diff, SnapshotType::Diff, taken)
+            }
+            _ => (
+                image.clone(),
+                SnapshotType::Full,
+                MemorySnapshot::Full(image),
+            ),
+        };
+        let frozen = self
+            .pause_for_snapshot(source_id, disks, dir, &mem_file, snapshot_type)
+            .await?;
+        Ok((frozen, taken))
+    }
+
+    /// Pause `source_id` if it runs, write a snapshot of it to `dir`, its
+    /// memory (all of it, or the pages dirtied since its last snapshot, as
+    /// `snapshot_type` says) to `mem_file`, freeze its `disks`, and resume it.
+    async fn pause_for_snapshot(
+        &self,
+        source_id: &str,
+        disks: &ForkDisks<'_>,
+        dir: &Path,
+        mem_file: &Path,
+        snapshot_type: SnapshotType,
+    ) -> Result<Option<FrozenUpper>, VmmError> {
         tokio::fs::create_dir_all(dir).await.map_err(|e| {
             VmmError::ProcessError(format!(
                 "Failed to create snapshot directory {}: {}",
@@ -377,27 +535,6 @@ impl FirecrackerManager {
                 .map_err(sdk_err)?;
             *state = LiveState::Paused;
         }
-        let image = dir.join("mem.snap");
-        let (mem_file, snapshot_type, taken) = match memory {
-            ForkMemory::Tracked {
-                base: Some(base),
-                startup,
-            } => {
-                let diff = dir.join("mem.diff");
-                let taken = MemorySnapshot::Diff {
-                    base: base.0.clone(),
-                    diff: diff.clone(),
-                    image,
-                    startup: startup.clone(),
-                };
-                (diff, SnapshotType::Diff, taken)
-            }
-            _ => (
-                image.clone(),
-                SnapshotType::Full,
-                MemorySnapshot::Full(image),
-            ),
-        };
         let snapshot = async {
             micro_vm
                 .create_snapshot(&SnapshotCreateParams {
@@ -420,7 +557,7 @@ impl FirecrackerManager {
                 .map_err(sdk_err)?;
             *state = LiveState::Running;
         }
-        snapshot.map(|frozen| (frozen, taken))
+        snapshot
     }
 
     /// The full memory image of a fork round's `snapshot`, which its forks
