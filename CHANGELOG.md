@@ -47,7 +47,8 @@ The first release.
 - A web UI at `/ui`: the fleet at a glance; VMs, hosts (each with its VMs,
   capacity, placement, NUMA nodes and GPUs, and maintenance and evacuation),
   networks (their hosts and the addresses VMs hold), storage pools (their
-  hosts, objects and transfers) and sandboxes (their pools; creating one from
+  hosts, objects and transfers), VM templates (creating a VM or a sandbox from
+  one, deleting one) and sandboxes (their pools; creating one from
   a template, running commands in it, forking it, keeping it alive and
   deleting it); creating a VM from an OCI image, a kernel or a disk, sized by
   vCPUs and memory or an instance type, on a network with security groups; a

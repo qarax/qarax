@@ -2,8 +2,9 @@
 E2E tests for the web UI: the control-plane image serves its build at /ui, the
 console connection the UI makes reaches a VM's serial console, and in a real
 browser (headless Chromium) the UI signs in, creates, starts and deletes a VM,
-takes a VM's snapshot and restores it from it, and creates a sandbox, runs a
-command in it and deletes it.
+takes a VM's snapshot and restores it from it, creates a sandbox, runs a
+command in it and deletes it, and makes a VM from a VM template, then deletes
+the template.
 """
 
 import asyncio
@@ -121,6 +122,7 @@ async def test_browser_pages_load(page: Page):
     sections = [
         "Virtual machines",
         "Sandboxes",
+        "VM templates",
         "Hosts",
         "Networks",
         "Storage pools",
@@ -337,6 +339,69 @@ async def test_browser_sandbox_runs_a_command(page: Page):
             httpx2.delete(
                 f"{QARAX_URL}/v1/sandboxes/{sandbox['id']}", headers=AUTH_HEADERS
             )
+        httpx2.delete(
+            f"{QARAX_URL}/v1/vm-templates/{template_id}", headers=AUTH_HEADERS
+        )
+
+
+async def test_browser_vm_from_template(page: Page):
+    """A template's page leads to the create form with the template picked;
+    the VM gets the template's size and hypervisor without the form setting
+    them, and Delete, once confirmed, removes the template."""
+    suffix = uuid.uuid4().hex[:8]
+    template_name = f"test-webui-template-{suffix}"
+    vm_name = f"test-webui-from-template-{suffix}"
+    template = httpx2.post(
+        f"{QARAX_URL}/v1/vm-templates",
+        json={
+            "name": template_name,
+            "hypervisor": "cloud_hv",
+            "boot_vcpus": 2,
+            "memory_size": 384 * 1024 * 1024,
+        },
+        headers=AUTH_HEADERS,
+    )
+    template.raise_for_status()
+    template_id = template.text.strip('"')
+    try:
+        nav = page.get_by_role("navigation", name="Global")
+        await nav.get_by_role("link", name="VM templates").click()
+        await page.get_by_role("link", name=template_name, exact=True).click()
+        await expect(
+            page.get_by_role("heading", level=1, name=template_name)
+        ).to_be_visible()
+
+        await page.get_by_role("link", name="Create VM").click()
+        await expect(page.get_by_role("combobox", name="Template")).to_have_value(
+            template_id
+        )
+        await expect(page.get_by_role("radio", name="Its template")).to_be_checked()
+        await page.get_by_role("textbox", name="Name", exact=True).fill(vm_name)
+        await page.get_by_role("button", name="Create", exact=True).click()
+        await expect(page.get_by_role("heading", level=1, name=vm_name)).to_be_visible()
+
+        [vm] = vms_named(vm_name)
+        assert (vm["hypervisor"], vm["boot_vcpus"], vm["memory_size"]) == (
+            "cloud_hv",
+            2,
+            384 * 1024 * 1024,
+        ), vm
+
+        await nav.get_by_role("link", name="VM templates").click()
+        await page.get_by_role("link", name=template_name, exact=True).click()
+        await page.get_by_role("button", name="Delete", exact=True).click()
+        await (
+            page.get_by_role("dialog", name=f"Delete {template_name}?")
+            .get_by_role("button", name="Delete", exact=True)
+            .click()
+        )
+        await expect(page).to_have_url(re.compile(r"/ui/templates$"))
+        await expect(
+            page.get_by_role("link", name=template_name, exact=True)
+        ).to_have_count(0)
+    finally:
+        for vm in vms_named(vm_name):
+            httpx2.delete(f"{QARAX_URL}/v1/vms/{vm['id']}", headers=AUTH_HEADERS)
         httpx2.delete(
             f"{QARAX_URL}/v1/vm-templates/{template_id}", headers=AUTH_HEADERS
         )
