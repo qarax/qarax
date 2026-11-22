@@ -1,10 +1,11 @@
 //! Forking a sandbox, short of the node: what is refused before any node
-//! call, and that a fork whose node call fails leaves no rows behind. The fork
-//! itself needs a real node; it is in e2e/test_sandboxes.py.
+//! call, that a fork whose node call fails leaves no rows behind, and which
+//! fork the node is asked for. The fork itself needs a real node; it is in
+//! e2e/test_sandboxes.py.
 
 use crate::support::{
-    TestApp, add_up_host, create_vm, set_total_memory, set_vm_status, spawn_app,
-    spawn_app_on_one_connection,
+    TestApp, add_up_host, create_vm, fake_node::add_forking_node, set_total_memory, set_vm_status,
+    spawn_app, spawn_app_on_one_connection,
 };
 use reqwest::StatusCode;
 use serde_json::{Value, json};
@@ -75,6 +76,24 @@ async fn count(app: &TestApp, table: &str) -> i64 {
         .fetch_one(&app.pool)
         .await
         .unwrap()
+}
+
+#[tokio::test]
+async fn a_sandbox_s_forks_continue_from_its_current_state() {
+    let app = spawn_app().await;
+    let client = reqwest::Client::new();
+    let (_, node) = add_forking_node(&app, "fork-node").await;
+    let (sandbox_id, vm_id) =
+        running_sandbox(&app, &client, "source", "firecracker", json!({})).await;
+
+    let (status, body) = fork(&app, &client, sandbox_id, json!({"count": 2})).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    // Not a seed's: no kept snapshot.
+    assert!(node.seed_forks().is_empty());
+    let forks = node.forks();
+    assert_eq!(forks.len(), 1);
+    assert_eq!(forks[0].source_vm_id, vm_id.to_string());
+    assert_eq!(forks[0].forks.len(), 2);
 }
 
 #[tokio::test]

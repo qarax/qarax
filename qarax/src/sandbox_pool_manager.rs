@@ -11,7 +11,7 @@ use uuid::Uuid;
 use crate::{
     App,
     handlers::{
-        sandbox::handler::{MAX_FORKS, create_forks_tx, start_forks},
+        sandbox::handler::{MAX_FORKS, create_forks_tx, start_seed_forks},
         vm::handler::{create_vm_internal, start_vm_internal},
     },
     model::{
@@ -315,8 +315,9 @@ async fn fork_members(env: &App, pool: &SandboxPool, count: usize) {
     }
 }
 
-/// Make `count` members of a forking pool by forking one of its seeds: they
-/// are ready as soon as the node has started them.
+/// Make `count` members of a forking pool by forking one of its seeds from
+/// the snapshot of it its node keeps: they continue from the seed's state when
+/// the node took it, and are ready as soon as the node has started them.
 async fn fork_seed(
     env: &App,
     pool: &SandboxPool,
@@ -332,7 +333,7 @@ async fn fork_seed(
         members.push(sandbox_pool_members::create_tx(&mut tx, pool.id, *vm_id, false).await?);
     }
     tx.commit().await?;
-    start_forks(env, forks).await?;
+    start_seed_forks(env, forks).await?;
     for member_id in members {
         sandbox_pool_members::mark_ready(env.pool(), member_id).await?;
     }

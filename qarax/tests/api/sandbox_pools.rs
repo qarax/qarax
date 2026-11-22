@@ -391,8 +391,10 @@ async fn a_sandbox_forks_the_seed_of_a_pool_with_no_member_ready() {
     let vm_id = created["vm_id"].as_str().unwrap().to_string();
     assert_ne!(vm_id, seed_vm.to_string());
 
-    // The node forked the seed into the sandbox's VM.
-    let forks = node.forks();
+    // The node forked the seed into the sandbox's VM, from the seed's
+    // snapshot it keeps rather than from its current state.
+    assert!(node.forks().is_empty());
+    let forks = node.seed_forks();
     assert_eq!(forks.len(), 1);
     assert_eq!(forks[0].source_vm_id, seed_vm.to_string());
     let fork_ids: Vec<&str> = forks[0].forks.iter().map(|f| f.vm_id.as_str()).collect();
@@ -468,8 +470,9 @@ async fn a_pool_forks_the_seed_on_a_host_with_room() {
     }
 
     // Both the sandbox and the member are forks of the seed with room, on its
-    // host.
-    let forks = node.forks();
+    // host, from the snapshot of it the node keeps.
+    assert!(node.forks().is_empty());
+    let forks = node.seed_forks();
     assert_eq!(forks.len(), 2, "{forks:?}");
     assert!(
         forks

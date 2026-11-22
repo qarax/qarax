@@ -411,12 +411,52 @@ pub(crate) async fn create_forks_tx(
     })
 }
 
-/// Have the forks' node start them, and move their VMs to RUNNING. The node
-/// starts all of them or none: when it fails, their rows go, and with them
-/// their NICs, addresses, security groups and own disks; the files of their
-/// disk copies go through the cleanup queue.
+/// Have the forks' node start them from their source's current state, and
+/// move their VMs to RUNNING. The node starts all of them or none: when it
+/// fails, their rows go, and with them their NICs, addresses, security groups
+/// and own disks; the files of their disk copies go through the cleanup
+/// queue.
 pub(crate) async fn start_forks(env: &App, forks: PendingForks) -> Result<()> {
-    if let Err(e) = start_forks_on_node(env, &forks).await {
+    let started = async {
+        let node_forks = node_forks(env, &forks).await?;
+        forks
+            .client()
+            .fork_vm(forks.source_vm_id, node_forks)
+            .await
+            .map_err(|e| node_fork_error(forks.source_vm_id, e))
+    }
+    .await;
+    settle_forks(env, &forks, started).await
+}
+
+/// Have the forks' node start them from the snapshot of their source, a
+/// pool's seed, that it keeps, and move their VMs to RUNNING: they continue
+/// from the seed's state when the node took the snapshot, at the seed's first
+/// fork, not from its current state. All of them start or none does, as with
+/// [`start_forks`].
+pub(crate) async fn start_seed_forks(env: &App, forks: PendingForks) -> Result<()> {
+    let started = async {
+        let node_forks = node_forks(env, &forks).await?;
+        forks
+            .client()
+            .fork_seed(forks.source_vm_id, node_forks)
+            .await
+            .map_err(|e| node_fork_error(forks.source_vm_id, e))
+    }
+    .await;
+    settle_forks(env, &forks, started).await
+}
+
+impl PendingForks {
+    fn client(&self) -> NodeClient {
+        NodeClient::new(&self.host.address, self.host.port as u16)
+    }
+}
+
+/// Move the forks the node started to RUNNING, or remove the rows of those it
+/// didn't.
+async fn settle_forks(env: &App, forks: &PendingForks, started: Result<()>) -> Result<()> {
+    if let Err(e) = started {
         for vm_id in &forks.vm_ids {
             match vms::delete(env.pool(), *vm_id).await {
                 Ok(deleted) => crate::storage_cleanup::process_now(env.pool(), &deleted).await,
@@ -433,9 +473,9 @@ pub(crate) async fn start_forks(env: &App, forks: PendingForks) -> Result<()> {
     Ok(())
 }
 
-/// Have the forks' node start them from their source: each with its NICs,
-/// security groups and copies of the source's data disks.
-async fn start_forks_on_node(env: &App, forks: &PendingForks) -> Result<()> {
+/// What the forks' node gets of each: its NICs, security groups and copies
+/// of the source's data disks.
+async fn node_forks(env: &App, forks: &PendingForks) -> Result<Vec<Fork>> {
     let host = &forks.host;
     let mut node_forks = Vec::with_capacity(forks.vm_ids.len());
     for (vm_id, disks) in forks.vm_ids.iter().zip(&forks.copies) {
@@ -450,18 +490,17 @@ async fn start_forks_on_node(env: &App, forks: &PendingForks) -> Result<()> {
             disks: disks.clone(),
         });
     }
-    let source_id = forks.source_vm_id;
-    let client = NodeClient::new(&host.address, host.port as u16);
-    client
-        .fork_vm(source_id, node_forks)
-        .await
-        .map_err(|e| match e.downcast::<Error>() {
-            Ok(err) => err,
-            Err(err) => {
-                tracing::error!(source_vm_id = %source_id, error = %err, "sandbox fork failed");
-                Error::InternalServerError
-            }
-        })
+    Ok(node_forks)
+}
+
+fn node_fork_error(source_id: Uuid, e: anyhow::Error) -> Error {
+    match e.downcast::<Error>() {
+        Ok(err) => err,
+        Err(err) => {
+            tracing::error!(source_vm_id = %source_id, error = %err, "sandbox fork failed");
+            Error::InternalServerError
+        }
+    }
 }
 
 /// Whether `vm`'s forks map its memory copy-on-write, sharing its pages until
@@ -731,7 +770,9 @@ async fn claim_ready_member(
 /// tries the seeds in the order the pool forks its members from them, the one
 /// whose host holds the fewest members first; a seed that can't be forked (its
 /// host has no room, say) leaves the request to the next. With none left, the
-/// sandbox boots a VM of its own, as a pool without seeds leaves it to.
+/// sandbox boots a VM of its own, as a pool without seeds leaves it to. Like
+/// the pool's members, it continues from the snapshot of its seed that the
+/// seed's node keeps.
 async fn fork_pool_seed(
     env: &App,
     req: &NewSandbox,
@@ -799,7 +840,7 @@ async fn start_seed_fork(
     )
     .await?;
     tx.commit().await?;
-    start_forks(env, forks).await?;
+    start_seed_forks(env, forks).await?;
     Ok(vm_id)
 }
 
