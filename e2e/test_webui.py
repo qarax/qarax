@@ -2,7 +2,8 @@
 E2E tests for the web UI: the control-plane image serves its build at /ui, the
 console connection the UI makes reaches a VM's serial console, and in a real
 browser (headless Chromium) the UI signs in, creates, starts and deletes a VM,
-and creates a sandbox, runs a command in it and deletes it.
+creates a sandbox, runs a command in it and deletes it, and creates a network
+and a storage pool, attaches each to a host, detaches it and deletes it.
 """
 
 import asyncio
@@ -251,6 +252,102 @@ async def test_browser_sandbox_runs_a_command(page: Page):
         httpx2.delete(
             f"{QARAX_URL}/v1/vm-templates/{template_id}", headers=AUTH_HEADERS
         )
+
+
+async def test_browser_network_and_storage_pool(page: Page):
+    """A network and a local storage pool made from their forms, attached to
+    a host from their pages, detached and deleted once confirmed."""
+    suffix = uuid.uuid4().hex[:6]
+    hosts = httpx2.get(f"{QARAX_URL}/v1/hosts", headers=AUTH_HEADERS).json()["items"]
+    host = next(host["name"] for host in hosts if host["status"] == "up")
+    network = f"test-webui-net-{suffix}"
+    pool = f"test-webui-pool-{suffix}"
+    third_octet = int(suffix, 16) % 250
+    nav = page.get_by_role("navigation", name="Global")
+    try:
+        await nav.get_by_role("link", name="Networks").click()
+        await page.get_by_role("link", name="Create network").click()
+        await page.get_by_role("textbox", name="Name", exact=True).fill(network)
+        await page.get_by_role("textbox", name="Subnet").fill(
+            f"10.231.{third_octet}.0/24"
+        )
+        await page.get_by_role("textbox", name="Gateway").fill(
+            f"10.231.{third_octet}.1"
+        )
+        await page.get_by_role("button", name="Create", exact=True).click()
+        await expect(page.get_by_role("heading", level=1, name=network)).to_be_visible()
+
+        await page.get_by_role("combobox", name="Host").select_option(label=host)
+        # Linux keeps interface names to 15 characters.
+        await page.get_by_role("textbox", name="Bridge").fill(f"qbw{suffix}")
+        await page.get_by_role("button", name="Attach", exact=True).click()
+        hosts_table = page.get_by_role("table", name="Hosts")
+        await expect(hosts_table.get_by_role("link", name=host)).to_be_visible()
+        await page.get_by_role("button", name=f"Detach from {host}").click()
+        await (
+            page.get_by_role("dialog", name=f"Detach {network} from {host}?")
+            .get_by_role("button", name="Detach", exact=True)
+            .click()
+        )
+        await expect(page.get_by_text("No host carries it yet")).to_be_visible()
+        await page.get_by_role("button", name="Delete", exact=True).click()
+        await (
+            page.get_by_role("dialog", name=f"Delete {network}?")
+            .get_by_role("button", name="Delete", exact=True)
+            .click()
+        )
+        await expect(page).to_have_url(re.compile(r"/ui/networks$"))
+        assert not named("networks", network), f"{network} is still there after Delete"
+
+        await nav.get_by_role("link", name="Storage pools").click()
+        await page.get_by_role("link", name="Create storage pool").click()
+        await page.get_by_role("textbox", name="Name", exact=True).fill(pool)
+        await page.get_by_role("textbox", name="Directory").fill(
+            f"/var/lib/qarax/test-webui-{suffix}"
+        )
+        await page.get_by_role("button", name="Create", exact=True).click()
+        await expect(page.get_by_role("heading", level=1, name=pool)).to_be_visible()
+
+        await page.get_by_role("combobox", name="Host to attach").select_option(
+            label=host
+        )
+        await page.get_by_role("button", name="Attach", exact=True).click()
+        await expect(
+            page.get_by_role("table", name="Hosts").get_by_role("link", name=host)
+        ).to_be_visible()
+        await page.get_by_role("button", name=f"Detach from {host}").click()
+        await (
+            page.get_by_role("dialog", name=f"Detach {pool} from {host}?")
+            .get_by_role("button", name="Detach", exact=True)
+            .click()
+        )
+        await expect(page.get_by_text("No host can use it yet.")).to_be_visible()
+        await page.get_by_role("button", name="Delete", exact=True).click()
+        await (
+            page.get_by_role("dialog", name=f"Delete {pool}?")
+            .get_by_role("button", name="Delete", exact=True)
+            .click()
+        )
+        await expect(page).to_have_url(re.compile(r"/ui/storage$"))
+        assert not named("storage-pools", pool), f"{pool} is still there after Delete"
+    finally:
+        for leftover in named("networks", network):
+            httpx2.delete(
+                f"{QARAX_URL}/v1/networks/{leftover['id']}", headers=AUTH_HEADERS
+            )
+        for leftover in named("storage-pools", pool):
+            httpx2.delete(
+                f"{QARAX_URL}/v1/storage-pools/{leftover['id']}", headers=AUTH_HEADERS
+            )
+
+
+def named(collection: str, name: str) -> list[dict]:
+    """The networks or storage pools of a name: their lists filter by it."""
+    response = httpx2.get(
+        f"{QARAX_URL}/v1/{collection}", params={"name": name}, headers=AUTH_HEADERS
+    )
+    response.raise_for_status()
+    return [item for item in response.json()["items"] if item["name"] == name]
 
 
 def sandboxes_named(name: str) -> list[dict]:

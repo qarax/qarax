@@ -30,12 +30,30 @@
 						<Empty icon="network" title="No networks yet">
 							A network is a subnet qarax manages: it gives each VM on it an address, and a bridge
 							on each host it is attached to carries its traffic. Create one and attach it to a host
-							from the CLI:
+							here, or from the CLI:
 							<CodeBlock
 								code={'qarax network create --name lan --subnet 10.0.0.0/24 --gateway 10.0.0.1\nqarax network attach-host --network lan --host node-01 --bridge-name qbr0'}
 							/>
+							{#snippet footer()}
+								<div class="pf-v6-c-empty-state__actions">
+									<a class="pf-v6-c-button pf-m-primary" href={resolve('/networks/new')}>
+										<span class="pf-v6-c-button__text">Create network</span>
+									</a>
+								</div>
+							{/snippet}
 						</Empty>
 					{:else}
+						<div class="pf-v6-c-toolbar">
+							<div class="pf-v6-c-toolbar__content">
+								<div class="pf-v6-c-toolbar__content-section">
+									<div class="pf-v6-c-toolbar__item">
+										<a class="pf-v6-c-button pf-m-primary" href={resolve('/networks/new')}>
+											<span class="pf-v6-c-button__text">Create network</span>
+										</a>
+									</div>
+								</div>
+							</div>
+						</div>
 						<table class="pf-v6-c-table pf-m-grid-md" aria-label="Networks">
 							<thead class="pf-v6-c-table__thead">
 								<tr class="pf-v6-c-table__tr">

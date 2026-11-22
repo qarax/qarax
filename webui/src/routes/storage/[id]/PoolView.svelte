@@ -1,21 +1,18 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
+	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import {
-		allStorageObjects,
-		allTransfers,
-		allVms,
-		api,
-		call,
-		type StoragePoolType
-	} from '#lib/api/client.ts';
+	import { allHosts, allStorageObjects, allTransfers, allVms, api, call } from '#lib/api/client.ts';
 	import { Remote, keepFresh } from '#lib/remote.svelte.ts';
 	import { POOL_STATUS, TRANSFER_STATUS } from '#lib/status.ts';
-	import { OBJECT_TYPE, POOL_TYPE, ago, bytes, poolLocation } from '#lib/format.ts';
+	import { OBJECT_TYPE, POOL_ABOUT, POOL_TYPE, ago, bytes, poolLocation } from '#lib/format.ts';
 	import CapacityBar from '#lib/components/CapacityBar.svelte';
+	import ConfirmModal from '#lib/components/ConfirmModal.svelte';
 	import Fact from '#lib/components/Fact.svelte';
 	import Icon from '#lib/components/Icon.svelte';
+	import FormControl from '#lib/components/FormControl.svelte';
 	import Loaded from '#lib/components/Loaded.svelte';
+	import Notice from '#lib/components/Notice.svelte';
 	import Status from '#lib/components/Status.svelte';
 	import StatusLabel from '#lib/components/StatusLabel.svelte';
 
@@ -26,26 +23,79 @@
 	const path = { params: { path: { pool_id: poolId } } };
 
 	const detail = new Remote(async () => {
-		const [pool, hosts, objects, transfers, vms] = await Promise.all([
+		const [pool, hosts, objects, transfers, vms, allHostList] = await Promise.all([
 			call(api.GET('/v1/storage-pools/{pool_id}', path)),
 			call(api.GET('/v1/storage-pools/{pool_id}/hosts', path)),
 			allStorageObjects({ poolId }),
 			allTransfers(poolId),
-			allVms()
+			allVms(),
+			allHosts()
 		]);
-		return { pool, hosts, objects, transfers, vmNames: new Map(vms.map((vm) => [vm.id, vm.name])) };
+		const attached = new Set(hosts.map((host) => host.host_id));
+		return {
+			pool,
+			hosts,
+			objects,
+			transfers,
+			vmNames: new Map(vms.map((vm) => [vm.id, vm.name])),
+			// The node mounts or logs in to the pool as it is attached, so it has to be up.
+			attachable: allHostList.filter((host) => host.status === 'up' && !attached.has(host.id))
+		};
 	});
 	// Pools don't change with VMs' statuses, but their objects do as VMs come and go.
 	keepFresh(detail.refresh);
 
-	/** What a pool of each type is, for someone who hasn't met one. */
-	const ABOUT: Record<StoragePoolType, string> = {
-		local: 'A directory on each host it is attached to. What it holds stays on that host.',
-		nfs: 'An NFS export each host it is attached to mounts. Its disks can follow a VM to another host.',
-		overlay_bd:
-			'A registry VMs boot OCI images from, reading blocks as the guest needs them instead of downloading the image first.',
-		block: 'LUNs on an iSCSI target, which each host it is attached to logs in to.'
-	};
+	type Attached = { host_id: string; host_name: string };
+	type ActionState =
+		| { kind: 'idle' }
+		| { kind: 'confirming-delete' }
+		| { kind: 'confirming-detach'; host: Attached }
+		| { kind: 'running'; action: 'attach' | 'detach' | 'delete' }
+		| { kind: 'failed'; message: string };
+	let action: ActionState = $state({ kind: 'idle' });
+	let attachHostId = $state('');
+
+	const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+	async function run(name: 'attach' | 'detach' | 'delete', request: () => Promise<unknown>) {
+		action = { kind: 'running', action: name };
+		try {
+			await request();
+			action = { kind: 'idle' };
+			return true;
+		} catch (e) {
+			action = { kind: 'failed', message: message(e) };
+			return false;
+		}
+	}
+
+	async function attachHost(event: SubmitEvent) {
+		event.preventDefault();
+		const host_id = attachHostId;
+		if (!host_id) return;
+		const done = await run('attach', () =>
+			call(api.POST('/v1/storage-pools/{pool_id}/hosts', { ...path, body: { host_id } }))
+		);
+		void detail.refresh();
+		if (done) attachHostId = '';
+	}
+
+	async function detachHost(host: Attached) {
+		await run('detach', () =>
+			call(
+				api.DELETE('/v1/storage-pools/{pool_id}/hosts/{host_id}', {
+					params: { path: { pool_id: poolId, host_id: host.host_id } }
+				})
+			)
+		);
+		void detail.refresh();
+	}
+
+	async function remove() {
+		if (await run('delete', () => call(api.DELETE('/v1/storage-pools/{pool_id}', path))))
+			await goto(resolve('/storage'));
+		else void detail.refresh();
+	}
 </script>
 
 <section class="pf-v6-c-page__main-breadcrumb">
@@ -69,15 +119,41 @@
 </section>
 
 <Loaded remote={detail} what="this storage pool">
-	{#snippet children({ pool, hosts, objects, transfers, vmNames })}
+	{#snippet children({ pool, hosts, objects, transfers, vmNames, attachable })}
 		{@const location = poolLocation(pool)}
+		{@const busy = action.kind === 'running'}
 		<section class="pf-v6-c-page__main-section">
 			<div class="pf-v6-c-page__main-body">
-				<div class="title">
-					<h1 class="pf-v6-c-title pf-m-2xl">{pool.name}</h1>
-					<StatusLabel look={POOL_STATUS[pool.status]} />
+				<div class="pf-v6-l-split pf-m-gutter pf-m-wrap">
+					<div class="pf-v6-l-split__item pf-m-fill">
+						<div class="title">
+							<h1 class="pf-v6-c-title pf-m-2xl">{pool.name}</h1>
+							<StatusLabel look={POOL_STATUS[pool.status]} />
+						</div>
+						<p class="pf-v6-c-content--p qx-subtle">{POOL_ABOUT[pool.pool_type]}</p>
+					</div>
+					<div class="pf-v6-l-split__item">
+						<button
+							class="pf-v6-c-button pf-m-link pf-m-danger"
+							type="button"
+							disabled={busy}
+							onclick={() => (action = { kind: 'confirming-delete' })}
+						>
+							<span class="pf-v6-c-button__text"
+								>{action.kind === 'running' && action.action === 'delete'
+									? 'Deleting…'
+									: 'Delete'}</span
+							>
+						</button>
+					</div>
 				</div>
-				<p class="pf-v6-c-content--p qx-subtle">{ABOUT[pool.pool_type]}</p>
+				{#if action.kind === 'failed'}
+					<div class="failed">
+						<Notice tone="danger" title="That didn't work"
+							><span class="message">{action.message}</span></Notice
+						>
+					</div>
+				{/if}
 			</div>
 		</section>
 
@@ -123,17 +199,69 @@
 							<div class="pf-v6-c-card__body">
 								{#if hosts.length}
 									<p class="qx-subtle intro">VMs on these hosts can use what this pool holds.</p>
-									<ul class="pf-v6-c-list pf-m-plain" role="list">
-										{#each hosts as host (host.host_id)}
-											<li>{host.host_name}</li>
-										{/each}
-									</ul>
+									<table class="pf-v6-c-table pf-m-compact" aria-label="Hosts">
+										<thead class="pf-v6-c-table__thead">
+											<tr class="pf-v6-c-table__tr">
+												<th class="pf-v6-c-table__th" scope="col">Host</th>
+												<td class="pf-v6-c-table__td"></td>
+											</tr>
+										</thead>
+										<tbody class="pf-v6-c-table__tbody">
+											{#each hosts as host (host.host_id)}
+												<tr class="pf-v6-c-table__tr">
+													<td class="pf-v6-c-table__td" data-label="Host">
+														<a href={resolve('/hosts/[id]', { id: host.host_id })}
+															>{host.host_name}</a
+														>
+													</td>
+													<td class="pf-v6-c-table__td pf-v6-c-table__action">
+														<button
+															class="pf-v6-c-button pf-m-link pf-m-danger pf-m-small"
+															type="button"
+															disabled={busy}
+															aria-label="Detach from {host.host_name}"
+															onclick={() => (action = { kind: 'confirming-detach', host })}
+														>
+															<span class="pf-v6-c-button__text">Detach</span>
+														</button>
+													</td>
+												</tr>
+											{/each}
+										</tbody>
+									</table>
 								{:else}
-									<p class="qx-subtle">
-										No host can use it yet. Attach one with <code
-											>qarax storage-pool attach-host {pool.name} &lt;host&gt;</code
-										>, or every host that is up with <code>--all</code>.
-									</p>
+									<p class="qx-subtle">No host can use it yet.</p>
+								{/if}
+								{#if attachable.length}
+									<form class="attach" novalidate onsubmit={attachHost}>
+										<div class="pf-v6-c-input-group">
+											<div class="pf-v6-c-input-group__item pf-m-fill">
+												<FormControl kind="select">
+													<select bind:value={attachHostId} aria-label="Host to attach">
+														<option value="" disabled>Pick a host to attach</option>
+														{#each attachable as host (host.id)}
+															<option value={host.id}>{host.name}</option>
+														{/each}
+													</select>
+												</FormControl>
+											</div>
+											<div class="pf-v6-c-input-group__item">
+												<button
+													class="pf-v6-c-button pf-m-secondary"
+													type="submit"
+													disabled={busy || !attachHostId}
+												>
+													<span class="pf-v6-c-button__text"
+														>{action.kind === 'running' && action.action === 'attach'
+															? 'Attaching…'
+															: 'Attach'}</span
+													>
+												</button>
+											</div>
+										</div>
+									</form>
+								{:else if hosts.length === 0}
+									<p class="qx-subtle">No host is up to attach it to.</p>
 								{/if}
 							</div>
 						</div>
@@ -252,6 +380,28 @@
 				</div>
 			</div>
 		</section>
+
+		{#if action.kind === 'confirming-delete'}
+			<ConfirmModal
+				title="Delete {pool.name}?"
+				confirm="Delete"
+				onconfirm={remove}
+				oncancel={() => (action = { kind: 'idle' })}
+			>
+				qarax forgets the pool. A pool that still holds storage objects can't be deleted: delete
+				them first.
+			</ConfirmModal>
+		{:else if action.kind === 'confirming-detach'}
+			{@const host = action.host}
+			<ConfirmModal
+				title="Detach {pool.name} from {host.host_name}?"
+				confirm="Detach"
+				onconfirm={() => detachHost(host)}
+				oncancel={() => (action = { kind: 'idle' })}
+			>
+				VMs on {host.host_name} can no longer use what it holds.
+			</ConfirmModal>
+		{/if}
 	{/snippet}
 </Loaded>
 
@@ -270,6 +420,20 @@
 
 	.wrap {
 		overflow-wrap: anywhere;
+	}
+
+	.failed {
+		margin-top: var(--pf-t--global--spacer--md);
+	}
+
+	.message {
+		white-space: pre-wrap;
+		overflow-wrap: anywhere;
+	}
+
+	.attach {
+		margin-top: var(--pf-t--global--spacer--md);
+		max-width: 28rem;
 	}
 
 	.bar {
