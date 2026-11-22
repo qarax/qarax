@@ -303,14 +303,42 @@ async def cleanup_bootable_sandbox_template(client, resources):
 
 
 @contextlib.asynccontextmanager
-async def bootable_sandbox_template(c, hypervisor, **options):
+async def bootable_sandbox_template(c, hypervisor):
     """create_bootable_sandbox_template as a context manager: yields the
     template's UUID, and cleans up after the test's own cleanup."""
-    template_id, resources = await create_bootable_sandbox_template(c, hypervisor, **options)
+    template_id, resources = await create_bootable_sandbox_template(c, hypervisor)
     try:
         yield template_id
     finally:
         await cleanup_bootable_sandbox_template(c, resources)
+
+
+@contextlib.asynccontextmanager
+async def default_boot_sandbox_template(c, hypervisor):
+    """A template of sandboxes that boot the nodes' default kernel and
+    initramfs (VM_KERNEL, VM_INITRAMFS), which every node has, so they run on
+    any host: a boot source's files are on one host's local pool. Yields the
+    template's UUID; deletes it after the test's own cleanup."""
+    template_id = uuid.UUID(
+        str(
+            await call_api(
+                create_template,
+                client=c,
+                body=NewVmTemplate(
+                    name=f"e2e-sandbox-default-boot-{uuid.uuid4().hex[:8]}",
+                    hypervisor=hypervisor,
+                    boot_vcpus=1,
+                    max_vcpus=1,
+                    memory_size=256 * 1024 * 1024,
+                    boot_mode="kernel",
+                ),
+            )
+        ).strip('"')
+    )
+    try:
+        yield template_id
+    finally:
+        await delete_template.asyncio_detailed(client=c, vm_template_id=template_id)
 
 
 @contextlib.asynccontextmanager
@@ -1369,8 +1397,7 @@ async def test_a_forking_pool_keeps_a_seed_on_each_of_its_seed_hosts(client):
         if len(hosts) < 2:
             pytest.skip("A seed per host needs two UP hosts")
         httpx_client = c.get_async_httpx_client()
-        # On shared storage, so that a VM of the template runs on either host.
-        async with bootable_sandbox_template(c, "firecracker", shared_pool=True) as template_id:
+        async with default_boot_sandbox_template(c, "firecracker") as template_id:
             pool_url = f"{QARAX_URL}/v1/vm-templates/{template_id}/sandbox-pool"
             sandbox_ids = []
 
