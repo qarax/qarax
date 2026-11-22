@@ -1,23 +1,42 @@
 //! A qarax-node that forks VMs and does nothing else, for what the control
 //! plane does around a fork: it answers ForkVM and ForkSeed, keeping each
-//! request, and refuses every other call.
+//! request, and refuses every other call. It counts the connections it takes,
+//! and restarts, or stops answering without closing them, when told to.
 
+use std::io;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
 
 use qarax::grpc_client::node::{
     self,
     vm_service_server::{VmService, VmServiceServer},
 };
-use tokio::net::TcpListener;
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
+use tonic::transport::server::{Connected, TcpConnectInfo};
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
 use super::{TestApp, node_server_tls};
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct ForkingNode {
+    port: u16,
     forks: Arc<Mutex<Vec<node::ForkVmRequest>>>,
     seed_forks: Arc<Mutex<Vec<node::ForkVmRequest>>>,
+    connections: Arc<AtomicUsize>,
+    frozen: Arc<AtomicBool>,
+    server: Arc<Mutex<Option<Running>>>,
+}
+
+/// The node's server, running, and what stops it.
+struct Running {
+    stop: oneshot::Sender<()>,
+    server: JoinHandle<()>,
 }
 
 impl ForkingNode {
@@ -30,6 +49,113 @@ impl ForkingNode {
     pub fn seed_forks(&self) -> Vec<node::ForkVmRequest> {
         self.seed_forks.lock().unwrap().clone()
     }
+
+    /// The connections it has taken.
+    pub fn connections(&self) -> usize {
+        self.connections.load(Ordering::SeqCst)
+    }
+
+    /// Stop, closing its connections, as a node does when it restarts, and
+    /// serve again on the same port a moment later.
+    pub async fn restart(&self) {
+        let Running { stop, server } = self.server.lock().unwrap().take().unwrap();
+        stop.send(()).unwrap();
+        server.await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        self.serve(TcpListener::bind(("127.0.0.1", self.port)).await.unwrap());
+    }
+
+    /// Stop reading and writing on its connections without closing them, as
+    /// a host that is powered off or cut off the network.
+    pub fn freeze(&self) {
+        self.frozen.store(true, Ordering::SeqCst);
+    }
+
+    fn serve(&self, listener: TcpListener) {
+        let (connections, frozen) = (self.connections.clone(), self.frozen.clone());
+        let incoming = async_stream::stream! {
+            loop {
+                match listener.accept().await {
+                    Ok((stream, _)) => {
+                        connections.fetch_add(1, Ordering::SeqCst);
+                        yield Ok(Freezable { stream, frozen: frozen.clone() });
+                    }
+                    Err(e) => yield Err::<Freezable, io::Error>(e),
+                }
+            }
+        };
+        let (stop, stopped) = oneshot::channel::<()>();
+        let service = VmServiceServer::new(self.clone());
+        let server = tokio::spawn(async move {
+            tonic::transport::Server::builder()
+                .tls_config(node_server_tls())
+                .unwrap()
+                .add_service(service)
+                .serve_with_incoming_shutdown(incoming, async {
+                    let _ = stopped.await;
+                })
+                .await
+                .unwrap()
+        });
+        *self.server.lock().unwrap() = Some(Running { stop, server });
+    }
+}
+
+/// A connection of the node's, which stalls once the node is frozen.
+struct Freezable {
+    stream: TcpStream,
+    frozen: Arc<AtomicBool>,
+}
+
+impl Freezable {
+    fn frozen(&self) -> bool {
+        self.frozen.load(Ordering::SeqCst)
+    }
+}
+
+impl Connected for Freezable {
+    type ConnectInfo = TcpConnectInfo;
+
+    fn connect_info(&self) -> Self::ConnectInfo {
+        self.stream.connect_info()
+    }
+}
+
+impl AsyncRead for Freezable {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        if self.frozen() {
+            return Poll::Pending;
+        }
+        Pin::new(&mut self.stream).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for Freezable {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        if self.frozen() {
+            return Poll::Pending;
+        }
+        Pin::new(&mut self.stream).poll_write(cx, buf)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        if self.frozen() {
+            return Poll::Pending;
+        }
+        Pin::new(&mut self.stream).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.stream).poll_shutdown(cx)
+    }
 }
 
 /// Serves a [`ForkingNode`] on 127.0.0.1, the address its certificate names,
@@ -37,17 +163,15 @@ impl ForkingNode {
 pub async fn add_forking_node(app: &TestApp, name: &str) -> (Uuid, ForkingNode) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let node = ForkingNode::default();
-    let incoming = async_stream::stream! {
-        loop { yield listener.accept().await.map(|(stream, _)| stream); }
+    let node = ForkingNode {
+        port,
+        forks: Default::default(),
+        seed_forks: Default::default(),
+        connections: Default::default(),
+        frozen: Default::default(),
+        server: Default::default(),
     };
-    tokio::spawn(
-        tonic::transport::Server::builder()
-            .tls_config(node_server_tls())
-            .unwrap()
-            .add_service(VmServiceServer::new(node.clone()))
-            .serve_with_incoming(incoming),
-    );
+    node.serve(listener);
     let host_id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO hosts (id, name, address, port, host_user, status) \
