@@ -88,6 +88,7 @@ vm_service! {
             Ok(Response::new(()))
         }
     }
+    fork_seed(node::ForkVmRequest) -> ();
     get_node_info(()) -> node::NodeInfo;
     create_vm(node::VmConfig) -> node::VmState;
     start_vm(node::VmId) -> ();

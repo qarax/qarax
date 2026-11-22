@@ -19,6 +19,7 @@ use crate::rpc::node::{
 pub mod fork;
 pub mod guest_agent;
 pub mod memory;
+pub mod seed;
 pub(crate) mod vms;
 
 /// How long a VMM gets to answer a request it serves at once (its VM's
@@ -235,7 +236,17 @@ pub trait VmmManager: Send + Sync + 'static {
         Err(VmmError::Unsupported("fork_vm"))
     }
 
-    /// Resume forks of `source_id` that [`VmmManager::fork_vm`] loaded, and
+    /// Load forks of `seed_id`, a seed, paused as [`VmmManager::fork_vm`]
+    /// leaves them, from the snapshot of the seed the node keeps, taking it at
+    /// the seed's first fork as a seed ([`seed::SeedSnapshot`]): they continue
+    /// from the seed's state then, not its current one. Either all of them
+    /// load or none is left.
+    async fn fork_seed(&self, _seed_id: &str, _forks: &[Fork]) -> Result<(), VmmError> {
+        Err(VmmError::Unsupported("fork_seed"))
+    }
+
+    /// Resume forks of `source_id` that [`VmmManager::fork_vm`] or
+    /// [`VmmManager::fork_seed`] loaded, and
     /// tell each one's guest that it is a fork, and its NICs' addresses.
     async fn resume_forks(&self, _source_id: &str, _fork_ids: &[String]) -> Result<(), VmmError> {
         Err(VmmError::Unsupported("resume_forks"))

@@ -445,8 +445,12 @@ message RestoreVmRequest {
 // ForkVmRequest starts new VMs that continue from a running VM's current
 // state: its memory, devices and guest processes. The source is paused for a
 // snapshot and resumes. Each fork has the source's config under its own ID,
-// with its own NICs. Firecracker VMs with the guest agent, and no disk but
-// their OCI image's, only.
+// with its own NICs. VMs with the guest agent, and no writable disk but their
+// OCI image's and copied data disks, only.
+//
+// ForkSeed takes the same request for a seed, a VM forked as a sandbox
+// pool's: its forks continue from the snapshot of it the node keeps, not from
+// its current state (see ForkSeed).
 message ForkVmRequest {
   reserved 2;
   string source_vm_id  = 1;
@@ -534,6 +538,17 @@ service VmService {
   rpc SnapshotVM(SnapshotVmRequest) returns (google.protobuf.Empty) {}
   rpc RestoreVM(RestoreVmRequest) returns (google.protobuf.Empty) {}
   rpc ForkVM(ForkVmRequest) returns (google.protobuf.Empty) {}
+  // Forks of a seed, from the snapshot of it the node keeps: they continue
+  // from the state the seed had when the node took it, at the seed's first
+  // ForkSeed (which pauses the seed, as ForkVM does), and all map the same
+  // memory image. The ForkSeeds after it leave the seed alone. The snapshot
+  // holds the seed's memory and devices, its OCI image disk and data disks as
+  // they were then, and its config: each fork has that config under its own
+  // ID, with its own NICs and copies of the data disks. The node drops it when
+  // the seed stops or is deleted, or the node restarts; the next ForkSeed
+  // takes a new one, as it does once the seed's config has changed (a resize,
+  // a device added).
+  rpc ForkSeed(ForkVmRequest) returns (google.protobuf.Empty) {}
   // Remove a snapshot directory written by SnapshotVM. Missing is not an error.
   rpc DeleteSnapshot(DeleteSnapshotRequest) returns (google.protobuf.Empty) {}
   rpc DeleteVM(VmID) returns (google.protobuf.Empty) {}

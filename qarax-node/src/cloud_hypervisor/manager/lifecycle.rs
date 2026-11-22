@@ -156,6 +156,7 @@ impl VmManager {
                 console_pty_path: None,
                 vsock_socket_path,
                 storage_backend_kind,
+                seed_snapshot: None,
             };
 
             self.vms.insert(vm_id.clone(), ManagedVm::new(instance));
@@ -410,6 +411,7 @@ impl VmManager {
             console_pty_path: console_pty,
             vsock_socket_path,
             storage_backend_kind,
+            seed_snapshot: None,
         };
 
         let state = instance.summary.borrow().to_vm_state();
@@ -485,8 +487,8 @@ impl VmManager {
             }
         }
 
-        if let Ok(instance) = self.lock_vm(vm_id).await {
-            instance.set_status(VmStatus::Shutdown);
+        if let Ok(mut instance) = self.lock_vm(vm_id).await {
+            instance.stopped();
         }
 
         info!("VM {} stopped successfully", vm_id);
@@ -566,7 +568,7 @@ impl VmManager {
             warn!("Failed to kill CH process for VM {}: {}", vm_id, e);
         }
 
-        instance.set_status(VmStatus::Shutdown);
+        instance.stopped();
 
         info!("VM {} force stopped successfully", vm_id);
         Ok(())

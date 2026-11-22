@@ -1010,6 +1010,10 @@ impl VmmManager for FirecrackerManager {
         self.fork(source_id, forks).await
     }
 
+    async fn fork_seed(&self, seed_id: &str, forks: &[Fork]) -> Result<(), VmmError> {
+        FirecrackerManager::fork_seed(self, seed_id, forks).await
+    }
+
     async fn resume_forks(&self, source_id: &str, fork_ids: &[String]) -> Result<(), VmmError> {
         FirecrackerManager::resume_forks(self, source_id, fork_ids).await
     }

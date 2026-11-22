@@ -155,6 +155,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Ensure directories exist
     tokio::fs::create_dir_all(&args.runtime_dir).await?;
     tokio::fs::create_dir_all(&args.overlaybd_cache_dir).await?;
+    qarax_node::vmm::seed::remove_stale_snapshots(&args.runtime_dir).await;
 
     // Build OverlayBdManager if convertor binary is present
     let overlaybd_manager = if args.convertor_binary.exists() {
