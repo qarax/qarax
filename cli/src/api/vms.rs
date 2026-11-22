@@ -100,6 +100,10 @@ pub async fn exec(
     client.post(&format!("/vms/{vm_id}/exec"), req).await
 }
 
+pub async fn list_disks(client: &Client, vm_id: Uuid) -> anyhow::Result<Vec<VmDisk>> {
+    client.get(&format!("/vms/{vm_id}/disks")).await
+}
+
 pub async fn attach_disk(
     client: &Client,
     vm_id: Uuid,

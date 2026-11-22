@@ -584,6 +584,16 @@ pub async fn run(args: VmArgs, client: &Client, output: OutputFormat) -> anyhow:
                 if !vm.tags.is_empty() {
                     println!("Tags:        {}", vm.tags.join(", "));
                 }
+                for disk in api::vms::list_disks(client, id).await? {
+                    let object = disk
+                        .storage_object_id
+                        .map_or_else(|| "-".to_string(), |id| id.to_string());
+                    let access = if disk.read_only { " read-only" } else { "" };
+                    println!(
+                        "Disk:        {} {} object={object}{access}",
+                        disk.logical_name, disk.device_path
+                    );
+                }
                 let nics = api::vms::list_nics(client, id).await.unwrap_or_default();
                 for nic in &nics {
                     let ip = nic.ip_address.as_deref().unwrap_or("-");

@@ -452,6 +452,56 @@ async fn test_attach_multiple_disks_auto_names() {
 }
 
 #[tokio::test]
+async fn test_list_disks_in_boot_order() {
+    let app = spawn_app().await;
+    let client = reqwest::Client::new();
+    let host_id = add_up_host(&client, &app.address, "test-host").await;
+    let vm_id = create_vm(&client, &app.address, vm_body("vm-list-disks")).await;
+    let pool_id = create_local_pool(&client, &app.address, &app.pool, host_id, "list-pool").await;
+    let data = create_disk_object(&client, &app.address, pool_id, "data", GIB).await;
+    let boot = create_disk_object(&client, &app.address, pool_id, "boot", GIB).await;
+    for body in [
+        json!({"storage_object_id": data, "logical_name": "scratch", "boot_order": 1}),
+        json!({"storage_object_id": boot, "logical_name": "system", "boot_order": 0}),
+    ] {
+        let res = attach_disk(&client, &app.address, vm_id, body).await;
+        assert_eq!(res.status(), StatusCode::CREATED);
+    }
+
+    let res = client
+        .get(format!("{}/vms/{vm_id}/disks", app.address))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let disks: Vec<Value> = res.json().await.unwrap();
+    // The first to boot first, though its name sorts after the other's.
+    let listed: Vec<(String, String)> = disks
+        .iter()
+        .map(|disk| {
+            (
+                disk["logical_name"].as_str().unwrap().to_string(),
+                disk["storage_object_id"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            ("system".to_string(), boot.to_string()),
+            ("scratch".to_string(), data.to_string())
+        ]
+    );
+
+    let res = client
+        .get(format!("{}/vms/{}/disks", app.address, Uuid::new_v4()))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn test_attach_disk_duplicate_logical_name_rejected() {
     let app = spawn_app().await;
     let client = reqwest::Client::new();

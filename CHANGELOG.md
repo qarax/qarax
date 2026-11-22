@@ -50,13 +50,14 @@ The first release.
   hosts, objects and transfers), VM templates (creating a VM or a sandbox from
   one, deleting one) and sandboxes (their pools; creating one from
   a template, running commands in it, forking it, keeping it alive and
-  deleting it); creating a VM from an OCI image, a kernel or
-  a disk, sized by vCPUs and memory or an instance type, on a network with
-  security groups; a VM's details and actions (start, stop, pause, resume,
-  force stop, delete), live charts of its disk and network throughput, and its
-  serial console in the browser, all kept current from the event stream. For
-  clients that can't set the Authorization header on a WebSocket, as browsers
-  can't, the console also takes the API token as the subprotocol
+  deleting it); creating a VM from an OCI image, a kernel or a disk, sized by
+  vCPUs and memory or an instance type, on a network with security groups; a
+  VM's details and actions (start, stop, pause, resume, force stop, delete),
+  its disks and snapshots (taking one, restoring the VM from one, deleting
+  one), live charts of its disk and network throughput, and its serial console
+  in the browser, all kept current from the event stream. For clients that
+  can't set the Authorization header on a WebSocket, as browsers can't, the
+  console also takes the API token as the subprotocol
   `qarax.bearer.<the token, hex-encoded>`.
 
 ### Changed since pre-release builds of master
