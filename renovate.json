@@ -1,24 +1,214 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:recommended"],
-  "cargo": {
-    "enabled": true
+  "extends": [
+    "config:recommended",
+    "customManagers:githubActionsVersions"
+  ],
+  "minimumReleaseAge": "7 days",
+  "ignorePaths": [
+    "python-sdk/qarax-api-client/**"
+  ],
+  "lockFileMaintenance": {
+    "enabled": true,
+    "minimumReleaseAge": null,
+    "addLabels": [
+      "run-e2e"
+    ]
   },
   "packageRules": [
     {
-      "description": "Match the cargo dependency cooldown in .cargo/config.toml",
-      "matchDatasources": ["crate"],
-      "minimumReleaseAge": "7 days"
+      "description": "No cooldown for images: Docker Hub dates a tag by its last push, not its release, and some tags have no date, which the cooldown would hold forever",
+      "matchDatasources": [
+        "docker"
+      ],
+      "minimumReleaseAge": null
     },
     {
-      "matchPackageNames": ["cloud-hypervisor-sdk"],
-      "groupName": "cloud-hypervisor-sdk",
-      "automerge": false
+      "description": "Docker Hub tags Fedora Rawhide with the next release number, so approve each new Fedora release on the dependency dashboard once it is out",
+      "matchPackageNames": [
+        "fedora"
+      ],
+      "dependencyDashboardApproval": true,
+      "separateMultipleMajor": true
     },
     {
-      "matchPackageNames": ["firecracker-rust-sdk"],
-      "groupName": "firecracker-rust-sdk",
-      "automerge": false
+      "description": "One PR for the crate updates that semver says are compatible; breaking ones get their own",
+      "matchManagers": [
+        "cargo"
+      ],
+      "matchJsonata": [
+        "isBreaking = false"
+      ],
+      "groupName": "Rust crates"
+    },
+    {
+      "description": "One PR for the compatible web UI package updates; breaking ones get their own",
+      "matchManagers": [
+        "npm"
+      ],
+      "matchFileNames": [
+        "webui/**"
+      ],
+      "matchJsonata": [
+        "isBreaking = false"
+      ],
+      "groupName": "web UI packages"
+    },
+    {
+      "description": "tonic and prost: tonic's codegen and runtime need the matching prost",
+      "matchDatasources": [
+        "crate"
+      ],
+      "matchPackageNames": [
+        "tonic",
+        "tonic-*",
+        "prost",
+        "prost-*"
+      ],
+      "groupName": "tonic and prost"
+    },
+    {
+      "description": "OpenTelemetry: tracing-opentelemetry (its own repo) pins the opentelemetry release it bridges to",
+      "matchDatasources": [
+        "crate"
+      ],
+      "matchPackageNames": [
+        "opentelemetry",
+        "opentelemetry_*",
+        "opentelemetry-*",
+        "tracing-opentelemetry"
+      ],
+      "groupName": "OpenTelemetry crates"
+    },
+    {
+      "description": "RustCrypto: hmac and sha2 must share a digest release for Hmac<Sha256>",
+      "matchDatasources": [
+        "crate"
+      ],
+      "matchSourceUrls": [
+        "https://github.com/RustCrypto/**"
+      ],
+      "groupName": "RustCrypto crates"
+    },
+    {
+      "description": "rtnetlink re-exports the netlink-packet-* releases it is built on",
+      "matchDatasources": [
+        "crate"
+      ],
+      "matchSourceUrls": [
+        "https://github.com/rust-netlink/**"
+      ],
+      "groupName": "rust-netlink crates"
+    },
+    {
+      "description": "sqlx and the sqlx-cli CI builds (SQLX_CLI_VERSION in rust-ci.yml) for the offline query cache",
+      "matchDatasources": [
+        "crate"
+      ],
+      "matchPackageNames": [
+        "sqlx",
+        "sqlx-cli"
+      ],
+      "groupName": "sqlx"
+    },
+    {
+      "description": "Cloud Hypervisor: the SDK's tag (qarax-node/Cargo.toml) and the release it serializes (versions/cloud-hypervisor-version) move together, in one PR for the newest release",
+      "matchPackageNames": [
+        "qarax/cloud-hypervisor-sdk"
+      ],
+      "groupName": "Cloud Hypervisor",
+      "separateMajorMinor": false,
+      "addLabels": [
+        "run-e2e"
+      ]
+    },
+    {
+      "description": "Firecracker: the SDK's tag (qarax-node/Cargo.toml) and the release it serializes (versions/firecracker-version) move together, in one PR for the newest release",
+      "matchPackageNames": [
+        "qarax/firecracker-rust-sdk"
+      ],
+      "groupName": "Firecracker",
+      "separateMajorMinor": false,
+      "addLabels": [
+        "run-e2e"
+      ]
+    },
+    {
+      "description": "Only E2E builds and runs what these pin (node images, hypervisors, node artifacts, the E2E suite), so label their PRs to start it",
+      "matchFileNames": [
+        "e2e/**",
+        "deployments/**",
+        "versions/**"
+      ],
+      "addLabels": [
+        "run-e2e"
+      ]
     }
-  ]
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "The Cloud Hypervisor release, from the SDK tags (vX.Y.0 for vX.Y), so it only moves once the SDK serializes it",
+      "managerFilePatterns": [
+        "/^versions/cloud-hypervisor-version$/"
+      ],
+      "matchStrings": [
+        "(?<currentValue>v\\d+\\.\\d+)"
+      ],
+      "depNameTemplate": "cloud-hypervisor",
+      "packageNameTemplate": "qarax/cloud-hypervisor-sdk",
+      "datasourceTemplate": "github-tags",
+      "extractVersionTemplate": "^(?<version>v\\d+\\.\\d+)\\.0$",
+      "versioningTemplate": "semver-coerced"
+    },
+    {
+      "customType": "regex",
+      "description": "The Firecracker release, from the SDK tags (the same as upstream), so it only moves once the SDK serializes it",
+      "managerFilePatterns": [
+        "/^versions/firecracker-version$/"
+      ],
+      "matchStrings": [
+        "(?<currentValue>v\\d+\\.\\d+\\.\\d+)"
+      ],
+      "depNameTemplate": "firecracker",
+      "packageNameTemplate": "qarax/firecracker-rust-sdk",
+      "datasourceTemplate": "github-tags",
+      "versioningTemplate": "semver-coerced"
+    },
+    {
+      "customType": "regex",
+      "description": "OverlayBD and the ACI snapshotter: the release under each '# https://github.com/<repo>/releases' comment, and as its digest the build suffix of the release's RPM names",
+      "managerFilePatterns": [
+        "/^versions/node-artifacts\\.env$/"
+      ],
+      "matchStrings": [
+        "# https://github\\.com/(?<packageName>[\\w.-]+/[\\w.-]+)/releases\\n\\w+_VERSION=(?<currentValue>\\S+)\\n\\w+_RPM_SUFFIX=(?<currentDigest>\\S+)"
+      ],
+      "depNameTemplate": "{{{packageName}}}",
+      "datasourceTemplate": "custom.github-rpm-release",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "description": "The guest kernel: Cloud Hypervisor tags its builds ch-release-v<kernel>-<date>",
+      "managerFilePatterns": [
+        "/^versions/node-artifacts\\.env$/"
+      ],
+      "matchStrings": [
+        "CH_KERNEL_TAG=(?<currentValue>\\S+)"
+      ],
+      "depNameTemplate": "cloud-hypervisor/linux",
+      "datasourceTemplate": "github-releases",
+      "versioningTemplate": "regex:^ch-release-v(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)-(?<build>\\d+)$"
+    }
+  ],
+  "customDatasources": {
+    "github-rpm-release": {
+      "description": "A GitHub repository's releases, with the build suffix of their x86_64 RPM names (<name>-<version>-<suffix>.[<dist>.]x86_64.rpm) as the digest",
+      "defaultRegistryUrlTemplate": "https://api.github.com/repos/{{packageName}}/releases?per_page=100",
+      "transformTemplates": [
+        "{\"releases\": [$[prerelease = false and draft = false and $count(assets[$contains(name, \".x86_64.rpm\")]) > 0].{\"version\": $replace(tag_name, /^v/, \"\"), \"releaseTimestamp\": published_at, \"digest\": $match(assets[$contains(name, \".x86_64.rpm\")][0].name, /^[a-z-]+-[0-9.]+-([0-9]+\\.[0-9a-f]+)\\./).groups[0]}], \"sourceUrl\": $substringBefore($[0].html_url, \"/releases/\")}"
+      ]
+    }
+  }
 }

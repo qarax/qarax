@@ -37,7 +37,8 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     env:
-      # The workspace's sqlx (Cargo.lock).
+      # The workspace's sqlx (Cargo.lock); Renovate updates both together.
+      # renovate: datasource=crate depName=sqlx-cli versioning=semver
       SQLX_CLI_VERSION: 0.8.6
       # Enough for a backtrace's file and line; full debug info is most of
       # what the linker has to write for each test binary.
