@@ -2,9 +2,11 @@
 
 use std::fs::{File, OpenOptions};
 use std::io;
+use std::ops::Range;
 use std::os::fd::AsRawFd;
 use std::path::Path;
 
+use nix::fcntl::{PosixFadviseAdvice, posix_fadvise};
 use nix::libc;
 
 /// Write back the dirty pages of the file at `path` and wait for them,
@@ -50,6 +52,23 @@ pub fn overlay_extents(src: &Path, dst: &Path) -> io::Result<()> {
         ));
     }
     copy_extents(&src, &dst, len)
+}
+
+/// Start reading `ranges` of `file` (byte ranges) into the page cache. The
+/// kernel queues the reads and returns, but may wait for room in the
+/// device's queue first.
+pub fn read_ahead(file: &File, ranges: &[Range<u64>]) -> io::Result<()> {
+    for range in ranges {
+        let offset = i64::try_from(range.start).map_err(io::Error::other)?;
+        let len = i64::try_from(range.end - range.start).map_err(io::Error::other)?;
+        posix_fadvise(
+            file.as_raw_fd(),
+            offset,
+            len,
+            PosixFadviseAdvice::POSIX_FADV_WILLNEED,
+        )?;
+    }
+    Ok(())
 }
 
 fn regular_file_len(file: &File) -> io::Result<u64> {
