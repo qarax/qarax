@@ -3540,10 +3540,13 @@ components:
           description: |-
             Make the pool's members by forking one VM of the template it keeps
             booted, its seed, rather than booting each one: a member is ready in
-            milliseconds and shares the seed's memory until it writes it.
+            milliseconds and shares the seed's memory until it writes it. A
+            sandbox asked for when the pool has no member ready is forked from the
+            seed on the request, so with `min_ready` 0 the pool keeps only its seed.
         min_ready:
           type: integer
           format: int32
+          description: How many sandboxes the pool keeps ready to hand out.
     CreateBackupRequest:
       type: object
       required:
@@ -5541,7 +5544,8 @@ components:
           type: boolean
           description: |-
             The pool makes its members by forking its seed, one VM of the template
-            it keeps booted, rather than booting each one.
+            it keeps booted, rather than booting each one, and forks a sandbox from
+            the seed when it has no member ready.
         id:
           type: string
           format: uuid

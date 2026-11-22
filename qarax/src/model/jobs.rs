@@ -134,6 +134,18 @@ VALUES ($1, $2, 'COMPLETED', $3, $4, $5, 100, $6, NOW(), NOW())
     get_tx(tx, id).await
 }
 
+/// [`create_completed_tx`] in a transaction of its own.
+pub async fn create_completed(
+    pool: &PgPool,
+    new_job: NewJob,
+    result: Option<serde_json::Value>,
+) -> Result<Job, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let job = create_completed_tx(&mut tx, new_job, result).await?;
+    tx.commit().await?;
+    Ok(job)
+}
+
 pub async fn get(pool: &PgPool, job_id: Uuid) -> Result<Job, sqlx::Error> {
     let mut tx = pool.begin().await?;
     let job = get_tx(&mut tx, job_id).await?;

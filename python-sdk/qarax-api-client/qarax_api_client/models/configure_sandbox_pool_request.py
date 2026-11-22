@@ -15,10 +15,12 @@ T = TypeVar("T", bound="ConfigureSandboxPoolRequest")
 class ConfigureSandboxPoolRequest:
     """
     Attributes:
-        min_ready (int):
+        min_ready (int): How many sandboxes the pool keeps ready to hand out.
         fork (bool | Unset): Make the pool's members by forking one VM of the template it keeps
             booted, its seed, rather than booting each one: a member is ready in
-            milliseconds and shares the seed's memory until it writes it.
+            milliseconds and shares the seed's memory until it writes it. A
+            sandbox asked for when the pool has no member ready is forked from the
+            seed on the request, so with `min_ready` 0 the pool keeps only its seed.
     """
 
     min_ready: int

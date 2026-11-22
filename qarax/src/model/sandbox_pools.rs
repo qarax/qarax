@@ -13,7 +13,8 @@ pub struct SandboxPool {
     pub vm_template_name: String,
     pub min_ready: i32,
     /// The pool makes its members by forking its seed, one VM of the template
-    /// it keeps booted, rather than booting each one.
+    /// it keeps booted, rather than booting each one, and forks a sandbox from
+    /// the seed when it has no member ready.
     pub fork: bool,
     /// The seed's VM, while the pool has one.
     pub seed_vm_id: Option<Uuid>,
@@ -63,10 +64,13 @@ impl From<SandboxPoolRow> for SandboxPool {
 
 #[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
 pub struct ConfigureSandboxPoolRequest {
+    /// How many sandboxes the pool keeps ready to hand out.
     pub min_ready: i32,
     /// Make the pool's members by forking one VM of the template it keeps
     /// booted, its seed, rather than booting each one: a member is ready in
-    /// milliseconds and shares the seed's memory until it writes it.
+    /// milliseconds and shares the seed's memory until it writes it. A
+    /// sandbox asked for when the pool has no member ready is forked from the
+    /// seed on the request, so with `min_ready` 0 the pool keeps only its seed.
     #[serde(default)]
     pub fork: bool,
 }

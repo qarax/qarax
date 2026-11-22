@@ -250,6 +250,33 @@ pub async fn delete_tx(
     Ok(())
 }
 
+/// The VM of the template's pool's seed, when the pool forks and its seed is
+/// ready and runs: a sandbox is forked from it when the pool has no member
+/// ready.
+pub async fn running_seed_for_template(
+    pool: &PgPool,
+    vm_template_id: Uuid,
+) -> Result<Option<Uuid>, sqlx::Error> {
+    sqlx::query_scalar!(
+        r#"
+SELECT seed.vm_id
+FROM sandbox_pool_members seed
+JOIN sandbox_pools sp
+  ON sp.id = seed.sandbox_pool_id
+JOIN vms v
+  ON v.id = seed.vm_id
+WHERE sp.vm_template_id = $1
+  AND sp.fork
+  AND seed.seed
+  AND seed.status = 'READY'
+  AND v.status = 'RUNNING'
+        "#,
+        vm_template_id
+    )
+    .fetch_optional(pool)
+    .await
+}
+
 /// The oldest ready member of the template's pool, never its seed, locked for
 /// the caller's transaction to hand to a sandbox.
 pub async fn claim_ready_for_template_tx(

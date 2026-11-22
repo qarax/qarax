@@ -398,21 +398,32 @@ async def wait_for_sandbox_status(
     )
 
 
-async def wait_for_sandbox_pool_ready(client, vm_template_id, min_ready=1, timeout=SANDBOX_READY_TIMEOUT):
-    """Poll the sandbox pool endpoint until the requested number of warm members are ready."""
+async def wait_for_sandbox_pool(client, vm_template_id, done, what, timeout=SANDBOX_READY_TIMEOUT):
+    """Poll the template's sandbox pool until done(pool) holds, and return it;
+    `what` names the condition for the timeout's message."""
     httpx_client = client.get_async_httpx_client()
     deadline = time.time() + timeout
+    body = None
     while time.time() < deadline:
         response = await httpx_client.get(f"{QARAX_URL}/v1/vm-templates/{vm_template_id}/sandbox-pool")
         assert response.status_code == 200, (
             f"Expected sandbox pool GET to succeed, got {response.status_code}: {response.text}"
         )
         body = response.json()
-        if body["current_ready"] >= min_ready:
+        if done(body):
             return body
         await asyncio.sleep(2)
-    raise TimeoutError(
-        f"Sandbox pool for template {vm_template_id} did not reach {min_ready} ready member(s)"
+    raise TimeoutError(f"Sandbox pool for template {vm_template_id} did not reach {what}: {body}")
+
+
+async def wait_for_sandbox_pool_ready(client, vm_template_id, min_ready=1, timeout=SANDBOX_READY_TIMEOUT):
+    """Poll the sandbox pool endpoint until the requested number of warm members are ready."""
+    return await wait_for_sandbox_pool(
+        client,
+        vm_template_id,
+        lambda pool: pool["current_ready"] >= min_ready,
+        f"{min_ready} ready member(s)",
+        timeout,
     )
 
 
@@ -1275,6 +1286,71 @@ async def test_a_forking_sandbox_pool_fills_with_forks_of_its_seed(
                 for sandbox_id in sandbox_ids:
                     await delete_sandbox.asyncio_detailed(client=c, sandbox_id=sandbox_id)
                 # Deleting the pool destroys its seed and members.
+                response = await httpx_client.delete(pool_url)
+                assert response.status_code in (204, 404), response.text
+
+
+@pytest.mark.asyncio
+async def test_a_pool_that_keeps_only_its_seed_forks_it_for_each_sandbox(client):
+    """A forking pool with min_ready 0 keeps its seed and nothing else: each
+    sandbox asked for is forked from the seed on its request, with the seed's
+    state as it is then, and the seed keeps running."""
+    async with client as c:
+        httpx_client = c.get_async_httpx_client()
+        async with bootable_sandbox_template(c, "firecracker") as template_id:
+            pool_url = f"{QARAX_URL}/v1/vm-templates/{template_id}/sandbox-pool"
+            sandbox_ids = []
+            try:
+                response = await httpx_client.put(pool_url, json={"min_ready": 0, "fork": True})
+                assert response.status_code == 200, response.text
+                pool = await wait_for_sandbox_pool(
+                    c, template_id, lambda pool: pool["seed_status"] == "ready", "a ready seed"
+                )
+                seed_vm_id = uuid.UUID(pool["seed_vm_id"])
+
+                for marker in ("first", "second"):
+                    result = await call_api(
+                        exec_vm,
+                        client=c,
+                        vm_id=seed_vm_id,
+                        body=ExecVmRequest(
+                            command=["/bin/sh", "-c", f"echo {marker} > /root/marker"],
+                            timeout_secs=15,
+                        ),
+                    )
+                    assert result.exit_code == 0, result.stderr
+                    created = await call_api(
+                        create_sandbox,
+                        client=c,
+                        body=NewSandbox(
+                            name=f"e2e-seed-only-{uuid.uuid4().hex[:8]}",
+                            vm_template_id=template_id,
+                            idle_timeout_secs=300,
+                        ),
+                    )
+                    sandbox_ids.append(created.id)
+                    assert created.vm_id != seed_vm_id
+                    sandbox = await call_api(get_sandbox, client=c, sandbox_id=created.id)
+                    assert sandbox.status == SandboxStatus.READY, sandbox.status
+                    result = await call_api(
+                        exec_sandbox,
+                        client=c,
+                        sandbox_id=created.id,
+                        body=ExecSandboxRequest(command=["cat", "/root/marker"], timeout_secs=15),
+                    )
+                    assert result.exit_code == 0, result.stderr
+                    assert result.stdout.strip() == marker
+
+                # It kept nothing ready, and the same seed.
+                pool = (await httpx_client.get(pool_url)).json()
+                assert pool["current_ready"] == 0, pool
+                assert pool["seed_vm_id"] == str(seed_vm_id), pool
+                seed = await call_api(get_vm, client=c, vm_id=seed_vm_id)
+                assert seed.status == VmStatus.RUNNING, seed.status
+            finally:
+                for sandbox_id in sandbox_ids:
+                    await delete_sandbox.asyncio_detailed(client=c, sandbox_id=sandbox_id)
+                # Deleting the pool destroys its seed.
                 response = await httpx_client.delete(pool_url)
                 assert response.status_code in (204, 404), response.text
 

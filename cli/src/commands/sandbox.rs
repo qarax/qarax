@@ -101,11 +101,13 @@ enum SandboxPoolCommand {
         /// VM template name or ID
         #[arg(long)]
         template: String,
-        /// Keep at least this many prewarmed sandboxes ready
+        /// Keep at least this many prewarmed sandboxes ready; with --fork, 0
+        /// keeps only the seed
         #[arg(long)]
         min_ready: i32,
         /// Make them by forking one booted VM of the template, the pool's
-        /// seed, rather than booting each one
+        /// seed, rather than booting each one. A sandbox asked for when none
+        /// is ready is forked from the seed too
         #[arg(long)]
         fork: bool,
     },

@@ -55,7 +55,7 @@ pub async fn create(
     let idle_timeout_secs = req
         .idle_timeout_secs
         .unwrap_or(env.sandbox().default_idle_timeout_secs);
-    if let Some(response) = try_claim_prewarmed_sandbox(&env, &req, idle_timeout_secs).await? {
+    if let Some(response) = claim_from_pool(&env, &req, idle_timeout_secs).await? {
         return Ok(ApiResponse {
             data: response,
             code: StatusCode::ACCEPTED,
@@ -638,7 +638,11 @@ fn fork_name(source: &str, fork_id: Uuid) -> String {
     format!("{source}{suffix}")
 }
 
-async fn try_claim_prewarmed_sandbox(
+/// A sandbox from the template's pool, when it has one to give: a ready
+/// member, or else a fork of its seed. `None` when the request asks for what
+/// a pool's VMs don't have (an instance type, a network) or the pool has
+/// neither: the sandbox boots a VM of its own.
+async fn claim_from_pool(
     env: &App,
     req: &NewSandbox,
     idle_timeout_secs: i32,
@@ -646,7 +650,18 @@ async fn try_claim_prewarmed_sandbox(
     if req.instance_type_id.is_some() || req.network_id.is_some() {
         return Ok(None);
     }
+    if let Some(claimed) = claim_ready_member(env, req, idle_timeout_secs).await? {
+        return Ok(Some(claimed));
+    }
+    fork_pool_seed(env, req, idle_timeout_secs).await
+}
 
+/// The pool's oldest ready member, renamed as the sandbox and handed to it.
+async fn claim_ready_member(
+    env: &App,
+    req: &NewSandbox,
+    idle_timeout_secs: i32,
+) -> Result<Option<CreateSandboxResponse>> {
     let mut tx = env
         .pool()
         .begin()
@@ -704,6 +719,80 @@ async fn try_claim_prewarmed_sandbox(
         vm_id: member.vm_id,
         job_id: job.id,
     }))
+}
+
+/// A fork of the template's pool's seed made for the request, ready when this
+/// returns as a fork is: when the pool forks and its seed runs. A seed that
+/// can't be forked (its host has no room, say) leaves the sandbox to boot a
+/// VM of its own, as a pool without a seed does.
+async fn fork_pool_seed(
+    env: &App,
+    req: &NewSandbox,
+    idle_timeout_secs: i32,
+) -> Result<Option<CreateSandboxResponse>> {
+    let Some(seed_vm_id) =
+        sandbox_pool_members::running_seed_for_template(env.pool(), req.vm_template_id).await?
+    else {
+        return Ok(None);
+    };
+    let sandbox_id = Uuid::new_v4();
+    let vm_id = match start_seed_fork(env, req, idle_timeout_secs, seed_vm_id, sandbox_id).await {
+        Ok(vm_id) => vm_id,
+        Err(e) => {
+            tracing::warn!(
+                seed_vm_id = %seed_vm_id,
+                vm_template_id = %req.vm_template_id,
+                error = %e,
+                "Couldn't fork the sandbox pool's seed; booting the sandbox instead"
+            );
+            return Ok(None);
+        }
+    };
+    sandboxes::mark_ready(env.pool(), sandbox_id).await?;
+    let job = jobs::create_completed(
+        env.pool(),
+        NewJob {
+            job_type: JobType::SandboxClaim,
+            description: Some(format!("Forked sandbox {} from its pool's seed", req.name)),
+            resource_id: Some(sandbox_id),
+            resource_type: Some(jobs::resource_types::SANDBOX.to_string()),
+        },
+        Some(serde_json::json!({ "source": "pool_seed", "seed_vm_id": seed_vm_id })),
+    )
+    .await?;
+    Ok(Some(CreateSandboxResponse {
+        id: sandbox_id,
+        vm_id,
+        job_id: job.id,
+    }))
+}
+
+/// Start the sandbox's VM, a fork of the seed named as the sandbox; its rows
+/// go when the node can't start it.
+async fn start_seed_fork(
+    env: &App,
+    req: &NewSandbox,
+    idle_timeout_secs: i32,
+    seed_vm_id: Uuid,
+    sandbox_id: Uuid,
+) -> Result<Uuid> {
+    let seed = vms::get(env.pool(), seed_vm_id).await?;
+    let mut tx = env.pool().begin().await?;
+    let forks = create_forks_tx(env, &mut tx, &seed, std::slice::from_ref(&req.name)).await?;
+    let vm_id = forks.vm_ids[0];
+    sandboxes::create_tx_with_status(
+        &mut tx,
+        sandbox_id,
+        vm_id,
+        Some(req.vm_template_id),
+        &req.name,
+        idle_timeout_secs,
+        SandboxStatus::Provisioning,
+    )
+    .await?;
+    tx.commit().await?;
+    start_forks(env, forks).await?;
+    Ok(vm_id)
 }
 
 fn spawn_sandbox_ready_watcher(env: App, sandbox_id: Uuid, vm_id: Uuid, wait: ReadyWait) {

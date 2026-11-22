@@ -23,7 +23,8 @@ class SandboxPool:
         current_provisioning (int):
         current_ready (int): Counts of the pool's members, not counting its seed.
         fork (bool): The pool makes its members by forking its seed, one VM of the template
-            it keeps booted, rather than booting each one.
+            it keeps booted, rather than booting each one, and forks a sandbox from
+            the seed when it has no member ready.
         id (UUID):
         min_ready (int):
         updated_at (datetime.datetime):
