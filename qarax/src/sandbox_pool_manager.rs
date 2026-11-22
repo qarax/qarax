@@ -1,3 +1,8 @@
+use std::{
+    collections::HashMap,
+    sync::{Arc, LazyLock, Mutex},
+};
+
 use sqlx::PgPool;
 use tokio::time::{Duration, interval};
 use tracing::{info, warn};
@@ -13,7 +18,7 @@ use crate::{
         sandbox_pool_members::{self, SandboxPoolMember, SandboxPoolMemberStatus},
         sandbox_pools::{self, SandboxPool},
         sandboxes::NewSandbox,
-        vms::{self, Vm, VmStatus},
+        vms::{self, VmStatus},
     },
     pagination::PageRequest,
     sandbox_runtime::{self, ReadyOutcome, ReadyWait, destroy_vm, resolve_sandbox_vm},
@@ -52,7 +57,18 @@ pub(crate) async fn sync_pool_for_template(
     Ok(())
 }
 
+/// The lock that keeps one sync of a pool at a time: two at once (the
+/// manager's pass and the one a claim starts) would each boot the seeds the
+/// pool is short of.
+fn sync_lock(pool_id: Uuid) -> Arc<tokio::sync::Mutex<()>> {
+    static LOCKS: LazyLock<Mutex<HashMap<Uuid, Arc<tokio::sync::Mutex<()>>>>> =
+        LazyLock::new(Default::default);
+    LOCKS.lock().unwrap().entry(pool_id).or_default().clone()
+}
+
 async fn sync_pool(env: &App, pool: SandboxPool) {
+    let lock = sync_lock(pool.id);
+    let _syncing = lock.lock().await;
     let error_members = match sandbox_pool_members::list_error_by_pool(env.pool(), pool.id).await {
         Ok(members) => members,
         Err(e) => {
@@ -70,7 +86,7 @@ async fn sync_pool(env: &App, pool: SandboxPool) {
         destroy_member(env.pool(), member).await;
     }
 
-    let seed = sync_seed(env, &pool).await;
+    sync_seeds(env, &pool).await;
 
     let ready_members = match sandbox_pool_members::list_ready_by_pool(env.pool(), pool.id).await {
         Ok(members) => members,
@@ -130,121 +146,187 @@ async fn sync_pool(env: &App, pool: SandboxPool) {
     };
 
     let deficit = (pool.min_ready - (ready_count + provisioning_count) as i32).max(0) as usize;
-    match (pool.fork, seed) {
-        (false, _) => {
-            for _ in 0..deficit {
-                if let Err(e) = provision_pool_member(env, &pool, false).await {
-                    warn!(
-                        pool_id = %pool.id,
-                        vm_template_id = %pool.vm_template_id,
-                        error = %e,
-                        "Sandbox pool manager: failed to provision pool member"
-                    );
-                }
-            }
-        }
-        (true, Some(seed)) => {
-            let mut left = deficit;
-            while left > 0 {
-                let count = left.min(MAX_FORKS as usize);
-                if let Err(e) = fork_pool_members(env, &pool, &seed, count).await {
-                    warn!(
-                        pool_id = %pool.id,
-                        vm_template_id = %pool.vm_template_id,
-                        seed_vm_id = %seed.id,
-                        error = %e,
-                        "Sandbox pool manager: failed to fork pool members from the seed"
-                    );
-                    return;
-                }
-                left -= count;
-            }
-        }
-        // The pool makes its members once its seed runs.
-        (true, None) => {}
-    }
-}
-
-/// A forking pool's seed, the VM of its template it keeps booted and forks
-/// its members from, and a sandbox from when it has no member ready: returned
-/// once it runs. The pool boots a seed when it has none, whatever its
-/// `min_ready`, and replaces one that failed (destroyed with the pool's other
-/// failed members) or whose VM stopped running. A pool that doesn't fork has
-/// no seed.
-async fn sync_seed(env: &App, pool: &SandboxPool) -> Option<Vm> {
-    let seed = match sandbox_pool_members::seed(env.pool(), pool.id).await {
-        Ok(seed) => seed,
-        Err(e) => {
-            warn!(
-                pool_id = %pool.id,
-                error = %e,
-                "Sandbox pool manager: failed to look up the pool's seed"
-            );
-            return None;
-        }
-    };
-    let seed = match (seed, pool.fork) {
-        (None, false) => return None,
-        (None, true) => {
-            if let Err(e) = provision_pool_member(env, pool, true).await {
+    if pool.fork {
+        fork_members(env, &pool, deficit).await;
+    } else {
+        for _ in 0..deficit {
+            if let Err(e) = provision_pool_vm(env, &pool, PoolVm::Member).await {
                 warn!(
                     pool_id = %pool.id,
                     vm_template_id = %pool.vm_template_id,
                     error = %e,
-                    "Sandbox pool manager: failed to boot the pool's seed"
+                    "Sandbox pool manager: failed to provision pool member"
                 );
             }
-            return None;
         }
-        (Some(seed), false) => {
-            destroy_member(env.pool(), seed).await;
-            return None;
-        }
-        (Some(seed), true) => seed,
-    };
-    // Booting, or being destroyed.
-    if seed.status != SandboxPoolMemberStatus::Ready {
-        return None;
-    }
-    let vm = match vms::get(env.pool(), seed.vm_id).await {
-        Ok(vm) => vm,
-        Err(e) => {
-            warn!(
-                pool_id = %pool.id,
-                seed_vm_id = %seed.vm_id,
-                error = %e,
-                "Sandbox pool manager: failed to look up the seed's VM"
-            );
-            return None;
-        }
-    };
-    match vm.status {
-        VmStatus::Running => Some(vm),
-        VmStatus::Shutdown | VmStatus::Unknown | VmStatus::Created => {
-            warn!(
-                pool_id = %pool.id,
-                seed_vm_id = %vm.id,
-                status = %vm.status,
-                "Sandbox pool manager: the pool's seed stopped running, replacing it"
-            );
-            destroy_member(env.pool(), seed).await;
-            None
-        }
-        VmStatus::Pending | VmStatus::Paused | VmStatus::Migrating | VmStatus::Committing => None,
     }
 }
 
-/// Make `count` members of a forking pool by forking its seed: they are ready
-/// as soon as the node has started them.
-async fn fork_pool_members(
+/// A forking pool's seeds: VMs of its template it keeps booted, one on each
+/// of `seed_hosts` hosts, which it forks its members from, and a sandbox from
+/// when it has no member ready. The pool boots the seeds it is short of,
+/// whatever its `min_ready`, each on a host without one, and replaces a seed
+/// that failed (destroyed with the pool's other failed members) or whose VM
+/// stopped running. A seed whose host is down or in maintenance is left where
+/// it is, out of the count: the pool boots another on a host that's up, and
+/// once the host is back, one of them is extra. It destroys a second seed on a
+/// host (one migrated there, say) and those beyond `seed_hosts`, the newest
+/// first: all of them, once it no longer forks.
+async fn sync_seeds(env: &App, pool: &SandboxPool) {
+    let seeds = match sandbox_pool_members::seeds(env.pool(), pool.id).await {
+        Ok(seeds) => seeds,
+        Err(e) => {
+            warn!(
+                pool_id = %pool.id,
+                error = %e,
+                "Sandbox pool manager: failed to look up the pool's seeds"
+            );
+            return;
+        }
+    };
+    let wanted = if pool.fork {
+        pool.seed_hosts as usize
+    } else {
+        0
+    };
+    // The hosts of the seeds the pool keeps, booting or running.
+    let mut hosts = Vec::new();
+    for seed in seeds {
+        // A down host's node may not answer a destroy, which would leave the
+        // VM running there with no row.
+        if !seed.host_up {
+            continue;
+        }
+        let gone = match seed.member.status {
+            SandboxPoolMemberStatus::Provisioning => None,
+            SandboxPoolMemberStatus::Ready => match seed.vm_status {
+                VmStatus::Shutdown | VmStatus::Unknown | VmStatus::Created => {
+                    Some("its VM stopped running")
+                }
+                VmStatus::Running
+                | VmStatus::Pending
+                | VmStatus::Paused
+                | VmStatus::Migrating
+                | VmStatus::Committing => None,
+            },
+            // Failed seeds went with the pool's other failed members, and a
+            // seed being destroyed is gone already.
+            SandboxPoolMemberStatus::Error | SandboxPoolMemberStatus::Destroying => continue,
+        };
+        let extra = if hosts.len() >= wanted {
+            Some("the pool keeps fewer seeds")
+        } else if seed.host_id.is_some_and(|host| hosts.contains(&host)) {
+            Some("another of the pool's seeds runs on its host")
+        } else {
+            None
+        };
+        if let Some(reason) = gone {
+            warn!(
+                pool_id = %pool.id,
+                seed_vm_id = %seed.member.vm_id,
+                reason,
+                "Sandbox pool manager: replacing a seed"
+            );
+            destroy_member(env.pool(), seed.member).await;
+        } else if let Some(reason) = extra {
+            info!(
+                pool_id = %pool.id,
+                seed_vm_id = %seed.member.vm_id,
+                reason,
+                "Sandbox pool manager: destroying a seed"
+            );
+            destroy_member(env.pool(), seed.member).await;
+        } else {
+            hosts.extend(seed.host_id);
+        }
+    }
+    for _ in hosts.len()..wanted {
+        match boot_seed(env, pool, &hosts).await {
+            Ok(host) => hosts.extend(host),
+            Err(e) => {
+                warn!(
+                    pool_id = %pool.id,
+                    vm_template_id = %pool.vm_template_id,
+                    error = %e,
+                    "Sandbox pool manager: failed to boot a seed"
+                );
+                return;
+            }
+        }
+    }
+}
+
+/// Boot a seed of the pool on a host without one: returns its host.
+async fn boot_seed(
     env: &App,
     pool: &SandboxPool,
-    seed: &Vm,
+    other_seed_hosts: &[Uuid],
+) -> Result<Option<Uuid>, crate::errors::Error> {
+    let vm_id = provision_pool_vm(env, pool, PoolVm::Seed { other_seed_hosts }).await?;
+    Ok(vms::get(env.pool(), vm_id).await?.host_id)
+}
+
+/// Make `count` members of a forking pool by forking its seeds, spread across
+/// their hosts: each round forks the seed whose host holds the fewest of the
+/// pool's members, as many as bring it level with the next (up to
+/// `MAX_FORKS`). A seed that can't be forked (its host has no room, say)
+/// leaves the rest to the others, and the pool tries it again on its next
+/// pass.
+async fn fork_members(env: &App, pool: &SandboxPool, count: usize) {
+    if count == 0 {
+        return;
+    }
+    let mut seeds =
+        match sandbox_pool_members::forkable_seeds(env.pool(), pool.vm_template_id).await {
+            Ok(seeds) => seeds,
+            Err(e) => {
+                warn!(
+                    pool_id = %pool.id,
+                    error = %e,
+                    "Sandbox pool manager: failed to look up the seeds to fork"
+                );
+                return;
+            }
+        };
+    let mut left = count;
+    while left > 0 && !seeds.is_empty() {
+        seeds.sort_by_key(|seed| seed.members);
+        let level = seeds.get(1).map_or(i64::MAX, |next| next.members);
+        let round = ((level - seeds[0].members) as usize)
+            .clamp(1, MAX_FORKS as usize)
+            .min(left);
+        let seed_vm_id = seeds[0].vm_id;
+        match fork_seed(env, pool, seed_vm_id, round).await {
+            Ok(()) => {
+                seeds[0].members += round as i64;
+                left -= round;
+            }
+            Err(e) => {
+                warn!(
+                    pool_id = %pool.id,
+                    vm_template_id = %pool.vm_template_id,
+                    seed_vm_id = %seed_vm_id,
+                    error = %e,
+                    "Sandbox pool manager: failed to fork pool members from a seed"
+                );
+                seeds.remove(0);
+            }
+        }
+    }
+}
+
+/// Make `count` members of a forking pool by forking one of its seeds: they
+/// are ready as soon as the node has started them.
+async fn fork_seed(
+    env: &App,
+    pool: &SandboxPool,
+    seed_vm_id: Uuid,
     count: usize,
 ) -> Result<(), crate::errors::Error> {
+    let seed = vms::get(env.pool(), seed_vm_id).await?;
     let names: Vec<String> = (0..count).map(|_| member_vm_name(pool, false)).collect();
     let mut tx = env.pool().begin().await?;
-    let forks = create_forks_tx(env, &mut tx, seed, &names).await?;
+    let forks = create_forks_tx(env, &mut tx, &seed, &names).await?;
     let mut members = Vec::with_capacity(count);
     for vm_id in &forks.vm_ids {
         members.push(sandbox_pool_members::create_tx(&mut tx, pool.id, *vm_id, false).await?);
@@ -258,7 +340,7 @@ async fn fork_pool_members(
         pool_id = %pool.id,
         seed_vm_id = %seed.id,
         count,
-        "Sandbox pool manager: forked pool members from the seed"
+        "Sandbox pool manager: forked pool members from a seed"
     );
     Ok(())
 }
@@ -274,12 +356,23 @@ fn member_vm_name(pool: &SandboxPool, seed: bool) -> String {
     )
 }
 
-/// Boot a member of the pool from its template, or its seed.
-async fn provision_pool_member(
+/// What a VM a pool boots is to it.
+#[derive(Clone, Copy)]
+enum PoolVm<'a> {
+    Member,
+    /// A seed, kept off the hosts of the pool's other seeds.
+    Seed {
+        other_seed_hosts: &'a [Uuid],
+    },
+}
+
+/// Boot a VM of the pool's template, a member or a seed: returns its ID.
+async fn provision_pool_vm(
     env: &App,
     pool: &SandboxPool,
-    seed: bool,
-) -> Result<(), crate::errors::Error> {
+    pool_vm: PoolVm<'_>,
+) -> Result<Uuid, crate::errors::Error> {
+    let seed = matches!(pool_vm, PoolVm::Seed { .. });
     let req = NewSandbox {
         name: member_vm_name(pool, seed),
         vm_template_id: pool.vm_template_id,
@@ -287,7 +380,10 @@ async fn provision_pool_member(
         instance_type_id: None,
         network_id: None,
     };
-    let resolved_vm = resolve_sandbox_vm(env, &req).await?;
+    let mut resolved_vm = resolve_sandbox_vm(env, &req).await?;
+    if let PoolVm::Seed { other_seed_hosts } = pool_vm {
+        resolved_vm.excluded_host_ids = other_seed_hosts.to_vec();
+    }
     let (vm_id, image_pull_job) = if resolved_vm.image_ref.is_some() {
         let (vm_id, job_id) =
             crate::handlers::vm::handler::create_vm_with_image_internal(env, resolved_vm).await?;
@@ -295,7 +391,7 @@ async fn provision_pool_member(
     } else {
         (create_vm_internal(env, resolved_vm).await?, None)
     };
-    // A second seed, booted by a sync racing this one, has no row to go in.
+    // A VM the pool has no row for would be no one's.
     let member = match sandbox_pool_members::create(env.pool(), pool.id, vm_id, seed).await {
         Ok(member) => member,
         Err(e) => {
@@ -311,7 +407,7 @@ async fn provision_pool_member(
             Err(e) => {
                 let _ =
                     sandbox_pool_members::mark_error(env.pool(), member.id, &e.to_string()).await;
-                return Ok(());
+                return Ok(vm_id);
             }
         },
     };
@@ -326,7 +422,7 @@ async fn provision_pool_member(
     );
     spawn_member_ready_watcher(env.clone(), member.id, vm_id, wait);
 
-    Ok(())
+    Ok(vm_id)
 }
 
 fn spawn_member_ready_watcher(env: App, member_id: Uuid, vm_id: Uuid, wait: ReadyWait) {

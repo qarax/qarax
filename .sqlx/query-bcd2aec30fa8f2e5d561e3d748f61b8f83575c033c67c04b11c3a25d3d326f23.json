@@ -1,26 +1,26 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\nSELECT id, sandbox_pool_id, vm_id, status AS \"status: _\", error_message, created_at, updated_at\nFROM sandbox_pool_members\nWHERE sandbox_pool_id = $1 AND seed\n        ",
+  "query": "\nSELECT seed.sandbox_pool_id,\n       seed.vm_id,\n       v.host_id,\n       seed.status AS \"status: SandboxPoolMemberStatus\"\nFROM sandbox_pool_members seed\nJOIN vms v\n  ON v.id = seed.vm_id\nWHERE seed.sandbox_pool_id = ANY($1)\n  AND seed.seed\nORDER BY seed.created_at, seed.id\n        ",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "id",
-        "type_info": "Uuid"
-      },
-      {
-        "ordinal": 1,
         "name": "sandbox_pool_id",
         "type_info": "Uuid"
       },
       {
-        "ordinal": 2,
+        "ordinal": 1,
         "name": "vm_id",
         "type_info": "Uuid"
       },
       {
+        "ordinal": 2,
+        "name": "host_id",
+        "type_info": "Uuid"
+      },
+      {
         "ordinal": 3,
-        "name": "status: _",
+        "name": "status: SandboxPoolMemberStatus",
         "type_info": {
           "Custom": {
             "name": "sandbox_pool_member_status",
@@ -34,37 +34,19 @@
             }
           }
         }
-      },
-      {
-        "ordinal": 4,
-        "name": "error_message",
-        "type_info": "Text"
-      },
-      {
-        "ordinal": 5,
-        "name": "created_at",
-        "type_info": "Timestamptz"
-      },
-      {
-        "ordinal": 6,
-        "name": "updated_at",
-        "type_info": "Timestamptz"
       }
     ],
     "parameters": {
       "Left": [
-        "Uuid"
+        "UuidArray"
       ]
     },
     "nullable": [
       false,
       false,
-      false,
-      false,
       true,
-      false,
       false
     ]
   },
-  "hash": "cd4a123f767bf8174f5a5fa123948197e533474d77b08e43d06b95356a09729e"
+  "hash": "bcd2aec30fa8f2e5d561e3d748f61b8f83575c033c67c04b11c3a25d3d326f23"
 }

@@ -16,21 +16,28 @@ class ConfigureSandboxPoolRequest:
     """
     Attributes:
         min_ready (int): How many sandboxes the pool keeps ready to hand out.
-        fork (bool | Unset): Make the pool's members by forking one VM of the template it keeps
-            booted, its seed, rather than booting each one: a member is ready in
+        fork (bool | Unset): Make the pool's members by forking a VM of the template it keeps
+            booted, a seed, rather than booting each one: a member is ready in
             milliseconds and shares the seed's memory until it writes it. A
-            sandbox asked for when the pool has no member ready is forked from the
-            seed on the request, so with `min_ready` 0 the pool keeps only its seed.
+            sandbox asked for when the pool has no member ready is forked from a
+            seed on the request, so with `min_ready` 0 the pool keeps only seeds.
+        seed_hosts (int | Unset): For a pool that forks: how many hosts to keep a seed on, one each. A
+            member or a sandbox is forked from the seed whose host holds the fewest
+            of the pool's members, or the next when that host has no room. 1 if
+            unset. Default: 1.
     """
 
     min_ready: int
     fork: bool | Unset = UNSET
+    seed_hosts: int | Unset = 1
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         min_ready = self.min_ready
 
         fork = self.fork
+
+        seed_hosts = self.seed_hosts
 
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
@@ -41,6 +48,8 @@ class ConfigureSandboxPoolRequest:
         )
         if fork is not UNSET:
             field_dict["fork"] = fork
+        if seed_hosts is not UNSET:
+            field_dict["seed_hosts"] = seed_hosts
 
         return field_dict
 
@@ -51,9 +60,12 @@ class ConfigureSandboxPoolRequest:
 
         fork = d.pop("fork", UNSET)
 
+        seed_hosts = d.pop("seed_hosts", UNSET)
+
         configure_sandbox_pool_request = cls(
             min_ready=min_ready,
             fork=fork,
+            seed_hosts=seed_hosts,
         )
 
         configure_sandbox_pool_request.additional_properties = d

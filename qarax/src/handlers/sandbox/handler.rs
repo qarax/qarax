@@ -726,32 +726,35 @@ async fn claim_ready_member(
     }))
 }
 
-/// A fork of the template's pool's seed made for the request, ready when this
-/// returns as a fork is: when the pool forks and its seed runs. A seed that
-/// can't be forked (its host has no room, say) leaves the sandbox to boot a
-/// VM of its own, as a pool without a seed does.
+/// A fork of one of the template's pool's seeds made for the request, ready
+/// when this returns as a fork is: when the pool forks and a seed runs. It
+/// tries the seeds in the order the pool forks its members from them, the one
+/// whose host holds the fewest members first; a seed that can't be forked (its
+/// host has no room, say) leaves the request to the next. With none left, the
+/// sandbox boots a VM of its own, as a pool without seeds leaves it to.
 async fn fork_pool_seed(
     env: &App,
     req: &NewSandbox,
     idle_timeout_secs: i32,
 ) -> Result<Option<CreateSandboxResponse>> {
-    let Some(seed_vm_id) =
-        sandbox_pool_members::running_seed_for_template(env.pool(), req.vm_template_id).await?
-    else {
-        return Ok(None);
-    };
-    let sandbox_id = Uuid::new_v4();
-    let vm_id = match start_seed_fork(env, req, idle_timeout_secs, seed_vm_id, sandbox_id).await {
-        Ok(vm_id) => vm_id,
-        Err(e) => {
-            tracing::warn!(
-                seed_vm_id = %seed_vm_id,
+    let mut started = None;
+    for seed in sandbox_pool_members::forkable_seeds(env.pool(), req.vm_template_id).await? {
+        let sandbox_id = Uuid::new_v4();
+        match start_seed_fork(env, req, idle_timeout_secs, seed.vm_id, sandbox_id).await {
+            Ok(vm_id) => {
+                started = Some((seed.vm_id, sandbox_id, vm_id));
+                break;
+            }
+            Err(e) => tracing::warn!(
+                seed_vm_id = %seed.vm_id,
                 vm_template_id = %req.vm_template_id,
                 error = %e,
-                "Couldn't fork the sandbox pool's seed; booting the sandbox instead"
-            );
-            return Ok(None);
+                "Couldn't fork a seed of the sandbox pool for a sandbox"
+            ),
         }
+    }
+    let Some((seed_vm_id, sandbox_id, vm_id)) = started else {
+        return Ok(None);
     };
     sandboxes::mark_ready(env.pool(), sandbox_id).await?;
     let job = jobs::create_completed(

@@ -689,6 +689,9 @@ pub struct ResolvedNewVm {
     pub numa_config: Option<serde_json::Value>,
     pub persistent_upper_pool_id: Option<Uuid>,
     pub placement_policy: Option<PlacementPolicy>,
+    /// Hosts the VM can't go on: a pool's seed is kept off those of the
+    /// pool's other seeds. No request sets it.
+    pub excluded_host_ids: Vec<Uuid>,
     pub config: serde_json::Value,
 }
 
@@ -989,6 +992,7 @@ pub async fn resolve_create_request(pool: &PgPool, request: NewVm) -> Result<Res
         }),
         persistent_upper_pool_id,
         placement_policy,
+        excluded_host_ids: vec![],
         // NOTE: numa_config is intentionally not merged into `config` here;
         // the handler merges it in create_vm_internal before persisting.
         config: merge_config(

@@ -309,6 +309,7 @@ pub struct BackupListQuery {
             crate::model::sandboxes::ExecSandboxResponse,
             crate::model::sandboxes::ForkSandboxRequest,
             crate::model::sandbox_pools::SandboxPool,
+            crate::model::sandbox_pools::SandboxPoolSeed,
             crate::model::sandbox_pools::ConfigureSandboxPoolRequest,
             crate::configuration::SchedulingSettings,
         crate::model::audit_log::AuditLog,

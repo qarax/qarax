@@ -3,7 +3,8 @@
 //! itself needs a real node; it is in e2e/test_sandboxes.py.
 
 use crate::support::{
-    TestApp, add_up_host, create_vm, set_vm_status, spawn_app, spawn_app_on_one_connection,
+    TestApp, add_up_host, create_vm, set_total_memory, set_vm_status, spawn_app,
+    spawn_app_on_one_connection,
 };
 use reqwest::StatusCode;
 use serde_json::{Value, json};
@@ -67,15 +68,6 @@ async fn assert_refused(app: &TestApp, client: &reqwest::Client, sandbox_id: Uui
     let (status, body) = fork(app, client, sandbox_id, json!({})).await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
     assert!(body.contains(because), "expected {because:?} in {body}");
-}
-
-async fn set_total_memory(app: &TestApp, host_id: Uuid, bytes: i64) {
-    sqlx::query("UPDATE hosts SET total_memory_bytes = $1 WHERE id = $2")
-        .bind(bytes)
-        .bind(host_id)
-        .execute(&app.pool)
-        .await
-        .unwrap();
 }
 
 async fn count(app: &TestApp, table: &str) -> i64 {

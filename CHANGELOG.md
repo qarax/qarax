@@ -32,12 +32,12 @@ The first release.
 - Snapshots and backups of VMs, and backups of the control-plane database.
 - Sandboxes: short-lived VMs with idle reaping and prewarmed pools, of
   templates booting a kernel or an OCI image, which can make their sandboxes
-  by forking one booted VM of the template, ahead of time or on request, and
-  forks of a running Firecracker or Cloud Hypervisor sandbox, its OCI image
-  disk, data disks, network interfaces and cloud-init included, that continue
-  from its state; forking a Firecracker sandbox again writes only the memory
-  it changed since, and a fork counts against its host's memory for what it
-  holds of its own, not its memory size
+  by forking booted VMs of the template, on one host or several, ahead of time
+  or on request, and forks of a running Firecracker or Cloud Hypervisor
+  sandbox, its OCI image disk, data disks, network interfaces and cloud-init
+  included, that continue from its state; forking a Firecracker sandbox again
+  writes only the memory it changed since, and a fork counts against its
+  host's memory for what it holds of its own, not its memory size
   ([docs/SANDBOX_FORKING.md](docs/SANDBOX_FORKING.md)).
 - Lifecycle hooks (webhooks), a Server-Sent Events stream of VM changes, an
   audit log of API mutations, OpenTelemetry traces and metrics.
@@ -87,3 +87,5 @@ These need action if you ran a build from before them:
   gives it, which holds the address and port the node logged in to. A LUN of
   a pool created with a hostname portal can't be used: create the pool again
   with the target's address and register its LUNs again.
+- A sandbox pool that forks lists its seeds in `seeds` (each one's VM, host
+  and status), in place of `seed_vm_id` and `seed_status`.

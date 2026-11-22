@@ -259,7 +259,7 @@ async fn scheduling_request_for_vm(
         requires_overlaybd: vm.image_ref.is_some(),
         gpu: gpu_request(accel),
         placement_policy: vm.placement_policy.clone(),
-        excluded_host_ids: vec![],
+        excluded_host_ids: vm.excluded_host_ids.clone(),
         required_host_id: None,
     })
 }
