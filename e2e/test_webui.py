@@ -234,7 +234,13 @@ async def test_browser_vm_snapshot_restore(page: Page):
 
             nav = page.get_by_role("navigation", name="Global")
             await nav.get_by_role("link", name="Virtual machines").click()
-            await page.get_by_role("link", name=name, exact=True).click()
+            # In the VM list: until the page changes, the overview's recent
+            # changes link the VM once per status change.
+            await (
+                page.get_by_role("table", name="Virtual machines")
+                .get_by_role("link", name=name, exact=True)
+                .click()
+            )
             await page.get_by_role("tab", name="Storage").click()
             await expect(
                 page.get_by_text("None: it boots from a kernel")
