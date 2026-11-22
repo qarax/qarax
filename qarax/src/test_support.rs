@@ -143,6 +143,7 @@ pub(crate) fn resolved_vm(name: &str) -> ResolvedNewVm {
         numa_config: None,
         persistent_upper_pool_id: None,
         placement_policy: None,
+        excluded_host_ids: vec![],
         config: serde_json::json!({}),
     }
 }

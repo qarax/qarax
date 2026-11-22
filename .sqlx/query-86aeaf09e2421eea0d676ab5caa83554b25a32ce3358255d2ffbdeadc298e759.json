@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nSELECT seed.vm_id,\n       (SELECT COUNT(*)\n        FROM sandbox_pool_members member\n        JOIN vms member_vm\n          ON member_vm.id = member.vm_id\n        WHERE member.sandbox_pool_id = seed.sandbox_pool_id\n          AND NOT member.seed\n          AND member.status IN ('PROVISIONING', 'READY')\n          AND member_vm.host_id = v.host_id) AS \"members!\"\nFROM sandbox_pool_members seed\nJOIN sandbox_pools sp\n  ON sp.id = seed.sandbox_pool_id\nJOIN vms v\n  ON v.id = seed.vm_id\nJOIN hosts h\n  ON h.id = v.host_id\nWHERE sp.vm_template_id = $1\n  AND sp.fork\n  AND seed.seed\n  AND seed.status = 'READY'\n  AND v.status = 'RUNNING'\n  AND h.status = 'UP'\nORDER BY 2, seed.created_at, seed.id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "vm_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "members!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "86aeaf09e2421eea0d676ab5caa83554b25a32ce3358255d2ffbdeadc298e759"
+}

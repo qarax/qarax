@@ -276,6 +276,16 @@ pub async fn create_vm(client: &reqwest::Client, address: &str, body: serde_json
     res.json().await.unwrap()
 }
 
+/// Sets the memory a host has, as its node would report it.
+pub async fn set_total_memory(app: &TestApp, host_id: Uuid, bytes: i64) {
+    sqlx::query("UPDATE hosts SET total_memory_bytes = $1 WHERE id = $2")
+        .bind(bytes)
+        .bind(host_id)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+}
+
 /// Forces a VM's status in the database, for guards that need a state only a
 /// real node could reach.
 pub async fn set_vm_status(pool: &PgPool, vm_id: Uuid, status: &str) {

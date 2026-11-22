@@ -3538,15 +3538,25 @@ components:
         fork:
           type: boolean
           description: |-
-            Make the pool's members by forking one VM of the template it keeps
-            booted, its seed, rather than booting each one: a member is ready in
+            Make the pool's members by forking a VM of the template it keeps
+            booted, a seed, rather than booting each one: a member is ready in
             milliseconds and shares the seed's memory until it writes it. A
-            sandbox asked for when the pool has no member ready is forked from the
-            seed on the request, so with `min_ready` 0 the pool keeps only its seed.
+            sandbox asked for when the pool has no member ready is forked from a
+            seed on the request, so with `min_ready` 0 the pool keeps only seeds.
         min_ready:
           type: integer
           format: int32
           description: How many sandboxes the pool keeps ready to hand out.
+        seed_hosts:
+          type: integer
+          format: int32
+          description: |-
+            For a pool that forks: how many hosts to keep a seed on, one each. A
+            member or a sandbox is forked from the seed whose host holds the fewest
+            of the pool's members, or the next when that host has no room. 1 if
+            unset.
+          default: 1
+          minimum: 1
     CreateBackupRequest:
       type: object
       required:
@@ -5521,6 +5531,8 @@ components:
       - vm_template_name
       - min_ready
       - fork
+      - seed_hosts
+      - seeds
       - current_ready
       - current_provisioning
       - current_error
@@ -5539,29 +5551,28 @@ components:
         current_ready:
           type: integer
           format: int64
-          description: Counts of the pool's members, not counting its seed.
+          description: Counts of the pool's members, not counting its seeds.
         fork:
           type: boolean
           description: |-
-            The pool makes its members by forking its seed, one VM of the template
+            The pool makes its members by forking its seeds, VMs of the template
             it keeps booted, rather than booting each one, and forks a sandbox from
-            the seed when it has no member ready.
+            a seed when it has no member ready.
         id:
           type: string
           format: uuid
         min_ready:
           type: integer
           format: int32
-        seed_status:
-          oneOf:
-          - $ref: '#/components/schemas/SandboxPoolMemberStatus'
-          - type: 'null'
-        seed_vm_id:
-          type:
-          - string
-          - 'null'
-          format: uuid
-          description: The seed's VM, while the pool has one.
+        seed_hosts:
+          type: integer
+          format: int32
+          description: How many hosts the pool keeps a seed on, when it forks.
+        seeds:
+          type: array
+          items:
+            $ref: '#/components/schemas/SandboxPoolSeed'
+          description: 'The pool''s seeds, oldest first: at most one on a host.'
         updated_at:
           type: string
           format: date-time
@@ -5593,6 +5604,24 @@ components:
           type:
           - string
           - 'null'
+    SandboxPoolSeed:
+      type: object
+      description: A VM of the template a forking pool keeps booted and forks from.
+      required:
+      - vm_id
+      - status
+      properties:
+        host_id:
+          type:
+          - string
+          - 'null'
+          format: uuid
+          description: The host it runs on.
+        status:
+          $ref: '#/components/schemas/SandboxPoolMemberStatus'
+        vm_id:
+          type: string
+          format: uuid
     SandboxStatus:
       type: string
       description: |-

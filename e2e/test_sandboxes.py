@@ -314,6 +314,34 @@ async def bootable_sandbox_template(c, hypervisor):
 
 
 @contextlib.asynccontextmanager
+async def default_boot_sandbox_template(c, hypervisor):
+    """A template of sandboxes that boot the nodes' default kernel and
+    initramfs (VM_KERNEL, VM_INITRAMFS), which every node has, so they run on
+    any host: a boot source's files are on one host's local pool. Yields the
+    template's UUID; deletes it after the test's own cleanup."""
+    template_id = uuid.UUID(
+        str(
+            await call_api(
+                create_template,
+                client=c,
+                body=NewVmTemplate(
+                    name=f"e2e-sandbox-default-boot-{uuid.uuid4().hex[:8]}",
+                    hypervisor=hypervisor,
+                    boot_vcpus=1,
+                    max_vcpus=1,
+                    memory_size=256 * 1024 * 1024,
+                    boot_mode="kernel",
+                ),
+            )
+        ).strip('"')
+    )
+    try:
+        yield template_id
+    finally:
+        await delete_template.asyncio_detailed(client=c, vm_template_id=template_id)
+
+
+@contextlib.asynccontextmanager
 async def oci_sandbox_template(c, hypervisor, image_ref):
     """A template of sandboxes that boot `image_ref` on `hypervisor`, with an
     OverlayBD storage pool on each UP host that takes one. Yields the
@@ -1256,8 +1284,9 @@ async def test_a_forking_sandbox_pool_fills_with_forks_of_its_seed(
                 assert response.status_code == 200, response.text
                 assert response.json()["fork"] is True
                 pool = await wait_for_sandbox_pool_ready(c, template_id, min_ready=1)
-                assert pool["seed_status"] == "ready", pool
-                seed_vm_id = uuid.UUID(pool["seed_vm_id"])
+                [seed] = pool["seeds"]
+                assert seed["status"] == "ready", pool
+                seed_vm_id = uuid.UUID(seed["vm_id"])
 
                 # The member the pool has made doesn't have this; the next does.
                 # Synced, so that the member reads it from its image's disk
@@ -1305,9 +1334,12 @@ async def test_a_pool_that_keeps_only_its_seed_forks_it_for_each_sandbox(client)
                 response = await httpx_client.put(pool_url, json={"min_ready": 0, "fork": True})
                 assert response.status_code == 200, response.text
                 pool = await wait_for_sandbox_pool(
-                    c, template_id, lambda pool: pool["seed_status"] == "ready", "a ready seed"
+                    c,
+                    template_id,
+                    lambda pool: [seed["status"] for seed in pool["seeds"]] == ["ready"],
+                    "a ready seed",
                 )
-                seed_vm_id = uuid.UUID(pool["seed_vm_id"])
+                seed_vm_id = uuid.UUID(pool["seeds"][0]["vm_id"])
 
                 for marker in ("first", "second"):
                     result = await call_api(
@@ -1345,13 +1377,109 @@ async def test_a_pool_that_keeps_only_its_seed_forks_it_for_each_sandbox(client)
                 # It kept nothing ready, and the same seed.
                 pool = (await httpx_client.get(pool_url)).json()
                 assert pool["current_ready"] == 0, pool
-                assert pool["seed_vm_id"] == str(seed_vm_id), pool
+                assert [seed["vm_id"] for seed in pool["seeds"]] == [str(seed_vm_id)], pool
                 seed = await call_api(get_vm, client=c, vm_id=seed_vm_id)
                 assert seed.status == VmStatus.RUNNING, seed.status
             finally:
                 for sandbox_id in sandbox_ids:
                     await delete_sandbox.asyncio_detailed(client=c, sandbox_id=sandbox_id)
                 # Deleting the pool destroys its seed.
+                response = await httpx_client.delete(pool_url)
+                assert response.status_code in (204, 404), response.text
+
+
+@pytest.mark.asyncio
+async def test_a_forking_pool_keeps_a_seed_on_each_of_its_seed_hosts(client):
+    """A forking pool with seed_hosts 2 keeps a seed on each of two hosts and
+    spreads its members across them, each a fork of its own host's seed."""
+    async with client as c:
+        hosts = up_hosts((await call_api(list_hosts, client=c)).items)
+        if len(hosts) < 2:
+            pytest.skip("A seed per host needs two UP hosts")
+        httpx_client = c.get_async_httpx_client()
+        async with default_boot_sandbox_template(c, "firecracker") as template_id:
+            pool_url = f"{QARAX_URL}/v1/vm-templates/{template_id}/sandbox-pool"
+            sandbox_ids = []
+
+            async def claim():
+                created = await call_api(
+                    create_sandbox,
+                    client=c,
+                    body=NewSandbox(
+                        name=f"e2e-seed-hosts-{uuid.uuid4().hex[:8]}",
+                        vm_template_id=template_id,
+                        idle_timeout_secs=300,
+                    ),
+                )
+                sandbox_ids.append(created.id)
+                return created
+
+            async def host_of(created):
+                return (await call_api(get_vm, client=c, vm_id=created.vm_id)).host_id
+
+            async def marker(created):
+                result = await call_api(
+                    exec_sandbox,
+                    client=c,
+                    sandbox_id=created.id,
+                    body=ExecSandboxRequest(
+                        command=["/bin/sh", "-c", "cat /root/marker 2>/dev/null || echo none"],
+                        timeout_secs=15,
+                    ),
+                )
+                assert result.exit_code == 0, result.stderr
+                return result.stdout.strip()
+
+            try:
+                # The seeds first: a member made while only one runs would
+                # go to its host.
+                body = {"min_ready": 0, "fork": True, "seed_hosts": 2}
+                response = await httpx_client.put(pool_url, json=body)
+                assert response.status_code == 200, response.text
+                pool = await wait_for_sandbox_pool(
+                    c,
+                    template_id,
+                    lambda pool: [seed["status"] for seed in pool["seeds"]] == ["ready", "ready"],
+                    "two ready seeds",
+                )
+                seeds = {uuid.UUID(seed["host_id"]): uuid.UUID(seed["vm_id"]) for seed in pool["seeds"]}
+                assert len(seeds) == 2, f"two seeds on one host: {pool}"
+
+                response = await httpx_client.put(pool_url, json={**body, "min_ready": 2})
+                assert response.status_code == 200, response.text
+                await wait_for_sandbox_pool_ready(c, template_id, min_ready=2)
+                # Each seed marks the members forked from it from now on.
+                for host_id, seed_vm_id in seeds.items():
+                    result = await call_api(
+                        exec_vm,
+                        client=c,
+                        vm_id=seed_vm_id,
+                        body=ExecVmRequest(
+                            command=["/bin/sh", "-c", f"echo {host_id} > /root/marker"],
+                            timeout_secs=15,
+                        ),
+                    )
+                    assert result.exit_code == 0, result.stderr
+
+                # The two members made before, one on each host; then the two
+                # the pool makes up for them, one on each host too, forked
+                # from that host's seed.
+                before = [await claim(), await claim()]
+                assert {await host_of(created) for created in before} == set(seeds)
+                await wait_for_sandbox_pool_ready(c, template_id, min_ready=2)
+                after = [await claim(), await claim()]
+                after_hosts = [await host_of(created) for created in after]
+                assert set(after_hosts) == set(seeds), after_hosts
+                for created, host_id in zip(after, after_hosts):
+                    assert await marker(created) == str(host_id)
+
+                for seed_vm_id in seeds.values():
+                    seed = await call_api(get_vm, client=c, vm_id=seed_vm_id)
+                    assert seed.status == VmStatus.RUNNING, seed.status
+            finally:
+                for sandbox_id in sandbox_ids:
+                    await delete_sandbox.asyncio_detailed(client=c, sandbox_id=sandbox_id)
+                # Deleting the pool destroys its seeds and members.
                 response = await httpx_client.delete(pool_url)
                 assert response.status_code in (204, 404), response.text
 

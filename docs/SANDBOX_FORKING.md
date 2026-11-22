@@ -225,16 +225,35 @@ qarax sandbox pool set --template agent-base --min-ready 8 --fork
   seed that isn't running (booting, or being replaced) or can't be forked
   (its host has no room, say) leaves the request to boot a VM of its own, as
   a template without a pool does.
-- Each member, and each sandbox forked on its request, shares the seed's
+- Each member, and each sandbox forked on its request, shares its seed's
   memory until it writes it, and counts against the host as a fork does (see
-  above); the seed counts in full. They run on the seed's host.
-- A member continues from the seed's state when it was made. The seed is
-  never handed out; `GET /v1/vm-templates/{id}/sandbox-pool` shows it as
-  `seed_vm_id` and `seed_status`, and its counts are of the members alone.
-- A seed that fails to boot, or whose VM stops running, is replaced. When
-  forking the seed fails (its host has no room, say), the pool logs it and
-  tries again on its next pass. A pool set to stop forking destroys its
-  seed; its members stay until they're claimed.
+  above); a seed counts in full. They run on their seed's host.
+- A pool keeps one seed unless told otherwise, so one host's room caps it,
+  and losing that host loses every member. With `seed_hosts`
+  (`--seed-hosts`), it keeps a seed on each of that many hosts, never two on
+  one:
+
+  ```bash
+  qarax sandbox pool set --template agent-base --min-ready 8 --fork --seed-hosts 2
+  ```
+
+  A member is forked from the seed whose host holds the fewest of the pool's
+  members, so they spread across the hosts, or from the next when that host
+  has no room; a sandbox forked on its request picks its seed the same way.
+  With fewer up hosts than `seed_hosts`, the pool keeps a seed on each it
+  has and boots the rest once there are more.
+- A member continues from its seed's state when it was made. Seeds are never
+  handed out; `GET /v1/vm-templates/{id}/sandbox-pool` lists them in `seeds`
+  (each one's VM, host and status), and its counts are of the members alone.
+- A seed that fails to boot, or whose VM stops running, is replaced, on a
+  host without one. A seed whose host goes down or into maintenance stays
+  where it is, unforked, and the pool boots another on a host that's up; once
+  the host is back, the extra seed is destroyed. So are a second seed on a
+  host (one migrated there, say) and those beyond `seed_hosts`, the newest
+  first. When forking a seed fails (its host has no room, say),
+  the pool logs it, forks the others, and tries it again on its next pass. A
+  pool set to stop forking destroys its seeds; its members stay until they're
+  claimed.
 - The template must be forkable as a sandbox is (see "What forks").
 - A template booting an OCI image takes a pool too. A pool that boots its
   members pulls the image for each, as `POST /v1/sandboxes` does; a pool that

@@ -1,0 +1,104 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\nSELECT m.id,\n       m.sandbox_pool_id,\n       m.vm_id,\n       m.status AS \"status: _\",\n       m.error_message,\n       m.created_at,\n       m.updated_at,\n       v.status AS \"vm_status: _\",\n       v.host_id,\n       COALESCE(h.status = 'UP', false) AS \"host_up!\"\nFROM sandbox_pool_members m\nJOIN vms v\n  ON v.id = m.vm_id\nLEFT JOIN hosts h\n  ON h.id = v.host_id\nWHERE m.sandbox_pool_id = $1 AND m.seed\nORDER BY m.created_at, m.id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "sandbox_pool_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "vm_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "status: _",
+        "type_info": {
+          "Custom": {
+            "name": "sandbox_pool_member_status",
+            "kind": {
+              "Enum": [
+                "PROVISIONING",
+                "READY",
+                "ERROR",
+                "DESTROYING"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "error_message",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 6,
+        "name": "updated_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 7,
+        "name": "vm_status: _",
+        "type_info": {
+          "Custom": {
+            "name": "vm_status",
+            "kind": {
+              "Enum": [
+                "UNKNOWN",
+                "CREATED",
+                "RUNNING",
+                "PAUSED",
+                "SHUTDOWN",
+                "PENDING",
+                "MIGRATING",
+                "COMMITTING"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "host_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 9,
+        "name": "host_up!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      true,
+      null
+    ]
+  },
+  "hash": "5559aa86cd2c3922398094914251e45a7a789286fde55273144921b341009320"
+}

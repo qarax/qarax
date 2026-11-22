@@ -92,6 +92,16 @@ pub async fn put(
             "min_ready must be greater than or equal to 0".into(),
         ));
     }
+    if body.seed_hosts < 1 {
+        return Err(crate::errors::Error::UnprocessableEntity(
+            "seed_hosts must be at least 1".into(),
+        ));
+    }
+    if body.seed_hosts != 1 && !body.fork {
+        return Err(crate::errors::Error::UnprocessableEntity(
+            "seed_hosts is for a pool that forks".into(),
+        ));
+    }
 
     // A template that doesn't exist is a 404, not a foreign key violation.
     vm_templates::get(env.pool(), vm_template_id)
