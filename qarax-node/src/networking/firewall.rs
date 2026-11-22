@@ -138,6 +138,10 @@ pub async fn sync_security_groups(
         filtered.insert(nic.tap.as_str(), rules);
     }
 
+    // A VM without NICs has no chains to write.
+    if vm_nics.is_empty() {
+        return Ok(());
+    }
     let script = render_security_groups(vm_nics, &filtered);
     let _guard = NFT.lock().await;
     run_nft(&script).await
