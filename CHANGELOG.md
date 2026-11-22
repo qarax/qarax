@@ -48,7 +48,8 @@ The first release.
   capacity, placement, NUMA nodes and GPUs, and maintenance and evacuation),
   networks (their hosts and the addresses VMs hold) and storage pools (their
   hosts, objects and transfers), each created, attached to hosts and detached,
-  and deleted there, and sandboxes (their pools; creating one from
+  and deleted there, VM templates (creating a VM or a sandbox from one,
+  deleting one) and sandboxes (their pools; creating one from
   a template, running commands in it, forking it, keeping it alive and
   deleting it); creating a VM from an OCI image, a kernel or a disk, sized by
   vCPUs and memory or an instance type, on a network with security groups; a

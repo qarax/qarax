@@ -2,6 +2,7 @@
 	import { onMount, tick } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
+	import { page } from '$app/state';
 	import {
 		allNetworks,
 		allVmTemplates,
@@ -35,7 +36,8 @@
 	const MAX_SECONDS = 2_147_483_647;
 
 	let form = $state({
-		templateId: '',
+		// A template's page links here with ?template= to make a sandbox of it.
+		templateId: page.url.searchParams.get('template') ?? '',
 		name: '',
 		/** Empty for the control plane's default. */
 		idle: null as number | null,

@@ -34,6 +34,9 @@ export function ago(iso: string, now = Date.now()): string {
 	return elapsed < 5 ? 'just now' : `${span(elapsed)} ago`;
 }
 
+/** A phrase as the start of a sentence, or on its own: its first letter in capitals. */
+export const capitalize = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
+
 /** The time of day of an instant, to the second. */
 export function clock(iso: string): string {
 	return new Date(iso).toLocaleTimeString([], {
