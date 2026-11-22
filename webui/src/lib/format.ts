@@ -58,6 +58,15 @@ export const POOL_TYPE: Record<StoragePoolType, string> = {
 	block: 'iSCSI block'
 };
 
+/** What a pool of each type is, for someone who hasn't met one. */
+export const POOL_ABOUT: Record<StoragePoolType, string> = {
+	local: 'A directory on each host it is attached to. What it holds stays on that host.',
+	nfs: 'An NFS export each host it is attached to mounts. Its disks can follow a VM to another host.',
+	overlay_bd:
+		'A registry VMs boot OCI images from, reading blocks as the guest needs them instead of downloading the image first.',
+	block: 'LUNs on an iSCSI target, which each host it is attached to logs in to.'
+};
+
 export const OBJECT_TYPE: Record<StorageObjectType, string> = {
 	disk: 'Disk',
 	kernel: 'Kernel',

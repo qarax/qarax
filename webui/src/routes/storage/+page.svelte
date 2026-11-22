@@ -38,12 +38,30 @@
 						<Empty icon="storage" title="No storage pools yet">
 							A storage pool is a place for VM disks and images: a directory on a host, an NFS
 							export, an iSCSI target, or a registry to boot OCI images from. Create one and attach
-							it to hosts from the CLI:
+							it to hosts here, or from the CLI:
 							<CodeBlock
 								code={'qarax storage-pool create --name images --pool-type local --path /var/lib/qarax/images --host node-01'}
 							/>
+							{#snippet footer()}
+								<div class="pf-v6-c-empty-state__actions">
+									<a class="pf-v6-c-button pf-m-primary" href={resolve('/storage/new')}>
+										<span class="pf-v6-c-button__text">Create storage pool</span>
+									</a>
+								</div>
+							{/snippet}
 						</Empty>
 					{:else}
+						<div class="pf-v6-c-toolbar">
+							<div class="pf-v6-c-toolbar__content">
+								<div class="pf-v6-c-toolbar__content-section">
+									<div class="pf-v6-c-toolbar__item">
+										<a class="pf-v6-c-button pf-m-primary" href={resolve('/storage/new')}>
+											<span class="pf-v6-c-button__text">Create storage pool</span>
+										</a>
+									</div>
+								</div>
+							</div>
+						</div>
 						<table class="pf-v6-c-table pf-m-grid-md" aria-label="Storage pools">
 							<thead class="pf-v6-c-table__thead">
 								<tr class="pf-v6-c-table__tr">
