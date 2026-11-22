@@ -2543,6 +2543,32 @@ paths:
         '500':
           description: Internal server error
   /v1/vms/{vm_id}/disks:
+    get:
+      tags:
+      - vms
+      summary: A VM's disks, in boot order, then by device path.
+      operationId: list_disks
+      parameters:
+      - name: vm_id
+        in: path
+        description: VM unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: The disks attached to the VM
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/VmDisk'
+        '404':
+          description: VM not found
+        '500':
+          description: Internal server error
     post:
       tags:
       - vms

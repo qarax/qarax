@@ -24,6 +24,7 @@
 	import Notice from '#lib/components/Notice.svelte';
 	import StatusLabel from '#lib/components/StatusLabel.svelte';
 	import MetricsTab from './MetricsTab.svelte';
+	import StorageTab from './StorageTab.svelte';
 
 	let { id }: { id: string } = $props();
 
@@ -53,6 +54,7 @@
 
 	const TABS = [
 		{ id: 'details', label: 'Details' },
+		{ id: 'storage', label: 'Storage' },
 		{ id: 'metrics', label: 'Metrics' },
 		{ id: 'console', label: 'Console' },
 		{ id: 'log', label: 'Console log' }
@@ -381,6 +383,8 @@
 								</div>
 							</div>
 						</div>
+					{:else if tab === 'storage'}
+						<StorageTab {vm} />
 					{:else if tab === 'metrics'}
 						<MetricsTab {vm} {sampler} />
 					{:else if tab === 'console'}
