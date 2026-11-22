@@ -7,6 +7,8 @@ use crate::support::{
     TestApp, add_up_host, create_vm, fake_node::add_forking_node, set_total_memory, set_vm_status,
     spawn_app, spawn_app_on_one_connection,
 };
+use std::time::{Duration, Instant};
+
 use reqwest::StatusCode;
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -94,6 +96,74 @@ async fn a_sandbox_s_forks_continue_from_its_current_state() {
     assert_eq!(forks.len(), 1);
     assert_eq!(forks[0].source_vm_id, vm_id.to_string());
     assert_eq!(forks[0].forks.len(), 2);
+}
+
+#[tokio::test]
+async fn forks_share_one_connection_to_their_node() {
+    let app = spawn_app().await;
+    let client = reqwest::Client::new();
+    let (_, node) = add_forking_node(&app, "fork-node").await;
+    let (sandbox_id, _) = running_sandbox(&app, &client, "source", "firecracker", json!({})).await;
+
+    for _ in 0..3 {
+        let (status, body) = fork(&app, &client, sandbox_id, json!({})).await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+    }
+    assert_eq!(node.forks().len(), 3);
+    // The monitors' calls to the node, if any came, on it too.
+    assert_eq!(node.connections(), 1);
+}
+
+#[tokio::test]
+async fn a_node_that_restarts_is_forked_on_again() {
+    let app = spawn_app().await;
+    let client = reqwest::Client::new();
+    let (_, node) = add_forking_node(&app, "fork-node").await;
+    let (sandbox_id, _) = running_sandbox(&app, &client, "source", "firecracker", json!({})).await;
+    let (status, body) = fork(&app, &client, sandbox_id, json!({})).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    node.restart().await;
+    let (status, body) = fork(&app, &client, sandbox_id, json!({})).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(node.forks().len(), 2);
+    assert_eq!(node.connections(), 2);
+}
+
+#[tokio::test]
+async fn a_fork_on_a_node_that_stopped_answering_fails_within_seconds() {
+    let app = spawn_app().await;
+    let client = reqwest::Client::new();
+    let (_, node) = add_forking_node(&app, "fork-node").await;
+    let (sandbox_id, _) = running_sandbox(&app, &client, "source", "firecracker", json!({})).await;
+    let (status, body) = fork(&app, &client, sandbox_id, json!({})).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    // Its connection stays open, and nothing answers on it: only the
+    // control plane's keepalive tells.
+    node.freeze();
+    let started = Instant::now();
+    let (status, body) = fork(&app, &client, sandbox_id, json!({})).await;
+    assert!(status.is_server_error(), "{status} {body}");
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < Duration::from_secs(10),
+        "failed after {elapsed:?}"
+    );
+
+    // Then forks at once, each connecting anew to a node that takes the
+    // connection and never answers.
+    let started = Instant::now();
+    let forks =
+        futures::future::join_all((0..3).map(|_| fork(&app, &client, sandbox_id, json!({})))).await;
+    for (status, body) in forks {
+        assert!(status.is_server_error(), "{status} {body}");
+    }
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < Duration::from_secs(10),
+        "failed after {elapsed:?}"
+    );
 }
 
 #[tokio::test]
