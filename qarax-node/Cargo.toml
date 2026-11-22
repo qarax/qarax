@@ -36,7 +36,10 @@ uuid = { version = "1.6.1", features = ["v4"] }
 cloud-hypervisor-sdk = { git = "https://github.com/qarax/cloud-hypervisor-sdk.git", tag = "v54.0.0" }
 
 # Firecracker SDK
-firecracker-rust-sdk = { git = "https://github.com/qarax/firecracker-rust-sdk.git", tag = "v1.17.0" }
+# v1.18.0 plus a fix its tag doesn't have (attaching to a new Firecracker no
+# longer waits 100 ms). The SDK's tags are Firecracker's releases, so go back
+# to `tag = "..."` with the next one.
+firecracker-rust-sdk = { git = "https://github.com/qarax/firecracker-rust-sdk.git", rev = "cbc55f9bbb2120d059b07dba0092418d3a5707e2" }
 gethostname = "0.4"
 
 # HTTP client dependencies (same as SDK uses)
