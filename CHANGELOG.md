@@ -33,11 +33,13 @@ The first release.
 - Sandboxes: short-lived VMs with idle reaping and prewarmed pools, of
   templates booting a kernel or an OCI image, which can make their sandboxes
   by forking booted VMs of the template, on one host or several, ahead of time
-  or on request, and forks of a running Firecracker or Cloud Hypervisor
-  sandbox, its OCI image disk, data disks, network interfaces and cloud-init
-  included, that continue from its state; forking a Firecracker sandbox again
-  writes only the memory it changed since, and a fork counts against its
-  host's memory for what it holds of its own, not its memory size
+  or on request, each from a snapshot of it that its node keeps, so that a
+  seed's sandboxes share one memory image, and forks of a running Firecracker
+  or Cloud Hypervisor sandbox, its OCI image disk, data disks, network
+  interfaces and cloud-init included, that continue from its state; forking a
+  Firecracker sandbox again writes only the memory it changed since, and a
+  fork counts against its host's memory for what it holds of its own, not its
+  memory size
   ([docs/SANDBOX_FORKING.md](docs/SANDBOX_FORKING.md)).
 - Lifecycle hooks (webhooks), a Server-Sent Events stream of VM changes, an
   audit log of API mutations, OpenTelemetry traces and metrics.
@@ -91,3 +93,9 @@ These need action if you ran a build from before them:
   sandbox from it on each request, where it used to keep nothing.
 - A sandbox pool that forks lists its seeds in `seeds` (each one's VM, host
   and status), in place of `seed_vm_id` and `seed_status`.
+- A forking sandbox pool's members, and the sandboxes it forks on request,
+  continue from a snapshot of the seed its node took at the seed's first
+  fork, not from the seed's state when each was made: what the seed does
+  after that reaches none of them. The node keeps the snapshot while the seed
+  runs, and forks the seed with a call (`ForkSeed`) that older nodes don't
+  answer: upgrade the nodes with the control plane.

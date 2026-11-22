@@ -220,14 +220,14 @@ qarax sandbox pool set --template agent-base --min-ready 8 --fork
   qarax sandbox pool set --template agent-base --min-ready 0 --fork
   ```
 
-  The node makes one fork round of a source at a time, so requests that fork
-  the seed together wait for each other; members kept ready take a burst. A
-  seed that isn't running (booting, or being replaced) or can't be forked
-  (its host has no room, say) leaves the request to boot a VM of its own, as
-  a template without a pool does.
-- Each member, and each sandbox forked on its request, shares its seed's
-  memory until it writes it, and counts against the host as a fork does (see
-  above); a seed counts in full. They run on their seed's host.
+  Requests that fork a seed together load its snapshot side by side (see
+  below); only the seed's first fork, which takes the snapshot, holds the
+  others up. A seed that isn't running (booting, or being replaced) or can't
+  be forked (its host has no room, say) leaves the request to boot a VM of
+  its own, as a template without a pool does.
+- Each member, and each sandbox forked on its request, shares the memory of
+  its seed's snapshot until it writes it, and counts against the host as a
+  fork does (see above); a seed counts in full. They run on their seed's host.
 - A pool keeps one seed unless told otherwise, so one host's room caps it,
   and losing that host loses every member. With `seed_hosts`
   (`--seed-hosts`), it keeps a seed on each of that many hosts, never two on
@@ -242,8 +242,9 @@ qarax sandbox pool set --template agent-base --min-ready 8 --fork
   has no room; a sandbox forked on its request picks its seed the same way.
   With fewer up hosts than `seed_hosts`, the pool keeps a seed on each it
   has and boots the rest once there are more.
-- A member continues from its seed's state when it was made. Seeds are never
-  handed out; `GET /v1/vm-templates/{id}/sandbox-pool` lists them in `seeds`
+- A member continues from its seed's state when the seed's snapshot was
+  taken (see below), not when the member was made. Seeds are never handed
+  out; `GET /v1/vm-templates/{id}/sandbox-pool` lists them in `seeds`
   (each one's VM, host and status), and its counts are of the members alone.
 - A seed that fails to boot, or whose VM stops running, is replaced, on a
   host without one. A seed whose host goes down or into maintenance stays
@@ -257,7 +258,36 @@ qarax sandbox pool set --template agent-base --min-ready 8 --fork
 - The template must be forkable as a sandbox is (see "What forks").
 - A template booting an OCI image takes a pool too. A pool that boots its
   members pulls the image for each, as `POST /v1/sandboxes` does; a pool that
-  forks pulls it once, for its seed, and each member gets the image with the
-  seed's changes to it as they were, as a fork of an OCI sandbox does. The
+  forks pulls it once, for each seed, and each member gets the image with its
+  seed's changes to it as they were at the seed's snapshot. The
   VMs the pool boots go on hosts with an OverlayBD storage pool, as any VM
   booting an image does.
+
+### A seed's snapshot
+
+The pool's first fork of a seed, a refill or a sandbox on its request,
+pauses the seed and takes a snapshot of it, as a fork does, and the seed's
+node keeps it: the seed's memory and device state, its config, its OCI image
+disk's writable layer, sealed, and a copy of each of its data disks, as they
+were then. Every fork of the seed after that, member or sandbox, loads that
+snapshot and leaves the seed alone: no pause, no snapshot, no new memory
+image. So every member continues from the seed's state at its snapshot: a
+file the seed writes, or a process it starts, after it reaches no member.
+And they all map the one memory image: the pages none of them has written
+are one copy in the host's page cache, whichever refill made them.
+
+The node drops a seed's snapshot when the seed stops or is deleted (a pool
+replaces a seed whose VM stops running) and when the node restarts; the
+seed's next fork takes a new one, as does its first fork after the seed's
+config changed (resized, a device added or removed). Nothing else makes the
+pool take a new snapshot of its running seed.
+
+A kept snapshot takes, on the seed's node, a file the size of the seed's
+memory in the runtime directory's `seeds/`, whose pages the page cache keeps
+while the members use them; a copy of the seed's OCI writable layer in
+OverlayBD's cache directory; and a copy of each of its data disks in the
+runtime directory, a reflink when that is on the disk's filesystem (a copy
+of the disk's data otherwise, and each member copies it out again). The
+files go when the snapshot does: the forks have their own (a Firecracker
+fork maps the memory image, which outlives its name; a Cloud Hypervisor
+fork, an OCI disk and a data disk copy have files of their own).
