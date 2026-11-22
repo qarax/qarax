@@ -625,6 +625,7 @@ impl FirecrackerManager {
             ))
         })?;
         *base = Some(ForkBase(kept.clone()));
+        write_back_in_background(&kept);
         Ok(kept)
     }
 
@@ -764,6 +765,19 @@ impl FirecrackerManager {
             }
         }
     }
+}
+
+/// Start writing `base`, a fork base just made, back to disk, without
+/// waiting. The next round's reflink of it has to wait for what is still dirty
+/// then: all of the memory of a full snapshot, which Firecracker wrote to the
+/// page cache only, so the sooner its write-back starts, the less is left.
+fn write_back_in_background(base: &Path) {
+    let base = base.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        if let Err(e) = crate::storage::files::write_back(&base) {
+            warn!("FC: Failed to write back fork base {}: {e}", base.display());
+        }
+    });
 }
 
 /// Start reading `startup`'s parts of the memory image `image`, just made,
