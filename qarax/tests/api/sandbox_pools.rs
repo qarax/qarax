@@ -3,18 +3,28 @@ use reqwest::StatusCode;
 use serde_json::json;
 use uuid::Uuid;
 
-async fn create_template(client: &reqwest::Client, address: &str, name: &str) -> Uuid {
+/// A Firecracker template named `name`, with `extra` set in its create body.
+async fn create_template(
+    client: &reqwest::Client,
+    address: &str,
+    name: &str,
+    extra: serde_json::Value,
+) -> Uuid {
+    let mut body = json!({
+        "name": name,
+        "hypervisor": "firecracker",
+        "boot_vcpus": 1,
+        "max_vcpus": 1,
+        "memory_size": 268435456,
+        "boot_mode": "kernel",
+        "config": {}
+    });
+    for (key, value) in extra.as_object().unwrap() {
+        body[key] = value.clone();
+    }
     let res = client
         .post(format!("{address}/vm-templates"))
-        .json(&json!({
-            "name": name,
-            "hypervisor": "firecracker",
-            "boot_vcpus": 1,
-            "max_vcpus": 1,
-            "memory_size": 268435456,
-            "boot_mode": "kernel",
-            "config": {}
-        }))
+        .json(&body)
         .send()
         .await
         .unwrap();
@@ -26,7 +36,7 @@ async fn create_template(client: &reqwest::Client, address: &str, name: &str) ->
 async fn sandbox_pool_supports_crud() {
     let app = spawn_app().await;
     let client = reqwest::Client::new();
-    let template_id = create_template(&client, &app.address, "pool-template").await;
+    let template_id = create_template(&client, &app.address, "pool-template", json!({})).await;
     let template_url = format!("{}/vm-templates/{template_id}", app.address);
     let pool_url = format!("{template_url}/sandbox-pool");
 
@@ -84,10 +94,36 @@ async fn sandbox_pool_supports_crud() {
 }
 
 #[tokio::test]
+async fn a_pool_takes_a_template_that_boots_an_oci_image() {
+    let app = spawn_app().await;
+    let client = reqwest::Client::new();
+    let template_id = create_template(
+        &client,
+        &app.address,
+        "oci-pool-template",
+        json!({ "image_ref": "registry.example/agent:latest" }),
+    )
+    .await;
+    let pool_url = format!("{}/vm-templates/{template_id}/sandbox-pool", app.address);
+
+    for fork in [false, true] {
+        let res = client
+            .put(&pool_url)
+            .json(&json!({ "min_ready": 1, "fork": fork }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK, "fork: {fork}");
+        let configured: serde_json::Value = res.json().await.unwrap();
+        assert_eq!(configured["fork"], fork);
+    }
+}
+
+#[tokio::test]
 async fn sandbox_create_claims_a_ready_pool_member() {
     let app = spawn_app().await;
     let client = reqwest::Client::new();
-    let template_id = create_template(&client, &app.address, "claim-template").await;
+    let template_id = create_template(&client, &app.address, "claim-template", json!({})).await;
 
     let res = client
         .put(format!(
@@ -226,7 +262,7 @@ VALUES (
 async fn a_forking_pool_s_seed_is_never_claimed() {
     let app = spawn_app().await;
     let client = reqwest::Client::new();
-    let template_id = create_template(&client, &app.address, "fork-pool-template").await;
+    let template_id = create_template(&client, &app.address, "fork-pool-template", json!({})).await;
     let pool_url = format!("{}/vm-templates/{template_id}/sandbox-pool", app.address);
     let res = client
         .put(&pool_url)
