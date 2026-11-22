@@ -99,6 +99,17 @@ impl NodeVms {
         firewall::sync_nics(&nics, &host_addrs).await
     }
 
+    /// `vm_id`'s config, from the node's own state: asking the hypervisor
+    /// (get_vm_info) blocks while a VM waits for an incoming migration, which
+    /// waits on a firewall sync.
+    async fn config(&self, vm_id: &str) -> Option<VmConfig> {
+        self.states()
+            .await
+            .into_iter()
+            .filter_map(|vm| vm.config)
+            .find(|config| config.vm_id == vm_id)
+    }
+
     /// Write `vm_id`'s security groups, `interfaces`, into its NICs' chains.
     #[allow(clippy::result_large_err)]
     async fn sync_security_groups(
@@ -106,14 +117,9 @@ impl NodeVms {
         vm_id: &str,
         interfaces: &[VmFirewallInterface],
     ) -> Result<(), Status> {
-        // From the node's own state: asking the hypervisor (get_vm_info) blocks
-        // while a VM waits for an incoming migration, which waits on this sync.
         let config = self
-            .states()
+            .config(vm_id)
             .await
-            .into_iter()
-            .filter_map(|vm| vm.config)
-            .find(|config| config.vm_id == vm_id)
             .ok_or_else(|| Status::not_found(format!("VM {} not found", vm_id)))?;
         let nics = Nic::from_config(&config.networks)
             .map_err(|e| Status::internal(format!("Failed to sync VM firewall: {e:#}")))?;
@@ -237,10 +243,14 @@ impl VmServiceImpl {
         req: &ForkVmRequest,
     ) -> Result<Response<()>, Status> {
         let fork_ids: Vec<String> = req.forks.iter().map(|fork| fork.vm_id.clone()).collect();
-        // Loaded and paused: their NICs are filtered before they run.
+        // Loaded and paused: their NICs are filtered before they run. Forks
+        // without NICs leave the node's NICs as they were.
+        let nics_added = req.forks.iter().any(|fork| !fork.networks.is_empty());
         let node_vms = self.node_vms();
         let started = async {
-            firewall_status(node_vms.sync_nic_firewall().await, true)?;
+            if nics_added {
+                firewall_status(node_vms.sync_nic_firewall().await, true)?;
+            }
             for fork in &req.forks {
                 node_vms
                     .sync_security_groups(&fork.vm_id, &fork.firewall)
@@ -263,7 +273,9 @@ impl VmServiceImpl {
                     error!("Failed to delete fork {fork_id}: {e}");
                 }
             }
-            firewall_status(node_vms.sync_nic_firewall().await, false)?;
+            if nics_added {
+                firewall_status(node_vms.sync_nic_firewall().await, false)?;
+            }
             return Err(status);
         }
         info!("VM {} forked into {:?}", req.source_vm_id, fork_ids);
@@ -353,11 +365,14 @@ impl VmService for VmServiceImpl {
         debug!("VM config: {:?}", config);
 
         let manager = self.manager_for_create(hypervisor)?;
+        let nics_added = !config.networks.is_empty();
         match manager.create_vm(config).await {
             Ok(state) => {
-                // A VM whose NICs can't be filtered isn't created.
-                if let Err(status) =
-                    firewall_status(self.node_vms().sync_nic_firewall().await, true)
+                // A VM whose NICs can't be filtered isn't created. One without
+                // NICs leaves the node's NICs as they were.
+                if nics_added
+                    && let Err(status) =
+                        firewall_status(self.node_vms().sync_nic_firewall().await, true)
                 {
                     if let Err(e) = manager.delete_vm(&vm_id).await {
                         error!("Failed to delete VM {vm_id} after the firewall failed: {e}");
@@ -511,10 +526,18 @@ impl VmService for VmServiceImpl {
             .find_manager(&vm_id)
             .await
             .ok_or_else(|| Status::not_found(format!("VM {} not found", vm_id)))?;
+        let node_vms = self.node_vms();
+        // A VM without NICs leaves the node's NICs as they were.
+        let nics_removed = node_vms
+            .config(&vm_id)
+            .await
+            .is_some_and(|config| !config.networks.is_empty());
         let response = self
             .run_vm_op("Delete", vm_id.clone(), || manager.delete_vm(&vm_id))
             .await?;
-        firewall_status(self.node_vms().sync_nic_firewall().await, false)?;
+        if nics_removed {
+            firewall_status(node_vms.sync_nic_firewall().await, false)?;
+        }
         Ok(response)
     }
 
