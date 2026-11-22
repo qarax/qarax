@@ -79,6 +79,13 @@ restart forgets the base, so its next fork takes a full snapshot again; so
 does the first fork of a VM a restarted node recovered. A source forked once
 keeps a file the size of its memory in the runtime directory until it stops.
 
+Each new base is a new file, whose page cache starts empty: a reflink shares
+the old base's blocks on disk, not its pages in memory, so a fork would wait on
+the disk for each page of its memory it touched as it came up. So once a
+round's first fork has answered the fork notice, the node notes the pages of
+its memory it has touched, and the next round reads those into the new base's
+page cache as soon as the base is made, while its forks load.
+
 A source booted from an OCI image forks its disk too. The image is OverlayBD
 read-only layers with a writable layer of the VM's own on top:
 

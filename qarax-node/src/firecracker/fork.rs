@@ -19,9 +19,18 @@
 //! runs at a time, and anything else that resets the dirty-page log (a
 //! snapshot, a restart) forgets the base.
 //!
+//! Each round's image is a new file, whose page cache starts empty: a reflink
+//! shares the base's blocks, not its pages in memory. A fork reading its memory
+//! from there would wait on the disk for each page it touched. So the node
+//! notes the pages a round's first fork has touched once its guest answers the
+//! fork notice, and the next round reads those into its image's page cache as
+//! soon as the image is made, while its forks load: they touch the same pages
+//! first.
+//!
 //! The forks load paused and are resumed in a second step, so that their
 //! firewall is in place before they run.
 
+use std::ops::Range;
 use std::os::unix::fs::MetadataExt;
 
 use firecracker_rust_sdk::models::snapshot_create_params::SnapshotType;
@@ -56,15 +65,24 @@ pub(super) enum ForkMemory {
     Untracked,
     /// Firecracker tracks the pages the VM dirties. `base` is its memory as
     /// the last fork round's snapshot left it, the dirty-page log reset since:
-    /// the next round writes only the pages dirtied since.
-    Tracked { base: Option<ForkBase> },
+    /// the next round writes only the pages dirtied since. `startup` is the
+    /// parts of its memory (byte ranges) a fork had touched by the time its
+    /// guest answered the fork notice, which the next round's forks touch
+    /// first.
+    Tracked {
+        base: Option<ForkBase>,
+        startup: Vec<Range<u64>>,
+    },
 }
 
 impl ForkMemory {
     /// For a VM Firecracker runs with dirty-page tracking or without.
     pub(super) fn new(tracked: bool) -> ForkMemoryLock {
         Arc::new(tokio::sync::Mutex::new(if tracked {
-            ForkMemory::Tracked { base: None }
+            ForkMemory::Tracked {
+                base: None,
+                startup: Vec::new(),
+            }
         } else {
             ForkMemory::Untracked
         }))
@@ -73,7 +91,7 @@ impl ForkMemory {
     /// Forget the base, whose diffs no longer hold: something reset the
     /// dirty-page log.
     pub(super) fn forget_base(&mut self) {
-        if let ForkMemory::Tracked { base } = self {
+        if let ForkMemory::Tracked { base, .. } = self {
             *base = None;
         }
     }
@@ -99,11 +117,12 @@ enum MemorySnapshot {
     /// All of it, in this file.
     Full(PathBuf),
     /// The pages dirtied since `base`, in `diff`: laid over a copy of `base`,
-    /// they make `image`.
+    /// they make `image`, whose `startup` parts its forks touch first.
     Diff {
         base: PathBuf,
         diff: PathBuf,
         image: PathBuf,
+        startup: Vec<Range<u64>>,
     },
 }
 
@@ -225,7 +244,50 @@ impl FirecrackerManager {
         )
         .await
         .into_iter()
-        .collect()
+        .collect::<Result<(), VmmError>>()?;
+        if let Some(fork_id) = fork_ids.first() {
+            self.note_startup(source_id, fork_id).await;
+        }
+        Ok(())
+    }
+
+    /// Note the parts of its memory that `fork_id`, a fork of `source_id`
+    /// whose guest has just answered the fork notice, has touched, for the
+    /// source's next fork round to read ahead ([`Self::memory_image`]). In the
+    /// background, once the source's fork round in progress, if any, is over.
+    async fn note_startup(&self, source_id: &str, fork_id: &str) {
+        let pid = match self.lock_vm(fork_id).await {
+            Ok(fork) => fork.process.as_ref().and_then(Child::id),
+            Err(_) => None,
+        };
+        let source = self.vms.get(source_id, |vm| vm.instance.clone());
+        let (Some(pid), Some(source)) = (pid, source) else {
+            return;
+        };
+        let fork_id = fork_id.to_string();
+        tokio::spawn(async move {
+            let forking = match &*source.lock().await {
+                Some(FcVmInstance {
+                    phase: FcPhase::Live { forking, .. },
+                    ..
+                }) => forking.clone(),
+                _ => return,
+            };
+            let mut memory = forking.lock().await;
+            let ForkMemory::Tracked {
+                base: Some(base),
+                startup,
+            } = &mut *memory
+            else {
+                return;
+            };
+            match crate::vmm::memory::mapped_pages(pid, &base.0).await {
+                // None of a base a later round made: the fork maps the one before.
+                Ok(pages) if pages.is_empty() => {}
+                Ok(pages) => *startup = pages,
+                Err(e) => warn!("FC: Failed to read the pages fork {fork_id} touched: {e}"),
+            }
+        });
     }
 
     /// Snapshot `source_id` (and `disk` and `data`) into `dir` and load
@@ -317,12 +379,16 @@ impl FirecrackerManager {
         }
         let image = dir.join("mem.snap");
         let (mem_file, snapshot_type, taken) = match memory {
-            ForkMemory::Tracked { base: Some(base) } => {
+            ForkMemory::Tracked {
+                base: Some(base),
+                startup,
+            } => {
                 let diff = dir.join("mem.diff");
                 let taken = MemorySnapshot::Diff {
                     base: base.0.clone(),
                     diff: diff.clone(),
                     image,
+                    startup: startup.clone(),
                 };
                 (diff, SnapshotType::Diff, taken)
             }
@@ -368,7 +434,12 @@ impl FirecrackerManager {
     ) -> Result<PathBuf, VmmError> {
         let image = match snapshot {
             MemorySnapshot::Full(image) => Ok(image),
-            MemorySnapshot::Diff { base, diff, image } => {
+            MemorySnapshot::Diff {
+                base,
+                diff,
+                image,
+                startup,
+            } => {
                 let dirty = tokio::fs::metadata(&diff)
                     .await
                     .map(|metadata| metadata.blocks() * 512 / (1024 * 1024))
@@ -395,10 +466,13 @@ impl FirecrackerManager {
                         e
                     );
                 }
+                if let Ok(image) = &merged {
+                    read_ahead(image, startup).await;
+                }
                 merged
             }
         };
-        let ForkMemory::Tracked { base } = memory else {
+        let ForkMemory::Tracked { base, .. } = memory else {
             return image;
         };
         // Whatever comes next, the old base no longer holds.
@@ -553,4 +627,26 @@ impl FirecrackerManager {
             }
         }
     }
+}
+
+/// Start reading `startup`'s parts of the memory image `image`, just made,
+/// into its page cache, for the forks about to load it, without waiting: the
+/// reads go on while they load.
+async fn read_ahead(image: &Path, startup: Vec<Range<u64>>) {
+    let file = match tokio::fs::File::open(image).await {
+        Ok(file) => file.into_std().await,
+        Err(e) => {
+            warn!(
+                "FC: Failed to open {} to read it ahead: {e}",
+                image.display()
+            );
+            return;
+        }
+    };
+    let image = image.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        if let Err(e) = crate::storage::files::read_ahead(&file, &startup) {
+            warn!("FC: Failed to read ahead {}: {e}", image.display());
+        }
+    });
 }
