@@ -1,6 +1,7 @@
 """E2E tests for sandbox lifecycle."""
 
 import asyncio
+import contextlib
 import os
 import re
 import time
@@ -299,6 +300,63 @@ async def cleanup_bootable_sandbox_template(client, resources):
     await _delete_tolerating_404(
         delete_storage_pool, client=client, pool_id=resources["pool_id"]
     )
+
+
+@contextlib.asynccontextmanager
+async def bootable_sandbox_template(c, hypervisor):
+    """create_bootable_sandbox_template as a context manager: yields the
+    template's UUID, and cleans up after the test's own cleanup."""
+    template_id, resources = await create_bootable_sandbox_template(c, hypervisor)
+    try:
+        yield template_id
+    finally:
+        await cleanup_bootable_sandbox_template(c, resources)
+
+
+@contextlib.asynccontextmanager
+async def oci_sandbox_template(c, hypervisor, image_ref):
+    """A template of sandboxes that boot `image_ref` on `hypervisor`, with an
+    OverlayBD storage pool on each UP host that takes one. Yields the
+    template's UUID; deletes it and the pool after the test's own cleanup."""
+    test_id = uuid.uuid4().hex[:8]
+    hosts = up_hosts((await call_api(list_hosts, client=c)).items)
+    pool_id = uuid.UUID(
+        str(
+            await call_api(
+                create_storage_pool,
+                client=c,
+                body=NewStoragePool(
+                    name=f"e2e-sandbox-obd-{test_id}",
+                    pool_type=StoragePoolType.OVERLAY_BD,
+                    config={"url": f"http://{REGISTRY_INTERNAL_URL}"},
+                ),
+            )
+        ).strip('"')
+    )
+    template_id = None
+    try:
+        await attach_overlaybd_pool(c, hosts, pool_id)
+        template_id = uuid.UUID(
+            str(
+                await call_api(
+                    create_template,
+                    client=c,
+                    body=NewVmTemplate(
+                        name=f"e2e-sandbox-oci-{test_id}",
+                        hypervisor=hypervisor,
+                        boot_vcpus=1,
+                        max_vcpus=1,
+                        memory_size=256 * 1024 * 1024,
+                        image_ref=image_ref,
+                    ),
+                )
+            ).strip('"')
+        )
+        yield template_id
+    finally:
+        if template_id is not None:
+            await delete_template.asyncio_detailed(client=c, vm_template_id=template_id)
+        await delete_storage_pool.asyncio_detailed(client=c, pool_id=pool_id)
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="module")
@@ -617,21 +675,6 @@ async def test_sandbox_fork_of_an_oci_sandbox_forks_its_disk(client, bootable_oc
     )
 
     async with client as c:
-        hosts = up_hosts((await call_api(list_hosts, client=c)).items)
-        pool_id = uuid.UUID(
-            str(
-                await call_api(
-                    create_storage_pool,
-                    client=c,
-                    body=NewStoragePool(
-                        name=f"e2e-fork-obd-{test_id}",
-                        pool_type=StoragePoolType.OVERLAY_BD,
-                        config={"url": f"http://{REGISTRY_INTERNAL_URL}"},
-                    ),
-                )
-            ).strip('"')
-        )
-        template_id = None
         source_vm_id = None
         sandbox_ids = []
 
@@ -645,102 +688,85 @@ async def test_sandbox_fork_of_an_oci_sandbox_forks_its_disk(client, bootable_oc
             assert result.exit_code == 0, result.stderr
             return result.stdout.strip()
 
-        try:
-            await attach_overlaybd_pool(c, hosts, pool_id)
-            template_id = uuid.UUID(
-                str(
-                    await call_api(
-                        create_template,
-                        client=c,
-                        body=NewVmTemplate(
-                            name=f"e2e-fork-oci-{test_id}",
-                            hypervisor=Hypervisor.FIRECRACKER,
-                            boot_vcpus=1,
-                            max_vcpus=1,
-                            memory_size=256 * 1024 * 1024,
-                            image_ref=bootable_oci_image_ref,
-                        ),
+        async with oci_sandbox_template(
+            c, Hypervisor.FIRECRACKER, bootable_oci_image_ref
+        ) as template_id:
+            try:
+                source = await call_api(
+                    create_sandbox,
+                    client=c,
+                    body=NewSandbox(
+                        name=f"e2e-fork-oci-{test_id}",
+                        vm_template_id=template_id,
+                        idle_timeout_secs=300,
+                    ),
+                )
+                sandbox_ids.append(source.id)
+                source_vm_id = source.vm_id
+                # READY means its guest agent answers, however long the image's
+                # guest takes to start it: exec works at once.
+                await wait_for_sandbox_status(c, source.id, SandboxStatus.READY)
+                await sh(
+                    source.id,
+                    f"echo source > /root/state && sync && echo unsynced > /root/unsynced && {counter}",
+                )
+
+                response = await call_api_detailed(
+                    fork_sandbox,
+                    client=c,
+                    sandbox_id=source.id,
+                    body=ForkSandboxRequest(count=2),
+                )
+                assert response.status_code == 201, (
+                    f"{response.content.decode(errors='replace')}\n{vm_diagnostics(source_vm_id)}"
+                )
+                forks = response.parsed
+                sandbox_ids.extend(fork.id for fork in forks)
+                # Each disk has a SCSI identity of its own, or the host's
+                # multipathd takes them for paths to one LUN and holds them.
+                wwids = overlaybd_disk_wwids()
+                assert len(wwids) >= 3 and len(set(wwids.values())) == len(wwids), (
+                    f"{wwids}\n{node_storage_diagnostics()}"
+                )
+                # After the fork point: no fork may see it.
+                await sh(source.id, "echo after > /root/after && sync")
+
+                for fork in forks:
+                    # Read from the disk, not the page cache the fork inherited.
+                    await sh(fork.id, "echo 3 > /proc/sys/vm/drop_caches")
+                    assert await sh(fork.id, "cat /root/state") == "source"
+                    assert await sh(fork.id, "cat /root/unsynced") == "unsynced"
+                    assert await sh(fork.id, "[ -e /root/after ] && echo yes || echo no") == "no"
+                    before = int(await sh(fork.id, "cat /root/counter"))
+                    await asyncio.sleep(1)
+                    assert int(await sh(fork.id, "cat /root/counter")) > before, (
+                        "the source's counting process didn't continue in the fork"
                     )
-                ).strip('"')
-            )
-            source = await call_api(
-                create_sandbox,
-                client=c,
-                body=NewSandbox(
-                    name=f"e2e-fork-oci-{test_id}",
-                    vm_template_id=template_id,
-                    idle_timeout_secs=300,
-                ),
-            )
-            sandbox_ids.append(source.id)
-            source_vm_id = source.vm_id
-            # READY means its guest agent answers, however long the image's
-            # guest takes to start it: exec works at once.
-            await wait_for_sandbox_status(c, source.id, SandboxStatus.READY)
-            await sh(
-                source.id,
-                f"echo source > /root/state && sync && echo unsynced > /root/unsynced && {counter}",
-            )
+                    await sh(fork.id, f"echo {fork.id} > /root/state && sync")
 
-            response = await call_api_detailed(
-                fork_sandbox,
-                client=c,
-                sandbox_id=source.id,
-                body=ForkSandboxRequest(count=2),
-            )
-            assert response.status_code == 201, (
-                f"{response.content.decode(errors='replace')}\n{vm_diagnostics(source_vm_id)}"
-            )
-            forks = response.parsed
-            sandbox_ids.extend(fork.id for fork in forks)
-            # Each disk has a SCSI identity of its own, or the host's
-            # multipathd takes them for paths to one LUN and holds them.
-            wwids = overlaybd_disk_wwids()
-            assert len(wwids) >= 3 and len(set(wwids.values())) == len(wwids), (
-                f"{wwids}\n{node_storage_diagnostics()}"
-            )
-            # After the fork point: no fork may see it.
-            await sh(source.id, "echo after > /root/after && sync")
+                assert await sh(source.id, "cat /root/state") == "source"
+                for fork in forks:
+                    await sh(fork.id, "echo 3 > /proc/sys/vm/drop_caches")
+                    assert await sh(fork.id, "cat /root/state") == str(fork.id)
 
-            for fork in forks:
-                # Read from the disk, not the page cache the fork inherited.
-                await sh(fork.id, "echo 3 > /proc/sys/vm/drop_caches")
-                assert await sh(fork.id, "cat /root/state") == "source"
-                assert await sh(fork.id, "cat /root/unsynced") == "unsynced"
-                assert await sh(fork.id, "[ -e /root/after ] && echo yes || echo no") == "no"
-                before = int(await sh(fork.id, "cat /root/counter"))
-                await asyncio.sleep(1)
-                assert int(await sh(fork.id, "cat /root/counter")) > before, (
-                    "the source's counting process didn't continue in the fork"
-                )
-                await sh(fork.id, f"echo {fork.id} > /root/state && sync")
-
-            assert await sh(source.id, "cat /root/state") == "source"
-            for fork in forks:
-                await sh(fork.id, "echo 3 > /proc/sys/vm/drop_caches")
-                assert await sh(fork.id, "cat /root/state") == str(fork.id)
-
-            # Each sandbox has an image object of its own, which goes with it.
-            vm_ids = [source_vm_id] + [fork.vm_id for fork in forks]
-            for vm_id in vm_ids:
-                objects = await call_api(
-                    list_storage_objects, client=c, name=f"overlaybd-{vm_id}"
-                )
-                assert [obj.owner_vm_id for obj in objects.items] == [vm_id], objects.items
-            for sandbox_id in reversed(sandbox_ids):
-                await call_api(delete_sandbox, client=c, sandbox_id=sandbox_id)
-            sandbox_ids.clear()
-            for vm_id in vm_ids:
-                objects = await call_api(
-                    list_storage_objects, client=c, name=f"overlaybd-{vm_id}"
-                )
-                assert not objects.items, f"VM {vm_id}'s image object outlived it"
-        finally:
-            for sandbox_id in reversed(sandbox_ids):
-                await delete_sandbox.asyncio_detailed(client=c, sandbox_id=sandbox_id)
-            if template_id is not None:
-                await delete_template.asyncio_detailed(client=c, vm_template_id=template_id)
-            await delete_storage_pool.asyncio_detailed(client=c, pool_id=pool_id)
+                # Each sandbox has an image object of its own, which goes with it.
+                vm_ids = [source_vm_id] + [fork.vm_id for fork in forks]
+                for vm_id in vm_ids:
+                    objects = await call_api(
+                        list_storage_objects, client=c, name=f"overlaybd-{vm_id}"
+                    )
+                    assert [obj.owner_vm_id for obj in objects.items] == [vm_id], objects.items
+                for sandbox_id in reversed(sandbox_ids):
+                    await call_api(delete_sandbox, client=c, sandbox_id=sandbox_id)
+                sandbox_ids.clear()
+                for vm_id in vm_ids:
+                    objects = await call_api(
+                        list_storage_objects, client=c, name=f"overlaybd-{vm_id}"
+                    )
+                    assert not objects.items, f"VM {vm_id}'s image object outlived it"
+            finally:
+                for sandbox_id in reversed(sandbox_ids):
+                    await delete_sandbox.asyncio_detailed(client=c, sandbox_id=sandbox_id)
 
 
 @pytest.mark.parametrize("hypervisor", ["firecracker", "cloud_hv"])
@@ -1113,81 +1139,144 @@ async def test_sandbox_pool_claim_returns_completed_claim_job(client, sandbox_te
 
 
 @pytest.mark.asyncio
-async def test_a_forking_sandbox_pool_fills_with_forks_of_its_seed(client):
-    """A pool that forks keeps one booted VM of its template, its seed, and
-    makes its members by forking it: a member continues from the seed's state
-    as it was when the member was made, and the seed is never handed out."""
+async def test_an_oci_sandbox_pool_hands_out_members_that_booted_its_image(
+    client, bootable_oci_image_ref
+):
+    """A pool of a template that boots an OCI image keeps members that pulled
+    and booted it: a claim gets one that runs the image at once."""
     async with client as c:
         httpx_client = c.get_async_httpx_client()
-        template_id, resources = await create_bootable_sandbox_template(c, "firecracker")
-        pool_url = f"{QARAX_URL}/v1/vm-templates/{template_id}/sandbox-pool"
-        sandbox_ids = []
+        async with oci_sandbox_template(
+            c, Hypervisor.FIRECRACKER, bootable_oci_image_ref
+        ) as template_id:
+            pool_url = f"{QARAX_URL}/v1/vm-templates/{template_id}/sandbox-pool"
+            created = None
+            try:
+                response = await httpx_client.put(pool_url, json={"min_ready": 1})
+                assert response.status_code == 200, response.text
+                await wait_for_sandbox_pool_ready(c, template_id, min_ready=1)
 
-        async def claim():
-            created = await call_api(
-                create_sandbox,
-                client=c,
-                body=NewSandbox(
-                    name=f"e2e-fork-pool-{uuid.uuid4().hex[:8]}",
-                    vm_template_id=template_id,
-                    idle_timeout_secs=300,
-                ),
-            )
-            sandbox_ids.append(created.id)
-            sandbox = await call_api(get_sandbox, client=c, sandbox_id=created.id)
-            assert sandbox.status == SandboxStatus.READY, sandbox.status
-            return created
+                created = await call_api(
+                    create_sandbox,
+                    client=c,
+                    body=NewSandbox(
+                        name=f"e2e-oci-pool-{uuid.uuid4().hex[:8]}",
+                        vm_template_id=template_id,
+                        idle_timeout_secs=300,
+                    ),
+                )
+                sandbox = await call_api(get_sandbox, client=c, sandbox_id=created.id)
+                assert sandbox.status == SandboxStatus.READY, sandbox.status
+                result = await call_api(
+                    exec_sandbox,
+                    client=c,
+                    sandbox_id=created.id,
+                    body=ExecSandboxRequest(command=["cat", "/etc/os-release"], timeout_secs=15),
+                )
+                assert result.exit_code == 0, result.stderr
+                assert "Alpine" in result.stdout, result.stdout
+            finally:
+                if created is not None:
+                    await delete_sandbox.asyncio_detailed(client=c, sandbox_id=created.id)
+                # Deleting the pool destroys its members.
+                response = await httpx_client.delete(pool_url)
+                assert response.status_code in (204, 404), response.text
 
-        async def marker(sandbox_id):
-            result = await call_api(
-                exec_sandbox,
-                client=c,
-                sandbox_id=sandbox_id,
-                body=ExecSandboxRequest(
-                    command=["/bin/sh", "-c", "cat /root/marker 2>/dev/null || echo none"],
-                    timeout_secs=15,
-                ),
-            )
-            assert result.exit_code == 0, result.stderr
-            return result.stdout.strip()
 
-        try:
-            response = await httpx_client.put(pool_url, json={"min_ready": 1, "fork": True})
-            assert response.status_code == 200, response.text
-            assert response.json()["fork"] is True
-            pool = await wait_for_sandbox_pool_ready(c, template_id, min_ready=1)
-            assert pool["seed_status"] == "ready", pool
-            seed_vm_id = uuid.UUID(pool["seed_vm_id"])
+@pytest.mark.parametrize(
+    "image, hypervisor",
+    [(False, "firecracker"), (True, "firecracker"), (True, "cloud_hv")],
+    ids=["kernel-firecracker", "oci-firecracker", "oci-cloud_hv"],
+)
+@pytest.mark.asyncio
+async def test_a_forking_sandbox_pool_fills_with_forks_of_its_seed(
+    client, bootable_oci_image_ref, image, hypervisor
+):
+    """A pool that forks keeps one booted VM of its template, its seed, and
+    makes its members by forking it: a member continues from the seed's state
+    as it was when the member was made, files on its image's disk included,
+    and the seed is never handed out."""
+    async with client as c:
+        httpx_client = c.get_async_httpx_client()
+        template = (
+            oci_sandbox_template(c, hypervisor, bootable_oci_image_ref)
+            if image
+            else bootable_sandbox_template(c, hypervisor)
+        )
+        async with template as template_id:
+            pool_url = f"{QARAX_URL}/v1/vm-templates/{template_id}/sandbox-pool"
+            sandbox_ids = []
 
-            # The member the pool has made doesn't have this; the next does.
-            result = await call_api(
-                exec_vm,
-                client=c,
-                vm_id=seed_vm_id,
-                body=ExecVmRequest(
-                    command=["/bin/sh", "-c", "echo seeded > /root/marker"], timeout_secs=15
-                ),
-            )
-            assert result.exit_code == 0, result.stderr
+            async def claim():
+                created = await call_api(
+                    create_sandbox,
+                    client=c,
+                    body=NewSandbox(
+                        name=f"e2e-fork-pool-{uuid.uuid4().hex[:8]}",
+                        vm_template_id=template_id,
+                        idle_timeout_secs=300,
+                    ),
+                )
+                sandbox_ids.append(created.id)
+                sandbox = await call_api(get_sandbox, client=c, sandbox_id=created.id)
+                assert sandbox.status == SandboxStatus.READY, sandbox.status
+                return created
 
-            first = await claim()
-            assert first.vm_id != seed_vm_id
-            assert await marker(first.id) == "none"
+            async def marker(sandbox_id):
+                result = await call_api(
+                    exec_sandbox,
+                    client=c,
+                    sandbox_id=sandbox_id,
+                    body=ExecSandboxRequest(
+                        # From the member's disk, not the page cache it inherited.
+                        command=[
+                            "/bin/sh",
+                            "-c",
+                            "echo 3 > /proc/sys/vm/drop_caches; cat /root/marker 2>/dev/null || echo none",
+                        ],
+                        timeout_secs=15,
+                    ),
+                )
+                assert result.exit_code == 0, result.stderr
+                return result.stdout.strip()
 
-            await wait_for_sandbox_pool_ready(c, template_id, min_ready=1)
-            second = await claim()
-            assert second.vm_id != seed_vm_id
-            assert await marker(second.id) == "seeded"
+            try:
+                response = await httpx_client.put(pool_url, json={"min_ready": 1, "fork": True})
+                assert response.status_code == 200, response.text
+                assert response.json()["fork"] is True
+                pool = await wait_for_sandbox_pool_ready(c, template_id, min_ready=1)
+                assert pool["seed_status"] == "ready", pool
+                seed_vm_id = uuid.UUID(pool["seed_vm_id"])
 
-            seed = await call_api(get_vm, client=c, vm_id=seed_vm_id)
-            assert seed.status == VmStatus.RUNNING, seed.status
-        finally:
-            for sandbox_id in sandbox_ids:
-                await delete_sandbox.asyncio_detailed(client=c, sandbox_id=sandbox_id)
-            # Deleting the pool destroys its seed and members.
-            response = await httpx_client.delete(pool_url)
-            assert response.status_code in (204, 404), response.text
-            await cleanup_bootable_sandbox_template(c, resources)
+                # The member the pool has made doesn't have this; the next does.
+                result = await call_api(
+                    exec_vm,
+                    client=c,
+                    vm_id=seed_vm_id,
+                    body=ExecVmRequest(
+                        command=["/bin/sh", "-c", "echo seeded > /root/marker && sync"],
+                        timeout_secs=15,
+                    ),
+                )
+                assert result.exit_code == 0, result.stderr
+
+                first = await claim()
+                assert first.vm_id != seed_vm_id
+                assert await marker(first.id) == "none"
+
+                await wait_for_sandbox_pool_ready(c, template_id, min_ready=1)
+                second = await claim()
+                assert second.vm_id != seed_vm_id
+                assert await marker(second.id) == "seeded"
+
+                seed = await call_api(get_vm, client=c, vm_id=seed_vm_id)
+                assert seed.status == VmStatus.RUNNING, seed.status
+            finally:
+                for sandbox_id in sandbox_ids:
+                    await delete_sandbox.asyncio_detailed(client=c, sandbox_id=sandbox_id)
+                # Deleting the pool destroys its seed and members.
+                response = await httpx_client.delete(pool_url)
+                assert response.status_code in (204, 404), response.text
 
 
 @pytest.mark.asyncio

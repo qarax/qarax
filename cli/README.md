@@ -67,6 +67,8 @@ qarax sandbox pool delete --template ubuntu-base
 
 Warm claims currently apply to plain template-based sandbox requests; if you pass extra create-time overrides such as `--network`, qarax falls back to the cold provisioning path.
 
+A template that boots an OCI image takes a pool too: its standby sandboxes have pulled and booted the image, so a claim skips both. With `--fork`, the pool pulls the image once, for the VM it forks its standbys from (see [docs/SANDBOX_FORKING.md](../docs/SANDBOX_FORKING.md)).
+
 ## Provisioning a VM
 
 ### Scheduling

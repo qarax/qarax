@@ -214,5 +214,10 @@ qarax sandbox pool set --template agent-base --min-ready 8 --fork
   forking the seed fails (its host has no room, say), the pool logs it and
   tries again on its next pass. A pool set to stop forking, or to keep no
   members, destroys its seed; its members stay until they're claimed.
-- The template must be forkable as a sandbox is (see "What forks"). Pools of
-  templates booting an OCI image aren't supported, whether they fork or not.
+- The template must be forkable as a sandbox is (see "What forks").
+- A template booting an OCI image takes a pool too. A pool that boots its
+  members pulls the image for each, as `POST /v1/sandboxes` does; a pool that
+  forks pulls it once, for its seed, and each member gets the image with the
+  seed's changes to it as they were, as a fork of an OCI sandbox does. The
+  VMs the pool boots go on hosts with an OverlayBD storage pool, as any VM
+  booting an image does.

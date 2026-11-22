@@ -93,14 +93,10 @@ pub async fn put(
         ));
     }
 
-    let template = vm_templates::get(env.pool(), vm_template_id)
+    // A template that doesn't exist is a 404, not a foreign key violation.
+    vm_templates::get(env.pool(), vm_template_id)
         .await
         .map_err(crate::errors::Error::Sqlx)?;
-    if template.image_ref.is_some() {
-        return Err(crate::errors::Error::UnprocessableEntity(
-            "sandbox VM templates with OCI image_ref are not supported yet".into(),
-        ));
-    }
 
     let pool = sandbox_pools::upsert(env.pool(), vm_template_id, &body)
         .await
