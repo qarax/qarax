@@ -17,7 +17,7 @@ COPY openapi.yaml /src/openapi.yaml
 COPY webui/ ./
 RUN pnpm build
 
-FROM alpine:3.22
+FROM alpine:3.24
 
 # pg_dump and pg_restore for database backups, curl for health checks.
 RUN apk add --no-cache postgresql16-client curl
