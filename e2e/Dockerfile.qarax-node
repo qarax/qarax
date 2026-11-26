@@ -7,7 +7,7 @@
 # the node's DHCP server. Its own stage, so the bootc test node
 # (Containerfile.bootc-node) ships the same file and key. Network is configured
 # statically by the kernel via the ip= cmdline parameter.
-FROM fedora:43 AS test-initramfs
+FROM fedora:45 AS test-initramfs
 RUN dnf install -y busybox dropbear cpio gzip && dnf clean all
 # Everything but /init, so a code change only redoes the cpio step below.
 RUN mkdir -p /opt/test-initramfs/{dev,proc,sys,sbin,bin,etc/dropbear,var/run,lib64,root/.ssh} && \
@@ -32,7 +32,7 @@ RUN chmod +x /opt/test-initramfs/init && \
     cd /opt/test-initramfs && \
     find . | cpio -o -H newc | gzip > /test-initramfs.gz
 
-FROM fedora:43
+FROM fedora:45
 
 # Each ARG is declared right before the step that uses it: every RUN after
 # an ARG sees it in its environment, so a version bump declared at the top
