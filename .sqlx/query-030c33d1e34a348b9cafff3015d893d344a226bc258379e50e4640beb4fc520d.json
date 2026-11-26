@@ -18,7 +18,8 @@
                 "VM_COMMIT",
                 "SANDBOX_CLAIM",
                 "HOST_EVACUATE",
-                "VM_FAILOVER"
+                "VM_FAILOVER",
+                "BACKUP_COPY"
               ]
             }
           }
