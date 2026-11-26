@@ -1334,22 +1334,22 @@ dependencies = [
 
 [[package]]
 name = "edge-dhcp"
-version = "0.7.0"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2e0b32c831ced877a78378312fe0b6f7cdd5759f3ba272578f582ff9bba5291d"
+checksum = "f7a6f957c944e22c2c1904618863702e8af302953454ac738e6df0c7038c4d88"
 dependencies = [
  "edge-raw",
  "heapless",
  "log",
  "num_enum",
- "rand_core 0.9.5",
+ "rand_core 0.10.1",
 ]
 
 [[package]]
 name = "edge-raw"
-version = "0.7.0"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "466dfce9c2172a4e947b81b556f1f07a86029fbac679e323cfb66c738cc2faea"
+checksum = "c87c23c2a56d22076013bbf039425369d05bdb9ac833e3249c48008a46e1f95c"
 
 [[package]]
 name = "either"
