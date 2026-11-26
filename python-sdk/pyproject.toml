@@ -15,5 +15,5 @@ dependencies = [
 [dependency-groups]
 dev = [
     "openapi-python-client",
-    "ruff==0.17.5",
+    "ruff==0.17.6",
 ]
