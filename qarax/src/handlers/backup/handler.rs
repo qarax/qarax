@@ -305,7 +305,7 @@ pub async fn get(
     responses(
         (status = 201, description = "Backup created", body = Backup),
         (status = 404, description = "VM not found"),
-        (status = 422, description = "Invalid backup request"),
+        (status = 422, description = "Invalid backup request, or a VM with a writable disk a backup can't capture"),
         (status = 500, description = "Internal server error")
     ),
     tag = "backups"

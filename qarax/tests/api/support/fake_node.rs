@@ -1,7 +1,9 @@
 //! A qarax-node that forks VMs and does nothing else, for what the control
 //! plane does around a fork: it answers ForkVM and ForkSeed, keeping each
-//! request, and refuses every other call. It counts the connections it takes,
-//! and restarts, or stops answering without closing them, when told to.
+//! request, pauses and resumes VMs, refuses to snapshot them for
+//! [`SNAPSHOT_REFUSAL`], and refuses every other call. It counts the
+//! connections it takes, and restarts, or stops answering without closing
+//! them, when told to.
 
 use std::io;
 use std::pin::Pin;
@@ -22,6 +24,10 @@ use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
 use super::{TestApp, node_server_tls};
+
+/// Why the node refuses every snapshot, as a node refuses a VM with a disk it
+/// can't capture.
+pub const SNAPSHOT_REFUSAL: &str = "can't snapshot the VM with its disk vda: it is qcow2, whose metadata the hypervisor keeps in memory";
 
 #[derive(Clone)]
 pub struct ForkingNode {
@@ -225,15 +231,27 @@ vm_service! {
             self.seed_forks.lock().unwrap().push(request.into_inner());
             Ok(Response::new(()))
         }
+
+        async fn pause_vm(&self, _: Request<node::VmId>) -> Result<Response<()>, Status> {
+            Ok(Response::new(()))
+        }
+
+        async fn resume_vm(&self, _: Request<node::VmId>) -> Result<Response<()>, Status> {
+            Ok(Response::new(()))
+        }
+
+        async fn snapshot_vm(
+            &self,
+            _: Request<node::SnapshotVmRequest>,
+        ) -> Result<Response<()>, Status> {
+            Err(Status::invalid_argument(SNAPSHOT_REFUSAL))
+        }
     }
     get_node_info(()) -> node::NodeInfo;
     create_vm(node::VmConfig) -> node::VmState;
     start_vm(node::VmId) -> ();
     stop_vm(node::VmId) -> ();
     force_stop_vm(node::VmId) -> ();
-    pause_vm(node::VmId) -> ();
-    resume_vm(node::VmId) -> ();
-    snapshot_vm(node::SnapshotVmRequest) -> ();
     restore_vm(node::RestoreVmRequest) -> ();
     delete_snapshot(node::DeleteSnapshotRequest) -> ();
     delete_vm(node::VmId) -> ();

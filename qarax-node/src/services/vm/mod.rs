@@ -449,7 +449,25 @@ impl VmService for VmServiceImpl {
             .find_manager(&req.vm_id)
             .await
             .ok_or_else(|| Status::not_found(format!("VM {} not found", req.vm_id)))?;
-        match manager.snapshot_vm(&req.vm_id, &req.snapshot_url).await {
+        let result = async {
+            let config = manager
+                .get_vm_info(&req.vm_id)
+                .await?
+                .config
+                .ok_or_else(|| {
+                    VmmError::ProcessError(format!("VM {} has no config to snapshot", req.vm_id))
+                })?;
+            // Before the hypervisor writes anything: a VM with a disk that
+            // can't be captured isn't snapshotted at all.
+            let disks = crate::snapshot::disks_to_capture(&config)?;
+            manager.snapshot_vm(&req.vm_id, &req.snapshot_url).await?;
+            // The VM is still paused, so the copies hold what its guest wrote
+            // up to the snapshot of its memory.
+            crate::snapshot::capture_disks(&req.snapshot_url, disks).await?;
+            Ok::<_, VmmError>(())
+        }
+        .await;
+        match result {
             Ok(()) => {
                 info!("VM {} snapshotted successfully", req.vm_id);
                 Ok(Response::new(()))

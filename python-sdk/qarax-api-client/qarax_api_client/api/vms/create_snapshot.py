@@ -44,6 +44,10 @@ def _parse_response(*, client: AuthenticatedClient | Client, response: httpx2.Re
         response_404 = cast(Any, None)
         return response_404
 
+    if response.status_code == 422:
+        response_422 = cast(Any, None)
+        return response_422
+
     if response.status_code == 500:
         response_500 = cast(Any, None)
         return response_500
@@ -69,7 +73,12 @@ def sync_detailed(
     client: AuthenticatedClient | Client,
     body: CreateSnapshotRequest,
 ) -> Response[Any | Snapshot]:
-    """
+    """Snapshot a running VM: its memory, its devices and its writable disks, so
+    that a restore brings back the disks as they were too. The VM is paused
+    while its disks are copied (a reflink where their filesystem has them).
+    Refused for a VM with a writable disk that can't be copied whole while it
+    runs: a qcow2 disk, an OCI image's, or one on an iSCSI pool.
+
     Args:
         vm_id (UUID):
         body (CreateSnapshotRequest):
@@ -100,7 +109,12 @@ def sync(
     client: AuthenticatedClient | Client,
     body: CreateSnapshotRequest,
 ) -> Any | Snapshot | None:
-    """
+    """Snapshot a running VM: its memory, its devices and its writable disks, so
+    that a restore brings back the disks as they were too. The VM is paused
+    while its disks are copied (a reflink where their filesystem has them).
+    Refused for a VM with a writable disk that can't be copied whole while it
+    runs: a qcow2 disk, an OCI image's, or one on an iSCSI pool.
+
     Args:
         vm_id (UUID):
         body (CreateSnapshotRequest):
@@ -126,7 +140,12 @@ async def asyncio_detailed(
     client: AuthenticatedClient | Client,
     body: CreateSnapshotRequest,
 ) -> Response[Any | Snapshot]:
-    """
+    """Snapshot a running VM: its memory, its devices and its writable disks, so
+    that a restore brings back the disks as they were too. The VM is paused
+    while its disks are copied (a reflink where their filesystem has them).
+    Refused for a VM with a writable disk that can't be copied whole while it
+    runs: a qcow2 disk, an OCI image's, or one on an iSCSI pool.
+
     Args:
         vm_id (UUID):
         body (CreateSnapshotRequest):
@@ -155,7 +174,12 @@ async def asyncio(
     client: AuthenticatedClient | Client,
     body: CreateSnapshotRequest,
 ) -> Any | Snapshot | None:
-    """
+    """Snapshot a running VM: its memory, its devices and its writable disks, so
+    that a restore brings back the disks as they were too. The VM is paused
+    while its disks are copied (a reflink where their filesystem has them).
+    Refused for a VM with a writable disk that can't be copied whole while it
+    runs: a qcow2 disk, an OCI image's, or one on an iSCSI pool.
+
     Args:
         vm_id (UUID):
         body (CreateSnapshotRequest):

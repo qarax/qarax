@@ -28,8 +28,8 @@ pub fn write_back(path: &Path) -> io::Result<()> {
 /// Copy the regular file `src` to `dst`, a new file, as it is: its data
 /// extents only, so a sparse file stays sparse. `copy_file_range` shares the
 /// data where the filesystem has reflinks (XFS, btrfs), so the copy takes
-/// milliseconds whatever the file's size; elsewhere it takes as long as
-/// copying the data.
+/// milliseconds whatever the file's size; elsewhere, and between two
+/// filesystems, it takes as long as copying the data.
 pub fn copy_sparse(src: &Path, dst: &Path) -> io::Result<()> {
     let src = File::open(src)?;
     let len = regular_file_len(&src)?;
@@ -59,11 +59,17 @@ pub fn overlay_extents(src: &Path, dst: &Path) -> io::Result<()> {
             "the files' sizes differ",
         ));
     }
-    let mut buf = vec![0; OVERLAY_CHUNK];
-    for extent in data_extents(&src, len)? {
+    write_extents(&src, &dst, &data_extents(&src, len)?)
+}
+
+/// Copy `extents` of `src` to the same offsets of `dst`, through the page
+/// cache.
+fn write_extents(src: &File, dst: &File, extents: &[Range<u64>]) -> io::Result<()> {
+    let mut buf = vec![0; COPY_CHUNK];
+    for extent in extents {
         let mut offset = extent.start;
         while offset < extent.end {
-            let chunk = &mut buf[..(extent.end - offset).min(OVERLAY_CHUNK as u64) as usize];
+            let chunk = &mut buf[..(extent.end - offset).min(COPY_CHUNK as u64) as usize];
             src.read_exact_at(chunk, offset)?;
             dst.write_all_at(chunk, offset)?;
             offset += chunk.len() as u64;
@@ -72,8 +78,8 @@ pub fn overlay_extents(src: &Path, dst: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// How much of a diff [`overlay_extents`] copies at a time.
-const OVERLAY_CHUNK: usize = 1024 * 1024;
+/// How much of a file [`write_extents`] copies at a time.
+const COPY_CHUNK: usize = 1024 * 1024;
 
 /// Start reading `ranges` of `file` (byte ranges) into the page cache. The
 /// kernel queues the reads and returns, but may wait for room in the
@@ -131,9 +137,23 @@ fn data_extents(file: &File, len: u64) -> io::Result<Vec<Range<u64>>> {
 }
 
 /// Copy `src`'s data extents, within its first `len` bytes, to the same
-/// offsets of `dst`.
+/// offsets of `dst`: in the kernel, or through the page cache between
+/// filesystems the kernel doesn't copy between.
 fn copy_extents(src: &File, dst: &File, len: u64) -> io::Result<()> {
-    for extent in data_extents(src, len)? {
+    let extents = data_extents(src, len)?;
+    match copy_file_ranges(src, dst, &extents) {
+        // `copy_file_range` refuses files on two filesystems (EXDEV) before it
+        // copies anything. A snapshot's copies of its VM's disks go to its
+        // storage pool, which needn't be on the disks' filesystem.
+        Err(e) if e.raw_os_error() == Some(libc::EXDEV) => write_extents(src, dst, &extents),
+        result => result,
+    }
+}
+
+/// Copy `extents` of `src` to the same offsets of `dst` with
+/// `copy_file_range`.
+fn copy_file_ranges(src: &File, dst: &File, extents: &[Range<u64>]) -> io::Result<()> {
+    for extent in extents {
         let (mut from, mut to) = (extent.start as i64, extent.start as i64);
         let hole = extent.end as i64;
         while from < hole {
@@ -212,6 +232,25 @@ mod tests {
             overlay_extents(&diff, &short).unwrap_err().kind(),
             io::ErrorKind::InvalidInput
         );
+    }
+
+    #[test]
+    fn a_copy_crosses_filesystems() {
+        // /dev/shm is a tmpfs of its own, where copy_file_range from the
+        // temporary directory's filesystem fails with EXDEV.
+        let (from, to) = (
+            tempfile::tempdir().unwrap(),
+            tempfile::tempdir_in("/dev/shm").unwrap(),
+        );
+        let src = from.path().join("disk");
+        let mut file = File::create(&src).unwrap();
+        file.set_len(4 * MIB).unwrap();
+        file.seek(SeekFrom::Start(MIB)).unwrap();
+        file.write_all(b"data").unwrap();
+
+        let dst = to.path().join("copy");
+        copy_sparse(&src, &dst).unwrap();
+        assert_eq!(std::fs::read(&dst).unwrap(), std::fs::read(&src).unwrap());
     }
 
     #[test]

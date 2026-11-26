@@ -1,3 +1,4 @@
+use crate::support::fake_node::{SNAPSHOT_REFUSAL, add_forking_node};
 use crate::support::{TestApp, add_up_host, create_vm, spawn_app};
 use reqwest::StatusCode;
 use serde_json::json;
@@ -142,6 +143,50 @@ async fn test_create_snapshot_with_unavailable_node_creates_failed_record() {
         "Expected snapshot status 'failed', got: {}",
         snapshot["status"]
     );
+}
+
+/// A snapshot its node refuses, as it refuses a VM with a disk it can't
+/// capture, is the request's to fix: 422 with the node's reason, and a failed
+/// snapshot record.
+#[tokio::test]
+async fn test_a_snapshot_the_node_refuses_is_422_with_its_reason() {
+    let app = spawn_app().await;
+    let client = reqwest::Client::new();
+    let (_, _node) = add_forking_node(&app, "snapshot-node").await;
+    ensure_storage_pool(&client, &app.address).await;
+    let vm_id = create_vm(
+        &client,
+        &app.address,
+        json!({
+            "name": "test-vm-snap-refused",
+            "hypervisor": "cloud_hv",
+            "boot_vcpus": 1,
+            "max_vcpus": 1,
+            "memory_size": 268435456,
+            "config": {}
+        }),
+    )
+    .await;
+
+    let res = client
+        .post(format!("{}/vms/{}/snapshots", app.address, vm_id))
+        .json(&json!({}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(body["message"], SNAPSHOT_REFUSAL, "{body}");
+
+    let snapshots: serde_json::Value = client
+        .get(format!("{}/vms/{}/snapshots", app.address, vm_id))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(snapshots[0]["status"], "failed", "{snapshots}");
 }
 
 #[tokio::test]

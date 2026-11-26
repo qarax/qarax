@@ -924,6 +924,10 @@ impl VmmManager for FirecrackerManager {
             .reserve(vec![vm_id.to_string()])
             .map_err(VmmError::VmAlreadyExists)?;
 
+        // Before the new process opens the VM's drives: the ones the snapshot
+        // captured go back to what they held when it was taken.
+        crate::snapshot::restore_disks(source_url).await?;
+
         tokio::fs::create_dir_all(&self.runtime_dir)
             .await
             .map_err(VmmError::SpawnError)?;
