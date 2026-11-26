@@ -58,8 +58,8 @@ futures = "0.3"
 tokio-stream = { version = "0.1", features = ["sync"] }
 
 # OpenTelemetry (behind "otel" feature)
-opentelemetry = { version = "0.31", optional = true }
-tracing-opentelemetry = { version = "0.32", optional = true }
+opentelemetry = { version = "0.33", optional = true }
+tracing-opentelemetry = { version = "0.34", optional = true }
 
 # Heap profiling (behind "dhat-heap" feature — never enable in production builds)
 dhat = { version = "0.3", optional = true }
