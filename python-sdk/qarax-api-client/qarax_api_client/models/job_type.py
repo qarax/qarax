@@ -2,6 +2,7 @@ from enum import StrEnum
 
 
 class JobType(StrEnum):
+    BACKUP_COPY = "backup_copy"
     DISK_CREATE = "disk_create"
     HOST_EVACUATE = "host_evacuate"
     IMAGE_PULL = "image_pull"

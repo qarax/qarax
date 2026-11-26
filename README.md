@@ -99,11 +99,14 @@ See the [qarax-node README](qarax-node/) for runtime dependencies and configurat
 
 ### Node certificates
 
-qarax-node's gRPC API only serves clients that present a certificate from its
-CA. Each node needs a server certificate for the address its host is
-registered under (`--address`), and the control plane needs a client
-certificate. `scripts/gen-node-tls.sh` makes both; run it again with more
-nodes to issue theirs from the same CA:
+qarax-node's gRPC API, and the NBD server from which other nodes copy backups
+(port 10809, `--nbd-port`), only serve clients that present a certificate from
+its CA. Each node needs a server certificate for the address its host is
+registered under (`--address`) and a client certificate for reaching other
+nodes, and the control plane needs a client certificate.
+`scripts/gen-node-tls.sh` makes them all; run it again with more nodes to issue
+theirs from the same CA, or on a directory made before nodes had client
+certificates to add them:
 
 ```bash
 scripts/gen-node-tls.sh ./node-tls 10.0.0.42 node-02.example.com

@@ -876,3 +876,49 @@ message PreflightImageResponse {
   string architecture = 3;
   repeated PreflightCheck checks = 4;
 }
+
+// ============================================================================
+// Snapshot copies between nodes
+// ============================================================================
+
+// A snapshot (a VM backup's data) copied to another node over NBD: the node
+// that has it offers its files on its NBD server, which takes TLS clients with
+// a certificate from the node CA, the destination node pulls them with its own
+// client certificate, and the first node withdraws them.
+service SnapshotCopyService {
+  // Offer the files of the snapshot directory at snapshot_url, read-only, each
+  // as the export "<export_id>/<its path in the directory>", until
+  // UnexportSnapshot.
+  rpc ExportSnapshot(ExportSnapshotRequest) returns (ExportSnapshotResponse) {}
+  rpc UnexportSnapshot(UnexportSnapshotRequest) returns (google.protobuf.Empty) {}
+  // Copy another node's exports of a snapshot into snapshot_url, a new
+  // directory on this node, their holes left as holes. Removes the directory
+  // if the copy fails.
+  rpc PullSnapshot(PullSnapshotRequest) returns (PullSnapshotResponse) {}
+}
+
+message ExportSnapshotRequest {
+  string export_id    = 1;
+  string snapshot_url = 2;
+}
+
+message ExportSnapshotResponse {
+  uint32 port           = 1; // the node's NBD server's
+  repeated string files = 2; // paths in the snapshot directory
+}
+
+message UnexportSnapshotRequest {
+  string export_id = 1;
+}
+
+message PullSnapshotRequest {
+  string address        = 1; // the exporting node's, as its certificate names it
+  uint32 port           = 2;
+  string export_id      = 3;
+  repeated string files = 4;
+  string snapshot_url   = 5;
+}
+
+message PullSnapshotResponse {
+  uint64 bytes = 1; // of data copied; holes aren't
+}

@@ -1,9 +1,16 @@
-//! mTLS for the node's gRPC API. The control plane is its only client, and it
-//! must present a certificate issued by the CA in the node's TLS directory.
+//! mTLS for the node's gRPC API and NBD server. The control plane is the gRPC
+//! API's only client; the NBD server's are other nodes, copying a backup from
+//! it. Each must present a certificate issued by the CA in the node's TLS
+//! directory, from which the node has a client certificate of its own too.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use rustls::RootCertStore;
+use rustls::pki_types::pem::PemObject;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use rustls::server::WebPkiClientVerifier;
 use tonic::transport::{Certificate, Identity, ServerTlsConfig};
 
 /// The CA whose certificates clients must present.
@@ -11,6 +18,10 @@ const CA_CERT: &str = "ca-cert.pem";
 /// This node's certificate, valid for the address it is registered under.
 const SERVER_CERT: &str = "server-cert.pem";
 const SERVER_KEY: &str = "server-key.pem";
+/// This node's client certificate, which it presents to other nodes' NBD
+/// servers.
+const CLIENT_CERT: &str = "client-cert.pem";
+const CLIENT_KEY: &str = "client-key.pem";
 
 /// The gRPC server's TLS config from the files in `dir` (see
 /// scripts/gen-node-tls.sh); fails if one is missing or invalid. Clients
@@ -34,8 +45,61 @@ pub fn server_tls_config(dir: &Path) -> Result<ServerTlsConfig> {
     Ok(config)
 }
 
+fn certificates(dir: &Path, name: &str) -> Result<Vec<CertificateDer<'static>>> {
+    let path = dir.join(name);
+    CertificateDer::pem_file_iter(&path)
+        .and_then(|certs| certs.collect())
+        .with_context(|| format!("failed to read {}", path.display()))
+}
+
+fn private_key(dir: &Path, name: &str) -> Result<PrivateKeyDer<'static>> {
+    let path = dir.join(name);
+    PrivateKeyDer::from_pem_file(&path)
+        .with_context(|| format!("failed to read {}", path.display()))
+}
+
+fn ca_roots(dir: &Path) -> Result<Arc<RootCertStore>> {
+    let mut roots = RootCertStore::empty();
+    for cert in certificates(dir, CA_CERT)? {
+        roots.add(cert)?;
+    }
+    Ok(Arc::new(roots))
+}
+
+/// The NBD server's TLS config from the files in `dir`: the node's
+/// certificate, and clients need one from its CA.
+pub fn nbd_server_config(dir: &Path) -> Result<rustls::ServerConfig> {
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let verifier =
+        WebPkiClientVerifier::builder_with_provider(ca_roots(dir)?, provider.clone()).build()?;
+    rustls::ServerConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()?
+        .with_client_cert_verifier(verifier)
+        .with_single_cert(
+            certificates(dir, SERVER_CERT)?,
+            private_key(dir, SERVER_KEY)?,
+        )
+        .with_context(|| format!("invalid TLS files in {}", dir.display()))
+}
+
+/// TLS config from the files in `dir` for copying from another node's NBD
+/// server: trusts the node CA, and presents this node's client certificate,
+/// which `scripts/gen-node-tls.sh` issues to directories from before nodes had
+/// one when run again.
+pub fn nbd_client_config(dir: &Path) -> Result<rustls::ClientConfig> {
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()?
+        .with_root_certificates(ca_roots(dir)?)
+        .with_client_auth_cert(
+            certificates(dir, CLIENT_CERT)?,
+            private_key(dir, CLIENT_KEY)?,
+        )
+        .with_context(|| format!("invalid TLS files in {}", dir.display()))
+}
+
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use tokio_stream::wrappers::TcpListenerStream;
     use tonic::transport::{Channel, ClientTlsConfig, Server};
     use uuid::Uuid;
@@ -49,7 +113,7 @@ mod tests {
     use crate::services::file_transfer::FileTransferServiceImpl;
 
     /// A new CA and its certificates, made with the script operators use.
-    fn gen_node_tls(nodes: &[&str]) -> tempfile::TempDir {
+    pub(crate) fn gen_node_tls(nodes: &[&str]) -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
         let status = std::process::Command::new("sh")
             .arg(concat!(

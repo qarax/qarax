@@ -273,3 +273,139 @@ async fn test_delete_vm_deletes_its_snapshots() {
     assert_eq!(res.status(), StatusCode::NO_CONTENT);
     assert!(!storage_object_exists(&app, &snapshot).await);
 }
+
+/// A backup copy is refused, before any job, for what it can't do: copy a
+/// backup that isn't there, isn't a VM's or isn't ready, or copy to a pool
+/// that isn't there, isn't Local or NFS, is the backup's own, or has no UP
+/// host to write the copy.
+#[tokio::test]
+async fn test_backup_copy_refusals() {
+    let app = spawn_app().await;
+    let client = reqwest::Client::new();
+    let (vm_id, _, snapshot) = vm_with_failed_snapshot(&app, &client).await;
+    let snapshot_id: Uuid = snapshot["id"].as_str().unwrap().parse().unwrap();
+    let object_id: Uuid = snapshot["storage_object_id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    sqlx::query("UPDATE vm_snapshots SET status = 'READY' WHERE id = $1")
+        .bind(snapshot_id)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    let backup_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO backups (id, name, backup_type, status, vm_id, snapshot_id, storage_object_id) \
+         VALUES ($1, 'backup', 'VM', 'READY', $2, $3, $4)",
+    )
+    .bind(backup_id)
+    .bind(vm_id)
+    .bind(snapshot_id)
+    .bind(object_id)
+    .execute(&app.pool)
+    .await
+    .unwrap();
+    let source_pool: Uuid =
+        sqlx::query_scalar("SELECT storage_pool_id FROM storage_objects WHERE id = $1")
+            .bind(object_id)
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+    let create_pool = |body: serde_json::Value| {
+        let client = client.clone();
+        let address = app.address.clone();
+        async move {
+            let res = client
+                .post(format!("{address}/storage-pools"))
+                .json(&body)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(res.status(), StatusCode::CREATED);
+            res.text().await.unwrap().parse::<Uuid>().unwrap()
+        }
+    };
+    let block = create_pool(json!({
+        "name": "copy-block",
+        "pool_type": "block",
+        "config": {"portal": "10.0.0.1:3260", "iqn": "iqn.2024-01.qarax:copy"}
+    }))
+    .await;
+    let unattached = create_pool(json!({
+        "name": "copy-local",
+        "pool_type": "local",
+        "config": {"path": "/tmp/copy-local"}
+    }))
+    .await;
+    let copy = |backup: Uuid, pool: Uuid| {
+        client
+            .post(format!("{}/backups/{backup}/copy", app.address))
+            .json(&json!({ "storage_pool_id": pool }))
+            .send()
+    };
+
+    let res = copy(Uuid::new_v4(), unattached).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::NOT_FOUND,
+        "a backup that isn't there"
+    );
+    let res = copy(backup_id, Uuid::new_v4()).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::NOT_FOUND,
+        "a pool that isn't there"
+    );
+    for (pool, why) in [
+        (source_pool, "already"),
+        (block, "Local or NFS"),
+        (unattached, "no UP host"),
+    ] {
+        let res = copy(backup_id, pool).await.unwrap();
+        assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY, "{why}");
+        let body: serde_json::Value = res.json().await.unwrap();
+        assert!(body["message"].as_str().unwrap().contains(why), "{body}");
+    }
+
+    sqlx::query("UPDATE backups SET status = 'CREATING' WHERE id = $1")
+        .bind(backup_id)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    let res = copy(backup_id, unattached).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY, "not ready");
+
+    let dump_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO storage_objects (id, name, storage_pool_id, object_type, size_bytes, config) \
+         VALUES ($1, 'dump', $2, 'DATABASE_BACKUP', 0, '{}')",
+    )
+    .bind(dump_id)
+    .bind(source_pool)
+    .execute(&app.pool)
+    .await
+    .unwrap();
+    let database_backup = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO backups (id, name, backup_type, status, storage_object_id) \
+         VALUES ($1, 'dump', 'DATABASE', 'READY', $2)",
+    )
+    .bind(database_backup)
+    .bind(dump_id)
+    .execute(&app.pool)
+    .await
+    .unwrap();
+    let res = copy(database_backup, unattached).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "a database backup"
+    );
+
+    let jobs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM jobs WHERE job_type = 'BACKUP_COPY'")
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(jobs, 0, "a refused copy starts no job");
+}

@@ -15,8 +15,10 @@ use qarax_node::firecracker::FirecrackerManager;
 use qarax_node::overlaybd::OverlayBdManager;
 use qarax_node::rpc::node::StoragePoolKind;
 use qarax_node::rpc::node::file_transfer_service_server::FileTransferServiceServer;
+use qarax_node::rpc::node::snapshot_copy_service_server::SnapshotCopyServiceServer;
 use qarax_node::rpc::node::vm_service_server::VmServiceServer;
 use qarax_node::services::file_transfer::FileTransferServiceImpl;
+use qarax_node::services::snapshot_copy::SnapshotCopyServiceImpl;
 use qarax_node::services::vm::VmServiceImpl;
 use qarax_node::storage::StorageBackendRegistry;
 use qarax_node::storage::block::BlockBackend;
@@ -73,12 +75,19 @@ pub struct Args {
     #[clap(long)]
     migration_tls_dir: Option<PathBuf>,
 
-    /// Directory with this node's gRPC TLS files: server-cert.pem and
-    /// server-key.pem (valid for the address the node is registered under)
-    /// and ca-cert.pem, the CA that issued the control plane's client
-    /// certificate. Only clients with a certificate from that CA are served.
+    /// Directory with this node's TLS files: server-cert.pem and
+    /// server-key.pem (valid for the address the node is registered under),
+    /// ca-cert.pem, the CA that issued the control plane's client
+    /// certificate and the other nodes', and client-cert.pem and
+    /// client-key.pem, which the node presents to other nodes' NBD servers.
+    /// The gRPC API and the NBD server only serve clients with a certificate
+    /// from that CA.
     #[clap(long, default_value = "/etc/qarax-node/tls")]
     tls_dir: PathBuf,
+
+    /// Port of the NBD server, from which other nodes copy backups
+    #[clap(long, default_value_t = qarax_node::services::snapshot_copy::DEFAULT_NBD_PORT)]
+    nbd_port: u16,
 
     /// Enable OpenTelemetry export
     #[clap(long, default_value = "false", env = "OTEL_ENABLED")]
@@ -250,6 +259,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let file_transfer_service =
         FileTransferServiceImpl::with_overlaybd(overlaybd_manager_for_transfer);
+    let snapshot_copy_service =
+        SnapshotCopyServiceImpl::serve(&args.tls_dir, args.nbd_port).await?;
 
     // Start the gRPC server (with trace extraction layer when otel is enabled)
     #[cfg(feature = "otel")]
@@ -259,6 +270,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .layer(trace_extraction::OtelGrpcLayer)
             .add_service(VmServiceServer::new(vm_service))
             .add_service(FileTransferServiceServer::new(file_transfer_service))
+            .add_service(SnapshotCopyServiceServer::new(snapshot_copy_service))
             .serve_with_shutdown(addr, shutdown_signal())
             .await?;
     }
@@ -269,6 +281,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .tls_config(tls)?
             .add_service(VmServiceServer::new(vm_service))
             .add_service(FileTransferServiceServer::new(file_transfer_service))
+            .add_service(SnapshotCopyServiceServer::new(snapshot_copy_service))
             .serve_with_shutdown(addr, shutdown_signal())
             .await?;
     }

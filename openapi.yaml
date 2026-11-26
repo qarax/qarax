@@ -205,6 +205,45 @@ paths:
           description: No UP host can reach the VM snapshot
         '500':
           description: Internal server error
+  /v1/backups/{backup_id}/copy:
+    post:
+      tags:
+      - backups
+      summary: |-
+        Copy a VM backup to another storage pool, typically one on another host,
+        so that it outlives the host it was taken on. The node that has the
+        backup offers its files over NBD, with TLS between the nodes' certificates
+        from the node CA, and a node attached to the target pool copies them,
+        their holes left as holes. The copy is a backup of its own, of the same
+        VM, which can be restored from it on a host attached to its pool.
+      operationId: copy
+      parameters:
+      - name: backup_id
+        in: path
+        description: Backup unique identifier
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CopyBackupRequest'
+        required: true
+      responses:
+        '202':
+          description: Copy job accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CopyBackupResponse'
+        '404':
+          description: Backup or storage pool not found
+        '422':
+          description: Not a ready VM backup, or a storage pool it can't be copied to
+        '500':
+          description: Internal server error
   /v1/backups/{backup_id}/restore:
     post:
       tags:
@@ -3595,6 +3634,33 @@ components:
             unset.
           default: 1
           minimum: 1
+    CopyBackupRequest:
+      type: object
+      required:
+      - storage_pool_id
+      properties:
+        name:
+          type:
+          - string
+          - 'null'
+          description: The copy's name. Defaults to the backup's, with "-copy" after it.
+        storage_pool_id:
+          type: string
+          format: uuid
+          description: |-
+            The storage pool to copy the backup to: a Local or NFS pool other than
+            the backup's, attached to an UP host.
+    CopyBackupResponse:
+      type: object
+      required:
+      - job_id
+      properties:
+        job_id:
+          type: string
+          format: uuid
+          description: |-
+            The job that copies the backup. Once it completes, its result holds
+            the copy's `backup_id`.
     CreateBackupRequest:
       type: object
       required:
@@ -4424,6 +4490,7 @@ components:
       - host_evacuate
       - disk_create
       - vm_commit
+      - backup_copy
     LifecycleHook:
       type: object
       required:

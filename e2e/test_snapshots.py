@@ -13,8 +13,6 @@ These tests verify snapshot lifecycle against a real Cloud Hypervisor VM:
 """
 
 import uuid
-from contextlib import asynccontextmanager
-from uuid import UUID
 
 import pytest
 from qarax_api_client import Client
@@ -22,13 +20,10 @@ from qarax_api_client.api.hosts import list_ as list_hosts
 from qarax_api_client.api.storage_pools import attach_host as attach_pool_host
 from qarax_api_client.api.storage_pools import create as create_pool
 from qarax_api_client.api.storage_pools import delete as delete_pool
-from qarax_api_client.api.storage_objects import create as create_storage_object
-from qarax_api_client.api.storage_objects import delete as delete_storage_object
 from qarax_api_client.api.vms import (
     create as create_vm,
 )
 from qarax_api_client.api.vms import (
-    attach_disk,
     create_snapshot,
     delete_snapshot,
     list_snapshots,
@@ -54,10 +49,7 @@ from qarax_api_client.models import (
     StoragePoolType,
     VmStatus,
 )
-from qarax_api_client.models.attach_disk_request import AttachDiskRequest
 from qarax_api_client.models.attach_pool_host_request import AttachPoolHostRequest
-from qarax_api_client.models.new_storage_object import NewStorageObject
-from qarax_api_client.models.storage_object_type import StorageObjectType
 from qarax_api_client.models.create_snapshot_request import CreateSnapshotRequest
 from qarax_api_client.models.restore_request import RestoreRequest
 from qarax_api_client.models.snapshot_status import SnapshotStatus
@@ -70,14 +62,13 @@ from helpers import (
     QARAX_URL,
     call_api,
     call_api_detailed,
-    create_image_on_nodes,
     exec_when_ready,
     path_exists_in_any,
-    remove_file_from_nodes,
+    read_disk_marker,
+    running_vm_with_disk,
     wait_for_status,
+    write_disk_marker,
 )
-
-MIB = 1024 * 1024
 
 
 @pytest.fixture
@@ -261,92 +252,6 @@ async def test_snapshot_delete_removes_its_data(client, snapshot_storage_pool):
             await delete_vm.asyncio_detailed(client=c, vm_id=vm_id)
 
 
-@asynccontextmanager
-async def _running_vm_with_disk(c, hypervisor, image_format):
-    """A running VM with the guest agent and a 64 MiB image of its own
-    (`raw` or `qcow2`) as its only disk, /dev/vda, in a local pool of its own
-    on the VM's host. Deleting the VM deletes its snapshots."""
-    test_id = uuid.uuid4().hex[:8]
-    pool_path = f"/var/lib/qarax/e2e-snapdisk-{test_id}"
-    disk_path = f"{pool_path}/disk.img"
-    vm_id = pool_id = disk_id = None
-    try:
-        vm_id = UUID(
-            str(
-                await call_api(
-                    create_vm,
-                    client=c,
-                    body=NewVm(
-                        name=f"e2e-snapdisk-{test_id}",
-                        hypervisor=hypervisor,
-                        boot_vcpus=1,
-                        max_vcpus=1,
-                        memory_size=256 * MIB,
-                        guest_agent=True,
-                    ),
-                )
-            ).strip('"')
-        )
-        vm = await call_api(get_vm, client=c, vm_id=vm_id)
-        pool_id = UUID(
-            str(
-                await call_api(
-                    create_pool,
-                    client=c,
-                    body=NewStoragePool(
-                        name=f"e2e-snapdisk-{test_id}",
-                        pool_type=StoragePoolType.LOCAL,
-                        config={"path": pool_path},
-                    ),
-                )
-            ).strip('"')
-        )
-        await call_api(
-            attach_pool_host,
-            client=c,
-            pool_id=pool_id,
-            body=AttachPoolHostRequest(host_id=vm.host_id),
-        )
-        create_image_on_nodes(disk_path, 64 * MIB, image_format)
-        disk_id = UUID(
-            str(
-                await call_api(
-                    create_storage_object,
-                    client=c,
-                    body=NewStorageObject(
-                        name=f"e2e-snapdisk-{test_id}",
-                        storage_pool_id=str(pool_id),
-                        object_type=StorageObjectType.DISK,
-                        size_bytes=64 * MIB,
-                        config={"path": disk_path},
-                    ),
-                )
-            ).strip('"')
-        )
-        # Before the start: Firecracker drives can't be hotplugged.
-        await call_api(
-            attach_disk,
-            client=c,
-            vm_id=vm_id,
-            body=AttachDiskRequest(storage_object_id=disk_id),
-        )
-        await call_api(start_vm, client=c, vm_id=vm_id)
-        await wait_for_status(c, vm_id, VmStatus.RUNNING, timeout=VM_OPERATION_TIMEOUT)
-        yield vm_id
-    finally:
-        if vm_id:
-            await call_api(delete_vm, client=c, vm_id=vm_id)
-        if disk_id:
-            await call_api(delete_storage_object, client=c, object_id=disk_id)
-        if pool_id:
-            await call_api(delete_pool, client=c, pool_id=pool_id)
-        remove_file_from_nodes(disk_path)
-
-
-def _write_marker(marker):
-    return f"printf {marker} | busybox dd of=/dev/vda conv=notrunc 2>/dev/null && busybox sync"
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("hypervisor", [Hypervisor.CLOUD_HV, Hypervisor.FIRECRACKER])
 async def test_restore_brings_back_the_disk(client, hypervisor):
@@ -359,8 +264,8 @@ async def test_restore_brings_back_the_disk(client, hypervisor):
     its page cache.
     """
     async with client as c:
-        async with _running_vm_with_disk(c, hypervisor, "raw") as vm_id:
-            result = await exec_when_ready(c, vm_id, _write_marker("before"))
+        async with running_vm_with_disk(c, hypervisor, "raw") as vm_id:
+            result = await exec_when_ready(c, vm_id, write_disk_marker("before"))
             assert result.exit_code == 0, result
 
             snapshot = await call_api(
@@ -368,7 +273,7 @@ async def test_restore_brings_back_the_disk(client, hypervisor):
             )
             assert snapshot.status == SnapshotStatus.READY
 
-            result = await exec_when_ready(c, vm_id, _write_marker("after!"))
+            result = await exec_when_ready(c, vm_id, write_disk_marker("after!"))
             assert result.exit_code == 0, result
             await call_api(stop_vm, client=c, vm_id=vm_id)
             await wait_for_status(c, vm_id, VmStatus.SHUTDOWN, timeout=VM_OPERATION_TIMEOUT)
@@ -380,7 +285,7 @@ async def test_restore_brings_back_the_disk(client, hypervisor):
             result = await exec_when_ready(
                 c,
                 vm_id,
-                "echo 3 > /proc/sys/vm/drop_caches; busybox dd if=/dev/vda bs=6 count=1 2>/dev/null",
+                read_disk_marker(6),
             )
             assert result.exit_code == 0, result
             assert result.stdout == "before", result.stdout
@@ -395,7 +300,7 @@ async def test_a_vm_with_a_qcow2_disk_is_not_snapshotted(client):
     taken without the disk, and the VM keeps running.
     """
     async with client as c:
-        async with _running_vm_with_disk(c, Hypervisor.CLOUD_HV, "qcow2") as vm_id:
+        async with running_vm_with_disk(c, Hypervisor.CLOUD_HV, "qcow2") as vm_id:
             resp = await call_api_detailed(
                 create_snapshot, client=c, vm_id=vm_id, body=CreateSnapshotRequest()
             )

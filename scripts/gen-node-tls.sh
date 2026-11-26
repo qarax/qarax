@@ -1,9 +1,12 @@
 #!/bin/sh
-# Creates the certificates for qarax-node's gRPC API, which only serves clients
-# with a certificate from its CA: a CA, the control plane's client certificate
-# and, for each NODE, a server certificate valid for that address (the one the
-# host is registered under, a DNS name or an IP address). Run again with more
-# nodes, it issues theirs from the same CA and leaves what exists alone.
+# Creates the certificates for qarax-node's gRPC API and NBD server, which
+# only serve clients with a certificate from its CA: a CA, the control plane's
+# client certificate and, for each NODE, a server certificate valid for that
+# address (the one the host is registered under, a DNS name or an IP address)
+# and a client certificate, which it presents to other nodes' NBD servers when
+# it copies a backup from them. Run again with more nodes, or on a directory
+# from before nodes had client certificates, it issues what is missing from the
+# same CA and leaves what exists alone.
 #
 #   DIR/ca-cert.pem, DIR/ca-key.pem   the CA; keep the key off the hosts
 #   DIR/control-plane/                the control plane's node_tls_dir
@@ -51,15 +54,21 @@ if [ ! -f control-plane/client-key.pem ]; then
 fi
 
 for node in "$@"; do
-	[ ! -f "nodes/$node/server-key.pem" ] || continue
-	case $node in
-	*:*) san="IP:$node" ;; # IPv6
-	*[!0-9.]*) san="DNS:$node" ;;
-	*) san="IP:$node" ;; # IPv4
-	esac
 	mkdir -p "nodes/$node"
-	key "nodes/$node/server-key.pem"
-	sign "nodes/$node/server-cert.pem" "nodes/$node/server-key.pem" "$node" \
-		"basicConstraints=CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=serverAuth\nsubjectAltName=$san"
-	cp ca-cert.pem "nodes/$node/"
+	if [ ! -f "nodes/$node/server-key.pem" ]; then
+		case $node in
+		*:*) san="IP:$node" ;; # IPv6
+		*[!0-9.]*) san="DNS:$node" ;;
+		*) san="IP:$node" ;; # IPv4
+		esac
+		key "nodes/$node/server-key.pem"
+		sign "nodes/$node/server-cert.pem" "nodes/$node/server-key.pem" "$node" \
+			"basicConstraints=CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=serverAuth\nsubjectAltName=$san"
+		cp ca-cert.pem "nodes/$node/"
+	fi
+	if [ ! -f "nodes/$node/client-key.pem" ]; then
+		key "nodes/$node/client-key.pem"
+		sign "nodes/$node/client-cert.pem" "nodes/$node/client-key.pem" "$node" \
+			'basicConstraints=CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=clientAuth'
+	fi
 done

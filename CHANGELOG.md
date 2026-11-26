@@ -31,7 +31,11 @@ The first release.
 - Live migration (TLS, postcopy), HA failover of VMs from dead hosts.
 - Snapshots and backups of VMs, which capture the VM's writable disks with
   its memory and put them back on restore, and backups of the control-plane
-  database.
+  database. A VM backup can be copied to another storage pool, such as one on
+  another host, so that it outlives the host it was taken on: the node that has
+  it offers its files over NBD with TLS between the nodes, and a node attached
+  to the target pool copies them, their holes left as holes
+  (`qarax backup copy`, `POST /v1/backups/{id}/copy`).
 - Sandboxes: short-lived VMs with idle reaping and prewarmed pools, of
   templates booting a kernel or an OCI image, which can make their sandboxes
   by forking booted VMs of the template, on one host or several, ahead of time
@@ -90,6 +94,12 @@ These need action if you ran a build from before them:
   whole while it runs (qcow2, an OCI image's, or one on an iSCSI pool) can't
   be snapshotted for now (422). A snapshot taken by an earlier build restores
   the memory only, as before.
+- Each node has a client certificate (`client-cert.pem` and `client-key.pem`
+  in its TLS directory), which it presents to other nodes, and serves NBD on
+  port 10809, which the other nodes must reach, to copy backups between hosts.
+  Run `scripts/gen-node-tls.sh` again on your certificate directory with the
+  same nodes: it adds their client certificates and leaves the rest alone.
+  Then copy each node's two new files to its TLS directory.
 - An OverlayBD import writes the converted image to `<tag>_overlaybd` and
   leaves the mirrored image as it was; earlier builds converted the mirror in
   place, so importing it again gave an empty disk. An image you pushed to the

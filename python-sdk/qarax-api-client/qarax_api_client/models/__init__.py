@@ -19,6 +19,8 @@ from .boot_source_page import BootSourcePage
 from .commit_vm_request import CommitVmRequest
 from .commit_vm_response import CommitVmResponse
 from .configure_sandbox_pool_request import ConfigureSandboxPoolRequest
+from .copy_backup_request import CopyBackupRequest
+from .copy_backup_response import CopyBackupResponse
 from .create_backup_request import CreateBackupRequest
 from .create_disk_request import CreateDiskRequest
 from .create_disk_response import CreateDiskResponse
@@ -157,6 +159,8 @@ __all__ = (
     "CommitVmRequest",
     "CommitVmResponse",
     "ConfigureSandboxPoolRequest",
+    "CopyBackupRequest",
+    "CopyBackupResponse",
     "CreateBackupRequest",
     "CreateDiskRequest",
     "CreateDiskResponse",

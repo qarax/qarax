@@ -2633,6 +2633,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d87ecb2933e8aeadb3e3a02b828fed80a7528047e68b4f424523a0981a3a084"
 
 [[package]]
+name = "nbdwire"
+version = "0.1.0"
+source = "git+https://github.com/qarax/nbdwire.git?tag=v0.1.0#ab9826f6eba9c5736a390914ad94a9b144d60ce8"
+dependencies = [
+ "rustix 1.1.6",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-rustls",
+ "tracing",
+]
+
+[[package]]
 name = "netlink-packet-core"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3687,6 +3699,7 @@ dependencies = [
  "http",
  "http-body-util",
  "hyper",
+ "nbdwire",
  "netlink-packet-route",
  "nix 0.29.0",
  "num_cpus",

@@ -7,12 +7,16 @@ These tests cover:
 - Backup deletion, including removal of the stored snapshot / dump
 - VM deletion removing the VM's backups and their snapshots
 - A database restore keeping the database backups' records
+- A VM backup copied to a pool on another host over NBD, file for file and
+  with its disk's holes kept, and a VM restored from a copy of its backup
 """
 
+import shlex
 import uuid
 
 import pytest
 from qarax_api_client import Client
+from qarax_api_client.api.backups import copy as copy_backup
 from qarax_api_client.api.hosts import list_ as list_hosts
 from qarax_api_client.api.instance_types import create as create_instance_type
 from qarax_api_client.api.instance_types import delete as delete_instance_type
@@ -22,6 +26,7 @@ from qarax_api_client.api.storage_pools import create as create_pool
 from qarax_api_client.api.storage_pools import delete as delete_pool
 from qarax_api_client.api.vms import create as create_vm
 from qarax_api_client.api.vms import delete as delete_vm
+from qarax_api_client.api.vms import get as get_vm
 from qarax_api_client.api.vms import start as start_vm
 from qarax_api_client.api.vms import stop as stop_vm
 from qarax_api_client.models import (
@@ -34,13 +39,23 @@ from qarax_api_client.models import (
     VmStatus,
 )
 from qarax_api_client.models.attach_pool_host_request import AttachPoolHostRequest
+from qarax_api_client.models.copy_backup_request import CopyBackupRequest
 
 from helpers import (
     AUTH_HEADERS,
     NODE_CONTAINER_PREFIX,
     QARAX_URL,
+    call_api,
+    compose_container,
+    docker,
+    exec_when_ready,
+    local_pool,
     path_exists_in_any,
+    read_disk_marker,
+    running_vm_with_disk,
+    wait_for_job,
     wait_for_status,
+    write_disk_marker,
 )
 
 VM_OPERATION_TIMEOUT = 60
@@ -369,3 +384,131 @@ async def test_vm_delete_removes_its_backups(client, backup_storage_pool):
             if not deleted:
                 await stop_vm.asyncio_detailed(client=c, vm_id=vm_id)
                 await delete_vm.asyncio_detailed(client=c, vm_id=vm_id)
+
+
+async def _backup_and_copy(c, httpx_client, vm_id, from_pool, to_pool, copy_name):
+    """Back the VM up into from_pool and copy the backup to to_pool; returns
+    the backup and its copy."""
+    resp = await httpx_client.post(
+        f"{QARAX_URL}/v1/backups",
+        json={
+            "backup_type": "vm",
+            "vm_id": str(vm_id),
+            "storage_pool_id": str(from_pool),
+            "name": f"{copy_name}-original",
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    backup = resp.json()
+
+    accepted = await call_api(
+        copy_backup,
+        client=c,
+        backup_id=uuid.UUID(backup["id"]),
+        body=CopyBackupRequest(storage_pool_id=to_pool, name=copy_name),
+    )
+    await wait_for_job(c, accepted.job_id)
+    resp = await httpx_client.get(f"{QARAX_URL}/v1/backups", params={"name": copy_name})
+    assert resp.status_code == 200, resp.text
+    (copy,) = resp.json()["items"]
+    assert copy["status"] == "ready", copy
+    assert copy["vm_id"] == str(vm_id)
+    assert copy["id"] != backup["id"]
+    return backup, copy
+
+
+def _digests(container, directory):
+    """sha256 of each file under directory in container, by its path there."""
+    script = f"cd {shlex.quote(directory)} && find . -type f -exec sha256sum {{}} +"
+    lines = docker("exec", container, "sh", "-c", script).stdout.splitlines()
+    return {path: digest for digest, path in (line.split(maxsplit=1) for line in lines)}
+
+
+@pytest.mark.asyncio
+async def test_vm_backup_copies_to_another_host(client, two_hosts):
+    """
+    A VM backup copied to a pool on another host arrives whole: each of its
+    files, the copy of the VM's disk among them, is the same on that host's
+    node as on the one that took it, and the disk's holes stayed holes.
+    """
+    test_id = uuid.uuid4().hex[:8]
+    async with client as c:
+        httpx_client = c.get_async_httpx_client()
+        hosts = {h.id: h for h in (await call_api(list_hosts, client=c)).items}
+        from_pool = to_pool = None
+        try:
+            async with running_vm_with_disk(c, Hypervisor.CLOUD_HV, "raw") as vm_id:
+                result = await exec_when_ready(c, vm_id, write_disk_marker("backup"))
+                assert result.exit_code == 0, result
+                vm = await call_api(get_vm, client=c, vm_id=vm_id)
+                (other,) = [h for h in two_hosts if h != vm.host_id]
+                from_pool = await local_pool(
+                    c, f"e2e-bcopy-from-{test_id}", f"/var/lib/qarax/e2e-bcopy-from-{test_id}", vm.host_id
+                )
+                to_pool = await local_pool(
+                    c, f"e2e-bcopy-to-{test_id}", f"/var/lib/qarax/e2e-bcopy-to-{test_id}", other
+                )
+
+                backup, copy = await _backup_and_copy(
+                    c, httpx_client, vm_id, from_pool, to_pool, f"e2e-bcopy-{test_id}"
+                )
+
+                source = _digests(
+                    compose_container(hosts[vm.host_id].address),
+                    await _backup_data_path(httpx_client, backup),
+                )
+                copy_dir = await _backup_data_path(httpx_client, copy)
+                target_node = compose_container(hosts[other].address)
+                assert "./disks/0.img" in source and "./disks.json" in source, source
+                assert _digests(target_node, copy_dir) == source
+                # 64 MiB of disk, of which the guest wrote a marker.
+                allocated = docker("exec", target_node, "du", "-k", f"{copy_dir}/disks/0.img")
+                assert int(allocated.stdout.split()[0]) < 16 * 1024, allocated.stdout
+        finally:
+            # After the VM, whose deletion deletes its backups.
+            for pool_id in (from_pool, to_pool):
+                if pool_id:
+                    await httpx_client.delete(f"{QARAX_URL}/v1/storage-pools/{pool_id}")
+
+
+@pytest.mark.asyncio
+async def test_a_vm_restores_from_a_copy_of_its_backup(client):
+    """
+    A copy is a backup of its own: with the original deleted, restoring the VM
+    from the copy brings back its disk as it was when the backup was taken.
+    """
+    test_id = uuid.uuid4().hex[:8]
+    async with client as c:
+        httpx_client = c.get_async_httpx_client()
+        from_pool = to_pool = None
+        try:
+            async with running_vm_with_disk(c, Hypervisor.CLOUD_HV, "raw") as vm_id:
+                result = await exec_when_ready(c, vm_id, write_disk_marker("before"))
+                assert result.exit_code == 0, result
+                vm = await call_api(get_vm, client=c, vm_id=vm_id)
+                from_pool = await local_pool(
+                    c, f"e2e-brest-from-{test_id}", f"/var/lib/qarax/e2e-brest-from-{test_id}", vm.host_id
+                )
+                to_pool = await local_pool(
+                    c, f"e2e-brest-to-{test_id}", f"/var/lib/qarax/e2e-brest-to-{test_id}", vm.host_id
+                )
+                backup, copy = await _backup_and_copy(
+                    c, httpx_client, vm_id, from_pool, to_pool, f"e2e-brest-{test_id}"
+                )
+                await _assert_backup_deleted(httpx_client, backup)
+
+                result = await exec_when_ready(c, vm_id, write_disk_marker("after!"))
+                assert result.exit_code == 0, result
+                await stop_vm.asyncio_detailed(client=c, vm_id=vm_id)
+                await wait_for_status(c, vm_id, VmStatus.SHUTDOWN, timeout=VM_OPERATION_TIMEOUT)
+
+                resp = await httpx_client.post(f"{QARAX_URL}/v1/backups/{copy['id']}/restore")
+                assert resp.status_code == 200, resp.text
+                await wait_for_status(c, vm_id, VmStatus.RUNNING, timeout=VM_OPERATION_TIMEOUT)
+                result = await exec_when_ready(c, vm_id, read_disk_marker(6))
+                assert result.exit_code == 0, result
+                assert result.stdout == "before", result.stdout
+        finally:
+            for pool_id in (from_pool, to_pool):
+                if pool_id:
+                    await httpx_client.delete(f"{QARAX_URL}/v1/storage-pools/{pool_id}")

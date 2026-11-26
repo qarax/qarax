@@ -11,7 +11,8 @@ database, and the nodes that run VMs. For a local stack on one machine, use
   state in PostgreSQL 16 or later. Run one instance.
 - **Nodes**: hosts that run VMs. Each runs the appliance image, a bootc image
   with `qarax-node` (gRPC, port 50051), Cloud Hypervisor, Firecracker and
-  OverlayBD. The control plane installs and upgrades it over SSH.
+  OverlayBD. The control plane installs and upgrades it over SSH. Nodes reach
+  each other on port 10809 (NBD) to copy backups between hosts.
 - **The CLI**, `qarax`, wherever you manage qarax from.
 
 Each release `vX.Y.Z` publishes:
@@ -27,8 +28,10 @@ Both images are signed with cosign (keyless, from the release workflow).
 ## 1. Certificates
 
 The control plane and the nodes authenticate each other with mutual TLS. Make
-a CA, the control plane's client certificate, and a certificate for each node
-address you will register (a DNS name or an IP), on a machine you trust:
+a CA, the control plane's client certificate, and for each node address you
+will register (a DNS name or an IP) a server certificate and a client
+certificate, which the node presents to other nodes when it copies a backup
+from them, on a machine you trust:
 
 ```bash
 ./gen-node-tls.sh ./node-tls 10.0.0.42 10.0.0.43
@@ -37,7 +40,8 @@ address you will register (a DNS name or an IP), on a machine you trust:
 `node-tls/control-plane/` goes to the control plane (step 3), and
 `node-tls/nodes/ADDRESS/` to each node (step 4). Keep `node-tls/ca-key.pem`
 off the hosts. To add a node later, run the script again with its address:
-it reuses the CA.
+it reuses the CA, and issues what is missing (such as client certificates, to
+a directory made before nodes had them) without touching the rest.
 
 ## 2. Database
 

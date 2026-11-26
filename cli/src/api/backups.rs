@@ -2,7 +2,9 @@ use uuid::Uuid;
 
 use crate::client::Client;
 
-use super::models::{Backup, CreateBackupRequest, RestoreBackupResponse};
+use super::models::{
+    Backup, CopyBackupRequest, CopyBackupResponse, CreateBackupRequest, RestoreBackupResponse,
+};
 
 pub async fn list(
     client: &Client,
@@ -35,6 +37,16 @@ pub async fn create(client: &Client, request: &CreateBackupRequest) -> anyhow::R
 pub async fn restore(client: &Client, backup_id: Uuid) -> anyhow::Result<RestoreBackupResponse> {
     client
         .post_empty_json(&format!("/backups/{backup_id}/restore"))
+        .await
+}
+
+pub async fn copy(
+    client: &Client,
+    backup_id: Uuid,
+    request: &CopyBackupRequest,
+) -> anyhow::Result<CopyBackupResponse> {
+    client
+        .post(&format!("/backups/{backup_id}/copy"), request)
         .await
 }
 

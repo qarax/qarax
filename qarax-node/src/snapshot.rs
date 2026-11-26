@@ -42,7 +42,7 @@ pub enum SnapshotDeleteError {
 
 /// The directory `snapshot_url` (`file:///abs/path` or a bare absolute path)
 /// names, or why it can't be a snapshot's.
-fn snapshot_dir(snapshot_url: &str) -> Result<&Path, &'static str> {
+pub(crate) fn snapshot_dir(snapshot_url: &str) -> Result<&Path, &'static str> {
     let path = Path::new(snapshot_url.trim_prefix("file://"));
     if !path.is_absolute() {
         return Err("must be absolute");
@@ -54,6 +54,13 @@ fn snapshot_dir(snapshot_url: &str) -> Result<&Path, &'static str> {
         return Err("must not be the root directory");
     }
     Ok(path)
+}
+
+/// Whether `path` holds the files one of our hypervisors writes for a
+/// snapshot.
+pub(crate) fn is_snapshot_dir(path: &Path) -> bool {
+    let has_all = |markers: &[&str]| markers.iter().all(|m| path.join(m).is_file());
+    has_all(CLOUD_HV_MARKERS) || has_all(FIRECRACKER_MARKERS)
 }
 
 /// Delete the snapshot directory at `snapshot_url` (`file:///abs/path` or a
@@ -70,8 +77,7 @@ pub async fn delete_snapshot_dir(snapshot_url: &str) -> Result<bool, SnapshotDel
         Err(e) => return Err(SnapshotDeleteError::Io(raw.into(), e)),
     }
 
-    let has_all = |markers: &[&str]| markers.iter().all(|m| path.join(m).is_file());
-    if !has_all(CLOUD_HV_MARKERS) && !has_all(FIRECRACKER_MARKERS) {
+    if !is_snapshot_dir(path) {
         return Err(SnapshotDeleteError::NotASnapshot(raw.into()));
     }
 

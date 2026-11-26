@@ -34,6 +34,7 @@ uuid = { version = "1.6.1", features = ["v4"] }
 
 # Cloud Hypervisor SDK
 cloud-hypervisor-sdk = { git = "https://github.com/qarax/cloud-hypervisor-sdk.git", tag = "v54.0.0" }
+nbdwire = { git = "https://github.com/qarax/nbdwire.git", tag = "v0.1.0" }
 
 # Firecracker SDK
 # v1.18.0 plus a fix its tag doesn't have (attaching to a new Firecracker no
