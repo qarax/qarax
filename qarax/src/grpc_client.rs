@@ -105,9 +105,11 @@ impl AsyncWrite for NodeStream {
     }
 }
 
-/// What a node's refusal of a fork means to the caller: a fork the node can't
-/// make is the request's to fix (422); anything else is the node's failure.
-fn fork_error(status: tonic::Status, context: &'static str) -> anyhow::Error {
+/// What a node's refusal means to the caller: what the node can't do for what
+/// the request asks (a fork it can't make, a snapshot of a VM with a disk it
+/// can't capture) is the request's to fix (422); anything else is the node's
+/// failure.
+fn refusal_error(status: tonic::Status, context: &'static str) -> anyhow::Error {
     match status.code() {
         tonic::Code::NotFound
         | tonic::Code::InvalidArgument
@@ -766,7 +768,8 @@ impl NodeClient {
         Ok(())
     }
 
-    /// Snapshot a VM on the qarax-node
+    /// Snapshot a VM on the qarax-node: its memory, devices and writable
+    /// disks, which it must have paused.
     #[instrument(skip(self))]
     pub async fn snapshot_vm(&self, vm_id: Uuid, snapshot_url: &str) -> Result<()> {
         let mut client = self.connect_vm_service().await?;
@@ -776,8 +779,7 @@ impl NodeClient {
                 snapshot_url: snapshot_url.to_string(),
             })
             .await
-            .map_err(NodeError)
-            .context("Failed to snapshot VM on qarax-node")?;
+            .map_err(|status| refusal_error(status, "Failed to snapshot VM on qarax-node"))?;
         Ok(())
     }
 
@@ -831,7 +833,7 @@ impl NodeClient {
                 forks,
             })
             .await
-            .map_err(|status| fork_error(status, "Failed to fork VM on qarax-node"))?;
+            .map_err(|status| refusal_error(status, "Failed to fork VM on qarax-node"))?;
         Ok(())
     }
 
@@ -847,7 +849,7 @@ impl NodeClient {
                 forks,
             })
             .await
-            .map_err(|status| fork_error(status, "Failed to fork seed on qarax-node"))?;
+            .map_err(|status| refusal_error(status, "Failed to fork seed on qarax-node"))?;
         Ok(())
     }
 

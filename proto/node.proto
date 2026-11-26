@@ -427,6 +427,11 @@ message NumaPlacement {
 // gRPC Service Definition
 // ============================================================================
 
+// SnapshotVM writes a paused VM's memory and device state to snapshot_url, a
+// directory, and copies its writable disks there. It refuses a VM with a
+// writable disk it can't copy whole (qcow2, an OCI image's, a block device),
+// before writing anything. RestoreVM puts the copies back over the disks
+// before it restores the VM.
 message SnapshotVmRequest {
   string vm_id        = 1;
   string snapshot_url = 2;

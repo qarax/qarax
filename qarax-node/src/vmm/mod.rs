@@ -86,6 +86,16 @@ impl From<crate::cloud_init::CloudInitError> for VmmError {
     }
 }
 
+impl From<crate::snapshot::SnapshotDisksError> for VmmError {
+    fn from(e: crate::snapshot::SnapshotDisksError) -> Self {
+        use crate::snapshot::SnapshotDisksError as E;
+        match e {
+            E::Uncapturable(msg) => VmmError::InvalidConfig(msg),
+            e @ (E::InvalidPath(..) | E::Io(..)) => VmmError::StorageError(e.to_string()),
+        }
+    }
+}
+
 impl From<crate::cloud_hypervisor::VmManagerError> for VmmError {
     fn from(e: crate::cloud_hypervisor::VmManagerError) -> Self {
         use crate::cloud_hypervisor::VmManagerError as E;

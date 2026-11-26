@@ -73,7 +73,10 @@ def sync_detailed(
     client: AuthenticatedClient | Client,
     body: RestoreRequest,
 ) -> Response[Any | Vm]:
-    """
+    """Restore a stopped VM from one of its snapshots: its memory, its devices and
+    the disks the snapshot captured, which go back to what they held when it
+    was taken.
+
     Args:
         vm_id (UUID):
         body (RestoreRequest):
@@ -104,7 +107,10 @@ def sync(
     client: AuthenticatedClient | Client,
     body: RestoreRequest,
 ) -> Any | Vm | None:
-    """
+    """Restore a stopped VM from one of its snapshots: its memory, its devices and
+    the disks the snapshot captured, which go back to what they held when it
+    was taken.
+
     Args:
         vm_id (UUID):
         body (RestoreRequest):
@@ -130,7 +136,10 @@ async def asyncio_detailed(
     client: AuthenticatedClient | Client,
     body: RestoreRequest,
 ) -> Response[Any | Vm]:
-    """
+    """Restore a stopped VM from one of its snapshots: its memory, its devices and
+    the disks the snapshot captured, which go back to what they held when it
+    was taken.
+
     Args:
         vm_id (UUID):
         body (RestoreRequest):
@@ -159,7 +168,10 @@ async def asyncio(
     client: AuthenticatedClient | Client,
     body: RestoreRequest,
 ) -> Any | Vm | None:
-    """
+    """Restore a stopped VM from one of its snapshots: its memory, its devices and
+    the disks the snapshot captured, which go back to what they held when it
+    was taken.
+
     Args:
         vm_id (UUID):
         body (RestoreRequest):

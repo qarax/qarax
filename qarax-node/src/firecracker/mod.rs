@@ -924,6 +924,25 @@ impl VmmManager for FirecrackerManager {
             .reserve(vec![vm_id.to_string()])
             .map_err(VmmError::VmAlreadyExists)?;
 
+        // Before the new process opens the VM's drives: the ones the snapshot
+        // captured go back to what they held when it was taken.
+        crate::snapshot::restore_disks(source_url).await?;
+
+        let proto_config =
+            self.load_persisted_config(vm_id)
+                .await?
+                .unwrap_or_else(|| ProtoVmConfig {
+                    vm_id: vm_id.to_string(),
+                    ..Default::default()
+                });
+        // Loading the snapshot binds the vsock's socket where the VM had it,
+        // and fails on the one its last process left there.
+        if let Some(path) = Self::vsock_socket_path_from_config(&proto_config.vsock)
+            && path.exists()
+        {
+            let _ = tokio::fs::remove_file(path).await;
+        }
+
         tokio::fs::create_dir_all(&self.runtime_dir)
             .await
             .map_err(VmmError::SpawnError)?;
@@ -965,15 +984,6 @@ impl VmmManager for FirecrackerManager {
         // Attach to the fresh process and load the snapshot.
         let machine = Machine::attach(&socket_path).await.map_err(sdk_err)?;
         let micro_vm = machine.load_and_resume(&params).await.map_err(sdk_err)?;
-
-        // Reload persisted proto config for gRPC state reporting.
-        let proto_config =
-            self.load_persisted_config(vm_id)
-                .await?
-                .unwrap_or_else(|| ProtoVmConfig {
-                    vm_id: vm_id.to_string(),
-                    ..Default::default()
-                });
 
         let instance = FcVmInstance::new(
             proto_config,

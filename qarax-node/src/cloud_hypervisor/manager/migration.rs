@@ -66,6 +66,12 @@ impl VmManager {
             .reserve(vec![vm_id.to_string()])
             .map_err(VmManagerError::VmAlreadyExists)?;
 
+        // Before the new process opens the VM's disks: the ones the snapshot
+        // captured go back to what they held when it was taken.
+        crate::snapshot::restore_disks(source_url)
+            .await
+            .map_err(|e| VmManagerError::StorageError(e.to_string()))?;
+
         // Ensure runtime directory exists.
         tokio::fs::create_dir_all(&self.runtime_dir)
             .await

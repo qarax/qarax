@@ -1924,15 +1924,25 @@ pub(crate) async fn create_vm_snapshot(
             }
         }
         Err(e) => {
-            error!("Failed to snapshot VM: {}", e);
+            error!("Failed to snapshot VM: {:#}", e);
             let _ = snapshots::update_status(env.pool(), id, SnapshotStatus::Failed).await;
-            return Err(crate::errors::Error::InternalServerError);
+            // A VM the node refuses to snapshot, such as one with a disk it
+            // can't capture, is the request's to fix.
+            return Err(match e.downcast::<crate::errors::Error>() {
+                Ok(e) => e,
+                Err(_) => crate::errors::Error::InternalServerError,
+            });
         }
     }
 
     snapshots::get(env.pool(), id).await.map_err(Into::into)
 }
 
+/// Snapshot a running VM: its memory, its devices and its writable disks, so
+/// that a restore brings back the disks as they were too. The VM is paused
+/// while its disks are copied (a reflink where their filesystem has them).
+/// Refused for a VM with a writable disk that can't be copied whole while it
+/// runs: a qcow2 disk, an OCI image's, or one on an iSCSI pool.
 #[utoipa::path(
     post,
     path = "/v1/vms/{vm_id}/snapshots",
@@ -1943,6 +1953,7 @@ pub(crate) async fn create_vm_snapshot(
     responses(
         (status = 201, description = "Snapshot created", body = Snapshot),
         (status = 404, description = "VM not found"),
+        (status = 422, description = "The VM has a writable disk a snapshot can't capture"),
         (status = 500, description = "Internal server error")
     ),
     tag = "vms"
@@ -2019,6 +2030,9 @@ pub(crate) async fn restore_vm_from_snapshot(
     vms::get(env.pool(), vm_id).await.map_err(Into::into)
 }
 
+/// Restore a stopped VM from one of its snapshots: its memory, its devices and
+/// the disks the snapshot captured, which go back to what they held when it
+/// was taken.
 #[utoipa::path(
     post,
     path = "/v1/vms/{vm_id}/restore",

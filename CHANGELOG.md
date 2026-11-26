@@ -29,7 +29,9 @@ The first release.
   evacuation, placement policies (labels, affinity, spread), GPU passthrough
   and NUMA placement.
 - Live migration (TLS, postcopy), HA failover of VMs from dead hosts.
-- Snapshots and backups of VMs, and backups of the control-plane database.
+- Snapshots and backups of VMs, which capture the VM's writable disks with
+  its memory and put them back on restore, and backups of the control-plane
+  database.
 - Sandboxes: short-lived VMs with idle reaping and prewarmed pools, of
   templates booting a kernel or an OCI image, which can make their sandboxes
   by forking booted VMs of the template, on one host or several, ahead of time
@@ -80,6 +82,14 @@ These need action if you ran a build from before them:
   `DELETE /v1/vms/{id}/snapshots/{snapshot_id}` deletes a single snapshot.
 - Restoring a database backup keeps the database backups' records as they
   were before the restore.
+- A VM snapshot or backup captures the VM's writable disks along with its
+  memory, copied while the VM is paused (a reflink where the filesystem has
+  them), and a restore puts them back. Earlier builds restored the memory over
+  the disks as they were at the restore, which a guest's page cache and
+  filesystems don't match. A VM with a writable disk that can't be copied
+  whole while it runs (qcow2, an OCI image's, or one on an iSCSI pool) can't
+  be snapshotted for now (422). A snapshot taken by an earlier build restores
+  the memory only, as before.
 - An OverlayBD import writes the converted image to `<tag>_overlaybd` and
   leaves the mirrored image as it was; earlier builds converted the mirror in
   place, so importing it again gave an empty disk. An image you pushed to the

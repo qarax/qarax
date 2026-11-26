@@ -155,7 +155,7 @@ paths:
         '404':
           description: VM not found
         '422':
-          description: Invalid backup request
+          description: Invalid backup request, or a VM with a writable disk a backup can't capture
         '500':
           description: Internal server error
   /v1/backups/{backup_id}:
@@ -2934,6 +2934,10 @@ paths:
     post:
       tags:
       - vms
+      summary: |-
+        Restore a stopped VM from one of its snapshots: its memory, its devices and
+        the disks the snapshot captured, which go back to what they held when it
+        was taken.
       operationId: restore
       parameters:
       - name: vm_id
@@ -3099,6 +3103,12 @@ paths:
     post:
       tags:
       - vms
+      summary: |-
+        Snapshot a running VM: its memory, its devices and its writable disks, so
+        that a restore brings back the disks as they were too. The VM is paused
+        while its disks are copied (a reflink where their filesystem has them).
+        Refused for a VM with a writable disk that can't be copied whole while it
+        runs: a qcow2 disk, an OCI image's, or one on an iSCSI pool.
       operationId: create_snapshot
       parameters:
       - name: vm_id
@@ -3123,6 +3133,8 @@ paths:
                 $ref: '#/components/schemas/Snapshot'
         '404':
           description: VM not found
+        '422':
+          description: The VM has a writable disk a snapshot can't capture
         '500':
           description: Internal server error
   /v1/vms/{vm_id}/snapshots/{snapshot_id}:
