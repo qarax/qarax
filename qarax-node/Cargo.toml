@@ -64,8 +64,8 @@ netlink-packet-route = "0.19"
 num_cpus = "1"
 
 # OpenTelemetry (behind "otel" feature)
-opentelemetry = { version = "0.31", optional = true }
-tracing-opentelemetry = { version = "0.32", optional = true }
+opentelemetry = { version = "0.33", optional = true }
+tracing-opentelemetry = { version = "0.34", optional = true }
 tower = { version = "0.4", optional = true }
 http = { version = "1", optional = true }
 
