@@ -1,10 +1,10 @@
-use std::{mem::DropGuard, path::Path as StdPath, time::Duration};
+use std::{mem::DropGuard, path::Path as StdPath, sync::Arc, time::Duration};
 
 use axum::{Extension, Json, extract::Path};
 use http::StatusCode;
 use secrecy::ExposeSecret;
 use serde::{Deserialize, Serialize};
-use sqlx::{Connection, PgConnection};
+use sqlx::{Connection, PgConnection, PgPool};
 use tokio::{fs, process::Command, time::sleep};
 use tracing::{error, instrument, warn};
 use utoipa::ToSchema;
@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 use crate::{
     App,
+    grpc_client::NodeClient,
     handlers::{
         audit::{AuditEvent, AuditEventExt},
         vm::handler::{
@@ -22,8 +23,12 @@ use crate::{
     model::{
         audit_log::{AuditAction, AuditResourceType},
         backups::{self, Backup, BackupStatus, BackupType, NewBackup},
+        hosts::{self, Host, HostStatus},
+        jobs::{self, JobType, NewJob},
+        snapshots::{self, NewSnapshot, SnapshotStatus},
         storage_objects::{self, NewStorageObject, StorageObjectType},
-        storage_pools, vms,
+        storage_pools::{self, StoragePoolStatus, StoragePoolType},
+        vms,
     },
     pagination::{PageQuery, PageRequest, time_key},
 };
@@ -519,4 +524,288 @@ pub async fn delete(
         resource_name: Some(backup.name),
         metadata: None,
     }))
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct CopyBackupRequest {
+    /// The storage pool to copy the backup to: a Local or NFS pool other than
+    /// the backup's, attached to an UP host.
+    pub storage_pool_id: Uuid,
+    /// The copy's name. Defaults to the backup's, with "-copy" after it.
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct CopyBackupResponse {
+    /// The job that copies the backup. Once it completes, its result holds
+    /// the copy's `backup_id`.
+    pub job_id: Uuid,
+}
+
+/// Copy a VM backup to another storage pool, typically one on another host,
+/// so that it outlives the host it was taken on. The node that has the
+/// backup offers its files over NBD, with TLS between the nodes' certificates
+/// from the node CA, and a node attached to the target pool copies them,
+/// their holes left as holes. The copy is a backup of its own, of the same
+/// VM, which can be restored from it on a host attached to its pool.
+#[utoipa::path(
+    post,
+    path = "/v1/backups/{backup_id}/copy",
+    params(
+        ("backup_id" = uuid::Uuid, Path, description = "Backup unique identifier")
+    ),
+    request_body = CopyBackupRequest,
+    responses(
+        (status = 202, description = "Copy job accepted", body = CopyBackupResponse),
+        (status = 404, description = "Backup or storage pool not found"),
+        (status = 422, description = "Not a ready VM backup, or a storage pool it can't be copied to"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "backups"
+)]
+#[instrument(skip(env))]
+pub async fn copy(
+    Extension(env): Extension<App>,
+    Path(backup_id): Path<Uuid>,
+    Json(req): Json<CopyBackupRequest>,
+) -> Result<ApiResponse<CopyBackupResponse>> {
+    let refuse = |why: &str| crate::errors::Error::UnprocessableEntity(why.into());
+    let backup = backups::get(env.pool(), backup_id).await?;
+    if backup.backup_type != BackupType::Vm {
+        return Err(refuse("only VM backups are copied"));
+    }
+    if backup.status != BackupStatus::Ready {
+        return Err(refuse("the backup isn't ready"));
+    }
+    // A VM backup is recorded with its VM and snapshot.
+    let (Some(vm_id), Some(snapshot_id)) = (backup.vm_id, backup.snapshot_id) else {
+        return Err(crate::errors::Error::InternalServerError);
+    };
+    let snapshot = snapshots::get(env.pool(), snapshot_id).await?;
+    let source = storage_objects::get(env.pool(), snapshot.storage_object_id).await?;
+    let source_path = storage_objects::get_path_from_config(&source.config)
+        .ok_or(crate::errors::Error::InternalServerError)?;
+
+    let pool = storage_pools::get(env.pool(), req.storage_pool_id).await?;
+    if !matches!(
+        pool.pool_type,
+        StoragePoolType::Local | StoragePoolType::Nfs
+    ) {
+        return Err(refuse("backups are copied to Local or NFS storage pools"));
+    }
+    if pool.status != StoragePoolStatus::Active {
+        return Err(refuse("the storage pool isn't active"));
+    }
+    if pool.id == source.storage_pool_id {
+        return Err(refuse("the backup is in that storage pool already"));
+    }
+
+    let vm = vms::get(env.pool(), vm_id).await?;
+    let sources = up_hosts_with_snapshot(&env, source.storage_pool_id, vm.host_id).await?;
+    if sources.is_empty() {
+        return Err(refuse("no UP host can reach the backup's snapshot"));
+    }
+    let destination = up_host_attached(&env, pool.id, vm.host_id)
+        .await?
+        .ok_or_else(|| refuse("no UP host is attached to the storage pool"))?;
+
+    let name = req.name.unwrap_or_else(|| format!("{}-copy", backup.name));
+    let object = storage_objects::create_returning(
+        env.pool(),
+        NewStorageObject {
+            name: name.clone(),
+            storage_pool_id: Some(pool.id),
+            object_type: StorageObjectType::Snapshot,
+            size_bytes: 0,
+            config: serde_json::Value::Null,
+            parent_id: None,
+        },
+    )
+    .await?;
+    let target_path = storage_objects::get_path_from_config(&object.config)
+        .ok_or(crate::errors::Error::InternalServerError)?;
+    let copy_snapshot_id = snapshots::create(
+        env.pool(),
+        &NewSnapshot {
+            vm_id,
+            storage_object_id: object.id,
+            name: name.clone(),
+        },
+    )
+    .await?;
+    let job = jobs::create(
+        env.pool(),
+        NewJob {
+            job_type: JobType::BackupCopy,
+            description: Some(format!(
+                "Copying backup {} to storage pool {}",
+                backup.name, pool.name
+            )),
+            resource_id: Some(backup_id),
+            resource_type: Some(jobs::resource_types::BACKUP.to_string()),
+        },
+    )
+    .await;
+    let job = match job {
+        Ok(job) => job,
+        Err(e) => {
+            // Deleting the object deletes its snapshot record.
+            let _ = storage_objects::delete(env.pool(), object.id).await;
+            return Err(e.into());
+        }
+    };
+
+    tokio::spawn(run_backup_copy(
+        env.pool_arc(),
+        BackupCopy {
+            job_id: job.id,
+            name,
+            vm_id,
+            snapshot_id: copy_snapshot_id,
+            object_id: object.id,
+            source_url: format!("file://{source_path}"),
+            target_url: format!("file://{target_path}"),
+            sources,
+            destination,
+        },
+    ));
+
+    Ok(ApiResponse {
+        data: CopyBackupResponse { job_id: job.id },
+        code: StatusCode::ACCEPTED,
+    })
+}
+
+/// A backup copy's job: what it copies, from where to where, and the
+/// records of the copy.
+struct BackupCopy {
+    job_id: Uuid,
+    name: String,
+    vm_id: Uuid,
+    /// The copy's snapshot and its storage object.
+    snapshot_id: Uuid,
+    object_id: Uuid,
+    source_url: String,
+    target_url: String,
+    /// The UP hosts that may have the backup's files, the likeliest first.
+    sources: Vec<Host>,
+    /// The UP host that writes the copy.
+    destination: Host,
+}
+
+/// The UP hosts that may have a snapshot's files: the VM's, which wrote it
+/// (from a local pool its host needn't be attached to), then the hosts its
+/// pool is attached to.
+async fn up_hosts_with_snapshot(
+    env: &App,
+    pool_id: Uuid,
+    vm_host_id: Option<Uuid>,
+) -> Result<Vec<Host>> {
+    let mut host_ids: Vec<Uuid> = vm_host_id.into_iter().collect();
+    for host_id in storage_pools::list_host_ids(env.pool(), pool_id).await? {
+        if !host_ids.contains(&host_id) {
+            host_ids.push(host_id);
+        }
+    }
+    let mut up = Vec::new();
+    for host_id in host_ids {
+        let host = hosts::require_by_id(env.pool(), host_id).await?;
+        if host.status == HostStatus::Up {
+            up.push(host);
+        }
+    }
+    Ok(up)
+}
+
+/// An UP host attached to `pool_id`: the VM's, if it is one.
+async fn up_host_attached(
+    env: &App,
+    pool_id: Uuid,
+    vm_host_id: Option<Uuid>,
+) -> Result<Option<Host>> {
+    let mut attached = Vec::new();
+    for host_id in storage_pools::list_host_ids(env.pool(), pool_id).await? {
+        let host = hosts::require_by_id(env.pool(), host_id).await?;
+        if host.status == HostStatus::Up {
+            attached.push(host);
+        }
+    }
+    let preferred = attached.iter().position(|host| Some(host.id) == vm_host_id);
+    Ok(match preferred {
+        Some(index) => Some(attached.swap_remove(index)),
+        None => attached.into_iter().next(),
+    })
+}
+
+async fn run_backup_copy(db: Arc<PgPool>, copy: BackupCopy) {
+    if let Err(e) = jobs::mark_running(&db, copy.job_id).await {
+        error!(job_id = %copy.job_id, error = %e, "failed to mark a backup copy job running");
+    }
+    let copied = match copy_snapshot_files(&copy).await {
+        Ok(bytes) => record_copy(&db, &copy, bytes)
+            .await
+            .map(|backup| (backup, bytes)),
+        Err(e) => Err(e),
+    };
+    match copied {
+        Ok((backup, bytes)) => {
+            let result = serde_json::json!({ "backup_id": backup.id, "bytes": bytes });
+            let _ = jobs::mark_completed(&db, copy.job_id, Some(result)).await;
+        }
+        Err(e) => {
+            error!(job_id = %copy.job_id, error = %format!("{e:#}"), "backup copy failed");
+            let _ = snapshots::update_status(&db, copy.snapshot_id, SnapshotStatus::Failed).await;
+            let _ = jobs::mark_failed(&db, copy.job_id, &format!("{e:#}")).await;
+        }
+    }
+}
+
+/// Copy the backup's snapshot from the first of its candidate hosts that
+/// exports it into the copy's directory. Returns the bytes of data copied.
+async fn copy_snapshot_files(copy: &BackupCopy) -> anyhow::Result<u64> {
+    let export_id = copy.job_id.to_string();
+    let destination = NodeClient::new(&copy.destination.address, copy.destination.port as u16);
+    let mut refusals = Vec::new();
+    for source in &copy.sources {
+        let node = NodeClient::new(&source.address, source.port as u16);
+        // Only a node that has the snapshot's files exports them.
+        let (port, files) = match node.export_snapshot(&export_id, &copy.source_url).await {
+            Ok(export) => export,
+            Err(e) => {
+                refusals.push(format!("{}: {e:#}", source.name));
+                continue;
+            }
+        };
+        let pulled = destination
+            .pull_snapshot(&source.address, port, &export_id, files, &copy.target_url)
+            .await;
+        if let Err(e) = node.unexport_snapshot(&export_id).await {
+            warn!(host = %source.name, error = %format!("{e:#}"), "failed to withdraw a backup copy's exports");
+        }
+        return pulled;
+    }
+    anyhow::bail!(
+        "no host exported the backup's snapshot ({})",
+        refusals.join("; ")
+    )
+}
+
+/// Record a finished copy: its size, its snapshot ready, and the backup it is.
+async fn record_copy(db: &PgPool, copy: &BackupCopy, bytes: u64) -> anyhow::Result<Backup> {
+    let mut tx = db.begin().await?;
+    storage_objects::update_size_bytes_tx(&mut tx, copy.object_id, i64::try_from(bytes)?).await?;
+    tx.commit().await?;
+    snapshots::update_status(db, copy.snapshot_id, SnapshotStatus::Ready).await?;
+    let backup = backups::create(
+        db,
+        &NewBackup {
+            name: copy.name.clone(),
+            backup_type: BackupType::Vm,
+            vm_id: Some(copy.vm_id),
+            snapshot_id: Some(copy.snapshot_id),
+            storage_object_id: copy.object_id,
+        },
+    )
+    .await?;
+    Ok(backup)
 }

@@ -2,7 +2,10 @@ use clap::{Args, Subcommand, ValueEnum};
 use tabled::{Table, Tabled, settings::Style};
 
 use crate::{
-    api::{self, models::CreateBackupRequest},
+    api::{
+        self,
+        models::{CopyBackupRequest, CreateBackupRequest},
+    },
     client::Client,
 };
 
@@ -39,6 +42,18 @@ enum BackupCommand {
     Restore {
         /// Backup name or ID
         backup: String,
+    },
+    /// Copy a VM backup to another storage pool, such as one on another host,
+    /// and wait for the copy
+    Copy {
+        /// Backup name or ID
+        backup: String,
+        /// Storage pool name or ID to copy it to (Local or NFS)
+        #[arg(long)]
+        pool: String,
+        /// The copy's name (default: the backup's, with "-copy" after it)
+        #[arg(long)]
+        name: Option<String>,
     },
     /// Delete a backup and the data it stores (snapshot or database dump)
     Delete {
@@ -207,6 +222,30 @@ pub async fn run(args: BackupArgs, client: &Client, output: OutputFormat) -> any
                 println!("Type:        {}", backup.backup_type);
                 println!("Status:      {}", backup.status);
                 println!("Target:      {}", backup_target(&backup));
+            }
+        }
+        BackupCommand::Copy { backup, pool, name } => {
+            let backup_id = resolve_backup_id(client, &backup).await?;
+            let storage_pool_id = resolve_pool_id(client, &pool).await?;
+            let request = CopyBackupRequest {
+                storage_pool_id,
+                name,
+            };
+            let accepted = api::backups::copy(client, backup_id, &request).await?;
+            eprintln!("Job:         {}", accepted.job_id);
+            crate::wait::wait_for_job(client, accepted.job_id).await?;
+            let job = api::jobs::get(client, accepted.job_id).await?;
+            let copy_id = job
+                .result
+                .as_ref()
+                .and_then(|result| result.get("backup_id"))
+                .and_then(|id| id.as_str())
+                .ok_or_else(|| anyhow::anyhow!("job {} names no copy", accepted.job_id))?
+                .to_string();
+            if !matches!(output, OutputFormat::Table) {
+                print_output(&api::backups::get(client, copy_id.parse()?).await?, output)?;
+            } else {
+                println!("Copy:        {copy_id}");
             }
         }
         BackupCommand::Restore { backup } => {

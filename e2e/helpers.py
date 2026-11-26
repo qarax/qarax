@@ -6,6 +6,7 @@ import os
 import shlex
 import subprocess
 import time
+import uuid
 from pathlib import Path
 from uuid import UUID
 
@@ -15,13 +16,33 @@ from qarax_api_client.api.networks import attach_host as attach_network_host
 from qarax_api_client.api.networks import create as create_network
 from qarax_api_client.api.networks import delete as delete_network
 from qarax_api_client.api.networks import detach_host as detach_network_host
+from qarax_api_client.api.storage_objects import create as create_storage_object
+from qarax_api_client.api.storage_objects import delete as delete_storage_object
 from qarax_api_client.api.storage_pools import attach_host as attach_pool_host
+from qarax_api_client.api.storage_pools import create as create_pool
+from qarax_api_client.api.storage_pools import delete as delete_pool
 from qarax_api_client.api.jobs import get as get_job
+from qarax_api_client.api.vms import attach_disk
+from qarax_api_client.api.vms import create as create_vm
+from qarax_api_client.api.vms import delete as delete_vm
 from qarax_api_client.api.vms import exec_ as exec_vm
 from qarax_api_client.api.vms import get as get_vm
-from qarax_api_client.models import ExecVmRequest, HostStatus, NewNetwork, VmStatus
+from qarax_api_client.api.vms import start as start_vm
+from qarax_api_client.models import (
+    ExecVmRequest,
+    HostStatus,
+    JobStatus,
+    NewNetwork,
+    NewStoragePool,
+    NewVm,
+    StoragePoolType,
+    VmStatus,
+)
+from qarax_api_client.models.attach_disk_request import AttachDiskRequest
 from qarax_api_client.models.attach_host_request import AttachHostRequest
 from qarax_api_client.models.attach_pool_host_request import AttachPoolHostRequest
+from qarax_api_client.models.new_storage_object import NewStorageObject
+from qarax_api_client.models.storage_object_type import StorageObjectType
 
 QARAX_URL = os.getenv("QARAX_URL", "http://localhost:8000")
 QARAX_TEST_TOKEN = os.getenv("QARAX_TEST_TOKEN", "e2e-test-token")
@@ -363,3 +384,113 @@ def remove_file_from_nodes(path):
     """Remove `path` from every qarax-node container."""
     for container in containers(NODE_CONTAINER_PREFIX):
         docker("exec", container, "rm", "-f", path)
+
+
+MIB = 1024 * 1024
+
+
+async def wait_for_job(client, job_id, timeout=300):
+    """Wait for a job to complete, failing the test if it fails or takes longer than timeout seconds."""
+    deadline = time.monotonic() + timeout
+    while True:
+        job = await call_api(get_job, client=client, job_id=UUID(str(job_id)))
+        if job.status == JobStatus.COMPLETED:
+            return job
+        assert job.status != JobStatus.FAILED, f"job {job_id} failed: {job.error}"
+        assert time.monotonic() < deadline, f"job {job_id} didn't finish in {timeout}s"
+        await asyncio.sleep(2)
+
+
+async def local_pool(client, name, path, host_id):
+    """A Local storage pool at path, attached to host_id."""
+    pool_id = UUID(
+        str(
+            await call_api(
+                create_pool,
+                client=client,
+                body=NewStoragePool(name=name, pool_type=StoragePoolType.LOCAL, config={"path": path}),
+            )
+        ).strip('"')
+    )
+    await call_api(
+        attach_pool_host,
+        client=client,
+        pool_id=pool_id,
+        body=AttachPoolHostRequest(host_id=host_id),
+    )
+    return pool_id
+
+
+@contextlib.asynccontextmanager
+async def running_vm_with_disk(client, hypervisor, image_format):
+    """A running VM with the guest agent and a 64 MiB image of its own
+    (`raw` or `qcow2`) as its only disk, /dev/vda, in a local pool of its own
+    on the VM's host. Deleting the VM deletes its snapshots and backups."""
+    test_id = uuid.uuid4().hex[:8]
+    pool_path = f"/var/lib/qarax/e2e-vmdisk-{test_id}"
+    disk_path = f"{pool_path}/disk.img"
+    vm_id = pool_id = disk_id = None
+    try:
+        vm_id = UUID(
+            str(
+                await call_api(
+                    create_vm,
+                    client=client,
+                    body=NewVm(
+                        name=f"e2e-vmdisk-{test_id}",
+                        hypervisor=hypervisor,
+                        boot_vcpus=1,
+                        max_vcpus=1,
+                        memory_size=256 * MIB,
+                        guest_agent=True,
+                    ),
+                )
+            ).strip('"')
+        )
+        vm = await call_api(get_vm, client=client, vm_id=vm_id)
+        pool_id = await local_pool(client, f"e2e-vmdisk-{test_id}", pool_path, vm.host_id)
+        create_image_on_nodes(disk_path, 64 * MIB, image_format)
+        disk_id = UUID(
+            str(
+                await call_api(
+                    create_storage_object,
+                    client=client,
+                    body=NewStorageObject(
+                        name=f"e2e-vmdisk-{test_id}",
+                        storage_pool_id=str(pool_id),
+                        object_type=StorageObjectType.DISK,
+                        size_bytes=64 * MIB,
+                        config={"path": disk_path},
+                    ),
+                )
+            ).strip('"')
+        )
+        # Before the start: Firecracker drives can't be hotplugged.
+        await call_api(
+            attach_disk,
+            client=client,
+            vm_id=vm_id,
+            body=AttachDiskRequest(storage_object_id=disk_id),
+        )
+        await call_api(start_vm, client=client, vm_id=vm_id)
+        await wait_for_status(client, vm_id, VmStatus.RUNNING, timeout=60)
+        yield vm_id
+    finally:
+        if vm_id:
+            await call_api(delete_vm, client=client, vm_id=vm_id)
+        if disk_id:
+            await call_api(delete_storage_object, client=client, object_id=disk_id)
+        if pool_id:
+            await call_api(delete_pool, client=client, pool_id=pool_id)
+        remove_file_from_nodes(disk_path)
+
+
+def write_disk_marker(marker):
+    """A guest script that writes marker at the start of /dev/vda."""
+    return f"printf {marker} | busybox dd of=/dev/vda conv=notrunc 2>/dev/null && busybox sync"
+
+
+def read_disk_marker(length):
+    """A guest script that prints the first length bytes of /dev/vda, read
+    from the disk past the guest's page cache."""
+    return f"echo 3 > /proc/sys/vm/drop_caches; busybox dd if=/dev/vda bs={length} count=1 2>/dev/null"

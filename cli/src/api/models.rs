@@ -594,6 +594,7 @@ pub struct Job {
     pub description: Option<String>,
     pub resource_id: Option<Uuid>,
     pub progress: Option<i32>,
+    pub result: Option<serde_json::Value>,
     pub error: Option<String>,
     pub created_at: String,
     pub updated_at: String,
@@ -776,6 +777,18 @@ pub struct CreateBackupRequest {
     pub backup_type: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vm_id: Option<Uuid>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CopyBackupRequest {
+    pub storage_pool_id: Uuid,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CopyBackupResponse {
+    pub job_id: Uuid,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -38,6 +38,7 @@ pub enum JobType {
     HostEvacuate,
     DiskCreate,
     VmCommit,
+    BackupCopy,
 }
 
 #[derive(
@@ -56,6 +57,7 @@ pub enum JobStatus {
 
 /// Well-known resource type values for the `resource_type` column.
 pub mod resource_types {
+    pub const BACKUP: &str = "backup";
     pub const HOST: &str = "host";
     pub const SANDBOX: &str = "sandbox";
     pub const VM: &str = "vm";

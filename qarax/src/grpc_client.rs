@@ -249,6 +249,19 @@ type FileTransferClient = node::file_transfer_service_client::FileTransferServic
 type FileTransferClient =
     node::file_transfer_service_client::FileTransferServiceClient<tonic::transport::Channel>;
 
+/// Type alias for the snapshot copy service client.
+#[cfg(feature = "otel")]
+type SnapshotCopyClient = node::snapshot_copy_service_client::SnapshotCopyServiceClient<
+    tonic::service::interceptor::InterceptedService<
+        tonic::transport::Channel,
+        fn(tonic::Request<()>) -> std::result::Result<tonic::Request<()>, tonic::Status>,
+    >,
+>;
+
+#[cfg(not(feature = "otel"))]
+type SnapshotCopyClient =
+    node::snapshot_copy_service_client::SnapshotCopyServiceClient<tonic::transport::Channel>;
+
 use node::{
     AddDiskDeviceRequest, AddNetworkDeviceRequest, AttachNetworkRequest, AttachStoragePoolRequest,
     BlankDiskSource, CloudInitConfig, ConsoleConfig, ConsoleInput, ConsoleLogResponse,
@@ -481,6 +494,24 @@ impl NodeClient {
         #[cfg(not(feature = "otel"))]
         {
             Ok(FileTransferServiceClient::new(channel))
+        }
+    }
+
+    async fn connect_snapshot_copy_service(&self) -> Result<SnapshotCopyClient> {
+        let channel = self.channel().await?;
+
+        #[cfg(feature = "otel")]
+        {
+            Ok(
+                node::snapshot_copy_service_client::SnapshotCopyServiceClient::with_interceptor(
+                    channel,
+                    trace_propagation::inject_trace_context as fn(_) -> _,
+                ),
+            )
+        }
+        #[cfg(not(feature = "otel"))]
+        {
+            Ok(node::snapshot_copy_service_client::SnapshotCopyServiceClient::new(channel))
         }
     }
 
@@ -781,6 +812,72 @@ impl NodeClient {
             .await
             .map_err(|status| refusal_error(status, "Failed to snapshot VM on qarax-node"))?;
         Ok(())
+    }
+
+    /// Offer the files of the snapshot directory at `snapshot_url` on the
+    /// node's NBD server as `export_id`'s, for another node to copy. Returns
+    /// the server's port and the files' paths in the directory.
+    #[instrument(skip(self))]
+    pub async fn export_snapshot(
+        &self,
+        export_id: &str,
+        snapshot_url: &str,
+    ) -> Result<(u16, Vec<String>)> {
+        let mut client = self.connect_snapshot_copy_service().await?;
+        let response = client
+            .export_snapshot(node::ExportSnapshotRequest {
+                export_id: export_id.to_string(),
+                snapshot_url: snapshot_url.to_string(),
+            })
+            .await
+            .map_err(NodeError)
+            .context("Failed to export the snapshot on qarax-node")?
+            .into_inner();
+        let port = u16::try_from(response.port)
+            .with_context(|| format!("the node's NBD port {} is out of range", response.port))?;
+        Ok((port, response.files))
+    }
+
+    /// Withdraw the exports of `export_id`.
+    #[instrument(skip(self))]
+    pub async fn unexport_snapshot(&self, export_id: &str) -> Result<()> {
+        let mut client = self.connect_snapshot_copy_service().await?;
+        client
+            .unexport_snapshot(node::UnexportSnapshotRequest {
+                export_id: export_id.to_string(),
+            })
+            .await
+            .map_err(NodeError)
+            .context("Failed to withdraw the snapshot's exports on qarax-node")?;
+        Ok(())
+    }
+
+    /// Copy `files` of the snapshot the node at `address` exports as
+    /// `export_id` on NBD port `port` into `snapshot_url`, a new directory
+    /// on this node. Returns the bytes of data copied.
+    #[instrument(skip(self, files))]
+    pub async fn pull_snapshot(
+        &self,
+        address: &str,
+        port: u16,
+        export_id: &str,
+        files: Vec<String>,
+        snapshot_url: &str,
+    ) -> Result<u64> {
+        let mut client = self.connect_snapshot_copy_service().await?;
+        let response = client
+            .pull_snapshot(node::PullSnapshotRequest {
+                address: address.to_string(),
+                port: u32::from(port),
+                export_id: export_id.to_string(),
+                files,
+                snapshot_url: snapshot_url.to_string(),
+            })
+            .await
+            .map_err(NodeError)
+            .context("Failed to copy the snapshot on qarax-node")?
+            .into_inner();
+        Ok(response.bytes)
     }
 
     /// Remove a snapshot directory previously written by `snapshot_vm`.

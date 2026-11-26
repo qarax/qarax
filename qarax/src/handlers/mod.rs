@@ -98,6 +98,7 @@ pub struct BackupListQuery {
         backup::handler::get,
         backup::handler::create,
         backup::handler::restore,
+        backup::handler::copy,
         backup::handler::delete,
         host::handler::list,
         host::handler::add,
@@ -265,6 +266,8 @@ pub struct BackupListQuery {
             crate::model::snapshots::SnapshotStatus,
             crate::handlers::backup::handler::CreateBackupRequest,
             crate::handlers::backup::handler::RestoreBackupResponse,
+            crate::handlers::backup::handler::CopyBackupRequest,
+            crate::handlers::backup::handler::CopyBackupResponse,
             crate::handlers::vm::handler::CreateVmResponse,
             crate::handlers::vm::handler::VmImagePreflightRequest,
             crate::handlers::vm::handler::VmImagePreflightResponse,
@@ -510,6 +513,7 @@ fn backups() -> Router {
             "/backups/{backup_id}/restore",
             post(backup::handler::restore),
         )
+        .route("/backups/{backup_id}/copy", post(backup::handler::copy))
 }
 
 fn vms() -> Router {
