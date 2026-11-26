@@ -19,7 +19,7 @@ dirs = "6"
 toml = "0.8"
 tabled = "0.17"
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
-crossterm = "0.28"
+crossterm = "0.29"
 uuid = { version = "1", features = ["v4", "serde"] }
 futures-util = "0.3"
 serde_with = "3.4.0"
