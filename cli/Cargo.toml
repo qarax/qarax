@@ -17,7 +17,7 @@ serde_yaml = "0.9"
 anyhow = "1"
 dirs = "6"
 toml = "0.8"
-tabled = "0.17"
+tabled = "0.22"
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
 crossterm = "0.29"
 uuid = { version = "1", features = ["v4", "serde"] }
