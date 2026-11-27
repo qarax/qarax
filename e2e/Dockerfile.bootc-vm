@@ -12,7 +12,7 @@
 # can run VMs of its own. node-ssh runs a command in it, or opens a shell:
 #   docker compose -f e2e/docker-compose.yml exec bootc-vm node-ssh
 
-FROM fedora:43
+FROM fedora:45
 
 ENV CURL_RETRY_ARGS="--fail --show-error --silent --location --retry 5 --retry-delay 5 --retry-all-errors --connect-timeout 30 --max-time 1800"
 

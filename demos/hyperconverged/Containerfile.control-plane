@@ -28,7 +28,7 @@
 # declared right before the step that uses it, since every RUN after an ARG
 # sees it in its environment and is rebuilt when it changes.
 
-FROM fedora:43
+FROM fedora:45
 
 # Install PostgreSQL, qarax-node runtime dependencies, and minimal tools
 RUN dnf install -y \
