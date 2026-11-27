@@ -41,7 +41,7 @@ nbdwire = { git = "https://github.com/qarax/nbdwire.git", tag = "v0.1.0" }
 # longer waits 100 ms). The SDK's tags are Firecracker's releases, so go back
 # to `tag = "..."` with the next one.
 firecracker-rust-sdk = { git = "https://github.com/qarax/firecracker-rust-sdk.git", rev = "cbc55f9bbb2120d059b07dba0092418d3a5707e2" }
-gethostname = "0.4"
+gethostname = "0.5"
 
 # HTTP client dependencies (same as SDK uses)
 bytes = "1.5.0"
