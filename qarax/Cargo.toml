@@ -29,7 +29,7 @@ chrono = { version = "0.4", features = ["serde"] }
 sqlx = { version = "0.8.6", features = ["postgres", "uuid", "json", "chrono", "ipnetwork", "macros", "runtime-tokio-rustls", "mac_address"] }
 thiserror = "1.0.50"
 tokio = { version = "1.34.0", features = ["full", "tracing"] }
-tower-http = { version = "0.5.0", features = ["trace", "uuid", "tokio", "cors", "request-id", "fs"] }
+tower-http = { version = "0.7.0", features = ["trace", "uuid", "tokio", "cors", "request-id", "fs"] }
 common = { path = "../common" }
 tracing = "0.1.40"
 http = "1.0.0"
