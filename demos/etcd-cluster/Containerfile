@@ -12,7 +12,7 @@
 #     demos/etcd-cluster/
 #   docker push localhost:5001/etcd-node:src
 
-FROM fedora:43
+FROM fedora:46
 
 ARG ETCD_VERSION=v3.5.21
 
