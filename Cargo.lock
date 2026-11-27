@@ -2834,19 +2834,6 @@ dependencies = [
 
 [[package]]
 name = "nix"
-version = "0.29.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "71e2746dc3a24dd78b3cfcb7be93368c6de9963d30f43a6a73998a9cf4b17b46"
-dependencies = [
- "bitflags 2.13.2",
- "cfg-if",
- "cfg_aliases",
- "libc",
- "memoffset",
-]
-
-[[package]]
-name = "nix"
 version = "0.31.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf20d2fde8ff38632c426f1165ed7436270b44f199fc55284c38276f9db47c3d"
@@ -2868,6 +2855,7 @@ dependencies = [
  "cfg-if",
  "cfg_aliases",
  "libc",
+ "memoffset",
 ]
 
 [[package]]
@@ -3705,7 +3693,7 @@ name = "qarax-init"
 version = "0.1.0"
 dependencies = [
  "libc",
- "nix 0.29.0",
+ "nix 0.32.0",
  "serde",
  "serde_json",
 ]
@@ -3731,7 +3719,7 @@ dependencies = [
  "hyper",
  "nbdwire",
  "netlink-packet-route",
- "nix 0.29.0",
+ "nix 0.32.0",
  "num_cpus",
  "oci-client",
  "opentelemetry",
