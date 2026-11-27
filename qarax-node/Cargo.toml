@@ -66,7 +66,7 @@ num_cpus = "1"
 # OpenTelemetry (behind "otel" feature)
 opentelemetry = { version = "0.33", optional = true }
 tracing-opentelemetry = { version = "0.34", optional = true }
-tower = { version = "0.4", optional = true }
+tower = { version = "0.5", optional = true }
 http = { version = "1", optional = true }
 
 # Heap profiling (behind "dhat-heap" feature — never enable in production builds)
