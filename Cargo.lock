@@ -626,8 +626,8 @@ dependencies = [
 
 [[package]]
 name = "cloud-hypervisor-sdk"
-version = "54.1.0"
-source = "git+https://github.com/qarax/cloud-hypervisor-sdk.git?tag=v54.1.0#93880c567d9bb994de13fb066285dfe339b82ff1"
+version = "55.0.0"
+source = "git+https://github.com/qarax/cloud-hypervisor-sdk.git?tag=v55.0.0#848f42945d9447291b44ae5e600600eb554a8058"
 dependencies = [
  "bytes",
  "futures",
