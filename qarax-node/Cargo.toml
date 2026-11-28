@@ -59,8 +59,8 @@ nix = { version = "0.29", features = ["term", "fs"] }
 fatfs = "0.3"
 edge-dhcp = { version = "0.8", default-features = false, features = ["log"] }
 socket2 = "0.6"
-rtnetlink = "0.14"
-netlink-packet-route = "0.19"
+rtnetlink = "0.24"
+netlink-packet-route = "0.34"
 num_cpus = "1"
 
 # OpenTelemetry (behind "otel" feature)
